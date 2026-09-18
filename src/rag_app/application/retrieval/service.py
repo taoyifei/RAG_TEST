@@ -7,6 +7,7 @@ import json
 import re
 import unicodedata
 import uuid
+from collections import Counter
 from collections.abc import Callable
 from contextlib import suppress
 from copy import copy
@@ -16,7 +17,10 @@ from decimal import Decimal
 from time import perf_counter
 from typing import Literal
 
-from rag_app.application.answering.grounded import GroundedAnsweringService
+from rag_app.application.answering.grounded import (
+    GroundedAnsweringService,
+    GroundedOutcome,
+)
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlannerPort,
     AdaptivePlanOutcome,
@@ -28,10 +32,18 @@ from rag_app.application.retrieval.adaptive import (
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.atom_group_alignment import (
     AlignmentQualification,
+    AtomEvidenceQualification,
     AtomGroupAlignment,
     align_atom_to_groups,
+    qualify_atom_evidence,
 )
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
+from rag_app.application.retrieval.context_resolution import (
+    CONTEXT_RESOLUTION_REVISION,
+    build_input_spans,
+    degraded_query_plan,
+    resolve_root_query,
+)
 from rag_app.application.retrieval.dense import DenseChannel
 from rag_app.application.retrieval.evidence import (
     EvidenceAssembler,
@@ -199,6 +211,7 @@ _CONFLICT_QUANTITY = re.compile(
     r"(?P<unit>％|%|毫秒|分钟|小时|秒|天|日|周|个月|月|年|"
     r"万元|亿元|元|人|次|个|件|项)"
 )
+_MAX_SCALAR_DIRECT_CANDIDATES = 12
 
 
 def _atom_scoped_candidates(  # noqa: PLR0913
@@ -231,6 +244,25 @@ def _atom_scoped_candidates(  # noqa: PLR0913
         for group in selected_groups
         for member in group.members
     }
+    if atom.answer_shape in {
+        AtomAnswerShape.FACT,
+        AtomAnswerShape.DEFINITION,
+        AtomAnswerShape.DURATION,
+        AtomAnswerShape.COUNT,
+        AtomAnswerShape.RESPONSIBLE_PARTY,
+    }:
+        linked_ids = {
+            link.chunk_id
+            for link in links
+            if link.atom_id in {None, atom.atom_id}
+        }
+        for candidate in candidates:
+            chunk_id = candidate.hydrated.chunk.chunk_id
+            if (
+                chunk_id in linked_ids
+                and len(scoped) < _MAX_SCALAR_DIRECT_CANDIDATES
+            ):
+                scoped.setdefault(chunk_id, candidate)
     return tuple(scoped.values()), selected_groups, alignments
 
 
@@ -628,10 +660,44 @@ class RetrievalService:
         stage_started = _finish_timing(stage_timings, "snapshot", stage_started)
         _raise_if_cancelled(cancellation, provider_calls)
         analysis = self._analyzer.analyze(request)
+        input_spans = build_input_spans(request)
+        resolved_root = resolve_root_query(request, input_spans)
         effort = reasoning_effort(
             analysis, has_context=bool(request.conversation_context)
         )
-        effective_analysis = analysis
+        effective_analysis = (
+            self._analyzer.resolve(
+                analysis, request, resolved_root.resolved_query
+            )
+            if resolved_root.mode == "RULE_CONTEXT"
+            else analysis
+        )
+        self._record(
+            trace_id,
+            "context_resolution",
+            {
+                "context_resolution_mode": resolved_root.mode,
+                "context_resolution_confidence": resolved_root.confidence,
+                "context_resolution_revision": (
+                    resolved_root.resolution_revision
+                ),
+                "original_query_sha256": hashlib.sha256(
+                    request.text.encode()
+                ).hexdigest(),
+                "resolved_root_query_sha256": hashlib.sha256(
+                    resolved_root.resolved_query.encode()
+                ).hexdigest(),
+                "context_digest": resolved_root.context_digest,
+                "referenced_turn_count": len(
+                    {
+                        span.turn
+                        for span in input_spans
+                        if span.span_id in resolved_root.referenced_span_ids
+                        and span.turn != "CURRENT"
+                    }
+                ),
+            },
+        )
         self._record(
             trace_id,
             "analyze",
@@ -653,7 +719,7 @@ class RetrievalService:
             },
         )
         stage_started = _finish_timing(stage_timings, "analyze", stage_started)
-        variants = self._expander.expand(analysis)
+        variants = self._expander.expand(effective_analysis)
         self._record(
             trace_id,
             "expand",
@@ -663,7 +729,7 @@ class RetrievalService:
             },
         )
         plan = self._planner.plan(
-            analysis,
+            effective_analysis,
             variants,
             self._policy,
             dense_required=request.dense_required,
@@ -714,6 +780,7 @@ class RetrievalService:
                     ),
                 }
             )
+            self._record_shortcut_trace(trace_id, cached_result, "CACHE_REPLAY")
             if on_final is not None:
                 _raise_if_cancelled(cancellation, provider_calls)
                 _validate_stream_final_sources(
@@ -791,12 +858,8 @@ class RetrievalService:
                 "interpret",
                 {
                     "reason_code": adaptive_reason,
-                    "schema_fallback_detail": (
-                        adaptive.schema_fallback_detail
-                    ),
-                    "structured_output_mode": (
-                        adaptive.structured_output_mode
-                    ),
+                    "schema_fallback_detail": (adaptive.schema_fallback_detail),
+                    "structured_output_mode": (adaptive.structured_output_mode),
                     "schema_revision": adaptive.schema_revision,
                     "schema_sha256": adaptive.schema_sha256,
                     "attempted": adaptive_attempted,
@@ -805,6 +868,17 @@ class RetrievalService:
                     "intent": adaptive.intent,
                     "atom_count": len(adaptive.atoms),
                     "needs_clarification": adaptive.needs_clarification,
+                    "planner_called": adaptive.attempted,
+                    "planner_protocol": adaptive.structured_output_mode,
+                    "planner_schema_revision": adaptive.schema_revision,
+                    "planner_transport_timeout_ms": (
+                        adaptive.planner_transport_timeout_ms
+                    ),
+                    "planner_latency_ms": adaptive.planner_latency_ms,
+                    "planner_input_tokens": adaptive.planner_input_tokens,
+                    "planner_output_tokens": adaptive.planner_output_tokens,
+                    "planner_finish_reason": adaptive.planner_finish_reason,
+                    "planner_failure_category": adaptive.failure_category,
                 },
             )
         interpret_attempted = False
@@ -907,7 +981,11 @@ class RetrievalService:
         if adaptive.atoms and adaptive.standalone_query:
             try:
                 query_plan = make_query_plan(
-                    standalone_query=adaptive.standalone_query,
+                    standalone_query=resolved_root.resolved_query,
+                    original_query=request.text,
+                    context_resolution_mode=resolved_root.mode,
+                    context_digest=resolved_root.context_digest,
+                    referenced_span_ids=resolved_root.referenced_span_ids,
                     intent=adaptive.intent or "FACT",
                     effort=effort.value,
                     atoms=adaptive.atoms,
@@ -918,18 +996,38 @@ class RetrievalService:
                     route_hints=adaptive.route_hints,
                 )
             except ValueError:
-                query_plan = fallback_query_plan(
+                query_plan = degraded_query_plan(
+                    request,
                     effective_analysis,
+                    input_spans,
+                    resolved_root,
                     effort=effort.value,
-                    reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
+                    reason_code="PLANNER_INTERNAL_VALIDATION",
                     planner_called=adaptive.attempted,
                 )
         else:
-            query_plan = fallback_query_plan(
-                effective_analysis,
-                effort=effort.value,
-                reason_code=adaptive_reason,
-                planner_called=adaptive.attempted,
+            query_plan = (
+                degraded_query_plan(
+                    request,
+                    effective_analysis,
+                    input_spans,
+                    resolved_root,
+                    effort=effort.value,
+                    reason_code=adaptive_reason,
+                    planner_called=adaptive.attempted,
+                )
+                if adaptive.attempted or resolved_root.mode == "CLARIFY"
+                else fallback_query_plan(
+                    effective_analysis,
+                    effort=effort.value,
+                    reason_code=adaptive_reason,
+                    planner_called=False,
+                    original_query=request.text,
+                    resolved_root_query=resolved_root.resolved_query,
+                    context_resolution_mode=resolved_root.mode,
+                    context_digest=resolved_root.context_digest,
+                    referenced_span_ids=resolved_root.referenced_span_ids,
+                )
             )
         atom_mode = len(query_plan.atoms) > 1
         self._record(
@@ -939,7 +1037,31 @@ class RetrievalService:
                 "plan_id": query_plan.plan_id,
                 "atom_count": len(query_plan.atoms),
                 "planner_called": query_plan.planner_called,
+                "planner_protocol": adaptive.structured_output_mode
+                if adaptive.attempted
+                else "NONE",
+                "planner_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
+                "planner_transport_timeout_ms": (
+                    adaptive.planner_transport_timeout_ms
+                    if adaptive.attempted
+                    else 0
+                ),
+                "planner_latency_ms": adaptive.planner_latency_ms,
+                "planner_input_tokens": adaptive.planner_input_tokens
+                if adaptive.attempted
+                else 0,
+                "planner_output_tokens": adaptive.planner_output_tokens
+                if adaptive.attempted
+                else 0,
+                "planner_finish_reason": adaptive.planner_finish_reason,
+                "planner_failure_category": adaptive.failure_category,
+                "planner_fallback_mode": query_plan.fallback_mode,
                 "reason_code": query_plan.planner_reason_code,
+                "fallback_mode": query_plan.fallback_mode,
+                "coverage_confidence": query_plan.coverage_confidence,
+                "resolved_root_query_sha256": hashlib.sha256(
+                    query_plan.resolved_root_query.encode()
+                ).hexdigest(),
             },
         )
         top_k = dict(plan.channel_top_k)
@@ -1105,7 +1227,7 @@ class RetrievalService:
             atom_retrieval = self._retrieve_atoms(
                 request=request,
                 snapshot=snapshot,
-                root_analysis=analysis,
+                root_analysis=effective_analysis,
                 plan=plan,
                 query_plan=query_plan,
                 provider_calls=provider_calls,
@@ -1121,6 +1243,36 @@ class RetrievalService:
             unit_fused = atom_retrieval.fused
             unit_seed_ids = atom_retrieval.seed_chunk_ids
             rerank_query = atom_retrieval.rerank_query
+        embedding_calls = tuple(
+            call
+            for call in provider_calls
+            if call.operation == "embedding.query"
+        )
+        self._record(
+            trace_id,
+            "embedding_accounting",
+            {
+                "query_embedding_provider_call_count": sum(
+                    call.call_count for call in embedding_calls
+                ),
+                "query_embedding_batch_size": (
+                    len(
+                        {
+                            query_plan.resolved_root_query,
+                            *(atom.search_text for atom in query_plan.atoms),
+                        }
+                    )
+                    if atom_mode and "dense" in plan.channels
+                    else 1
+                    if "dense" in plan.channels
+                    else 0
+                ),
+                "query_embedding_slot_id": selected_slot,
+                "query_embedding_latency_ms": sum(
+                    call.elapsed_ms for call in embedding_calls
+                ),
+            },
+        )
         selection = self._rank_and_select(
             request=request,
             snapshot=snapshot,
@@ -1306,6 +1458,7 @@ class RetrievalService:
             selected_slot=selected_slot,
             snapshot=snapshot,
             rerank_mode=reranked.mode,
+            trace_id=trace_id,
         )
         correction_started = perf_counter()
         correction_triggered = any(
@@ -1332,15 +1485,17 @@ class RetrievalService:
                     selected_slot=selected_slot,
                     snapshot=snapshot,
                     rerank_mode=reranked.mode,
+                    trace_id=trace_id,
                 )
         correction_elapsed_ms = (perf_counter() - correction_started) * 1000
         _finish_timing(
             stage_timings, "corrective_retrieval", correction_started
         )
-        correction_by_atom = {
-            item.atom_id: item
-            for item in correction_outcome.atom_traces
-        } if correction_outcome is not None else {}
+        correction_by_atom = (
+            {item.atom_id: item for item in correction_outcome.atom_traces}
+            if correction_outcome is not None
+            else {}
+        )
         for coverage in atom_coverage:
             self._record(
                 trace_id,
@@ -1404,6 +1559,17 @@ class RetrievalService:
                 for item in atom_evidence
                 if item.support_id in supported_ids
             )
+        if query_plan.needs_clarification:
+            confidence = confidence.model_copy(
+                update={
+                    "status": ConfidenceStatus.AMBIGUOUS_NEEDS_CLARIFICATION,
+                    "score": 0.0,
+                    "reason_codes": (
+                        *confidence.reason_codes,
+                        "CONTEXT_UNRESOLVED",
+                    ),
+                }
+            )
         _emit_stage(
             on_stage,
             "retrieval",
@@ -1417,6 +1583,7 @@ class RetrievalService:
         _raise_if_cancelled(cancellation, provider_calls)
         stage_started = perf_counter()
         generation_mode = "none"
+        generated: GroundedOutcome | None = None
         generation_reason: str | None = _generation_unavailable_reason(
             self._data_plane_context
         )
@@ -1586,6 +1753,51 @@ class RetrievalService:
                         ),
                     }
                 )
+        published_ids = (
+            generated.published_support_ids if generated is not None else ()
+        )
+        published_quotes = tuple(
+            hashlib.sha256(item.citation_text.encode("utf-8")).hexdigest()
+            for item in evidence
+            if item.support_id in published_ids
+        )
+        self._record(
+            trace_id,
+            "claim_publication",
+            {
+                "generated_claim_count": generated.generated_claim_count
+                if generated
+                else 0,
+                "accepted_claim_count": generated.accepted_claim_count
+                if generated
+                else 0,
+                "published_claim_count": generated.published_claim_count
+                if generated
+                else 0,
+                "accepted_support_ids": generated.accepted_support_ids
+                if generated
+                else (),
+                "published_support_ids": published_ids,
+                "published_quote_sha256s": published_quotes,
+                "claim_rejection_code_distribution": dict(
+                    generated.claim_rejection_codes
+                )
+                if generated
+                else {},
+                "generation_gap_count": generated.generation_gap_count
+                if generated
+                else 0,
+                "final_atom_coverage": generated.atom_coverage
+                if generated
+                else tuple(
+                    (item.atom_id, item.status.value)
+                    for item in atom_matrix.atoms
+                ),
+                "false_limited_detected": generated.false_limited_detected
+                if generated
+                else False,
+            },
+        )
         if on_claim is not None:
             # 没有增量 claim 的拒答或 final-only 路径也必须在 final
             # 前重查删除/撤权，且仍坚持请求开始时冻结的 revision。
@@ -1651,6 +1863,8 @@ class RetrievalService:
         )
         related_contents: tuple[RelatedContent, ...] = ()
         display_message = None
+        if query_plan.needs_clarification:
+            display_message = query_plan.clarification_question
         if (
             request.include_related_content
             and answer is None
@@ -1753,7 +1967,7 @@ class RetrievalService:
         self._record(trace_id, "complete", {"status": result.status.value})
         return result
 
-    def _catalog_fast_path(  # noqa: PLR0913
+    def _catalog_fast_path(  # noqa: PLR0913, PLR0915
         self,
         *,
         request: SearchRequest,
@@ -1949,6 +2163,7 @@ class RetrievalService:
             ),
         )
         _raise_if_cancelled(cancellation)
+        self._record_shortcut_trace(trace_id, result, "CATALOG_FAST_PATH")
         if on_final is not None:
             if matched:
                 self._validate_catalog_citations(matched, request, snapshot)
@@ -2182,6 +2397,7 @@ class RetrievalService:
         plan: RetrievalPlan,
     ) -> BaseResultCacheKey:
         """构造不含正文但覆盖全部答案行为的规范缓存键。"""
+        resolved_root = resolve_root_query(request, build_input_spans(request))
         normalized_variants = tuple(
             dict.fromkeys(
                 " ".join(
@@ -2198,6 +2414,12 @@ class RetrievalService:
                 "answer_support_policy": "minimum-supported-set-v3-08",
                 "answer_generation_policy": "model-grounded-claims-v2",
                 "query_plan_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
+                "context_resolution_revision": CONTEXT_RESOLUTION_REVISION,
+                "resolved_root_query_sha256": hashlib.sha256(
+                    resolved_root.resolved_query.encode("utf-8")
+                ).hexdigest(),
+                "context_resolution_mode": resolved_root.mode,
+                "context_digest": resolved_root.context_digest,
                 "query_unit_fusion_revision": QUERY_UNIT_FUSION_REVISION,
                 "atom_group_alignment_revision": ATOM_GROUP_ALIGNMENT_REVISION,
                 "evidence_group_schema_revision": (
@@ -2333,7 +2555,7 @@ class RetrievalService:
         """Root 和原子分别召回，批量嵌入后执行两级有界融合。"""
         started = perf_counter()
         merged: dict[str, dict[str, ChannelHit]] = {}
-        root_text = request.text
+        root_text = query_plan.resolved_root_query
         units = (
             QueryUnit(
                 unit_id="ROOT",
@@ -2534,9 +2756,14 @@ class RetrievalService:
             },
         )
         _finish_timing(stage_timings, "atom_retrieval", started)
-        rerank_query = "原始问题：" + root_text + "\n子问题：\n" + "\n".join(
-            f"- {atom.atom_id} {atom.target}｜{atom.relation}"
-            for atom in query_plan.atoms
+        rerank_query = (
+            "原始问题："
+            + root_text
+            + "\n子问题：\n"
+            + "\n".join(
+                f"- {atom.atom_id} {atom.target}｜{atom.relation}"
+                for atom in query_plan.atoms
+            )
         )
         return _AtomRetrievalOutcome(
             channels,
@@ -2560,6 +2787,7 @@ class RetrievalService:
         selected_slot: str | None,
         snapshot: ActiveRevisionQuerySnapshot,
         rerank_mode: str,
+        trace_id: str | None = None,
     ) -> tuple[
         AtomSupportMatrix,
         tuple[EvidenceItem, ...],
@@ -2589,6 +2817,9 @@ class RetrievalService:
             ]
         ] = []
         alignments_by_atom: dict[str, tuple[AtomGroupAlignment, ...]] = {}
+        qualifications_by_atom: dict[
+            str, dict[tuple[object, ...], AtomEvidenceQualification]
+        ] = {}
         for atom in query_plan.atoms:
             atom_candidates, atom_groups, alignments = _atom_scoped_candidates(
                 atom,
@@ -2628,16 +2859,48 @@ class RetrievalService:
                 *selection.answer_support_set,
                 *selection.model_evidence_candidates,
             )
-            allowed_keys = {identity(item) for item in scoped_items}
+            alignment_by_group = {
+                alignment.group_id: alignment for alignment in alignments
+            }
+            qualifications = {
+                identity(item): qualify_atom_evidence(
+                    atom,
+                    item,
+                    links,
+                    alignment=alignment_by_group.get(
+                        dict(item.metadata).get("evidence_group_id")
+                    ),
+                    resolved_root_query=query_plan.resolved_root_query,
+                    context_resolution_confidence=(
+                        "LOW"
+                        if query_plan.needs_clarification
+                        else "LOW"
+                        if query_plan.coverage_confidence == "LOW"
+                        and len(query_plan.atoms) > 1
+                        else "HIGH"
+                    ),
+                    single_atom_direct=len(query_plan.atoms) == 1
+                    and not query_plan.needs_clarification,
+                )
+                for item in scoped_items
+            }
+            qualifications_by_atom[atom.atom_id] = qualifications
+            allowed_keys = {
+                key
+                for key, qualification in qualifications.items()
+                if qualification.retrieval_relevant or qualification.publishable
+            }
             direct_keys = tuple(
                 identity(item)
                 for item in selection.answer_support_set
                 if identity(item) in allowed_keys
+                and qualifications[identity(item)].publishable
             )
             candidate_keys = tuple(
                 identity(item)
-                for item in selection.model_evidence_candidates
+                for item in scoped_items
                 if identity(item) in allowed_keys
+                and identity(item) not in direct_keys
             )
             if atom.answer_shape not in {
                 AtomAnswerShape.ENUMERATION,
@@ -2699,6 +2962,7 @@ class RetrievalService:
             relevant = tuple(
                 by_key[key] for key in candidate_keys if key in by_key
             )
+            atom_qualifications = qualifications_by_atom[atom.atom_id]
             direct_text = "\n".join(
                 item.citation_text for item in direct
             ).casefold()
@@ -2747,7 +3011,11 @@ class RetrievalService:
                         ),
                     )
                 )
-            if self._policy.evidence_group_mode == "active" and groups:
+            if (
+                structural
+                and self._policy.evidence_group_mode == "active"
+                and groups
+            ):
                 strong_group_ids = {
                     alignment.group_id
                     for alignment in alignments_by_atom[atom.atom_id]
@@ -2802,6 +3070,21 @@ class RetrievalService:
                     ),
                     missing_aspects=tuple(
                         (name for name, passed in checks if not passed)
+                    )
+                    + (
+                        ("STRUCTURE_GROUP_INCOMPLETE",)
+                        if structural and relevant and not direct
+                        else ("ROOT_SOURCE_HIT_ATOM_MISS",)
+                        if relevant
+                        and any(
+                            atom_qualifications[identity(item)].provenance.value
+                            == "ROOT"
+                            for item in relevant
+                        )
+                        and not direct
+                        else ("EVIDENCE_PRESENT_BUT_NOT_OWNED",)
+                        if relevant and not direct
+                        else ()
                     ),
                     contradictions=(
                         ("NUMERIC_VALUE_CONFLICT",) if conflicting else ()
@@ -2844,6 +3127,61 @@ class RetrievalService:
                     ),
                 )
             )
+        all_qualifications = tuple(
+            qualification
+            for per_atom_qualifications in qualifications_by_atom.values()
+            for qualification in per_atom_qualifications.values()
+        )
+        alignment_reasons = Counter(
+            code
+            for alignments in alignments_by_atom.values()
+            for alignment in alignments
+            for code in alignment.reason_codes
+        )
+        ownership_summary = {
+            "root_source_hit": any(link.atom_id is None for link in links),
+            "per_atom_source_hit": {
+                coverage.atom_id: coverage.source_hit for coverage in coverages
+            },
+            "retrieval_relevant_count": sum(
+                item.retrieval_relevant for item in all_qualifications
+            ),
+            "ownership_qualified_count": sum(
+                item.target_owned for item in all_qualifications
+            ),
+            "publishable_support_count": sum(
+                item.publishable for item in all_qualifications
+            ),
+            "evidence_present_but_rejected": sum(
+                support.status is not AtomStatus.SUPPORTED
+                and any(
+                    item.retrieval_relevant
+                    for item in qualifications_by_atom[support.atom_id].values()
+                )
+                for support in supports
+            ),
+            "alignment_reason_distribution": dict(alignment_reasons),
+            "direct_root_rescue_count": sum(
+                item.publishable
+                and item.support_mode is not None
+                and item.support_mode.value == "DIRECT_ROOT_SPAN"
+                for item in all_qualifications
+            ),
+            "direct_atom_rescue_count": sum(
+                item.publishable
+                and item.support_mode is not None
+                and item.support_mode.value == "DIRECT_ATOM_SPAN"
+                for item in all_qualifications
+            ),
+            "constraint_failure_count": sum(
+                not item.constraints_supported for item in all_qualifications
+            ),
+            "relation_failure_count": sum(
+                not item.relation_supported for item in all_qualifications
+            ),
+        }
+        if trace_id is not None:
+            self._record(trace_id, "ownership_summary", ownership_summary)
         return (
             AtomSupportMatrix(atoms=tuple(supports)),
             evidence,
@@ -2987,9 +3325,7 @@ class RetrievalService:
         )
         rank_started = perf_counter()
         resolved_query = (
-            rerank_query
-            or analysis.resolved_query
-            or analysis.normalized_query
+            rerank_query or analysis.resolved_query or analysis.normalized_query
         )
         reranked = self._reranker.rerank(
             resolved_query,
@@ -3374,6 +3710,85 @@ class RetrievalService:
                 occurred_at=datetime.now(UTC),
                 attributes=freeze_json_object(normalized),
             )
+        )
+
+    def _record_shortcut_trace(
+        self, trace_id: str, result: SearchAnswerResult, origin: str
+    ) -> None:
+        """缓存和目录早退也记录真实的本请求 0 次模型调用。"""
+        self._record(
+            trace_id,
+            "query_plan",
+            {
+                "planner_called": False,
+                "planner_protocol": "NONE",
+                "planner_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
+                "planner_transport_timeout_ms": 0,
+                "planner_latency_ms": 0,
+                "planner_input_tokens": 0,
+                "planner_output_tokens": 0,
+                "planner_finish_reason": None,
+                "planner_failure_category": None,
+                "planner_fallback_mode": None,
+                "atom_count": 1,
+                "shortcut_origin": origin,
+            },
+        )
+        self._record(
+            trace_id,
+            "embedding_accounting",
+            {
+                "query_embedding_provider_call_count": 0,
+                "query_embedding_batch_size": 0,
+                "query_embedding_slot_id": None,
+                "query_embedding_latency_ms": 0,
+                "shortcut_origin": origin,
+            },
+        )
+        self._record(
+            trace_id,
+            "ownership_summary",
+            {
+                "root_source_hit": bool(
+                    result.evidence or result.catalog_citations
+                ),
+                "per_atom_source_hit": {
+                    "A1": bool(result.evidence or result.catalog_citations)
+                },
+                "retrieval_relevant_count": len(result.evidence),
+                "ownership_qualified_count": len(result.evidence),
+                "publishable_support_count": len(result.evidence),
+                "evidence_present_but_rejected": 0,
+                "alignment_reason_distribution": {},
+                "direct_root_rescue_count": 0,
+                "direct_atom_rescue_count": 0,
+                "constraint_failure_count": 0,
+                "relation_failure_count": 0,
+                "shortcut_origin": origin,
+            },
+        )
+        support_ids = tuple(item.support_id for item in result.evidence)
+        self._record(
+            trace_id,
+            "claim_publication",
+            {
+                "generated_claim_count": 0,
+                "accepted_claim_count": 0,
+                "published_claim_count": 0,
+                "accepted_support_ids": (),
+                "published_support_ids": support_ids,
+                "published_quote_sha256s": tuple(
+                    hashlib.sha256(
+                        item.citation_text.encode("utf-8")
+                    ).hexdigest()
+                    for item in result.evidence
+                ),
+                "claim_rejection_code_distribution": {},
+                "generation_gap_count": 0,
+                "final_atom_coverage": (),
+                "false_limited_detected": False,
+                "shortcut_origin": origin,
+            },
         )
 
 

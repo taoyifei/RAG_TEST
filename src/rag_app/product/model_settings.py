@@ -32,6 +32,12 @@ class KnowledgeBaseModelSettings(FrozenModel):
     structured_output_mode: Literal[
         "none", "response_format", "structured_outputs", "guided_json"
     ] = "none"
+    planner_transport_timeout_seconds: float = Field(
+        default=8.0, gt=0.0, le=30.0
+    )
+    planner_max_output_tokens: StrictInt = Field(default=128, ge=32, le=160)
+    planner_slo_target_ms: StrictInt = Field(default=5000, gt=0)
+    planner_hard_ceiling_ms: StrictInt = Field(default=7000, gt=0)
     ocr_connection_id: str | None = None
     ocr_model: str | None = None
     ocr_enabled: bool = False
@@ -48,6 +54,8 @@ class KnowledgeBaseModelSettings(FrozenModel):
 
     @model_validator(mode="after")
     def _paired_references(self) -> KnowledgeBaseModelSettings:
+        if self.planner_slo_target_ms > self.planner_hard_ceiling_ms:
+            raise ValueError("Planner SLO 不得超过硬时延上限。")
         if any(
             len(value) != _SHA256_LENGTH
             or any(char not in "0123456789abcdef" for char in value)

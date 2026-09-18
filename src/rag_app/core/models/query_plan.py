@@ -12,7 +12,7 @@ from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
-QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v2"
+QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v3"
 QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v1"
 ATOM_GROUP_ALIGNMENT_REVISION = "wb08r-atom-group-alignment-v1"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v1"
@@ -119,6 +119,12 @@ class QueryPlan(FrozenModel):
 
     plan_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     standalone_query: str = Field(min_length=1, max_length=512)
+    original_query: str = Field(min_length=1, max_length=8000)
+    resolved_root_query: str = Field(min_length=1, max_length=512)
+    context_resolution_mode: str = "ORIGINAL"
+    context_resolution_revision: str = "wb08r-context-resolution-v1"
+    context_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    referenced_span_ids: tuple[str, ...] = ()
     intent: str = Field(min_length=1, max_length=40)
     effort: ReasoningEffortValue
     atoms: tuple[QueryAtom, ...] = Field(min_length=1, max_length=4)
@@ -127,6 +133,8 @@ class QueryPlan(FrozenModel):
     route_hints: tuple[str, ...] = Field(default=(), max_length=4)
     planner_reason_code: str = Field(min_length=1, max_length=120)
     planner_called: StrictBool = False
+    fallback_mode: str | None = None
+    coverage_confidence: Literal["HIGH", "MEDIUM", "LOW"] = "HIGH"
 
     @model_validator(mode="after")
     def _unique_atoms(self) -> Self:
@@ -209,12 +217,19 @@ _ANSWER_SHAPES = {
 }
 
 
-def fallback_query_plan(
+def fallback_query_plan(  # noqa: PLR0913
     analysis: QueryAnalysis,
     *,
     effort: ReasoningEffortValue,
     reason_code: str,
     planner_called: bool,
+    original_query: str | None = None,
+    resolved_root_query: str | None = None,
+    context_resolution_mode: str = "ORIGINAL",
+    context_digest: str | None = None,
+    referenced_span_ids: tuple[str, ...] = (),
+    fallback_mode: str | None = None,
+    coverage_confidence: Literal["HIGH", "MEDIUM", "LOW"] = "HIGH",
 ) -> QueryPlan:
     """规则分析为任意失败 Planner 提供唯一安全原子。"""
     semantics = analysis.semantics
@@ -248,7 +263,17 @@ def fallback_query_plan(
         )[:320],
     )
     return make_query_plan(
-        standalone_query=(analysis.resolved_query or analysis.normalized_query),
+        standalone_query=(
+            resolved_root_query
+            or analysis.resolved_query
+            or analysis.normalized_query
+        ),
+        original_query=original_query or analysis.original_query,
+        context_resolution_mode=context_resolution_mode,
+        context_digest=context_digest or analysis.conversation_fingerprint,
+        referenced_span_ids=referenced_span_ids,
+        fallback_mode=fallback_mode,
+        coverage_confidence=coverage_confidence,
         intent="FACT",
         effort=effort,
         atoms=(atom,),
@@ -260,6 +285,12 @@ def fallback_query_plan(
 def make_query_plan(  # noqa: PLR0913
     *,
     standalone_query: str,
+    original_query: str | None = None,
+    context_resolution_mode: str = "ORIGINAL",
+    context_digest: str | None = None,
+    referenced_span_ids: tuple[str, ...] = (),
+    fallback_mode: str | None = None,
+    coverage_confidence: Literal["HIGH", "MEDIUM", "LOW"] = "HIGH",
     intent: str,
     effort: ReasoningEffortValue,
     atoms: tuple[QueryAtom, ...],
@@ -279,10 +310,14 @@ def make_query_plan(  # noqa: PLR0913
         atom.model_copy(update={"atom_id": f"A{index}"})
         for index, atom in enumerate(unique.values(), 1)
     )
+    original = original_query or standalone_query
+    digest = context_digest or canonical_sha256(())
     identity = canonical_sha256(
         {
             "schema": QUERY_PLAN_SCHEMA_REVISION,
-            "query": standalone_query,
+            "original_query_hash": canonical_sha256(original),
+            "resolved_root_query_hash": canonical_sha256(standalone_query),
+            "context_digest": digest,
             "intent": intent,
             "effort": effort,
             "atoms": [atom.model_dump(mode="json") for atom in numbered],
@@ -291,6 +326,11 @@ def make_query_plan(  # noqa: PLR0913
     return QueryPlan(
         plan_id=identity,
         standalone_query=standalone_query,
+        original_query=original,
+        resolved_root_query=standalone_query,
+        context_resolution_mode=context_resolution_mode,
+        context_digest=digest,
+        referenced_span_ids=referenced_span_ids,
         intent=intent,
         effort=effort,
         atoms=numbered,
@@ -299,4 +339,6 @@ def make_query_plan(  # noqa: PLR0913
         route_hints=route_hints,
         planner_reason_code=reason_code,
         planner_called=planner_called,
+        fallback_mode=fallback_mode,
+        coverage_confidence=coverage_confidence,
     )

@@ -34,6 +34,13 @@ from rag_app.core.ports import EvidenceSourcePort
 _MAX_ADDED_CHUNKS = 12
 _MAX_ADDED_GROUPS = 4
 _ROW_LABEL = re.compile(r"r(?P<row>\d+):c0$")
+_CORRECTION_TRIGGERS = frozenset(
+    {
+        "EVIDENCE_PRESENT_BUT_NOT_OWNED",
+        "ROOT_SOURCE_HIT_ATOM_MISS",
+        "STRUCTURE_GROUP_INCOMPLETE",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +86,18 @@ def correct_per_atom(  # noqa: PLR0913
     atom_by_id = {atom.atom_id: atom for atom in query_plan.atoms}
     for support in matrix.atoms:
         if support.status not in {AtomStatus.PARTIAL, AtomStatus.MISSING}:
+            continue
+        if not set(support.missing_aspects) & _CORRECTION_TRIGGERS:
+            traces.append(
+                AtomCorrectionTrace(
+                    support.atom_id,
+                    "CORRECTION_NOT_TRIGGERED",
+                    None,
+                    None,
+                    None,
+                    0,
+                )
+            )
             continue
         atom = atom_by_id[support.atom_id]
         alignments = align_atom_to_groups(atom, groups, links, policy)

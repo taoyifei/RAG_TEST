@@ -38,6 +38,7 @@ from rag_app.core.models import (
 )
 from rag_app.core.ports.evidence_source import CatalogDocument
 from rag_app.product.grounded_runtime import ProductGroundedModel
+from rag_app.product.model_settings import KnowledgeBaseModelSettings
 from rag_app.wanshitong.public_stream import render_public_final
 from tests.adapters.parsers.docx_fixtures import build_docx
 from tests.application.retrieval.helpers import make_ranked_chunk
@@ -318,7 +319,7 @@ def test_invalid_adaptive_plan_returns_deterministic_fallback() -> None:
         project_id=deterministic_id("prj", "wb08r-plan"),
         knowledge_base_id=deterministic_id("kb", "wb08r-plan"),
     )
-    request = SearchRequest(scope=scope, text="这个流程咋办？")
+    request = SearchRequest(scope=scope, text="甲流程咋办？")
     analysis = QueryAnalyzer().analyze(request)
 
     class InvalidPlannerAdapter:
@@ -334,13 +335,14 @@ def test_invalid_adaptive_plan_returns_deterministic_fallback() -> None:
     model = object.__new__(ProductGroundedModel)
     model._campaign_required = False  # type: ignore[assignment]
     model.adapter = adapter  # type: ignore[assignment]
+    model.settings = KnowledgeBaseModelSettings()  # type: ignore[assignment]
     outcome = model.plan_adaptive(
         request, analysis, ReasoningEffort.ASSISTED
     )
 
     assert adapter.calls == 1
     assert outcome.attempted
-    assert outcome.reason_code == "ADAPTIVE_PLAN_SCHEMA_FALLBACK"
+    assert outcome.reason_code == "PLANNER_INVALID_JSON"
     assert outcome.standalone_query is None
 
 

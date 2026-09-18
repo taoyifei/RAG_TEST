@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
@@ -13,6 +15,17 @@ from rag_app.core.models.query_plan import (
 from rag_app.core.models.retrieval import AnswerClaim, EvidenceItem
 
 _MIN_DESCRIPTIVE_FRAGMENT_CHARS = 5
+
+
+class MissingAtomReason(StrEnum):
+    """区分资料缺失、结构未闭合和本次生成未覆盖。"""
+
+    SOURCE_MISSING = "SOURCE_MISSING"
+    EVIDENCE_NOT_DIRECT = "EVIDENCE_NOT_DIRECT"
+    STRUCTURE_INCOMPLETE = "STRUCTURE_INCOMPLETE"
+    GENERATION_INCOMPLETE = "GENERATION_INCOMPLETE"
+    CLAIM_REJECTED = "CLAIM_REJECTED"
+    CONTEXT_UNRESOLVED = "CONTEXT_UNRESOLVED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,15 +103,15 @@ def _source_order(
     )
 
 
-def render_natural_answer(
+def render_natural_answer(  # noqa: PLR0912
     plan: QueryPlan,
     matrix: AtomSupportMatrix,
     claims: tuple[ValidatedNaturalClaim, ...],
     evidence: tuple[EvidenceItem, ...],
     *,
-    missing_atom_ids: frozenset[str],
+    missing_atoms: Mapping[str, MissingAtomReason],
 ) -> str | None:
-    """以来源顺序发布一次完整答案，缺项只作有限回答。"""
+    """以来源顺序发布一次答案，并按缺项根因选择安全文案。"""
     by_id = {item.support_id: item for item in evidence}
     lines: list[str] = []
     represented_claim_ids: set[str] = set()
@@ -146,26 +159,49 @@ def render_natural_answer(
         lines.extend(("当前资料存在不一致：", *contradictions))
     if not lines:
         return None
-    if missing_atom_ids:
-        missing = "；".join(
-            dict.fromkeys(
-                _missing_description(
-                    atom.answer_shape,
-                    (
-                        atom.original_fragment
-                        or f"{atom.target}{atom.relation}"
-                    ).strip(),
-                )
-                for atom in plan.atoms
-                if atom.atom_id in missing_atom_ids
-            )
-        )
+    if missing_atoms:
         if claims:
             lines.insert(0, "当前资料能够确认的是：")
-            lines.append(f"但现有资料没有明确说明：{missing}。")
-        elif contradictions:
-            lines.append(f"现有资料没有明确说明：{missing}。")
+        for reason in MissingAtomReason:
+            descriptions = tuple(
+                dict.fromkeys(
+                    _missing_description(
+                        atom.answer_shape,
+                        (
+                            atom.original_fragment
+                            or f"{atom.target}{atom.relation}"
+                        ).strip(),
+                    )
+                    for atom in plan.atoms
+                    if missing_atoms.get(atom.atom_id) is reason
+                )
+            )
+            if not descriptions:
+                continue
+            subject = "；".join(descriptions)
+            if reason is MissingAtomReason.SOURCE_MISSING:
+                lines.append(f"但现有资料没有明确说明：{subject}。")
+            elif reason is MissingAtomReason.EVIDENCE_NOT_DIRECT:
+                lines.append(
+                    f"已检索到相关资料，但尚未确认{subject}的直接依据。"
+                )
+            elif reason is MissingAtomReason.STRUCTURE_INCOMPLETE:
+                lines.append(f"已检索到相关资料，但尚无法确认{subject}。")
+            elif reason is MissingAtomReason.GENERATION_INCOMPLETE:
+                lines.append(
+                    "已检索到相关资料，但本次未能完整核验全部条目。"
+                )
+            elif reason is MissingAtomReason.CLAIM_REJECTED:
+                lines.append(
+                    f"已检索到相关资料，但{subject}未通过引用核验。"
+                )
+            else:
+                lines.append("当前问题的指代对象尚不明确。")
     return "\n".join(lines)
 
 
-__all__ = ["ValidatedNaturalClaim", "render_natural_answer"]
+__all__ = [
+    "MissingAtomReason",
+    "ValidatedNaturalClaim",
+    "render_natural_answer",
+]

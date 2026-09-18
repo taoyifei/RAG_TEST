@@ -1,15 +1,16 @@
-"""将单次 Planner 的最小问题拆分转换为可信 QueryAtom。"""
+"""把模型选择的受信 Span ID 转成类型化 QueryAtom。"""
 
 from __future__ import annotations
 
 import re
-import unicodedata
-from typing import Literal
 
-from pydantic import Field, StrictBool, model_validator
+from pydantic import Field, model_validator
 
-from rag_app.application.retrieval.analyzer import QueryAnalyzer
-from rag_app.core.models import QueryAnalysis, SearchRequest
+from rag_app.application.retrieval.context_resolution import (
+    QueryInputSpan,
+    SpanKind,
+)
+from rag_app.core.models import QueryAnalysis
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
@@ -18,21 +19,16 @@ from rag_app.core.models.query_plan import (
     QueryConstraint,
 )
 
-_PUNCTUATION = re.compile(r"[^0-9a-z\u3400-\u9fff]+")
-_CLAUSE_BOUNDARY = re.compile(r"[，,；;。！？?!]+")
 _VERSION = re.compile(r"(?i)(?<![a-z0-9])v\d+(?:\.\d+)*(?![a-z0-9])")
 _DATE = re.compile(r"\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
-_ALNUM_IDENTIFIER = re.compile(r"(?i)[a-z][a-z0-9._/-]*\d[a-z0-9._/-]*")
 _NEGATION = re.compile(r"不得|无需|不必|禁止|严禁|没有|未|不")
-_DURATION_UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年)")
 _UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年|万元|元|%|％|千克|公斤|米)")
-_MAX_ATOMS = 4
-_MIN_TARGET_ANCHOR_CHARS = 1
+_DURATION_UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年)")
 
 
 class MinimalPlanValidationError(ValueError):
-    """只暴露稳定失败类别，不把模型字段或用户原文写入 Trace。"""
+    """只向 Trace 暴露稳定、无正文的失败类别。"""
 
     def __init__(self, code: str) -> None:
         self.code = code
@@ -40,149 +36,114 @@ class MinimalPlanValidationError(ValueError):
 
 
 class MinimalAtomPayload(FrozenModel):
-    """模型只能给出输入中的片段、目标、关系和回答形状。"""
+    """模型只选择服务端给定的片段身份和回答形状。"""
 
-    fragment: str = Field(min_length=1, max_length=320)
-    target: str = Field(min_length=1, max_length=160)
-    relation: str = Field(min_length=1, max_length=160)
+    fragment_span_ids: tuple[str, ...] = Field(min_length=1, max_length=4)
+    target_span_id: str
+    relation_span_id: str
     answer_shape: AtomAnswerShape
 
 
 class MinimalPlanPayload(FrozenModel):
-    """一次可审计的最小 Planner 输出，无答案和检索路由字段。"""
+    """无自由文本事实字段的单次 Planner 输出。"""
 
-    intent: Literal["SINGLE", "COMPOUND", "FOLLOW_UP", "CLARIFICATION"]
-    needs_clarification: StrictBool
-    clarification_question: str | None = Field(default=None, max_length=200)
-    atoms: tuple[MinimalAtomPayload, ...] = Field(
-        min_length=1, max_length=_MAX_ATOMS
+    intent: str = Field(pattern=r"^(SINGLE|COMPOUND|FOLLOW_UP|CLARIFICATION)$")
+    clarification_reason: str | None = Field(
+        default=None,
+        pattern=r"^(MISSING_TARGET|AMBIGUOUS_REFERENCE|MULTIPLE_TARGETS|CONFLICTING_CONTEXT)$",
     )
+    atoms: tuple[MinimalAtomPayload, ...] = Field(default=(), max_length=4)
 
     @model_validator(mode="after")
-    def _clarification_consistent(self) -> MinimalPlanPayload:
-        if self.needs_clarification != bool(self.clarification_question):
-            raise ValueError("澄清状态与问题不一致。")
-        if self.needs_clarification != (self.intent == "CLARIFICATION"):
-            raise ValueError("澄清意图与状态不一致。")
+    def _consistent(self) -> MinimalPlanPayload:
+        if self.intent == "CLARIFICATION":
+            if self.clarification_reason is None or self.atoms:
+                raise ValueError("澄清只允许返回原因。")
+        elif not self.atoms or self.clarification_reason is not None:
+            raise ValueError("非澄清规划须包含 1 至 4 个 Atom。")
         return self
 
 
 def build_query_atoms(
     payload: MinimalPlanPayload,
-    request: SearchRequest,
+    spans: tuple[QueryInputSpan, ...],
     analysis: QueryAnalysis,
 ) -> tuple[QueryAtom, ...]:
-    """只从用户原问与最近上下文提取限制，不信任模型补充事实。"""
-    available = (request.text, *request.conversation_context[-2:])
-    normalized_available = _normalized(" ".join(available))
-    fragments = tuple(atom.fragment.strip() for atom in payload.atoms)
-    if not all(
-        any(fragment in source for source in available)
-        for fragment in fragments
-    ):
-        raise MinimalPlanValidationError("FRAGMENT_NOT_IN_INPUT")
-    if not any(fragment in request.text for fragment in fragments):
-        raise MinimalPlanValidationError("CURRENT_QUERY_UNCOVERED")
-    _validate_clause_coverage(request.text, fragments)
-    analyzer = QueryAnalyzer()
-    available_literals = _protected_literals(
-        " ".join(available), analyzer, request
-    )
-    built: list[QueryAtom] = []
-    for index, (atom, fragment) in enumerate(
-        zip(payload.atoms, fragments, strict=True), 1
-    ):
-        target = atom.target.strip()
-        if not _target_anchored(target, normalized_available):
-            raise MinimalPlanValidationError("TARGET_NOT_IN_INPUT")
-        for literal in _protected_literals(
-            f"{target} {atom.relation}", analyzer, request
+    """仅解引用服务端受信片段；不存在的 ID 拒绝整份计划。"""
+    by_id = {span.span_id: span for span in spans}
+    current_clauses = {
+        span.span_id
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
+    }
+    referenced_clauses: set[str] = set()
+    atoms: list[QueryAtom] = []
+    for index, item in enumerate(payload.atoms, 1):
+        ids = (
+            *item.fragment_span_ids,
+            item.target_span_id,
+            item.relation_span_id,
+        )
+        if any(span_id not in by_id for span_id in ids):
+            raise MinimalPlanValidationError("PLANNER_UNKNOWN_SPAN_REFERENCE")
+        fragments = tuple(by_id[span_id] for span_id in item.fragment_span_ids)
+        target = by_id[item.target_span_id]
+        relation = by_id[item.relation_span_id]
+        if any(
+            span.kind is not SpanKind.CLAUSE for span in fragments
+        ) or not any(span.turn == "CURRENT" for span in fragments):
+            raise MinimalPlanValidationError("PLANNER_INVALID_SPAN_KIND")
+        if (
+            target.kind is not SpanKind.TARGET
+            or relation.kind is not SpanKind.RELATION
+            or relation.turn != "CURRENT"
         ):
-            if literal not in available_literals:
-                raise MinimalPlanValidationError("LITERAL_NOT_IN_INPUT")
-        built.append(
+            raise MinimalPlanValidationError("PLANNER_INVALID_SPAN_KIND")
+        referenced_clauses.update(
+            span.span_id for span in fragments if span.turn == "CURRENT"
+        )
+        fragment = " ".join(dict.fromkeys(span.text for span in fragments))
+        source = analysis.semantics.source_qualifier
+        atoms.append(
             QueryAtom(
                 atom_id=f"A{index}",
-                target=target,
-                relation=atom.relation.strip(),
-                answer_shape=atom.answer_shape,
-                source_qualifier=analysis.semantics.source_qualifier,
-                constraints=_constraints_for_fragment(fragment, analysis),
-                original_fragment=fragment,
+                target=target.text,
+                relation=relation.text,
+                answer_shape=item.answer_shape,
+                source_qualifier=source,
+                constraints=_constraints_for_fragment(fragment, source),
+                original_fragment=fragment[:320],
             )
         )
-    return tuple(built)
-
-
-def _normalized(value: str) -> str:
-    return _PUNCTUATION.sub(
-        "", unicodedata.normalize("NFKC", value).casefold()
-    )
-
-
-def _target_anchored(target: str, available: str) -> bool:
-    normalized = _normalized(target)
-    return (
-        len(normalized) >= _MIN_TARGET_ANCHOR_CHARS
-        and normalized in available
-    )
-
-
-def _protected_literals(
-    text: str, analyzer: QueryAnalyzer, request: SearchRequest
-) -> set[str]:
-    analyzed = analyzer.analyze(request.model_copy(update={"text": text}))
-    return {
-        _normalized(value)
-        for value in (
-            *analyzed.identifiers,
-            *analyzed.quoted_phrases,
-            *analyzed.date_version_signals,
-            *analyzed.numbers,
-            *[match[0] for match in _VERSION.finditer(text)],
-            *[match[0] for match in _DATE.finditer(text)],
-            *[match[0] for match in _NUMBER.finditer(text)],
-            *[match[0] for match in _ALNUM_IDENTIFIER.finditer(text)],
-        )
-        if _normalized(value)
+    if current_clauses - referenced_clauses:
+        raise MinimalPlanValidationError("PLANNER_CLAUSE_UNCOVERED")
+    literal_values = {
+        span.text
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.LITERAL
     }
-
-
-def _validate_clause_coverage(
-    question: str, fragments: tuple[str, ...]
-) -> None:
-    normalized_fragments = tuple(_normalized(item) for item in fragments)
-    for clause in _CLAUSE_BOUNDARY.split(question):
-        normalized = _normalized(clause)
-        if not normalized:
-            continue
-        if not any(
-            normalized in fragment or fragment in normalized
-            for fragment in normalized_fragments
-            if fragment
-        ):
-            raise MinimalPlanValidationError("CLAUSE_UNCOVERED")
+    atom_text = " ".join(atom.search_text for atom in atoms)
+    if any(value not in atom_text for value in literal_values):
+        raise MinimalPlanValidationError("PLANNER_LITERAL_VIOLATION")
+    return tuple(atoms)
 
 
 def _constraints_for_fragment(
-    fragment: str,
-    analysis: QueryAnalysis,
+    fragment: str, source: str | None
 ) -> tuple[QueryConstraint, ...]:
     constraints: list[QueryConstraint] = []
-    source = analysis.semantics.source_qualifier
-    scoped_text = " ".join((fragment, source or ""))
-    protected_spans: list[tuple[int, int]] = []
+    protected: list[tuple[int, int]] = []
     for pattern, kind in (
         (_VERSION, AtomConstraintKind.VERSION),
         (_DATE, AtomConstraintKind.DATE_TIME),
     ):
-        for match in pattern.finditer(scoped_text):
-            protected_spans.append(match.span())
+        for match in pattern.finditer(fragment):
+            protected.append(match.span())
             constraints.append(QueryConstraint(kind=kind, value=match[0]))
     for match in _NUMBER.finditer(fragment):
         if any(
             start <= match.start() and match.end() <= end
-            for start, end in protected_spans
+            for start, end in protected
         ):
             continue
         suffix = fragment[match.end() :]
@@ -206,10 +167,7 @@ def _constraints_for_fragment(
     )
     if source:
         constraints.append(
-            QueryConstraint(
-                kind=AtomConstraintKind.SOURCE,
-                value=source,
-            )
+            QueryConstraint(kind=AtomConstraintKind.SOURCE, value=source)
         )
     return tuple(dict.fromkeys(constraints))[:12]
 

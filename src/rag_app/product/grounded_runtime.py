@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from threading import RLock
+from time import perf_counter
 from typing import TypeVar
 
 from pydantic import (
@@ -36,6 +37,11 @@ from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlanOutcome,
     ReasoningEffort,
+)
+from rag_app.application.retrieval.context_resolution import (
+    QueryInputSpan,
+    build_input_spans,
+    resolve_root_query,
 )
 from rag_app.application.retrieval.minimal_plan import (
     MinimalPlanPayload,
@@ -455,6 +461,17 @@ class ProductGroundedModel:
             return AdaptivePlanOutcome()
         if len(request.text) > _MAX_REWRITE_CHARS:
             return AdaptivePlanOutcome(reason_code="ADAPTIVE_PLAN_INPUT_LIMIT")
+        spans = build_input_spans(request)
+        root = resolve_root_query(request, spans)
+        if root.mode == "CLARIFY":
+            return AdaptivePlanOutcome(
+                standalone_query=root.resolved_query,
+                intent="CLARIFICATION",
+                needs_clarification=True,
+                clarification_question="请明确您所指的对象和要查询的事项。",
+                reason_code="PLANNER_CONTEXT_UNRESOLVED",
+                failure_category="PLANNER_CONTEXT_UNRESOLVED",
+            )
         schema = _AdaptivePlanPayload.model_json_schema()
         mode = (
             self.adapter.config.structured_output_mode
@@ -462,7 +479,12 @@ class ProductGroundedModel:
             else "none"
         )
         outcome = self._plan_adaptive_once(
-            request, analysis, schema=schema, mode=mode
+            request,
+            analysis,
+            spans=spans,
+            root_query=root.resolved_query,
+            schema=schema,
+            mode=mode,
         )
         return replace(
             outcome,
@@ -471,11 +493,13 @@ class ProductGroundedModel:
             schema_sha256=canonical_sha256(schema),
         )
 
-    def _plan_adaptive_once(
+    def _plan_adaptive_once(  # noqa: PLR0911, PLR0913
         self,
         request: SearchRequest,
         analysis: QueryAnalysis,
         *,
+        spans: tuple[QueryInputSpan, ...],
+        root_query: str,
         schema: dict[str, object],
         mode: str,
     ) -> AdaptivePlanOutcome:
@@ -484,35 +508,27 @@ class ProductGroundedModel:
             ChatMessage(
                 role="system",
                 content=(
-                    "你只负责把用户问题整理为1至4个可检索事实原子，不得回答问题、"
-                    "引用文档或补充用户未提出的条件。必须保留数字、时限、否定、"
-                    "版本和来源限制。只输出JSON对象，字段为intent、"
-                    "needs_clarification、clarification_question、atoms。"
-                    "intent只可为SINGLE/COMPOUND/FOLLOW_UP/CLARIFICATION。"
-                    "每个atom只含fragment、target、relation、answer_shape。"
-                    "fragment必须是当前问题或最近上下文中的连续原文，尽量短；"
-                    "至少一个fragment必须来自当前问题。一个片段可供多个原子共用，"
-                    "但原子的目标或关系应不同。所有独立问句须由fragment覆盖。"
-                    "target从原文提取，"
-                    "relation只描述要查的关系。answer_shape只可为"
-                    "FACT/DEFINITION/ENUMERATION/PROCEDURE/"
-                    "DUTIES/RESPONSIBLE_PARTY/DURATION/COUNT/COMPARISON/"
-                    "CATALOG_REFERENCE。没有澄清问题时用null。"
-                    "虚构示例：甲什么时候提交，乙审核多久，分别拆成"
-                    "甲提交时间与乙审核时限两个原子。"
+                    "只选择给定 Span ID，将用户问题拆成至多四个可检索事实原子。"
+                    "不得回答问题、创造 Span、补充条件或引用文档。"
+                    "每个独立当前问句都须覆盖；relation 必须来自当前问句。"
+                    "无法唯一确定对象时选择澄清意图。"
+                    "只输出符合 JSON Schema 的对象。"
                 ),
             ),
             ChatMessage(
                 role="user",
                 content=json.dumps(
                     {
-                        "question": request.text,
-                        "rule_answer_type": (
-                            analysis.semantics.answer_type.value
-                        ),
-                        "context": [
-                            value[:300]
-                            for value in request.conversation_context[-2:]
+                        "current_question": request.text,
+                        "resolved_root": root_query,
+                        "spans": [
+                            {
+                                "id": span.span_id,
+                                "kind": span.kind.value,
+                                "turn": span.turn,
+                                "text": span.text,
+                            }
+                            for span in spans
                         ],
                     },
                     ensure_ascii=False,
@@ -520,6 +536,9 @@ class ProductGroundedModel:
             ),
         )
         calls: tuple[ProviderCall, ...] = ()
+        started = perf_counter()
+        timeout = self.settings.planner_transport_timeout_seconds
+        token_limit = self.settings.planner_max_output_tokens
         try:
             schema_args = (
                 {
@@ -533,11 +552,23 @@ class ProductGroundedModel:
                 completion = self.adapter.complete(
                     messages,
                     operation="query.interpret",
-                    max_output_tokens=192,
-                    timeout_seconds=5.0,
+                    max_output_tokens=token_limit,
+                    timeout_seconds=timeout,
                     **schema_args,
                 )
             calls = (completion.call,)
+            usage = getattr(completion, "usage", None)
+            telemetry = {
+                "planner_latency_ms": round((perf_counter() - started) * 1000),
+                "planner_input_tokens": getattr(usage, "prompt_tokens", None),
+                "planner_output_tokens": getattr(
+                    usage, "completion_tokens", None
+                ),
+                "planner_finish_reason": getattr(
+                    completion, "finish_reason", None
+                ),
+                "planner_transport_timeout_ms": round(timeout * 1000),
+            }
             try:
                 payload_data = (
                     json.loads(completion.content)
@@ -547,52 +578,84 @@ class ProductGroundedModel:
             except (json.JSONDecodeError, ValueError):
                 return AdaptivePlanOutcome(
                     calls=calls,
-                    reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
+                    reason_code="PLANNER_INVALID_JSON",
                     attempted=True,
                     schema_fallback_detail="INVALID_JSON",
+                    failure_category="PLANNER_INVALID_JSON",
+                    **telemetry,
                 )
             try:
                 payload = _AdaptivePlanPayload.model_validate(payload_data)
             except ValidationError:
                 return AdaptivePlanOutcome(
                     calls=calls,
-                    reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
+                    reason_code="PLANNER_INVALID_SCHEMA",
                     attempted=True,
                     schema_fallback_detail="INVALID_SCHEMA",
+                    failure_category="PLANNER_INVALID_SCHEMA",
+                    **telemetry,
                 )
             try:
-                atoms = build_query_atoms(payload, request, analysis)
+                atoms = build_query_atoms(payload, spans, analysis)
             except MinimalPlanValidationError as error:
                 return AdaptivePlanOutcome(
                     calls=calls,
-                    reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
+                    reason_code=error.code,
                     attempted=True,
                     schema_fallback_detail=error.code,
+                    failure_category=error.code,
+                    **telemetry,
+                )
+            if payload.intent == "CLARIFICATION":
+                return AdaptivePlanOutcome(
+                    standalone_query=root_query,
+                    intent=payload.intent,
+                    needs_clarification=True,
+                    clarification_question="请明确您所指的对象和要查询的事项。",
+                    calls=calls,
+                    reason_code="PLANNER_CONTEXT_UNRESOLVED",
+                    attempted=True,
+                    **telemetry,
                 )
             return AdaptivePlanOutcome(
-                standalone_query=request.text,
+                standalone_query=root_query,
                 intent=payload.intent,
-                needs_clarification=payload.needs_clarification,
-                clarification_question=payload.clarification_question,
+                needs_clarification=False,
+                clarification_question=None,
                 atoms=atoms,
                 route_hints=(),
                 calls=calls,
                 reason_code="ADAPTIVE_PLAN_APPLIED",
                 attempted=True,
+                **telemetry,
             )
         except RagError as error:
+            provider_reason = str(
+                dict(error.details).get("reason_code", error.code)
+            )
+            category = (
+                "PLANNER_PROVIDER_TIMEOUT"
+                if "TIMEOUT" in provider_reason
+                else "PLANNER_PROVIDER_UNAVAILABLE"
+            )
             return AdaptivePlanOutcome(
                 calls=_error_provider_calls(error),
-                reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
+                reason_code=category,
                 attempted=True,
-                schema_fallback_detail=error.code,
+                schema_fallback_detail=provider_reason,
+                failure_category=category,
+                planner_latency_ms=round((perf_counter() - started) * 1000),
+                planner_transport_timeout_ms=round(timeout * 1000),
             )
         except (ValueError, TypeError):
             return AdaptivePlanOutcome(
                 calls=calls,
-                reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
+                reason_code="PLANNER_INTERNAL_VALIDATION",
                 attempted=True,
                 schema_fallback_detail="ATOM_CONSTRUCTION_INVALID",
+                failure_category="PLANNER_INTERNAL_VALIDATION",
+                planner_latency_ms=round((perf_counter() - started) * 1000),
+                planner_transport_timeout_ms=round(timeout * 1000),
             )
 
     def interpret(  # noqa: PLR0911

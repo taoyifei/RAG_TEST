@@ -58,7 +58,11 @@ def _plan(count: int) -> QueryPlan:
 def _matrix(count: int) -> AtomSupportMatrix:
     return AtomSupportMatrix(
         atoms=tuple(
-            AtomSupport(atom_id=f"A{index}", status=AtomStatus.PARTIAL)
+            AtomSupport(
+                atom_id=f"A{index}",
+                status=AtomStatus.PARTIAL,
+                missing_aspects=("STRUCTURE_GROUP_INCOMPLETE",),
+            )
             for index in range(1, count + 1)
         )
     )
@@ -229,3 +233,35 @@ def test_correction_processes_each_missing_atom() -> None:
     assert outcome.atom_traces[0].reason_code == "NO_QUALIFIED_ANCHOR"
     assert outcome.atom_traces[1].added_chunk_count == 1
     assert outcome.added_chunk_count == 1
+
+
+def test_unrelated_partial_status_does_not_expand_neighbors() -> None:
+    neighbor = make_ranked_chunk(2, "甲设备1补充条款。")
+    anchor = make_ranked_chunk(
+        1,
+        "甲设备1保管期限待补充。",
+        next_chunk_id=neighbor.hydrated.chunk.chunk_id,
+    )
+    source = Mock()
+    matrix = AtomSupportMatrix(
+        atoms=(
+            AtomSupport(
+                atom_id="A1",
+                status=AtomStatus.PARTIAL,
+                missing_aspects=("ATOM_CONSTRAINT_UNVERIFIED",),
+            ),
+        )
+    )
+
+    outcome = _service(source)._corrective_retrieval(
+        snapshot=object(),  # type: ignore[arg-type]
+        candidates=(anchor,),
+        groups=(_group(1, (anchor,)),),
+        links=(_link(1, anchor.hydrated.chunk.chunk_id),),
+        matrix=matrix,
+        query_plan=_plan(1),
+    )
+
+    assert outcome.added_chunk_count == 0
+    assert outcome.atom_traces[0].reason_code == "CORRECTION_NOT_TRIGGERED"
+    source.hydrate_chunks.assert_not_called()

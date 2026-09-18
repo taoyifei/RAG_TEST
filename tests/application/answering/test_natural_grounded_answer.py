@@ -168,6 +168,9 @@ def test_supported_natural_paraphrase_keeps_server_quote() -> None:
     )
     assert outcome.atom_coverage == (("A1", "SUPPORTED"),)
     assert outcome.published_support_ids == ("S1",)
+    assert outcome.accepted_support_ids == ("S1",)
+    assert outcome.accepted_claim_count == 1
+    assert outcome.published_claim_count == 1
     assert generator.generate.call_count == 1
 
 
@@ -186,7 +189,7 @@ def test_changed_number_is_not_published_after_local_repair() -> None:
     assert outcome.reason_code == "CLAIM_NOT_SUPPORTED"
     assert outcome.atom_coverage == (("A1", "MISSING"),)
     assert outcome.repair_calls == 1
-    assert outcome.claim_rejection_codes == (("CLAIM_NUMBER_DRIFT", 2),)
+    assert outcome.claim_rejection_codes == (("CLAIM_NUMBER_MISMATCH", 2),)
     assert generator.generate.call_args_list[1].args[0].repair_atom_ids == (
         "A1",
     )
@@ -206,7 +209,7 @@ def test_changed_negation_is_not_published() -> None:
     assert outcome.answer is None
     assert outcome.reason_code == "CLAIM_NOT_SUPPORTED"
     assert outcome.repair_calls == 1
-    assert outcome.claim_rejection_codes == (("CLAIM_MODALITY_DRIFT", 2),)
+    assert outcome.claim_rejection_codes == (("CLAIM_MODALITY_MISMATCH", 2),)
 
 
 def test_permission_cannot_be_rewritten_as_obligation() -> None:
@@ -357,10 +360,13 @@ def test_incomplete_enumeration_remains_limited() -> None:
 
     assert outcome.atom_coverage == (("A1", "PARTIAL"),)
     assert outcome.answer is not None
-    assert "现有资料没有明确说明" in outcome.answer
-    assert "完整列表" in outcome.answer
+    assert "本次未能完整核验全部条目" in outcome.answer
+    assert "现有资料没有明确说明" not in outcome.answer
+    assert outcome.missing_atom_reasons == (("A1", "GENERATION_INCOMPLETE"),)
+    assert outcome.generation_gap_count == 1
+    assert outcome.repair_calls == 1
     assert "归档的规定" not in outcome.answer
-    assert generator.generate.call_count == 1
+    assert generator.generate.call_count == 2
 
 
 def test_renderer_deduplicates_same_fact_and_support() -> None:
@@ -592,7 +598,7 @@ def test_one_generic_claim_cannot_certify_multiple_atoms() -> None:
 
     assert outcome.answer is None
     assert outcome.claim_rejection_codes == (
-        ("CLAIM_SUPPORT_OUTSIDE_ATOM", 2),
+        ("CLAIM_SUPPORT_NOT_OWNED", 2),
     )
     assert outcome.atom_coverage == (("A1", "MISSING"), ("A2", "MISSING"))
     assert outcome.repair_calls == 1

@@ -144,7 +144,7 @@ def test_bad_claim_does_not_delete_valid_claim_after_repair_failure() -> None:
     assert "乙部门审核记录 4 天" not in outcome.answer
     assert outcome.reason_code == "LIMITED_ANSWER"
     assert outcome.atom_coverage == (("A1", "SUPPORTED"), ("A2", "MISSING"))
-    assert outcome.claim_rejection_codes == (("CLAIM_NUMBER_DRIFT", 1),)
+    assert outcome.claim_rejection_codes == (("CLAIM_NUMBER_MISMATCH", 1),)
     assert outcome.repair_calls == 1
     repair = generator.generate.call_args_list[1].args[0]
     assert repair.repair_atom_ids == ("A2",)

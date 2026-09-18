@@ -80,6 +80,12 @@ class AdaptivePlanOutcome:
     structured_output_mode: str = "none"
     schema_revision: str | None = None
     schema_sha256: str | None = None
+    failure_category: str | None = None
+    planner_latency_ms: int = 0
+    planner_input_tokens: int | None = None
+    planner_output_tokens: int | None = None
+    planner_finish_reason: str | None = None
+    planner_transport_timeout_ms: int = 0
 
 
 class AdaptivePlannerPort(Protocol):

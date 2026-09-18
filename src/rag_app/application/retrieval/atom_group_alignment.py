@@ -10,7 +10,7 @@ from difflib import SequenceMatcher
 from enum import StrEnum
 
 from rag_app.application.retrieval.evidence_groups import GroupCandidate
-from rag_app.core.models import EvidenceGroupKind, RetrievalPolicy
+from rag_app.core.models import EvidenceGroupKind, EvidenceItem, RetrievalPolicy
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomCandidateLink,
@@ -31,6 +31,23 @@ class AlignmentQualification(StrEnum):
     REJECTED = "REJECTED"
 
 
+class EvidenceProvenance(StrEnum):
+    """候选最早进入本次检索的来源。"""
+
+    ROOT = "ROOT"
+    ATOM = "ATOM"
+    CORRECTIVE = "CORRECTIVE"
+
+
+class EvidenceSupportMode(StrEnum):
+    """可引用证据的结构边界。"""
+
+    ALIGNED_COMPLETE_GROUP = "ALIGNED_COMPLETE_GROUP"
+    ALIGNED_PARTIAL_GROUP = "ALIGNED_PARTIAL_GROUP"
+    DIRECT_ATOM_SPAN = "DIRECT_ATOM_SPAN"
+    DIRECT_ROOT_SPAN = "DIRECT_ROOT_SPAN"
+
+
 @dataclass(frozen=True, slots=True)
 class AtomGroupAlignment:
     """保留结构身份、字面锚点、初召回来源和拒绝原因。"""
@@ -43,7 +60,201 @@ class AtomGroupAlignment:
     relation_compatible: bool
     constraint_checks: tuple[tuple[str, bool], ...]
     qualification: AlignmentQualification
+    publishable: bool
     reason_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AtomEvidenceQualification:
+    """区分相关候选和可发布支持，不用相似度代替事实证明。"""
+
+    atom_id: str
+    chunk_id: str
+    group_id: str | None
+    provenance: EvidenceProvenance
+    retrieval_relevant: bool
+    target_owned: bool
+    relation_supported: bool
+    constraints_supported: bool
+    source_scope_supported: bool
+    structure_safe: bool
+    publishable: bool
+    support_mode: EvidenceSupportMode | None
+    reason_codes: tuple[str, ...]
+
+
+_SCALAR_SHAPES = frozenset(
+    {
+        AtomAnswerShape.FACT,
+        AtomAnswerShape.DEFINITION,
+        AtomAnswerShape.DURATION,
+        AtomAnswerShape.COUNT,
+        AtomAnswerShape.RESPONSIBLE_PARTY,
+    }
+)
+
+
+def qualify_atom_evidence(  # noqa: PLR0913
+    atom: QueryAtom,
+    item: EvidenceItem,
+    links: tuple[AtomCandidateLink, ...],
+    *,
+    alignment: AtomGroupAlignment | None,
+    resolved_root_query: str,
+    context_resolution_confidence: str = "HIGH",
+    single_atom_direct: bool = False,
+) -> AtomEvidenceQualification:
+    """对一个真实 SourceSpan 建立逐原子发布资格。
+
+    ROOT 只能在可信上下文和完整目标关系均被来源直接证明时补救。
+    结构问题只使用其已锁定组，不能借单个邻居 Chunk 宣称完整。
+    """
+    metadata = dict(item.metadata)
+    group_id = metadata.get("evidence_group_id")
+    group_id = group_id if isinstance(group_id, str) else None
+    direct_support = metadata.get("answer_support")
+    relation_supported = (
+        isinstance(direct_support, dict)
+        and direct_support.get("status") == "SUPPORTED"
+    )
+    own_link = any(
+        link.atom_id == atom.atom_id and link.chunk_id == item.chunk_id
+        for link in links
+    ) or (single_atom_direct and not links and relation_supported)
+    root_link = any(
+        link.atom_id is None and link.chunk_id == item.chunk_id
+        for link in links
+    )
+    provenance = (
+        EvidenceProvenance.CORRECTIVE
+        if item.selection_reason == "closed_correction"
+        else EvidenceProvenance.ATOM
+        if own_link
+        else EvidenceProvenance.ROOT
+    )
+    cited = bool(item.source_spans) and all(
+        span.is_citable for span in item.source_spans
+    )
+    source_text = " ".join(
+        (
+            item.display_name or "",
+            str(metadata.get("document_title", "")),
+        )
+    )
+    source_scope_supported = (
+        not atom.source_qualifier
+        or _normalized(atom.source_qualifier) in _normalized(source_text)
+    )
+    constraints_supported = all(
+        _constraint_supported(constraint.kind.value, constraint.value, item)
+        for constraint in atom.constraints
+    )
+    direct_target = bool(
+        _normalized(atom.target)
+        and _normalized(atom.target) in _normalized(item.citation_text)
+    )
+    group_owned = (
+        alignment is not None
+        and alignment.qualification is not AlignmentQualification.REJECTED
+        and alignment.group_id == group_id
+    )
+    target_owned = direct_target or group_owned
+    root_trusted = (
+        context_resolution_confidence in {"HIGH", "MEDIUM"}
+        and bool(_normalized(atom.target))
+        and bool(_normalized(atom.relation))
+        and _normalized(atom.target) in _normalized(resolved_root_query)
+        and _normalized(atom.relation) in _normalized(resolved_root_query)
+    )
+    if provenance is EvidenceProvenance.ROOT and not root_link:
+        root_trusted = False
+    structural = atom.answer_shape not in _SCALAR_SHAPES
+    structure_safe = (
+        group_owned
+        if structural
+        else alignment is None
+        or group_owned
+        or group_id is None
+    )
+    retrieval_relevant = cited and (own_link or root_link or group_owned)
+    direct_allowed = (
+        atom.answer_shape in _SCALAR_SHAPES
+        and direct_target
+        and (own_link or root_trusted)
+        and structure_safe
+    )
+    group_allowed = group_owned and structure_safe
+    support_mode = (
+        EvidenceSupportMode.ALIGNED_COMPLETE_GROUP
+        if group_allowed and metadata.get("group_complete") is True
+        else EvidenceSupportMode.ALIGNED_PARTIAL_GROUP
+        if group_allowed
+        else EvidenceSupportMode.DIRECT_ATOM_SPAN
+        if direct_allowed and own_link
+        else EvidenceSupportMode.DIRECT_ROOT_SPAN
+        if direct_allowed and root_trusted
+        else None
+    )
+    publishable = (
+        item.publishable
+        and cited
+        and target_owned
+        and relation_supported
+        and constraints_supported
+        and source_scope_supported
+        and structure_safe
+        and support_mode is not None
+        and (provenance is not EvidenceProvenance.ROOT or root_trusted)
+    )
+    reasons: list[str] = []
+    for valid, code in (
+        (retrieval_relevant, "NOT_RETRIEVAL_RELEVANT"),
+        (target_owned, "ATOM_TARGET_NOT_OWNED"),
+        (relation_supported, "ATOM_RELATION_UNSUPPORTED"),
+        (constraints_supported, "ATOM_CONSTRAINT_UNVERIFIED"),
+        (source_scope_supported, "SOURCE_QUALIFIER_MISMATCH"),
+        (structure_safe, "ATOM_STRUCTURE_UNSAFE"),
+        (cited, "SOURCE_SPAN_NOT_CITABLE"),
+    ):
+        if not valid:
+            reasons.append(code)
+    if provenance is EvidenceProvenance.ROOT and not root_trusted:
+        reasons.append("ROOT_RESCUE_UNTRUSTED")
+    if support_mode is None:
+        reasons.append("NO_PUBLISHABLE_SUPPORT_MODE")
+    return AtomEvidenceQualification(
+        atom_id=atom.atom_id,
+        chunk_id=item.chunk_id,
+        group_id=group_id,
+        provenance=provenance,
+        retrieval_relevant=retrieval_relevant,
+        target_owned=target_owned,
+        relation_supported=relation_supported,
+        constraints_supported=constraints_supported,
+        source_scope_supported=source_scope_supported,
+        structure_safe=structure_safe,
+        publishable=publishable,
+        support_mode=support_mode,
+        reason_codes=tuple(reasons),
+    )
+
+
+def _constraint_supported(kind: str, value: str, item: EvidenceItem) -> bool:
+    """硬限制逐字保真；来源限制只检查文档身份。"""
+    metadata = dict(item.metadata)
+    checked = (
+        " ".join(
+            (
+                item.display_name or "",
+                str(metadata.get("document_title", "")),
+            )
+        )
+        if kind == "SOURCE"
+        else item.citation_text
+    )
+    expected = "".join(unicodedata.normalize("NFKC", value).casefold().split())
+    actual = "".join(unicodedata.normalize("NFKC", checked).casefold().split())
+    return bool(expected) and expected in actual
 
 
 def align_atom_to_groups(
@@ -135,6 +346,13 @@ def align_atom_to_groups(
             qualification = AlignmentQualification.REJECTED
             if score >= policy.atom_group_weak_anchor_threshold:
                 reasons.append("WEAK_ANCHOR_WITHOUT_ATOM_SEED")
+        if not relation_compatible:
+            reasons.append("ATOM_RELATION_UNVERIFIED")
+        publishable = (
+            qualification is not AlignmentQualification.REJECTED
+            and relation_compatible
+            and all(passed for _kind, passed in checks)
+        )
         results.append(
             AtomGroupAlignment(
                 atom_id=atom.atom_id,
@@ -145,6 +363,7 @@ def align_atom_to_groups(
                 relation_compatible=relation_compatible,
                 constraint_checks=checks,
                 qualification=qualification,
+                publishable=publishable,
                 reason_codes=tuple(reasons),
             )
         )
@@ -247,6 +466,10 @@ def _anchor_score(target: str, anchor: str) -> float:
 
 __all__ = [
     "AlignmentQualification",
+    "AtomEvidenceQualification",
     "AtomGroupAlignment",
+    "EvidenceProvenance",
+    "EvidenceSupportMode",
     "align_atom_to_groups",
+    "qualify_atom_evidence",
 ]
