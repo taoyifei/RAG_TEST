@@ -871,8 +871,9 @@ def _check_negations(clause: str, source_clauses: list[str]) -> None:
 
 
 def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
-    """表格按真实行分组，普通正文按真实来源节点分组。"""
-    support = dict(item.metadata).get("answer_support")
+    """表格按真实行，完整列表或流程按认证组，其余正文按来源节点分组。"""
+    metadata = dict(item.metadata)
+    support = metadata.get("answer_support")
     table_node_ids = {
         span.node_id
         for span in item.source_spans
@@ -929,6 +930,33 @@ def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
                         for value in supporting_ids
                         if isinstance(value, str)
                     ),
+                )
+            }
+    if (
+        not item.table_context
+        and item.table_locator is None
+        and metadata.get("group_complete") is True
+        and metadata.get("evidence_group_type")
+        in {"LIST_GROUP", "PROCEDURE_GROUP"}
+        and isinstance(metadata.get("evidence_group_id"), str)
+        and item.source_spans
+        and all(span.source_anchor is not None for span in item.source_spans)
+    ):
+        stories = {
+            (span.source_anchor.part_uri, span.source_anchor.story_kind)
+            for span in item.source_spans
+            if span.source_anchor is not None
+        }
+        if len(stories) == 1:
+            part_uri, story_kind = next(iter(stories))
+            return {
+                (
+                    "complete-structured-group",
+                    item.document_version_id,
+                    item.section_id,
+                    part_uri,
+                    story_kind,
+                    metadata["evidence_group_id"],
                 )
             }
     groups: set[tuple[object, ...]] = set()

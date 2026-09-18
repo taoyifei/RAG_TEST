@@ -6,7 +6,13 @@ from unittest.mock import Mock
 
 from rag_app.core.models import EvidenceItem
 from rag_app.core.models.common import freeze_json_object
-from rag_app.core.models.query_plan import AtomAnswerShape, AtomStatus
+from rag_app.core.models.query_plan import (
+    AtomAnswerShape,
+    AtomStatus,
+    AtomSupportMatrix,
+    QueryPlan,
+)
+from rag_app.core.models.retrieval import ClaimSupport, NaturalClaim
 from tests.application.answering.test_natural_grounded_answer import (
     _answer,
     _claim,
@@ -27,6 +33,7 @@ def _complete_group() -> tuple[EvidenceItem, ...]:
                 "metadata": freeze_json_object(
                     {
                         "evidence_group_id": "egrp_" + "0" * 31 + "1",
+                        "evidence_group_type": "LIST_GROUP",
                         "group_complete": True,
                         "group_member_count": 3,
                         "group_member_index": index,
@@ -38,23 +45,48 @@ def _complete_group() -> tuple[EvidenceItem, ...]:
     )
 
 
-def test_complete_group_omission_is_generation_gap_after_one_repair() -> None:
-    evidence = _complete_group()
-    by_text = {item.citation_text: item.support_id for item in evidence}
-    plan = _plan("甲类工作", shape=AtomAnswerShape.ENUMERATION)
+def _group_claim(
+    item_text: str,
+    by_text: dict[str, str],
+) -> NaturalClaim:
+    """同一完整结构组的事实同时引用关系导语和原句。"""
+    intro = "甲类工作如下："
+    claim = _claim("C1", f"{intro}{item_text}", "A1", by_text[item_text])
+    return claim.model_copy(
+        update={
+            "supports": (
+                ClaimSupport(support_id=by_text[intro], quote=intro),
+                ClaimSupport(support_id=by_text[item_text], quote=item_text),
+            )
+        }
+    )
+
+
+def _certified_matrix(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+) -> AtomSupportMatrix:
+    """模拟检索阶段已经核对完整组关系的证书。"""
     matrix = _matrix(
         plan,
         ((AtomStatus.SUPPORTED, tuple(item.support_id for item in evidence)),),
     )
+    group_id = dict(evidence[0].metadata)["evidence_group_id"]
+    support = matrix.atoms[0].model_copy(
+        update={"relation_certified_group_ids": (group_id,)}
+    )
+    return matrix.model_copy(update={"atoms": (support,)})
+
+
+def test_complete_group_omission_is_generation_gap_after_one_repair() -> None:
+    evidence = _complete_group()
+    by_text = {item.citation_text: item.support_id for item in evidence}
+    plan = _plan("甲类工作", shape=AtomAnswerShape.ENUMERATION)
+    matrix = _certified_matrix(plan, evidence)
     generator = Mock()
     generator.generate.return_value = _draft(
         (
-            _claim(
-                "C1",
-                "1.核对材料。",
-                "A1",
-                by_text["1.核对材料。"],
-            ),
+            _group_claim("1.核对材料。", by_text),
         ),
         plan,
     )
@@ -74,25 +106,12 @@ def test_complete_group_all_members_closes_without_repair() -> None:
     evidence = _complete_group()
     by_text = {item.citation_text: item.support_id for item in evidence}
     plan = _plan("甲类工作", shape=AtomAnswerShape.ENUMERATION)
-    matrix = _matrix(
-        plan,
-        ((AtomStatus.SUPPORTED, tuple(item.support_id for item in evidence)),),
-    )
+    matrix = _certified_matrix(plan, evidence)
     generator = Mock()
     generator.generate.return_value = _draft(
         (
-            _claim(
-                "C1",
-                "1.核对材料。",
-                "A1",
-                by_text["1.核对材料。"],
-            ),
-            _claim(
-                "C2",
-                "2.归档记录。",
-                "A1",
-                by_text["2.归档记录。"],
-            ),
+            _group_claim("1.核对材料。", by_text),
+            _group_claim("2.归档记录。", by_text),
         ),
         plan,
     )
