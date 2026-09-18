@@ -87,3 +87,32 @@ def test_conflicting_source_qualifiers_require_clarification() -> None:
     )
     root = resolve_root_query(request, build_input_spans(request))
     assert root.mode == "CLARIFY"
+
+
+def test_current_question_reference_uses_its_own_unique_antecedent() -> None:
+    request = _request("甲流程怎么启动，并且其条件是什么？")
+    spans = build_input_spans(request)
+    root = resolve_root_query(request, spans)
+
+    assert root.mode == "ORIGINAL"
+    assert any(
+        span.turn == "CURRENT"
+        and span.kind is SpanKind.TARGET
+        and span.text == "甲流程"
+        for span in spans
+    )
+    assert not any(
+        span.turn == "CURRENT"
+        and span.kind is SpanKind.TARGET
+        and span.text.startswith("其")
+        for span in spans
+    )
+
+
+def test_untrusted_context_lines_cannot_supply_previous_target() -> None:
+    request = _request("那要多久？", "模型回答：甲流程需要五天。")
+    spans = build_input_spans(request)
+    root = resolve_root_query(request, spans)
+
+    assert not any(span.turn.startswith("PREVIOUS") for span in spans)
+    assert root.mode == "CLARIFY"

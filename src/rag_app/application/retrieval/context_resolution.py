@@ -22,13 +22,21 @@ from rag_app.core.models.query_plan import (
 
 CONTEXT_RESOLUTION_REVISION = "wb08r-context-resolution-v1"
 _CLAUSES = re.compile(r"[^，,；;。！？?!]+")
-_REFERENCES = re.compile(r"这个|那个|上述|前者|后者|其中|它|这些|那些")
+_REFERENCES = re.compile(r"这个|那个|上述|前者|后者|其中|它|其|这些|那些|那")
 _SHORT_RELATION = re.compile(
     r"多久|何时|什么时候|多少|谁|哪里|怎么|如何|哪些|什么"
 )
 _TARGET_BEFORE_QUESTION = re.compile(
-    r"^(.+?)(?:什么时候|何时|多久|多少|怎么|如何|是什么|有哪些|负责什么|需要什么)"
+    r"^(.+?)(?:什么时候|何时|多久|多少|怎么|如何|是什么|有哪些|"
+    r"负责什么|需要什么|需要哪些|包括哪些|包含哪些|由谁|谁负责)"
 )
+_DECLARATIVE_ACTION = re.compile(
+    r"准备|计划|打算|申请|办理|提交|采购|签订|使用|参加|开展|"
+    r"更换|退出|讨论|说到|提到|涉及|关注|做"
+)
+_STATE_PIVOT = re.compile(r"还没|尚未|已经|正在|正要|需要|应当|必须|可以|要")
+_DISCOURSE_PREFIX = re.compile(r"^(?:并且|而且|同时|然后|那|这|还|再|又)")
+_PRONOUN_TARGET = re.compile(r"^(?:其|它|该|这个|那个|上述|其中|前者|后者)")
 _MULTIPLE = re.compile(
     r"[^，,；;。！？?!、]{1,80}(?:、[^，,；;。！？?!、]{1,80})+"
 )
@@ -40,6 +48,8 @@ _NEGATION = re.compile(r"不得|无需|不必|禁止|严禁|没有|未|不")
 _SEQUENCE = re.compile(r"先|再|然后|随后")
 _MIN_SEQUENCE_PARTS = 2
 _MAX_ATOMS = 4
+_MAX_SHORT_FOLLOW_UP_CHARS = 24
+_MIN_TARGET_CHARS = 2
 
 
 class SpanKind(StrEnum):
@@ -80,10 +90,9 @@ def trusted_user_questions(context: tuple[str, ...]) -> tuple[str, ...]:
     questions: list[str] = []
     for turn in context[-2:]:
         first_line = turn.splitlines()[0].strip()
-        if first_line.startswith("上一问："):
-            first_line = first_line.removeprefix("上一问：").strip()
-        elif "已验证事实：" in first_line:
+        if not first_line.startswith("上一问："):
             continue
+        first_line = first_line.removeprefix("上一问：").strip()
         if first_line:
             questions.append(first_line)
     return tuple(questions)
@@ -133,19 +142,26 @@ def build_input_spans(  # noqa: PLR0912
                 semantics.target
                 and semantics.target in clause
                 and "分别" not in semantics.target
+                and not _PRONOUN_TARGET.match(
+                    _clean_target(semantics.target)
+                )
             ):
                 targets.append(semantics.target)
             syntax_target = _TARGET_BEFORE_QUESTION.search(clause)
             if syntax_target:
-                candidate = syntax_target[1].strip("，,；;。！？?!、 ")
-                candidate = candidate.removeprefix("同时").removesuffix("要")
+                candidate = _clean_target(syntax_target[1])
                 if (
                     candidate
                     and not _TIME_MODIFIER.fullmatch(candidate)
                     and "、" not in candidate
                     and "分别" not in candidate
+                    and not _PRONOUN_TARGET.match(candidate)
                 ):
                     targets.append(candidate)
+            if turn_index > 0 and not targets:
+                declarative = _declarative_target(clause)
+                if declarative:
+                    targets.append(declarative)
             if "不得" in clause:
                 actor = clause.split("不得", 1)[0].strip()
                 if actor:
@@ -162,7 +178,28 @@ def build_input_spans(  # noqa: PLR0912
                     for part in before_relation.split("、")
                     if part.strip()
                 )
-            _append(spans, prefix, turn, SpanKind.TARGET, targets)
+            if (
+                not targets
+                and turn_index == 0
+                and not _PRONOUN_TARGET.match(_clean_target(clause))
+            ):
+                # 没有可可靠切分的对象时保留原 Clause，供 Planner 选择；
+                # 后续证据发布仍要求来源直接证明目标关系。
+                targets.append(clause)
+            _append(
+                spans,
+                prefix,
+                turn,
+                SpanKind.TARGET,
+                tuple(
+                    target
+                    for target in targets
+                    if not any(
+                        target != other and target in other
+                        for other in targets
+                    )
+                ),
+            )
             _append(spans, prefix, turn, SpanKind.RELATION, (clause,))
             if len(_SEQUENCE.findall(clause)) >= _MIN_SEQUENCE_PARTS:
                 _append(
@@ -214,11 +251,6 @@ def resolve_root_query(
     digest = canonical_sha256(
         trusted_user_questions(request.conversation_context)
     )
-    current_target = tuple(
-        span
-        for span in spans
-        if span.turn == "CURRENT" and span.kind is SpanKind.TARGET
-    )
     current_relation = tuple(
         span
         for span in spans
@@ -229,11 +261,61 @@ def resolve_root_query(
         for span in spans
         if span.turn == "PREVIOUS_1" and span.kind is SpanKind.TARGET
     )
-    needs_context = bool(_REFERENCES.search(original)) or (
-        bool(previous_targets)
-        and not current_target
-        and bool(_SHORT_RELATION.search(original))
+    previous_clauses = tuple(
+        span
+        for span in spans
+        if span.turn == "PREVIOUS_1" and span.kind is SpanKind.CLAUSE
     )
+    latest_clause = previous_clauses[-1] if previous_clauses else None
+    current_clauses = tuple(
+        span
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
+    )
+    current_antecedent_candidates = tuple(
+        span
+        for span in spans
+        if span.turn == "CURRENT"
+        and span.kind is SpanKind.TARGET
+        and current_clauses
+        and span.text in current_clauses[0].text
+        and not _PRONOUN_TARGET.match(span.text)
+    )
+    current_antecedents = tuple(
+        span
+        for span in current_antecedent_candidates
+        if not any(
+            span.text != other.text and span.text in other.text
+            for other in current_antecedent_candidates
+        )
+    )
+    if (
+        not previous_targets
+        and len(current_clauses) > 1
+        and len({span.text for span in current_antecedents}) == 1
+    ):
+        return ResolvedRootQuery(
+            original_query=request.text,
+            resolved_query=request.text.strip()[:512],
+            mode="ORIGINAL",
+            confidence="HIGH",
+            context_digest=digest,
+        )
+    latest_targets = tuple(
+        span
+        for span in previous_targets
+        if latest_clause is not None and span.text in latest_clause.text
+    )
+    antecedents = latest_targets or previous_targets
+    short_follow_up = len(original) <= _MAX_SHORT_FOLLOW_UP_CHARS and bool(
+        _SHORT_RELATION.search(original)
+        or original.endswith(("吗", "吗?", "吗？", "?", "？"))
+    )
+    needs_context = bool(antecedents) and (
+        bool(_REFERENCES.search(original)) or short_follow_up
+    )
+    if not antecedents and bool(_REFERENCES.search(original)):
+        needs_context = True
     if not needs_context:
         return ResolvedRootQuery(
             original_query=request.text,
@@ -242,9 +324,7 @@ def resolve_root_query(
             confidence="HIGH",
             context_digest=digest,
         )
-    unique_targets = tuple(
-        dict.fromkeys(span.text for span in previous_targets)
-    )
+    unique_targets = tuple(dict.fromkeys(span.text for span in antecedents))
     if len(unique_targets) != 1 or not current_relation:
         return ResolvedRootQuery(
             original_query=request.text,
@@ -255,7 +335,7 @@ def resolve_root_query(
             reason_codes=("CONTEXT_TARGET_AMBIGUOUS",),
         )
     target_span = next(
-        span for span in previous_targets if span.text == unique_targets[0]
+        span for span in antecedents if span.text == unique_targets[0]
     )
     current_source = tuple(
         span
@@ -283,6 +363,7 @@ def resolve_root_query(
     selected = (
         *current_source,
         target_span,
+        *((latest_clause,) if latest_clause is not None else ()),
         *current_relation[:1],
         *(
             span
@@ -301,6 +382,34 @@ def resolve_root_query(
         context_digest=digest,
         reason_codes=("CONTEXT_TARGET_RESOLVED",),
     )
+
+
+def _clean_target(value: str) -> str:
+    """只移除问句连接成分，不改写用户的实体字面值。"""
+    candidate = value.strip("，,；;。！？?!、 ")
+    candidate = _DISCOURSE_PREFIX.sub("", candidate)
+    return candidate.removesuffix("要").strip()
+
+
+def _declarative_target(clause: str) -> str | None:
+    """从先前用户陈述中取最后一个动作对象或状态主体。"""
+    actions = tuple(_DECLARATIVE_ACTION.finditer(clause))
+    if actions:
+        candidate = _clean_target(clause[actions[-1].end() :])
+        if (
+            len(candidate) >= _MIN_TARGET_CHARS
+            and not _PRONOUN_TARGET.match(candidate)
+        ):
+            return candidate
+    state = _STATE_PIVOT.search(clause)
+    if state:
+        candidate = _clean_target(clause[: state.start()])
+        if (
+            len(candidate) >= _MIN_TARGET_CHARS
+            and not _PRONOUN_TARGET.match(candidate)
+        ):
+            return candidate
+    return None
 
 
 def _append(
@@ -431,7 +540,7 @@ def degraded_query_plan(  # noqa: PLR0913
                 reason_code=reason_code,
                 planner_called=planner_called,
                 fallback_mode="DEGRADED_RULE_ATOMS",
-                coverage_confidence="MEDIUM",
+                coverage_confidence="LOW",
             )
     return fallback_query_plan(
         analyzed,

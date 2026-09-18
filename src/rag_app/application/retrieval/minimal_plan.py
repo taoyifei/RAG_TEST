@@ -38,7 +38,7 @@ class MinimalPlanValidationError(ValueError):
 class MinimalAtomPayload(FrozenModel):
     """模型只选择服务端给定的片段身份和回答形状。"""
 
-    fragment_span_ids: tuple[str, ...] = Field(min_length=1, max_length=4)
+    fragment_span_ids: tuple[str, ...] = Field(min_length=1, max_length=2)
     target_span_id: str
     relation_span_id: str
     answer_shape: AtomAnswerShape
