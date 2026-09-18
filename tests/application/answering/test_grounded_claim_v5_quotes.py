@@ -10,6 +10,7 @@ import pytest
 from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     GroundedOutcome,
+    _contextual_source_versions,
     _safe_extractive_fallback,
 )
 from rag_app.application.retrieval.generation_evidence import (
@@ -334,6 +335,31 @@ def test_fallback_ignores_group_with_only_generic_query_overlap() -> None:
         (_evidence("为员工的专业提升提供更有针对性的指引。")[0],),
         {"A1": (item.support_id,)},
     ) is None
+    unrelated = _evidence(
+        "为进一步提升人才队伍的专业性和岗位匹配度，助力公司战略发展，员工需参加认证。",
+        "鼓励员工参加外部任职资格认证考试，提供专业岗位指引。",
+        "为员工的专业提升提供更有针对性的指引。",
+    )
+    grouped = tuple(
+        entry.model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        **dict(entry.metadata),
+                        "group_complete": True,
+                        "evidence_group_id": "egrp_unrelated",
+                    }
+                )
+            }
+        )
+        for entry in unrelated
+    )
+    assert _safe_extractive_fallback(
+        plan,
+        grouped,
+        {"A1": tuple(entry.support_id for entry in grouped)},
+        ("egrp_unrelated",),
+    ) is None
 
 
 def test_duration_fallback_prefers_contextual_deadline() -> None:
@@ -373,6 +399,70 @@ def test_duration_fallback_prefers_contextual_deadline() -> None:
     )
     assert result is not None
     assert result[1] == (deadline.support_id,)
+
+
+def test_short_followup_rejects_other_document_duration() -> None:
+    """历史语境唯一指向直接采购资料时，不发布相似采购指引的时限。"""
+    source_items = _evidence(
+        "发布采购文件到应答截止时间，不得少于3日。",
+        "非招标方式的采购公告发售期一般为3天半。",
+    )
+    by_text = {item.citation_text: item for item in source_items}
+    direct = by_text["发布采购文件到应答截止时间，不得少于3日。"]
+    other = by_text["非招标方式的采购公告发售期一般为3天半。"]
+    direct = direct.model_copy(
+        update={
+            "document_version_id": "dver_direct",
+            "display_name": "湾区研究院直接采购项目方案决策通过后实施流程V1.0",
+        }
+    )
+    other = other.model_copy(
+        update={
+            "document_version_id": "dver_general",
+            "display_name": "附件1 湾区研究院采购工作实施指引(V2.0)",
+        }
+    )
+    plan = _plan("给供应商留几天？", shape=AtomAnswerShape.DURATION).model_copy(
+        update={
+            "original_query": "给供应商留几天？",
+            "resolved_root_query": "直接采购文件 应答截止时限 给供应商留几天？",
+            "context_resolution_mode": "RULE_CONTEXT",
+        }
+    )
+    assert _contextual_source_versions(plan, (direct, other)) == frozenset(
+        {"dver_direct"}
+    )
+    assert _safe_extractive_fallback(
+        plan,
+        (direct, other),
+        {"A1": (direct.support_id, other.support_id)},
+    ) is not None
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                "非招标方式的采购公告发售期一般为3天半。",
+                "A1",
+                other.support_id,
+            ),
+        ),
+        plan,
+    )
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        (direct, other),
+        ((AtomStatus.MISSING, ()),),
+    )
+
+    assert outcome.claim_rejection_codes == (
+        ("CLAIM_SOURCE_SCOPE_MISMATCH", 1),
+    )
+    assert outcome.answer is not None
+    assert "不得少于3日" in outcome.answer
+    assert "3天半" not in outcome.answer
+    assert outcome.published_support_ids == (direct.support_id,)
 
 
 def test_fallback_uses_named_complete_table_row() -> None:
@@ -464,8 +554,8 @@ def test_fallback_rejoins_one_source_paragraph_across_chunks() -> None:
 def test_fallback_extends_selected_paragraph_to_complete_list() -> None:
     """段落命中完整流程组时，回退摘录保留同组后续阶段。"""
     evidence = _evidence(
-        "立项申报阶段，提交项目目标和实施计划，",
-        "并附上相关材料。",
+        "（二）立项申报阶段，提交项目目标和实施计划，",
+        "并附上相关材料。附件须签字盖章。",
         "立项审核阶段，审查材料完整性。",
         "立项决策阶段，提交会议审议。",
     )
@@ -504,6 +594,8 @@ def test_fallback_extends_selected_paragraph_to_complete_list() -> None:
     assert result is not None
     assert len(result[1]) == 4
     assert "立项决策阶段" in result[0]
+    assert "附件须签字盖章" in result[0]
+    assert "- （二）" not in result[0]
 
 
 def test_fallback_orders_source_spans_without_start_offset() -> None:

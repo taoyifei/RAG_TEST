@@ -152,6 +152,10 @@ _FALLBACK_MAX_ORDINARY_EXCERPTS = 3
 _FALLBACK_TABLE_LABEL_MIN_CHARS = 3
 _FALLBACK_TABLE_LABEL_MAX_CHARS = 24
 _FALLBACK_NODE_MIN_EXCERPTS = 2
+_FALLBACK_MIN_QUESTION_ANCHOR_CHARS = 3
+_FALLBACK_LONG_QUESTION_CHARS = 10
+_CONTEXT_SOURCE_MIN_MATCH_CHARS = 4
+_CONTEXT_SOURCE_MIN_LEAD_CHARS = 2
 _FALLBACK_DURATION = re.compile(
     r"\d+(?:\.\d+)?\s*(?:个工作日|工作日|天|日|周|个月|月|年|小时|分钟)"
 )
@@ -235,6 +239,9 @@ _STANDALONE_SUBJECT = re.compile(
 _SECTION_NUMBER_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\s*")
 _LEADING_LIST_MARKER = re.compile(
     r"^\s*(?:[（(]?(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*)"
+)
+_LEADING_SECTION_MARKER = re.compile(
+    r"^\s*[（(][一二三四五六七八九十百千\d]+[）)]\s*"
 )
 _DUTY_ACTION_PREFIX = re.compile(
     r"^\s*(?:[）)】\]]\s*)?(?:不仅|还|也|同时)?"
@@ -2022,13 +2029,27 @@ class GroundedAnsweringService:
             else {}
         )
         by_id = {item.support_id: item for item in evidence}
+        scoped_versions = _contextual_source_versions(query_plan, evidence)
+        direct_evidence = (
+            evidence
+            if scoped_versions is None
+            else tuple(
+                item
+                for item in evidence
+                if item.document_version_id in scoped_versions
+            )
+        )
         if (
             generation_evidence_pack is not None
             and not any(
                 item.status is AtomStatus.CONTRADICTORY
                 for item in atom_support_matrix.atoms
             )
-            and (direct := _direct_extract(query_plan, evidence, analysis))
+            and (
+                direct := _direct_extract(
+                    query_plan, direct_evidence, analysis
+                )
+            )
             is not None
         ):
             claim, item = direct
@@ -2614,6 +2635,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     """模型未形成可发布事实时，仅展示相关且可引用的来源原句。"""
     if not linked_ids:
         return None
+    scoped_versions = _contextual_source_versions(plan, evidence)
     related = {
         support_id
         for support_ids in linked_ids.values()
@@ -2640,6 +2662,11 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     grouped: dict[str, list[tuple[EvidenceItem, str]]] = {}
     ordinary: list[tuple[int, int, EvidenceItem, str]] = []
     for index, item in enumerate(evidence):
+        if (
+            scoped_versions is not None
+            and item.document_version_id not in scoped_versions
+        ):
+            continue
         metadata = dict(item.metadata)
         group_id = metadata.get("evidence_group_id")
         complete_table_row = (
@@ -2679,6 +2706,14 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             sentences,
             key=lambda sentence: len(_terms(sentence) & question_terms),
         )
+        if (
+            structured
+            and isinstance(group_id, str)
+            and group_id in complete_ids
+            and metadata.get("evidence_group_type")
+            in {"LIST_GROUP", "PROCEDURE_GROUP"}
+        ):
+            matched = item.citation_text.strip()
         overlap = len(_terms(matched) & question_terms)
         normalized_sentence = _STOP.sub("", matched.casefold())
         sentence_trigrams = {
@@ -2778,15 +2813,115 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     )
     lines = ["资料中与该问题直接相关的规定如下："]
     ids: list[str] = []
+    seen_excerpts: set[tuple[str | None, str]] = set()
     for item, sentence in selected:
-        lines.append(f"- {sentence} [{item.support_id}]")
+        excerpt = _LEADING_SECTION_MARKER.sub("", sentence).strip()
+        excerpt_key = (item.document_version_id, excerpt)
+        if not excerpt or excerpt_key in seen_excerpts:
+            continue
+        seen_excerpts.add(excerpt_key)
+        lines.append(f"- {excerpt} [{item.support_id}]")
         ids.append(item.support_id)
+    if not ids:
+        return None
+    if not _fallback_has_question_anchor(plan.original_query, selected):
+        return None
     covered_atoms = frozenset(
         atom_id
         for atom_id, support_ids in linked_ids.items()
         if any(support_id in ids for support_id in support_ids)
     )
     return "\n".join(lines), tuple(ids), covered_atoms
+
+
+def _han_text(text: str) -> str:
+    """只保留汉字，供来源标题和问题作保守的连续字面匹配。"""
+    return "".join(char for char in text if "\u4e00" <= char <= "\u9fff")
+
+
+def _longest_common_han_run(left: str, right: str) -> int:
+    """返回两个短文本之间最长的连续汉字交集长度。"""
+    left, right = _han_text(left), _han_text(right)
+    previous = [0] * (len(right) + 1)
+    best = 0
+    for char in left:
+        current = [0] * (len(right) + 1)
+        for index, other in enumerate(right, 1):
+            if char == other:
+                current[index] = previous[index - 1] + 1
+                best = max(best, current[index])
+        previous = current
+    return best
+
+
+def _contextual_source_versions(
+    plan: QueryPlan, evidence: tuple[EvidenceItem, ...]
+) -> frozenset[str] | None:
+    """短追问的历史语境若唯一指向资料标题，则约束发布来源。"""
+    if (
+        plan.context_resolution_mode != "RULE_CONTEXT"
+        or not plan.resolved_root_query.endswith(plan.original_query)
+    ):
+        return None
+    context = plan.resolved_root_query.removesuffix(plan.original_query).strip()
+    if not context:
+        return None
+    scores: dict[str, int] = {}
+    for item in evidence:
+        if item.document_version_id is None or not item.display_name:
+            continue
+        scores[item.document_version_id] = max(
+            scores.get(item.document_version_id, 0),
+            _longest_common_han_run(context, item.display_name),
+        )
+    if not scores:
+        return None
+    best = max(scores.values())
+    runner_up = max(
+        (score for score in scores.values() if score != best), default=0
+    )
+    winners = frozenset(
+        version for version, score in scores.items() if score == best
+    )
+    if (
+        best < _CONTEXT_SOURCE_MIN_MATCH_CHARS
+        or len(winners) != 1
+        or best - runner_up < _CONTEXT_SOURCE_MIN_LEAD_CHARS
+    ):
+        return None
+    return winners
+
+
+def _fallback_has_question_anchor(
+    question: str, selected: list[tuple[EvidenceItem, str]]
+) -> bool:
+    """长问题回退至少命中一个连续问句锚点，防止泛词串答。"""
+    if len(_han_text(question)) < _FALLBACK_LONG_QUESTION_CHARS:
+        return True
+    source = " ".join(
+        f"{item.display_name or ''} {sentence}" for item, sentence in selected
+    )
+    return (
+        _longest_common_han_run(question, source)
+        >= _FALLBACK_MIN_QUESTION_ANCHOR_CHARS
+    )
+
+
+def _validate_contextual_source_scope(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    units: tuple[EvidenceItem, ...],
+) -> None:
+    """历史语境唯一锚定资料时，拒绝相似但不同来源的事实。"""
+    scoped_versions = _contextual_source_versions(plan, evidence)
+    if scoped_versions is not None and any(
+        item.document_version_id not in scoped_versions for item in units
+    ):
+        raise ValidationFailed(
+            "短追问引用了与历史所指资料不同的来源。",
+            stage="answer.validate",
+            code="CLAIM_SOURCE_SCOPE_MISMATCH",
+        )
 
 
 def _query_focus_in_source(focus: str, text: str) -> bool:
@@ -2879,6 +3014,7 @@ def _validated_natural_claim(
         )
     support = matrix.for_atom(natural.atom_id)
     units = tuple(by_id[support_id] for support_id in support_ids)
+    _validate_contextual_source_scope(plan, evidence, units)
     _validate_yes_no_source_focus(plan, evidence, units)
     _validate_natural_support_structure(units)
     claim = AnswerClaim(
