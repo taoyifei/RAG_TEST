@@ -144,6 +144,60 @@ def test_table_action_reenters_pack_from_bounded_rerank_pool() -> None:
     assert [item.citation_text for item in pack.evidence] == [source]
 
 
+def test_procedure_overlap_does_not_displace_root_evidence() -> None:
+    """流程问句的词片重合不应先占据表格职责配额。"""
+    distractor = make_ranked_chunk(
+        1, "快验类研发资源由市场拓展中心联合评审", role=ChunkRole.TABLE
+    )
+    chunk = distractor.hydrated.chunk
+    span = chunk.source_spans[0]
+    path = ("body", "tbl:1", "tr:1", "tc:1", "p:1")
+    table_span = span.model_copy(
+        update={
+            "structural_path": path,
+            "source_anchor": span.source_anchor.model_copy(
+                update={"structural_path": path}
+            ),
+        }
+    )
+    distractor = distractor.model_copy(
+        update={
+            "hydrated": distractor.hydrated.model_copy(
+                update={
+                    "chunk": chunk.model_copy(
+                        update={"source_spans": (table_span,)}
+                    )
+                }
+            )
+        }
+    )
+    root, evidence = _item(2, "经例会评审通过，以会议纪要为准启动。")
+    atom = QueryAtom(
+        atom_id="A1",
+        target="需求快验",
+        relation="输入和启动条件",
+        answer_shape=AtomAnswerShape.PROCEDURE,
+    )
+    plan = _plan(atom).model_copy(
+        update={
+            "original_query": "想走快验，手头先得有什么，满足啥才能开？",
+            "resolved_root_query": "想走快验，手头先得有什么，满足啥才能开？",
+        }
+    )
+    pack = _pack(
+        plan,
+        (distractor, root),
+        root=(evidence,),
+        policy=RetrievalPolicy(
+            generation_per_document_cap=1,
+            generation_max_ordinary_items=1,
+        ),
+    )
+    assert [item.chunk_id for item in pack.evidence] == [
+        root.hydrated.chunk.chunk_id
+    ]
+
+
 def test_direct_support_mismatch_remains_generation_candidate() -> None:
     candidate, evidence = _item(1, "检修记录应在三天内归档。")
     evidence = evidence.model_copy(

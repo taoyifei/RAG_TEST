@@ -752,10 +752,11 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     # 表格行名和职责主体可能已进入 Rerank 池，却被旧证据装配配额丢弃。
     # 只从同一个有界池恢复逐字命中的原文单元格，再走统一硬边界与预算。
     exact_table_keys: list[tuple[object, ...]] = []
+    # 流程问句中的零散字词不能当作表格职责主体；流程仍可经行名、
+    # Root/Atom 命中及结构组进入证据包。
     duty_shapes = {
         AtomAnswerShape.DUTIES,
         AtomAnswerShape.ENUMERATION,
-        AtomAnswerShape.PROCEDURE,
     }
     for ranked in ranked_candidates:
         chunk = ranked.hydrated.chunk
