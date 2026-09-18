@@ -2424,13 +2424,56 @@ def _evidence_item(
     )
 
 
+def _logical_table_row(
+    chunk: Chunk, span: SourceSpan
+) -> tuple[str, int] | None:
+    """从单一逻辑行的节点映射核对当前 SourceSpan 所属表格行。"""
+    atoms = dict(chunk.metadata).get("atoms")
+    if (
+        chunk.role.value != "table"
+        or span.node_id is None
+        or not isinstance(atoms, (list, tuple))
+        or not atoms
+    ):
+        return None
+    identities: set[tuple[str, int]] = set()
+    mapped_nodes: set[str] = set()
+    for atom in atoms:
+        metadata = atom.get("metadata") if isinstance(atom, dict) else None
+        if not isinstance(metadata, dict):
+            return None
+        table_node = metadata.get("table_node_id")
+        row_index = metadata.get("row_index")
+        mapping = metadata.get("cell_source_node_ids")
+        if (
+            not isinstance(table_node, str)
+            or not isinstance(row_index, int)
+            or isinstance(row_index, bool)
+            or not isinstance(mapping, dict)
+        ):
+            return None
+        identities.add((table_node, row_index))
+        for values in mapping.values():
+            if not isinstance(values, (list, tuple)) or any(
+                not isinstance(node_id, str) for node_id in values
+            ):
+                return None
+            mapped_nodes.update(values)
+    if len(identities) != 1 or span.node_id not in mapped_nodes:
+        return None
+    return next(iter(identities))
+
+
 def _evidence_metadata(chunk: Chunk, span: SourceSpan) -> JsonObject:
-    """只传播受控文档字段，并保留既有 OCR 来源标记。"""
+    """只传播受控文档字段、可核对的逻辑表格行与 OCR 来源标记。"""
     metadata = {
         key: value
         for key, value in chunk.metadata
         if key in _DOCUMENT_METADATA_KEYS
     }
+    if (table_row := _logical_table_row(chunk, span)) is not None:
+        metadata["table_logical_node_id"] = table_row[0]
+        metadata["table_logical_row_index"] = table_row[1]
     if dict(span.metadata).get("origin") == "ocr":
         metadata.update(dict(span.metadata))
     return freeze_json_object(metadata)

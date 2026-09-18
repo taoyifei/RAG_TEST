@@ -151,6 +151,7 @@ _DIFFERENT_RELATION = re.compile(r"不同(?!意|步)")
 _STOP = re.compile(r"[\W_]|的|了|和|与|及|在|将|其|以|并|为|是", re.UNICODE)
 _MIN_QUOTE_CHARS = 2
 _FALLBACK_MIN_BIGRAM_OVERLAP = 2
+_FALLBACK_MIN_TABLE_ITEMS = 2
 _FALLBACK_MAX_ORDINARY_EXCERPTS = 3
 _FALLBACK_TABLE_LABEL_MIN_CHARS = 3
 _FALLBACK_TABLE_LABEL_MAX_CHARS = 24
@@ -170,7 +171,6 @@ _CONTEXT_SOURCE_MIN_LEAD_CHARS = 2
 _FALLBACK_DURATION = re.compile(
     r"\d+(?:\.\d+)?\s*(?:个工作日|工作日|天|日|周|个月|月|年|小时|分钟)"
 )
-_FALLBACK_DURATION_QUESTION = re.compile(r"多久|多长时间|时限|期限")
 _FALLBACK_LIST_MARKER = re.compile(
     r"^[（(]?[一二三四五六七八九十\d]+[）).、]?$"
 )
@@ -2640,6 +2640,83 @@ def _fallback_table_row(
     return winners[0] if len(winners) == 1 else []
 
 
+def _fallback_partial_table_row(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    related: set[str],
+    scoped_versions: frozenset[str] | None,
+    question_terms: set[str],
+) -> list[tuple[EvidenceItem, str]]:
+    """只摘录唯一表格块中可引用的原句与独立数值单元格。"""
+    by_row: dict[
+        tuple[str | None, str, int], list[tuple[EvidenceItem, str]]
+    ] = {}
+    for item in evidence:
+        if (
+            item.support_id not in related
+            or not item.table_context
+            or (
+                scoped_versions is not None
+                and item.document_version_id not in scoped_versions
+            )
+            or not item.source_spans
+            or any(not span.is_citable for span in item.source_spans)
+        ):
+            continue
+        metadata = dict(item.metadata)
+        table_node = metadata.get("table_logical_node_id")
+        row_index = metadata.get("table_logical_row_index")
+        if (
+            not isinstance(table_node, str)
+            or not isinstance(row_index, int)
+            or isinstance(row_index, bool)
+        ):
+            continue
+        excerpt = item.citation_text.strip()
+        if excerpt.endswith(("。", "；", ";")) or _NUMBER.fullmatch(excerpt):
+            key = (item.document_version_id, table_node, row_index)
+            by_row.setdefault(key, []).append((item, excerpt))
+    eligible: list[list[tuple[EvidenceItem, str]]] = []
+    query = " ".join((plan.original_query, plan.resolved_root_query))
+    for items in by_row.values():
+        if not (
+            _FALLBACK_MIN_TABLE_ITEMS
+            <= len(items)
+            <= _FALLBACK_MAX_ORDINARY_EXCERPTS
+        ):
+            continue
+        values = [pair for pair in items if _NUMBER.fullmatch(pair[1])]
+        sentences = [
+            pair for pair in items if pair[1].endswith(("。", "；", ";"))
+        ]
+        if len(values) != 1 or not sentences:
+            continue
+        if not any(
+            not span.is_repeated
+            for item, _ in items
+            for span in item.source_spans
+        ):
+            continue
+        title = str(
+            dict(items[0][0].metadata).get("document_title")
+            or items[0][0].display_name
+            or ""
+        )
+        if (
+            _longest_common_han_run(query, title)
+            < _CONTEXT_SOURCE_MIN_MATCH_CHARS
+        ):
+            continue
+        if len(
+            question_terms
+            & _terms(" ".join(excerpt for _, excerpt in items))
+        ) < _FALLBACK_MIN_BIGRAM_OVERLAP:
+            continue
+        eligible.append(items)
+    # 行名未闭合时不以排名猜测多个候选行的关系。
+    return eligible[0] if len(eligible) == 1 else []
+
+
 def _fallback_source_node(
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
@@ -2932,7 +3009,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             ordinary.append((overlap, index, item, matched))
     selected: list[tuple[EvidenceItem, str]] = []
     named_row_selected = False
-    timed_cell_selected = False
+    partial_table_selected = False
     if direct_duration and ordinary:
         _, _, item, sentence = max(ordinary, key=lambda row: (row[0], -row[1]))
         selected = [(item, sentence)]
@@ -2950,56 +3027,11 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         named_row_selected = bool(selected)
     if require_named_row and not named_row_selected:
         return None
-    if (
-        not selected
-        and multi_part
-        and _PARENTHETICAL_LEVEL.search(plan.original_query)
-        and _FALLBACK_DURATION_QUESTION.search(plan.original_query)
-    ):
-        # 表格未闭合时只摘录唯一的时限单元格，不代填缺失的等级行名。
-        timed_cells = [
-            (item, item.citation_text.strip())
-            for item in evidence
-            if item.support_id in related
-            and (
-                scoped_versions is None
-                or item.document_version_id in scoped_versions
-            )
-            and item.table_context
-            and item.source_spans
-            and all(span.is_citable for span in item.source_spans)
-            and _FALLBACK_DURATION.search(item.citation_text)
-            and _longest_common_han_run(
-                plan.original_query,
-                str(
-                    dict(item.metadata).get("document_title")
-                    or item.display_name
-                    or ""
-                ),
-            )
-            >= _CONTEXT_SOURCE_MIN_MATCH_CHARS
-        ]
-        if len(timed_cells) == 1:
-            selected = timed_cells
-            timed_item = timed_cells[0][0]
-            same_row_sentences = [
-                (item, item.citation_text.strip())
-                for item in evidence
-                if item.support_id in related
-                and item.support_id != timed_item.support_id
-                and item.document_version_id == timed_item.document_version_id
-                and item.chunk_id == timed_item.chunk_id
-                and item.table_context
-                and item.source_spans
-                and all(span.is_citable for span in item.source_spans)
-                and item.citation_text.rstrip().endswith(("。", "；", ";"))
-                and not _FALLBACK_DURATION.search(item.citation_text)
-                and len(_terms(item.citation_text) & question_terms) >= 1
-            ]
-            if len(same_row_sentences) == 1:
-                # 同一 canonical 表格行里的原句可独立引用；不从相邻行借内容。
-                selected = [*same_row_sentences, *timed_cells]
-            timed_cell_selected = True
+    if not selected and multi_part:
+        selected = _fallback_partial_table_row(
+            plan, evidence, related, scoped_versions, question_terms
+        )
+        partial_table_selected = bool(selected)
     ordinary_selection = [
         (item, sentence)
         for _, _, item, sentence in sorted(
@@ -3155,7 +3187,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             for atom in plan.atoms
         )
         and grouped
-        and not (named_row_selected or timed_cell_selected)
+        and not (named_row_selected or partial_table_selected)
     ):
         # 复合事实可从同版资料中的邻近完整条款补一条尚未覆盖的问意。
         # 保持独立摘录和引用，不跨来源组拼成单句。
@@ -3297,7 +3329,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     if not ids:
         return None
     if (
-        not (named_row_selected or timed_cell_selected)
+        not (named_row_selected or partial_table_selected)
         and not _fallback_has_question_anchor(plan.original_query, selected)
     ):
         return None

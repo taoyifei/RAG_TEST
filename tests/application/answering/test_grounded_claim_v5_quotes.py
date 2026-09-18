@@ -11,7 +11,9 @@ from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     GroundedOutcome,
     _contextual_source_versions,
+    _fallback_partial_table_row,
     _safe_extractive_fallback,
+    _terms,
     _validate_short_question_source_anchor,
 )
 from rag_app.application.retrieval.generation_evidence import (
@@ -626,19 +628,35 @@ def test_fallback_resolves_unique_short_name_of_table_row() -> None:
 
 
 def test_fallback_quotes_unique_duration_from_incomplete_level_row() -> None:
-    """等级表格缺行名时，仅引用唯一已检索的时限单元格。"""
+    """未检索到等级行名时，仅引用同块且能独立核对的单元格。"""
     evidence = _evidence(
         "重大设备安全事件（Ⅱ级）指影响较大的故障。",
-        "电话及邮件方式报送设备安全部。 | 30分钟",
+        "电话及邮件方式报送设备安全部。",
+        "30分钟",
+    )
+    report = next(
+        item for item in evidence if "电话及邮件" in item.citation_text
     )
     items = tuple(
         item.model_copy(
             update={
-                "table_context": "30分钟" in item.citation_text,
+                "table_context": item is report
+                or "30分钟" in item.citation_text,
+                "chunk_id": report.chunk_id
+                if "30分钟" in item.citation_text
+                else item.chunk_id,
                 "metadata": freeze_json_object(
                     {
                         **dict(item.metadata),
                         "document_title": "重大设备安全事件管理办法",
+                        **(
+                            {
+                                "table_logical_node_id": f"node_{90:032x}",
+                                "table_logical_row_index": 2,
+                            }
+                            if item is report or "30分钟" in item.citation_text
+                            else {}
+                        ),
                         **(
                             {
                                 "evidence_group_id": "egrp_definition",
@@ -705,11 +723,15 @@ def test_fallback_quotes_sentence_and_duration_from_same_table_chunk() -> None:
     )
     duration = next(item for item in original if "30分钟" in item.citation_text)
     title = "重大设备安全事件管理办法"
+    row = {
+        "table_logical_node_id": f"node_{90:032x}",
+        "table_logical_row_index": 2,
+    }
     report = report.model_copy(
         update={
             "table_context": True,
             "metadata": freeze_json_object(
-                {**dict(report.metadata), "document_title": title}
+                {**dict(report.metadata), "document_title": title, **row}
             ),
         }
     )
@@ -718,7 +740,7 @@ def test_fallback_quotes_sentence_and_duration_from_same_table_chunk() -> None:
             "chunk_id": report.chunk_id,
             "table_context": True,
             "metadata": freeze_json_object(
-                {**dict(duration.metadata), "document_title": title}
+                {**dict(duration.metadata), "document_title": title, **row}
             ),
         }
     )
@@ -745,6 +767,102 @@ def test_fallback_quotes_sentence_and_duration_from_same_table_chunk() -> None:
     assert "30分钟" in result[0]
     assert report.support_id in result[1]
     assert duration.support_id in result[1]
+
+
+def test_partial_table_fallback_without_level_words() -> None:
+    """普通采购问题也能摘录同一表格块的完整原句和数值。"""
+    original = _evidence("采购文件发布后供应商可以应答。", "3天")
+    sentence = next(item for item in original if "供应商" in item.citation_text)
+    duration = next(item for item in original if "3天" in item.citation_text)
+    title = "直接采购文件流程规定"
+    row = {
+        "table_logical_node_id": f"node_{90:032x}",
+        "table_logical_row_index": 1,
+    }
+    items = (
+        sentence.model_copy(
+            update={
+                "table_context": True,
+                "metadata": freeze_json_object(
+                    {**dict(sentence.metadata), "document_title": title, **row}
+                ),
+            }
+        ),
+        duration.model_copy(
+            update={
+                "chunk_id": sentence.chunk_id,
+                "table_context": True,
+                "metadata": freeze_json_object(
+                    {**dict(duration.metadata), "document_title": title, **row}
+                ),
+            }
+        ),
+    )
+    question = "直接采购文件发布后供应商如何应答，最少留几天？"
+    plan = _plan("供应商应答", "最少天数").model_copy(
+        update={"original_query": question, "resolved_root_query": question}
+    )
+    result = _safe_extractive_fallback(
+        plan,
+        items,
+        {
+            atom.atom_id: tuple(item.support_id for item in items)
+            for atom in plan.atoms
+        },
+    )
+
+    assert result is not None
+    assert "采购文件发布后供应商可以应答。" in result[0]
+    assert "3天" in result[0]
+
+
+def test_partial_table_fallback_rejects_ambiguous_sibling_rows() -> None:
+    """两个候选表格行都符合问句时，不猜测该引用哪一行。"""
+    original = _evidence(
+        "采购文件发布后供应商可以应答。",
+        "3天",
+        "采购文件发布后供应商仍可应答。",
+        "5天",
+    )
+    first = next(item for item in original if "可以应答" in item.citation_text)
+    second = next(item for item in original if "仍可应答" in item.citation_text)
+    title = "直接采购文件流程规定"
+    items = tuple(
+        item.model_copy(
+            update={
+                "chunk_id": first.chunk_id
+                if "3天" in item.citation_text
+                else second.chunk_id
+                if "5天" in item.citation_text
+                else item.chunk_id,
+                "table_context": True,
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "document_title": title,
+                        "table_logical_node_id": f"node_{90:032x}",
+                        "table_logical_row_index": 2
+                        if "仍可应答" in item.citation_text
+                        or "5天" in item.citation_text
+                        else 1,
+                    }
+                ),
+            }
+        )
+        for item in original
+    )
+    question = "直接采购文件发布后供应商如何应答，最少留几天？"
+    plan = _plan("供应商应答", "最少天数").model_copy(
+        update={"original_query": question, "resolved_root_query": question}
+    )
+
+    assert not _fallback_partial_table_row(
+        plan,
+        items,
+        {item.support_id for item in items},
+        None,
+        _terms(question),
+    )
 
 
 def test_fallback_rejoins_one_source_paragraph_across_chunks() -> None:

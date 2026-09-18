@@ -539,6 +539,16 @@ def test_table_row_closure_keeps_mapped_duration_without_other_row() -> None:
 
     assert {item.citation_text for item in pack.evidence} == {report, duration}
     assert all(item.source_spans[0].is_citable for item in pack.evidence)
+    assert {
+        (
+            dict(item.metadata).get("table_logical_node_id"),
+            dict(item.metadata).get("table_logical_row_index"),
+        )
+        for item in pack.evidence
+    } == {(table_node, 2)}
+    assert "table_logical_node_id" not in dict(
+        _evidence_item(candidate, spans[2], other_row, "S9").metadata
+    )
     assert (
         pack.structural_sibling_observation(())[
             "structural_sibling_pollution_count"
