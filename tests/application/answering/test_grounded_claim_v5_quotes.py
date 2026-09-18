@@ -667,6 +667,8 @@ def test_fallback_keeps_adjacent_preparation_and_stage_overview() -> None:
     assert "立项准备阶段" in result[0]
     assert "项目立项包括准备" in result[0]
     assert "立项申报阶段" in result[0]
+    assert "立项审核阶段" in result[0]
+    assert "立项决策阶段" in result[0]
 
 
 def test_fallback_orders_source_spans_without_start_offset() -> None:
@@ -776,13 +778,13 @@ def test_short_question_uses_relevant_member_of_complete_group() -> None:
     assert "不可多次报销" not in result[0]
 
 
-def test_compound_reimbursement_omits_orphan_heading() -> None:
-    """半句条件和跨年条款各自引用，不能把相邻标题拼成事实。"""
+def test_short_question_keeps_complete_numbered_decision_sequence() -> None:
+    """短追问命中编号流程时保留同组审批和生效条件。"""
     evidence = _evidence(
-        "员工通过认证拿到证书后，在部门认证费用额度内集中报销，",
-        "、其他注意事项",
-        "跨年领到证书的，请在证书领取年份报销，占用本部门该年度额度；",
-        "若在认证目录内，部分认证项目通过后需要年检的，也可报销；",
+        "1）各团队提出调整需求；",
+        "2）牵头部门审核调整需求；",
+        "3）主管机构审批调整方案；",
+        "4）审批通过后执行调整。",
     )
     grouped = tuple(
         item.model_copy(
@@ -790,9 +792,73 @@ def test_compound_reimbursement_omits_orphan_heading() -> None:
                 "metadata": freeze_json_object(
                     {
                         **dict(item.metadata),
+                        "evidence_group_id": "egrp_decision",
+                        "evidence_group_type": "LIST_GROUP",
+                        "group_complete": True,
+                    }
+                )
+            }
+        )
+        for item in evidence
+    )
+    plan = _plan("调整能直接执行吗？")
+    result = _safe_extractive_fallback(
+        plan,
+        grouped,
+        {"A1": tuple(item.support_id for item in grouped)},
+        ("egrp_decision",),
+    )
+
+    assert result is not None
+    assert "主管机构审批调整方案" in result[0]
+    assert "审批通过后执行调整" in result[0]
+
+
+def test_compound_reimbursement_omits_orphan_heading() -> None:
+    """半句条件和跨年条款各自引用，不能把相邻标题拼成事实。"""
+    evidence = _evidence(
+        "员工通过认证拿到证书后，在部门认证费用额度内集中报销，",
+        "提交发票至管理部门报销。",
+        "、其他注意事项",
+        "跨年领到证书的，请在证书领取年份报销，占用本部门该年度额度；",
+        "若在认证目录内，部分认证项目通过后需要年检的，也可报销；",
+    )
+    condition = next(
+        item
+        for item in evidence
+        if item.citation_text.startswith("员工通过认证")
+    )
+    first_span = condition.source_spans[0]
+    assert first_span.source_anchor is not None
+    end = len(condition.citation_text)
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "source_spans": (
+                    item.source_spans[0].model_copy(
+                        update={
+                            "node_id": first_span.node_id,
+                            "source_start_char": end,
+                            "source_end_char": end + len(item.citation_text),
+                            "source_anchor": item.source_spans[0]
+                            .source_anchor.model_copy(
+                                update={
+                                    "ordinal": first_span.source_anchor.ordinal
+                                }
+                            ),
+                        }
+                    ),
+                )
+                if item.citation_text.startswith("提交发票")
+                else item.source_spans,
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
                         "evidence_group_id": (
                             "egrp_conditions"
-                            if index < 2
+                            if item.citation_text.startswith(
+                                ("员工通过认证", "提交发票", "、其他注意事项")
+                            )
                             else "egrp_cross_year"
                         ),
                         "evidence_group_type": "LIST_GROUP",
@@ -801,7 +867,7 @@ def test_compound_reimbursement_omits_orphan_heading() -> None:
                 )
             }
         )
-        for index, item in enumerate(evidence)
+        for item in evidence
     )
     plan = _plan("认证费跨年报销", "报销条件").model_copy(
         update={
@@ -820,6 +886,7 @@ def test_compound_reimbursement_omits_orphan_heading() -> None:
 
     assert result is not None
     assert "员工通过认证拿到证书后" in result[0]
+    assert "集中报销，提交发票至管理部门报销。" in result[0]
     assert "证书领取年份报销" in result[0]
     assert "其他注意事项" not in result[0]
     assert "部分认证项目" not in result[0]

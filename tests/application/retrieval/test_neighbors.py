@@ -153,6 +153,59 @@ def test_neighbor_and_table_expansion_require_bidirectional_links(
     assert outcome.candidates[1].expansion_reason == reason
 
 
+def test_ranked_prose_closes_same_source_node_across_chunks() -> None:
+    """正文长句切块后，生成证据还能读到逗号后的原文。"""
+    first = make_ranked_chunk(
+        1,
+        "员工通过认证后，在规定时间内以部门为单位，",
+        next_chunk_id=f"chunk_{2:032x}",
+    ).model_copy(update={"rerank_rank": 1})
+    second = make_ranked_chunk(
+        2,
+        "提交发票至管理部门报销。",
+        previous_chunk_id=first.hydrated.chunk.chunk_id,
+    )
+    first_span = first.hydrated.chunk.source_spans[0]
+    second_span = second.hydrated.chunk.source_spans[0]
+    assert first_span.source_anchor is not None
+    assert second_span.source_anchor is not None
+    continuation = second_span.model_copy(
+        update={
+            "node_id": first_span.node_id,
+            "source_start_char": len(first.hydrated.chunk.citation_text),
+            "source_end_char": (
+                len(first.hydrated.chunk.citation_text)
+                + len(second.hydrated.chunk.citation_text)
+            ),
+            "source_anchor": second_span.source_anchor.model_copy(
+                update={"ordinal": first_span.source_anchor.ordinal}
+            ),
+        }
+    )
+    second = second.model_copy(
+        update={
+            "hydrated": second.hydrated.model_copy(
+                update={
+                    "chunk": second.hydrated.chunk.model_copy(
+                        update={"source_spans": (continuation,)}
+                    )
+                }
+            )
+        }
+    )
+    source = cast(EvidenceSourcePort, _NeighborSource((second.hydrated,)))
+
+    outcome = NeighborExpander(source).close_source_nodes(
+        _snapshot(), (first,), RetrievalPolicy()
+    )
+
+    assert len(outcome.candidates) == 2
+    assert outcome.candidates[1].hydrated.chunk.chunk_id == (
+        second.hydrated.chunk.chunk_id
+    )
+    assert outcome.candidates[1].expansion_reason == "SOURCE_NODE_CONTINUATION"
+
+
 def test_section_expansion_is_bounded() -> None:
     origin = make_ranked_chunk(1, "origin")
     sibling = make_ranked_chunk(2, "sibling")

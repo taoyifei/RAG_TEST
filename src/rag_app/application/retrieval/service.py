@@ -1512,6 +1512,23 @@ class RetrievalService:
                     trace_id=trace_id,
                 )
         correction_elapsed_ms = (perf_counter() - correction_started) * 1000
+        source_closure = self._neighbors.close_source_nodes(
+            snapshot, generation_ranked_candidates, self._policy
+        )
+        generation_ranked_candidates = source_closure.candidates
+        degraded.extend(source_closure.degraded_reason_codes)
+        self._record(
+            trace_id,
+            "source_node_closure",
+            {
+                "added_chunk_ids": tuple(
+                    item.hydrated.chunk.chunk_id
+                    for item in generation_ranked_candidates
+                    if item.expansion_reason == "SOURCE_NODE_CONTINUATION"
+                ),
+                "reason_codes": source_closure.degraded_reason_codes,
+            },
+        )
         _finish_timing(
             stage_timings, "corrective_retrieval", correction_started
         )

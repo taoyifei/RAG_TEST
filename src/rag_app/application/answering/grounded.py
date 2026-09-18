@@ -157,6 +157,7 @@ _FALLBACK_PREDECESSOR_LIMIT = 2
 _FALLBACK_MIN_QUESTION_ANCHOR_CHARS = 3
 _FALLBACK_LONG_QUESTION_CHARS = 10
 _FALLBACK_SHORT_QUESTION_CHARS = 14
+_FALLBACK_SEQUENCE_MIN_NUMBERED_MEMBERS = 3
 _FALLBACK_FOCUSED_MIN_CHARS = 6
 _CONTEXT_SOURCE_MIN_MATCH_CHARS = 4
 _CONTEXT_SOURCE_MIN_LEAD_CHARS = 2
@@ -3021,10 +3022,93 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         selected = ordinary_selection
     if not selected:
         return None
+    if (
+        len(plan.atoms) > 1
+        and all(
+            atom.answer_shape
+            not in {
+                AtomAnswerShape.ENUMERATION,
+                AtomAnswerShape.PROCEDURE,
+                AtomAnswerShape.DUTIES,
+            }
+            for atom in plan.atoms
+        )
+        and any(
+            sentence.rstrip().endswith(("，", "、"))
+            for _, sentence in selected
+        )
+        and grouped
+    ):
+        # 同一来源节点的条件长句若被切块，再补同章节与剩余问意相符的
+        # 完整条款；其它章节及只有标题的结构成员均不能补入。
+        source = (
+            selected[0][0].document_version_id,
+            selected[0][0].section_id,
+        )
+        uncovered = question_terms - _terms(
+            " ".join(sentence for _, sentence in selected)
+        )
+        existing_ids = {item.support_id for item, _ in selected}
+        complements = (
+            (
+                len(_terms(sentence) & uncovered),
+                len(_terms(sentence) & question_terms),
+                item,
+                sentence,
+            )
+            for members in grouped.values()
+            for item, sentence in members
+            if item.support_id not in existing_ids
+            and (item.document_version_id, item.section_id) == source
+            and sentence.rstrip().endswith(("。", "；", ";"))
+        )
+        complement = max(complements, key=lambda row: row[:2], default=None)
+        if (
+            complement is not None
+            and complement[0] >= 1
+            and complement[1] >= _FALLBACK_MIN_BIGRAM_OVERLAP
+        ):
+            selected.append((complement[2], complement[3]))
     if multi_part and grouped:
         selected = _fallback_prior_stage_excerpts(
             selected, grouped, complete_ids, question_terms
         )
+    complete_selected_groups: set[str] = set()
+    for item, _ in selected:
+        metadata = dict(item.metadata)
+        group_id = metadata.get("evidence_group_id")
+        if (
+            not isinstance(group_id, str)
+            or group_id not in complete_ids
+            or metadata.get("evidence_group_type")
+            not in {"LIST_GROUP", "PROCEDURE_GROUP"}
+            or group_id not in grouped
+        ):
+            continue
+        members = grouped[group_id]
+        numbered_members = sum(
+            bool(_LEADING_LIST_MARKER.match(sentence))
+            for _, sentence in members
+        )
+        if (
+            any(
+                atom.answer_shape is AtomAnswerShape.PROCEDURE
+                for atom in plan.atoms
+            )
+            or (
+                len(_han_text(plan.original_query))
+                <= _FALLBACK_SHORT_QUESTION_CHARS
+                and numbered_members >= _FALLBACK_SEQUENCE_MIN_NUMBERED_MEMBERS
+            )
+        ):
+            complete_selected_groups.add(group_id)
+    if complete_selected_groups:
+        selected_ids = {item.support_id for item, _ in selected}
+        for group_id in complete_selected_groups:
+            for item, sentence in grouped[group_id]:
+                if item.support_id not in selected_ids:
+                    selected.append((item, sentence))
+                    selected_ids.add(item.support_id)
     selected.sort(
         key=lambda pair: min(
             (
@@ -3056,16 +3140,28 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             pending_excerpt += excerpt
             pending_ids.append(item.support_id)
         else:
-            if pending_ids:
+            if pending_ids and not pending_excerpt.endswith(("，", "、")):
                 refs = " ".join(f"[{support_id}]" for support_id in pending_ids)
                 lines.append(f"- {pending_excerpt} {refs}")
+            elif pending_ids:
+                ids = [
+                    support_id
+                    for support_id in ids
+                    if support_id not in pending_ids
+                ]
             pending_excerpt = excerpt
             pending_ids = [item.support_id]
         pending_item = item
         ids.append(item.support_id)
-    if pending_ids:
+    if pending_ids and not pending_excerpt.endswith(("，", "、")):
         refs = " ".join(f"[{support_id}]" for support_id in pending_ids)
         lines.append(f"- {pending_excerpt} {refs}")
+    elif pending_ids:
+        ids = [
+            support_id
+            for support_id in ids
+            if support_id not in pending_ids
+        ]
     if not ids:
         return None
     if not _fallback_has_question_anchor(plan.original_query, selected):

@@ -177,6 +177,69 @@ class NeighborExpander:
             return ExpansionOutcome(candidates, ("NEIGHBOR_INDEX_CORRUPT",))
         return ExpansionOutcome((*candidates, *context.values()))
 
+    def close_source_nodes(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        candidates: tuple[RankedChunk, ...],
+        policy: RetrievalPolicy,
+    ) -> ExpansionOutcome:
+        """补齐高排名正文中跨 canonical Chunk 的同一原文节点。"""
+        try:
+            originals = _original_candidates(candidates)
+            seeds = tuple(
+                candidate
+                for candidate in sorted(
+                    originals.values(),
+                    key=lambda item: item.rerank_rank or 2**31,
+                )
+                if candidate.rerank_rank is not None
+                and candidate.hydrated.chunk.role is ChunkRole.TEXT
+                and candidate.hydrated.chunk.next_chunk_id is not None
+                and candidate.hydrated.chunk.next_chunk_id not in originals
+            )[: policy.generation_max_ordinary_items]
+            if not seeds:
+                return ExpansionOutcome(candidates)
+            ids = tuple(
+                dict.fromkeys(
+                    seed.hydrated.chunk.next_chunk_id for seed in seeds
+                )
+            )
+            hydrated = _hydrated_candidates(
+                self._source.hydrate_chunks(snapshot, ids), originals
+            )
+            context: dict[str, RankedChunk] = {}
+            for seed in seeds:
+                origin = seed.hydrated.chunk
+                neighbor = hydrated.get(origin.next_chunk_id or "")
+                if (
+                    neighbor is None
+                    or neighbor.chunk.role is not ChunkRole.TEXT
+                ):
+                    continue
+                _validate_neighbor(origin, neighbor.chunk)
+                origin_nodes = {
+                    span.node_id
+                    for span in origin.source_spans
+                    if span.is_citable and not span.is_repeated and span.node_id
+                }
+                neighbor_nodes = {
+                    span.node_id
+                    for span in neighbor.chunk.source_spans
+                    if span.is_citable and not span.is_repeated and span.node_id
+                }
+                if origin_nodes.isdisjoint(neighbor_nodes):
+                    continue
+                _add_context(
+                    originals,
+                    context,
+                    neighbor,
+                    seed_id=origin.chunk_id,
+                    reason="SOURCE_NODE_CONTINUATION",
+                )
+            return ExpansionOutcome((*candidates, *context.values()))
+        except IndexCorrupt:
+            return ExpansionOutcome(candidates, ("SOURCE_NODE_INDEX_CORRUPT",))
+
     def _expand_table_context(
         self,
         snapshot: ActiveRevisionQuerySnapshot,
