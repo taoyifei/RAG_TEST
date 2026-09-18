@@ -12,7 +12,7 @@ from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
-QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v6"
+QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v7"
 QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v1"
 ATOM_GROUP_ALIGNMENT_REVISION = "wb08r-atom-group-alignment-v2"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v1"
@@ -122,7 +122,7 @@ class QueryPlan(FrozenModel):
     original_query: str = Field(min_length=1, max_length=8000)
     resolved_root_query: str = Field(min_length=1, max_length=512)
     context_resolution_mode: str = "ORIGINAL"
-    context_resolution_revision: str = "wb08r-context-resolution-v1"
+    context_resolution_revision: str = "wb08r-context-resolution-v2"
     context_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     referenced_span_ids: tuple[str, ...] = ()
     intent: str = Field(min_length=1, max_length=40)

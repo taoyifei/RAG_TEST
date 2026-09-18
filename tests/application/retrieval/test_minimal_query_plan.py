@@ -147,7 +147,7 @@ def test_planner_schema_references_only_trusted_ids_of_each_kind() -> None:
     schema = planner_json_schema(spans)
     atom = schema["$defs"]["MinimalAtomPayload"]["properties"]
     by_kind = {
-        "f": ("CLAUSE", None),
+        "f": ("CLAUSE", "CURRENT"),
         "t": ("TARGET", None),
         "r": ("RELATION", "CURRENT"),
     }
@@ -164,6 +164,7 @@ def test_planner_schema_references_only_trusted_ids_of_each_kind() -> None:
             if span.kind.value == kind and (turn is None or span.turn == turn)
         ]
     assert "Q.R1" not in atom["f"]["items"]["enum"]
+    assert "P1.C1" not in atom["f"]["items"]["enum"]
     assert all(
         span.turn == "CURRENT"
         for span in spans

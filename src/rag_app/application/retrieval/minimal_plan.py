@@ -68,7 +68,9 @@ def planner_json_schema(
 ) -> dict[str, object]:
     """把本请求受信 Span 的类型约束加入模型输出 Schema。"""
     clause_ids = [
-        span.span_id for span in spans if span.kind is SpanKind.CLAUSE
+        span.span_id
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
     ]
     target_ids = [
         span.span_id for span in spans if span.kind is SpanKind.TARGET

@@ -20,7 +20,7 @@ from rag_app.core.models.query_plan import (
     make_query_plan,
 )
 
-CONTEXT_RESOLUTION_REVISION = "wb08r-context-resolution-v1"
+CONTEXT_RESOLUTION_REVISION = "wb08r-context-resolution-v2"
 _CLAUSES = re.compile(r"[^，,；;。！？?!]+")
 _REFERENCES = re.compile(r"这个|那个|上述|前者|后者|其中|它|其|这些|那些|那")
 _SHORT_RELATION = re.compile(
@@ -29,6 +29,13 @@ _SHORT_RELATION = re.compile(
 _TARGET_BEFORE_QUESTION = re.compile(
     r"^(.+?)(?:什么时候|何时|多久|多少|怎么|如何|是什么|有哪些|"
     r"负责什么|需要什么|需要哪些|包括哪些|包含哪些|由谁|谁负责)"
+)
+_TARGET_BEFORE_STAGE_RANGE = re.compile(
+    r"^(?P<target>[^，,；;。！？?!]{2,80}?)从[^，,；;。！？?!]+到"
+)
+_QUESTION_RELATION = re.compile(
+    r"(?:多长时间内|多长时间|什么时候|哪些|什么|如何|怎么|怎样|多久|"
+    r"何时|多少|几天|几日)(?P<relation>[^，,；;。！？?!]+)$"
 )
 _DECLARATIVE_ACTION = re.compile(
     r"准备|计划|打算|申请|办理|提交|采购|签订|使用|参加|开展|"
@@ -158,6 +165,11 @@ def build_input_spans(  # noqa: PLR0912
                     and not _PRONOUN_TARGET.match(candidate)
                 ):
                     targets.append(candidate)
+            stage_target = _TARGET_BEFORE_STAGE_RANGE.search(clause)
+            if stage_target:
+                candidate = _clean_target(stage_target["target"])
+                if candidate and not _PRONOUN_TARGET.match(candidate):
+                    targets.append(candidate)
             if turn_index > 0 and not targets:
                 declarative = _declarative_target(clause)
                 if declarative:
@@ -181,6 +193,10 @@ def build_input_spans(  # noqa: PLR0912
             if (
                 not targets
                 and turn_index == 0
+                and not any(
+                    span.turn == turn and span.kind is SpanKind.TARGET
+                    for span in spans
+                )
                 and not _PRONOUN_TARGET.match(_clean_target(clause))
             ):
                 # 没有可可靠切分的对象时保留原 Clause，供 Planner 选择；
@@ -200,7 +216,13 @@ def build_input_spans(  # noqa: PLR0912
                     )
                 ),
             )
-            _append(spans, prefix, turn, SpanKind.RELATION, (clause,))
+            _append(
+                spans,
+                prefix,
+                turn,
+                SpanKind.RELATION,
+                (_relation_fragment(clause, semantics.relation, targets),),
+            )
             if len(_SEQUENCE.findall(clause)) >= _MIN_SEQUENCE_PARTS:
                 _append(
                     spans,
@@ -389,6 +411,20 @@ def _clean_target(value: str) -> str:
     candidate = value.strip("，,；;。！？?!、 ")
     candidate = _DISCOURSE_PREFIX.sub("", candidate)
     return candidate.removesuffix("要").strip()
+
+
+def _relation_fragment(
+    clause: str, analyzed_relation: str | None, targets: list[str]
+) -> str:
+    """只裁剪用户问句中的关系片段，不生成同义词或答案词。"""
+    question = _QUESTION_RELATION.search(clause)
+    if question is not None:
+        suffix = question["relation"].strip()
+        if suffix and suffix not in {"吗", "呢"}:
+            return suffix[:160]
+    if analyzed_relation and analyzed_relation not in targets:
+        return analyzed_relation[:160]
+    return clause[:160]
 
 
 def _declarative_target(clause: str) -> str | None:

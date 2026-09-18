@@ -116,3 +116,44 @@ def test_untrusted_context_lines_cannot_supply_previous_target() -> None:
 
     assert not any(span.turn.startswith("PREVIOUS") for span in spans)
     assert root.mode == "CLARIFY"
+
+
+def test_stage_modifier_keeps_shared_target_and_short_current_relations() -> (
+    None
+):
+    request = _request("甲流程从申请到复核后，分别如何提交，多久完成？")
+    spans = build_input_spans(request)
+    targets = tuple(
+        span.text
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.TARGET
+    )
+    relations = tuple(
+        span.text
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.RELATION
+    )
+
+    assert targets == ("甲流程",)
+    assert relations[1:] == ("提交", "完成")
+    assert all(value in request.text for value in (*targets, *relations))
+
+
+def test_compound_attributes_use_user_words_without_whole_clause_targets() -> (
+    None
+):
+    spans = build_input_spans(
+        _request("乙方案需要哪些输入内容，并且启动需要什么条件？")
+    )
+    targets = tuple(
+        span.text
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.TARGET
+    )
+    assert "乙方案" in targets
+    assert all("需要" not in value for value in targets)
+    assert tuple(
+        span.text
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.RELATION
+    ) == ("输入内容", "条件")
