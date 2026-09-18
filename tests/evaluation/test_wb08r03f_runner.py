@@ -121,7 +121,12 @@ def test_hard_rejected_gold_is_reported_separately() -> None:
 
 def test_review_case_never_becomes_a_refusal_success() -> None:
     _, cases, supports = load_truth()
-    case = cases["WB08R-N-050"]
+    case = {
+        **cases["WB08R-N-050"],
+        "truth_status": "NEEDS_TRUTH_REVIEW",
+        "expected_behavior": "NEEDS_TRUTH_REVIEW",
+        "notes": "来源尚待审核",
+    }
     scored = score_observation(
         case,
         supports,
@@ -504,7 +509,11 @@ def test_failed_24_catalog_shortcut_is_separate_from_pack_recall() -> None:
     assert result["status"] == "PASSED"
     assert result["catalog_fast_path_case_ids"] == [case["case_id"]]
 
-    pending = cases["WB08R-N-050"]
+    pending = {
+        **cases["WB08R-N-050"],
+        "truth_status": "NEEDS_TRUTH_REVIEW",
+        "expected_behavior": "NEEDS_TRUTH_REVIEW",
+    }
     pending_row = {
         "case_id": pending["case_id"],
         "truth_status": "NEEDS_TRUTH_REVIEW",

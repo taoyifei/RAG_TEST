@@ -2,11 +2,11 @@
   "active_index_revision_id": "irev_0329a35ca9ea700133f7b309160118f0",
   "active_snapshot_sha256": "9fba9aac42c3482c36e266e1bf2a04557962c11a5073f38a95d1e1407b5bae06",
   "case_count": 24,
-  "cases_sha256": "ec44a0ebbe44ef39436a3f83c09e1f55ac9f778dacf062afa63dbf2e5d850444",
-  "evidence_count": 42,
-  "evidence_truth_sha256": "a64312f5619dc250765e0675fa87b1fefa8c375ea170a7cf4c01db8938aef018",
+  "cases_sha256": "e4c76f5aa6158295b6f16ee98324ede62ca202c8972fd4e1473d36afcee797b6",
+  "evidence_count": 76,
+  "evidence_truth_sha256": "1fecbfb8b7384780cb67e703359931469a260984a5f6e9989cc9ebf86f5abd45",
   "knowledge_base_id": "kb_328756522df5f70ad9a852fdb5fea3b5",
-  "needs_truth_review_count": 5,
+  "needs_truth_review_count": 0,
   "runtime_isolation": "evaluation/wanshitong/** excluded by .dockerignore and Dockerfile.dockerignore",
   "source_dataset_files_sha256": {
     "adversarial-30.ndjson": "0b7c95d773329b741d9984f7053fc648e596e31f8c0d7b7fa05947bac8687e7b",
@@ -16,7 +16,7 @@
   },
   "source_dataset_revision": "wanshitong-v2-20260917",
   "source_scope": "8289 candidate active KB/index; no production runtime dependency",
-  "status_contract": "NEEDS_TRUTH_REVIEW cases are excluded from functional pass denominators, never counted as REFUSE or ANSWER",
+  "status_contract": "24/24 cases VERIFIED against pinned active index; future unverified cases must be NEEDS_TRUTH_REVIEW and excluded from functional pass denominators",
   "truth_revision": "wb08r03f-truth-v1",
-  "verified_case_count": 19
+  "verified_case_count": 24
 }

@@ -18,23 +18,29 @@ _TRUTH = _ROOT / "evaluation" / "wanshitong" / "wb08r03f-truth-v1"
 _FROZEN = _ROOT / "evaluation" / "wanshitong" / "v2"
 
 
-def test_truth_has_checked_gold_and_explicit_review_gaps() -> None:
+def test_truth_has_checked_gold_for_all_failed_cases() -> None:
     manifest, cases, supports = load_truth()
 
     assert manifest["case_count"] == 24
-    assert manifest["verified_case_count"] == 19
-    assert manifest["needs_truth_review_count"] == 5
-    assert len(supports) == 42
+    assert manifest["verified_case_count"] == 24
+    assert manifest["needs_truth_review_count"] == 0
+    assert len(supports) == 76
+    assert all(row["truth_status"] == "VERIFIED" for row in cases.values())
     assert {
-        case_id
-        for case_id, row in cases.items()
-        if row["truth_status"] == "NEEDS_TRUTH_REVIEW"
+        case_id: cases[case_id]["expected_behavior"]
+        for case_id in (
+            "WB08R-F-017",
+            "WB08R-N-048",
+            "WB08R-N-050",
+            "WB08R-N-057",
+            "WB08R-N-058",
+        )
     } == {
-        "WB08R-F-017",
-        "WB08R-N-048",
-        "WB08R-N-050",
-        "WB08R-N-057",
-        "WB08R-N-058",
+        "WB08R-F-017": "ANSWER",
+        "WB08R-N-048": "LIMITED",
+        "WB08R-N-050": "ANSWER",
+        "WB08R-N-057": "ANSWER",
+        "WB08R-N-058": "ANSWER",
     }
     assert cases["WB08R-N-055"]["expected_behavior"] == "LIMITED"
     for support in supports.values():
@@ -56,6 +62,41 @@ def test_table_gold_keeps_row_and_cell_identity() -> None:
             "tc:2",
             "tc:4",
         }
+
+    for case_id in ("WB08R-F-017", "WB08R-N-048", "WB08R-N-057"):
+        rows = [row for row in supports.values() if row["case_id"] == case_id]
+        assert {row["table_row_index"] for row in rows} == {2}
+        assert {row["table_node_id"] for row in rows} == {
+            "node_dee6320820698d600d4826eb9aaf139a"
+        }
+        assert {row["table_cell"] for row in rows} == (
+            {"tc:0", "tc:2"} if case_id == "WB08R-N-048"
+            else {"tc:0", "tc:1", "tc:2"}
+        )
+        for row in rows:
+            if row["table_cell"] == "tc:1":
+                assert row["locator"] == "body/tbl:113/tr:1/tc:1/p:1"
+                assert row["span_type"] == "repeated_context"
+            if row["table_cell"] == "tc:2":
+                assert row["locator"] == "body/tbl:113/tr:2/tc:2/p:1"
+                assert row["quote"] == "30分钟"
+
+    for case_id in ("WB08R-N-050", "WB08R-N-058"):
+        rows = [row for row in supports.values() if row["case_id"] == case_id]
+        assert {row["table_row_index"] for row in rows} == {1}
+        assert {row["table_cell"] for row in rows} == {"tc:1"}
+        assert {
+            int(row["locator"].split("/")[1].removeprefix("tbl:"))
+            for row in rows
+        } == {13, 16, 19, 22}
+    boundary = [
+        row for row in supports.values() if row["case_id"] == "WB08R-N-058"
+        and row["locator"] == "body/tbl:22/tr:1/tc:1/p:8"
+    ]
+    assert {row["quote"] for row in boundary} == {
+        "首单交付正式完成，开发团队对该版本的交付责任终止",
+        "后续规模化交付由运维团队主导",
+    }
 
     design_rows = [
         row for row in supports.values() if row["case_id"] == "WB08R-N-060"
