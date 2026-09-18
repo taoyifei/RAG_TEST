@@ -2981,6 +2981,24 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         ]
         if len(timed_cells) == 1:
             selected = timed_cells
+            timed_item = timed_cells[0][0]
+            same_row_sentences = [
+                (item, item.citation_text.strip())
+                for item in evidence
+                if item.support_id in related
+                and item.support_id != timed_item.support_id
+                and item.document_version_id == timed_item.document_version_id
+                and item.chunk_id == timed_item.chunk_id
+                and item.table_context
+                and item.source_spans
+                and all(span.is_citable for span in item.source_spans)
+                and item.citation_text.rstrip().endswith(("。", "；", ";"))
+                and not _FALLBACK_DURATION.search(item.citation_text)
+                and len(_terms(item.citation_text) & question_terms) >= 1
+            ]
+            if len(same_row_sentences) == 1:
+                # 同一 canonical 表格行里的原句可独立引用；不从相邻行借内容。
+                selected = [*same_row_sentences, *timed_cells]
             timed_cell_selected = True
     ordinary_selection = [
         (item, sentence)

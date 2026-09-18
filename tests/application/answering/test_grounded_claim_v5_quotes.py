@@ -690,6 +690,63 @@ def test_fallback_quotes_unique_duration_from_incomplete_level_row() -> None:
     assert "指影响较大" not in result[0]
 
 
+def test_fallback_quotes_sentence_and_duration_from_same_table_chunk() -> None:
+    """时限单元格有同块原句时，两段分别带引用，不拼造等级关系。"""
+    original = _evidence(
+        "重大设备安全事件（Ⅱ级）指影响较大的故障。",
+        "电话及邮件方式报送设备安全部。",
+        "30分钟",
+    )
+    definition = next(
+        item for item in original if "指影响较大" in item.citation_text
+    )
+    report = next(
+        item for item in original if "电话及邮件" in item.citation_text
+    )
+    duration = next(item for item in original if "30分钟" in item.citation_text)
+    title = "重大设备安全事件管理办法"
+    report = report.model_copy(
+        update={
+            "table_context": True,
+            "metadata": freeze_json_object(
+                {**dict(report.metadata), "document_title": title}
+            ),
+        }
+    )
+    duration = duration.model_copy(
+        update={
+            "chunk_id": report.chunk_id,
+            "table_context": True,
+            "metadata": freeze_json_object(
+                {**dict(duration.metadata), "document_title": title}
+            ),
+        }
+    )
+    question = "重大设备安全事件（Ⅱ级）如何报送，时限多长？"
+    plan = _plan("报送方式", "时限", shape=AtomAnswerShape.FACT).model_copy(
+        update={
+            "original_query": question,
+            "resolved_root_query": question,
+        }
+    )
+    items = (definition, report, duration)
+
+    result = _safe_extractive_fallback(
+        plan,
+        items,
+        {
+            atom.atom_id: tuple(item.support_id for item in items)
+            for atom in plan.atoms
+        },
+    )
+
+    assert result is not None
+    assert "电话及邮件方式报送设备安全部。" in result[0]
+    assert "30分钟" in result[0]
+    assert report.support_id in result[1]
+    assert duration.support_id in result[1]
+
+
 def test_fallback_rejoins_one_source_paragraph_across_chunks() -> None:
     """同一原文段落分成数块后仍能展示完整人工成本核算步骤。"""
     evidence = _evidence(
