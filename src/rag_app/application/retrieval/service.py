@@ -3683,16 +3683,17 @@ class RetrievalService:
                     )
                     else ()
                 )
+                expanded_by_id = {
+                    item.hydrated.chunk.chunk_id: item
+                    for item in expansion.candidates
+                }
+                for member in selected_members:
+                    # 原召回及章节扩展身份优先；闭合组只补尚未出现的成员。
+                    expanded_by_id.setdefault(
+                        member.hydrated.chunk.chunk_id, member
+                    )
                 expansion = ExpansionOutcome(
-                    tuple(
-                        {
-                            item.hydrated.chunk.chunk_id: item
-                            for item in (
-                                *expansion.candidates,
-                                *selected_members,
-                            )
-                        }.values()
-                    ),
+                    tuple(expanded_by_id.values()),
                     tuple(
                         dict.fromkeys(
                             (

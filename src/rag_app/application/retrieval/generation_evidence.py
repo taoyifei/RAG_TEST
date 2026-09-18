@@ -526,12 +526,13 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
 ) -> GenerationEvidencePack:
     """先取 Rerank Top，再公平补 Atom 与完整结构组。"""
     candidate_by_id = {
-        item.hydrated.chunk.chunk_id: item
-        for item in (
-            *ranked_candidates,
-            *(member for group in groups for member in group.members),
-        )
+        item.hydrated.chunk.chunk_id: item for item in ranked_candidates
     }
+    for group in groups:
+        for member in group.members:
+            # 结构闭合可能再次装入同一 Chunk；保留原扩展来源和排名，
+            # 避免闭合成员覆盖 SECTION_PREDECESSOR 身份。
+            candidate_by_id.setdefault(member.hydrated.chunk.chunk_id, member)
     groups_by_id = {group.group_id: group for group in groups}
     root_keys = {_identity(item) for item in root_evidence}
     atom_keys = {_identity(item) for item in atom_evidence}

@@ -6,7 +6,10 @@ from dataclasses import replace
 from typing import TypedDict, Unpack
 
 from rag_app.application.retrieval.evidence import _evidence_item
-from rag_app.application.retrieval.evidence_groups import GroupCandidate
+from rag_app.application.retrieval.evidence_groups import (
+    GroupCandidate,
+    build_evidence_groups,
+)
 from rag_app.application.retrieval.generation_evidence import (
     EvidenceAdmissionReason,
     EvidenceAdmissionStatus,
@@ -204,11 +207,21 @@ def test_compound_question_keeps_prior_stage_within_document_cap() -> None:
             answer_shape=AtomAnswerShape.FACT,
         ),
     )
+    shadow_member = predecessors[1].model_copy(
+        update={"expansion_reason": "STRUCTURE_CONTINUITY"}
+    )
+    shadow_group = build_evidence_groups(
+        (shadow_member,),
+        max_groups=1,
+        max_member_chunks=8,
+        rerank_text_char_limit=2400,
+    )[0]
 
     pack = _pack(
         _plan(*atoms),
         candidates,
         root=root,
+        groups=(shadow_group,),
         policy=RetrievalPolicy(generation_per_document_cap=4),
     )
 
