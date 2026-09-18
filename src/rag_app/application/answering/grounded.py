@@ -127,9 +127,14 @@ _CONDITION_SCOPE = re.compile(
 _MODALITY_CLASSES = (
     ("MUST", re.compile(r"必须|(?<!不)须(?!要)")),
     ("SHOULD", re.compile(r"应当|应予|应该|应(?=\s|[，。：；,;])")),
-    ("NEED", re.compile(r"需要|需(?=\s|[，。：；,;])")),
+    ("NEED", re.compile(r"(?<!无)需要|(?<!无)需(?!求|方|量)")),
     ("MAY", re.compile(r"可以|允许|可(?=\s|[，。：；,;])")),
 )
+_YES_NO_ACTION_FOCUS = re.compile(
+    r"(?:是否|需不需要|要不要|需要|应当|应该|必须|可以|要|能)"
+    r"(?P<focus>[\u4e00-\u9fff]{2,8})(?:吗|么)[？?]?$"
+)
+_SHORT_QUERY_FOCUS_LENGTH = 2
 _EXEMPTION_CONDITION_QUESTION = re.compile(
     r"(?:何种|哪些|什么)情况(?:下)?[^?？]{0,20}"
     r"(?:可以不|可不|允许不|无需|不必|不用|免于)"
@@ -2763,7 +2768,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             (
                 (
                     span.source_anchor.ordinal,
-                    span.source_start_char,
+                    span.source_start_char or 0,
                 )
                 for span in pair[0].source_spans
                 if span.source_anchor is not None
@@ -2782,6 +2787,41 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         if any(support_id in ids for support_id in support_ids)
     )
     return "\n".join(lines), tuple(ids), covered_atoms
+
+
+def _query_focus_in_source(focus: str, text: str) -> bool:
+    """只用问题动作的字面近邻匹配，避免引用同主题但答非所问的句子。"""
+    normalized = "".join(
+        character for character in text if "\u4e00" <= character <= "\u9fff"
+    )
+    if focus in normalized:
+        return True
+    return len(focus) == _SHORT_QUERY_FOCUS_LENGTH and re.search(
+        rf"{re.escape(focus[0])}.{{0,2}}{re.escape(focus[1])}",
+        normalized,
+    ) is not None
+
+
+def _validate_yes_no_source_focus(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    units: tuple[EvidenceItem, ...],
+) -> None:
+    """当包中有问题动作的直接原文时，拒绝仅同主题的旁支来源。"""
+    focus_match = _YES_NO_ACTION_FOCUS.search(plan.resolved_root_query.strip())
+    if focus_match is None:
+        return
+    focus = focus_match["focus"]
+    if any(
+        _query_focus_in_source(focus, item.citation_text) for item in evidence
+    ) and not any(
+        _query_focus_in_source(focus, item.citation_text) for item in units
+    ):
+        raise ValidationFailed(
+            "事实引用的来源没有回答是非问题所问的动作。",
+            stage="answer.validate",
+            code="CLAIM_QUERY_RELATION_UNSUPPORTED",
+        )
 
 
 def _validate_natural_support_structure(
@@ -2839,6 +2879,7 @@ def _validated_natural_claim(
         )
     support = matrix.for_atom(natural.atom_id)
     units = tuple(by_id[support_id] for support_id in support_ids)
+    _validate_yes_no_source_focus(plan, evidence, units)
     _validate_natural_support_structure(units)
     claim = AnswerClaim(
         text=natural.text,
@@ -3084,11 +3125,17 @@ def _validate_natural_entailment(
     if claim_modality is not None and not any(
         _modality_class(clause) == claim_modality for clause in matched
     ):
-        raise ValidationFailed(
-            "事实改变了来源中的义务强度。",
-            stage="answer.validate",
-            code="CLAIM_MODALITY_MISMATCH",
-        )
+        source_modalities = {
+            modality
+            for clause in source_clauses
+            if (modality := _modality_class(clause)) is not None
+        }
+        if source_modalities != {claim_modality}:
+            raise ValidationFailed(
+                "事实改变了来源中的义务强度。",
+                stage="answer.validate",
+                code="CLAIM_MODALITY_MISMATCH",
+            )
     if (
         claim_modality is None
         and matched

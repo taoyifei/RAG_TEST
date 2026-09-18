@@ -130,6 +130,48 @@ def test_soft_atom_mismatch_still_reaches_generation_and_publishes_quote() -> (
     assert outcome.accepted_claim_count == 1
 
 
+def test_yes_no_answer_uses_source_about_asked_action() -> None:
+    """同主题的交付句不能替代问题所问的重新启动规则。"""
+    evidence = _evidence(
+        "任务转为正式交付模式时，需另行满足准入要求，重新启动流程。",
+        "正式交付项目应提交验收材料。",
+    )
+    by_text = {item.citation_text: item.support_id for item in evidence}
+    plan = _plan("转正式交付要重启吗？")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                "正式交付项目应提交验收材料。",
+                "A1",
+                by_text["正式交付项目应提交验收材料。"],
+            ),
+            _claim(
+                "C2",
+                "任务转为正式交付模式时，需另行满足准入要求，重新启动流程。",
+                "A1",
+                by_text[
+                    "任务转为正式交付模式时，需另行满足准入要求，重新启动流程。"
+                ],
+            ),
+        ),
+        plan,
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()),),
+    )
+
+    assert outcome.claim_rejection_codes == (("CLAIM_RELATION_UNSUPPORTED", 1),)
+    assert outcome.answer is not None
+    assert "重新启动流程" in outcome.answer
+    assert "提交验收材料" not in outcome.answer
+
+
 def test_certified_single_fact_uses_direct_extract_without_model() -> None:
     source = _evidence("甲部门保存记录 14 天。")[0]
     certified = source.model_copy(
@@ -462,6 +504,47 @@ def test_fallback_extends_selected_paragraph_to_complete_list() -> None:
     assert result is not None
     assert len(result[1]) == 4
     assert "立项决策阶段" in result[0]
+
+
+def test_fallback_orders_source_spans_without_start_offset() -> None:
+    """派生编号没有来源字符偏移时，摘录排序仍可完成。"""
+    evidence = _evidence("立项申报阶段提交材料。", "立项审核阶段审查材料。")
+    anchor = evidence[0].source_spans[0].source_anchor
+    assert anchor is not None
+    adjusted = tuple(
+        item.model_copy(
+            update={
+                "source_spans": tuple(
+                    span.model_copy(
+                        update={
+                            "source_anchor": anchor,
+                            "source_start_char": None if index == 0 else 1,
+                        }
+                    )
+                    for span in item.source_spans
+                ),
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "evidence_group_id": "egrp_offset",
+                        "evidence_group_type": "LIST_GROUP",
+                        "group_complete": True,
+                    }
+                ),
+            }
+        )
+        for index, item in enumerate(evidence)
+    )
+    plan = _plan("立项", "阶段", shape=AtomAnswerShape.PROCEDURE)
+    result = _safe_extractive_fallback(
+        plan,
+        adjusted,
+        {"A1": tuple(item.support_id for item in adjusted)},
+        ("egrp_offset",),
+    )
+    assert result is not None
+    assert "立项申报阶段" in result[0]
+    assert "立项审核阶段" in result[0]
 
 
 def test_one_accepted_atom_keeps_limited_answer_for_unanswered_atom() -> None:
