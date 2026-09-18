@@ -37,6 +37,7 @@ from rag_app.core.models.query_plan import (
 )
 
 GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v2"
+_MAX_RESERVED_PREDECESSOR_CHUNKS = 2
 _STRUCTURED_GROUP_TYPES = frozenset(
     {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
 )
@@ -737,8 +738,16 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             )
             # 多子问题保留同一来源中紧邻的前序阶段，后续仍受每文档、
             # 总条数和 token 上限约束；只有已经过硬边界检查的来源可入包。
-            for key in list(predecessor_top)[:2]:
+            reserved_chunks: set[str] = set()
+            for key in predecessor_top:
+                chunk_id = candidates[key].chunk_id
+                if chunk_id in reserved_chunks:
+                    continue
                 add_ordinary(key)
+                if key in chosen:
+                    reserved_chunks.add(chunk_id)
+                if len(reserved_chunks) == _MAX_RESERVED_PREDECESSOR_CHUNKS:
+                    break
     root_top = [key for key in admitted if key in root_keys]
     for key in root_top[: policy.generation_root_top_k]:
         add_ordinary(key)

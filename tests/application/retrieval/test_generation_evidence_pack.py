@@ -183,15 +183,59 @@ def test_compound_question_keeps_prior_stage_within_document_cap() -> None:
             (6, "项目立项包括准备、申报、审核、决策和系统立项。"),
         )
     )
+    first = predecessors[0]
+    original_span = first.hydrated.chunk.source_spans[0]
+    assert original_span.source_anchor is not None
+    split_at = 4
+    opening = original_span.model_copy(
+        update={
+            "chunk_end_char": split_at,
+            "source_end_char": split_at,
+            "source_anchor": original_span.source_anchor.model_copy(
+                update={"source_end_char": split_at}
+            ),
+        }
+    )
+    remainder = original_span.model_copy(
+        update={
+            "chunk_start_char": split_at,
+            "source_start_char": split_at,
+            "source_anchor": original_span.source_anchor.model_copy(
+                update={"source_start_char": split_at}
+            ),
+        }
+    )
+    first = first.model_copy(
+        update={
+            "hydrated": first.hydrated.model_copy(
+                update={
+                    "chunk": first.hydrated.chunk.model_copy(
+                        update={"source_spans": (opening, remainder)}
+                    )
+                }
+            )
+        }
+    )
+    predecessors = (first, predecessors[1])
     candidates = (*seeds, *predecessors)
     root = tuple(
         _evidence_item(
             candidate,
             candidate.hydrated.chunk.source_spans[0],
-            candidate.hydrated.chunk.citation_text,
+            candidate.hydrated.chunk.citation_text[
+                : candidate.hydrated.chunk.source_spans[0].chunk_end_char
+            ],
             "S1",
         )
         for candidate in candidates
+    )
+    root += (
+        _evidence_item(
+            first,
+            remainder,
+            first.hydrated.chunk.citation_text[split_at:],
+            "S2",
+        ),
     )
     atoms = (
         QueryAtom(
