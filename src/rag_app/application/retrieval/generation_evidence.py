@@ -687,16 +687,12 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                 == primary_source
                 for item in (*root_evidence, *atom_evidence)
             )
-            represented_chunks = {
-                item.chunk_id for item in (*root_evidence, *atom_evidence)
-            }
             if anchored:
                 for candidate in ranked_top:
                     chunk = candidate.hydrated.chunk
                     if (
                         chunk.role is not ChunkRole.TEXT
                         or chunk.version != primary_version
-                        or chunk.chunk_id in represented_chunks
                     ):
                         continue
                     quoted_spans = (
@@ -725,7 +721,6 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                     candidates.setdefault(key, item)
                     root_keys.add(key)
                     supplemental_keys.append(key)
-                    represented_chunks.add(chunk.chunk_id)
     linked_ids_by_chunk: dict[str, set[str]] = defaultdict(set)
     root_chunk_ids: set[str] = set()
     for link in links:

@@ -293,12 +293,14 @@ def test_compound_question_keeps_distinct_reranked_primary_prose() -> None:
         ).model_copy(update={"rerank_rank": number})
         for number, text in enumerate(texts, 1)
     )
-    first = candidates[0]
-    root = _evidence_item(
-        first,
-        first.hydrated.chunk.source_spans[0],
-        first.hydrated.chunk.citation_text,
-        "S1",
+    root = tuple(
+        _evidence_item(
+            candidate,
+            candidate.hydrated.chunk.source_spans[0],
+            candidate.hydrated.chunk.citation_text,
+            "S1",
+        )
+        for candidate in candidates[:4]
     )
     atoms = (
         QueryAtom(
@@ -318,7 +320,7 @@ def test_compound_question_keeps_distinct_reranked_primary_prose() -> None:
     pack = _pack(
         _plan(*atoms),
         candidates,
-        root=(root,),
+        root=root,
         policy=RetrievalPolicy(generation_per_document_cap=4),
     )
 
