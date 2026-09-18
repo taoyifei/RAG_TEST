@@ -128,6 +128,24 @@ def test_table_row_group_keeps_header_row_label_cells_and_coordinates() -> None:
     assert len(group.group.member_source_maps[1].source_spans) == 3
 
 
+def test_group_budget_excludes_repeated_chunk_prefix() -> None:
+    """检索用 Chunk 前缀不应占用实际未渲染的组预算。"""
+    header = _with_chunk(
+        _table_row(71, 0, ("事项", "条件"), header=True),
+        token_count=5000,
+    )
+    row = _with_chunk(
+        _table_row(72, 1, ("申请", "会议通过"), header=False),
+        token_count=5000,
+    )
+    group = _groups(header, row)[0]
+    assert group.complete
+    assert group.token_cost < 1000
+    assert pack_evidence_groups(
+        (group,), token_budget=1000, max_groups=1, max_chunks=2
+    ) == (group,)
+
+
 def test_unmarked_short_first_row_can_supply_column_headers() -> None:
     header = _table_row(3, 0, ("事项", "时限"), header=False)
     row = _table_row(4, 1, ("申请", "五日"), header=False)

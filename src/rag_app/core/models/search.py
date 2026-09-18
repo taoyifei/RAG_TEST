@@ -73,7 +73,7 @@ class RetrievalPolicy(FrozenModel):
     generation_root_top_k: StrictInt = Field(default=4, gt=0, le=8)
     generation_atom_top_k: StrictInt = Field(default=2, gt=0, le=4)
     generation_max_ordinary_items: StrictInt = Field(default=12, gt=0, le=24)
-    generation_max_group_items: StrictInt = Field(default=16, gt=0, le=32)
+    generation_max_group_items: StrictInt = Field(default=32, gt=0, le=32)
     generation_per_document_cap: StrictInt = Field(default=4, gt=0, le=16)
     generation_evidence_token_budget: StrictInt = Field(
         default=4096, gt=0, le=6144

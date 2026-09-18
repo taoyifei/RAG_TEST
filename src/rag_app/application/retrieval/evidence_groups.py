@@ -563,7 +563,6 @@ def _group_candidate(
         lines.append(f"坐标：{' '.join(coordinates)[:128]}")
     # 成员自己的 embedding_text 已包含同类前缀；组内只放一次结构前缀，
     # 原文按成员顺序保留，避免重复元数据挤掉表格行或流程末尾条件。
-    header_text = "\n".join(lines)
     lines.extend(member.hydrated.chunk.citation_text for member in members)
     full_text = "\n".join(lines)
     rerank_text = _rerank_preview(full_text, rerank_text_char_limit)
@@ -611,10 +610,9 @@ def _group_candidate(
         group_text_for_rerank=rerank_text,
         complete=not reasons,
         incomplete_reasons=tuple(dict.fromkeys(reasons)),
-        token_cost=(
-            sum(member.hydrated.chunk.token_count for member in members)
-            + len(header_text)
-        ),
+        # 组文本只包含一次结构前缀和成员引用原文；Chunk 的 token_count
+        # 还计入每块重复的检索前缀，用它会把完整表格行错误地挤出组预算。
+        token_cost=max(1, len(full_text)),
         metadata=freeze_json_object(
             {
                 "department_name": department,

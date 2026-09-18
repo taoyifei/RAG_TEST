@@ -348,6 +348,56 @@ def test_complete_group_fills_real_member_spans() -> None:
     }
 
 
+def test_later_complete_group_keeps_its_source_spans() -> None:
+    """多个完整组同时入包时，末组仍须包含行内的全部事实。"""
+    groups: list[GroupCandidate] = []
+    first_members: list[RankedChunk] = []
+    first_evidence: list[EvidenceItem] = []
+    for group_index in range(3):
+        members = tuple(
+            make_ranked_chunk(
+                group_index * 7 + member_index + 1,
+                f"第 {group_index + 1} 组，第 {member_index + 1} 项。",
+                document_number=group_index + 1,
+            )
+            for member_index in range(7)
+        )
+        group = _complete_group(members)
+        groups.append(
+            replace(
+                group,
+                group=group.group.model_copy(
+                    update={"group_id": f"egrp_{group_index + 1:032x}"}
+                ),
+            )
+        )
+        first_members.append(members[0])
+        first_evidence.append(
+            _evidence_item(
+                members[0],
+                members[0].hydrated.chunk.source_spans[0],
+                members[0].hydrated.chunk.citation_text,
+                "S1",
+            )
+        )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="第三组",
+        relation="全部事实",
+        answer_shape=AtomAnswerShape.ENUMERATION,
+    )
+    pack = _pack(
+        _plan(atom),
+        tuple(first_members),
+        root=tuple(first_evidence),
+        groups=tuple(groups),
+    )
+    assert len(pack.complete_group_ids) == 3
+    assert {item.chunk_id for item in pack.evidence} >= {
+        member.hydrated.chunk.chunk_id for member in groups[-1].members
+    }
+
+
 def test_unknown_group_provenance_is_only_partially_observed() -> None:
     candidate, evidence = _item(1, "第一项：检查设备。")
     evidence = evidence.model_copy(
