@@ -262,9 +262,7 @@ def test_zero_model_claims_uses_one_safe_extractive_fallback() -> None:
 def test_fallback_uses_relevant_complete_group_only() -> None:
     """完整结构组已命中时，不混入其它组的事实。"""
     evidence = tuple(
-        _evidence(sentence)[0].model_copy(
-            update={"evidence_id": f"S{index}"}
-        )
+        _evidence(sentence)[0].model_copy(update={"evidence_id": f"S{index}"})
         for index, sentence in enumerate(
             (
                 "乙部门保存设备记录 30 天。",
@@ -326,17 +324,23 @@ def test_fallback_ignores_group_with_only_generic_query_overlap() -> None:
         }
     )
     plan = _plan("员工食堂本周三午餐菜品")
-    assert _safe_extractive_fallback(
-        plan,
-        (item,),
-        {"A1": (item.support_id,)},
-        ("egrp_unrelated",),
-    ) is None
-    assert _safe_extractive_fallback(
-        plan,
-        (_evidence("为员工的专业提升提供更有针对性的指引。")[0],),
-        {"A1": (item.support_id,)},
-    ) is None
+    assert (
+        _safe_extractive_fallback(
+            plan,
+            (item,),
+            {"A1": (item.support_id,)},
+            ("egrp_unrelated",),
+        )
+        is None
+    )
+    assert (
+        _safe_extractive_fallback(
+            plan,
+            (_evidence("为员工的专业提升提供更有针对性的指引。")[0],),
+            {"A1": (item.support_id,)},
+        )
+        is None
+    )
     unrelated = _evidence(
         "为进一步提升人才队伍的专业性和岗位匹配度，助力公司战略发展，员工需参加认证。",
         "鼓励员工参加外部任职资格认证考试，提供专业岗位指引。",
@@ -356,12 +360,15 @@ def test_fallback_ignores_group_with_only_generic_query_overlap() -> None:
         )
         for entry in unrelated
     )
-    assert _safe_extractive_fallback(
-        plan,
-        grouped,
-        {"A1": tuple(entry.support_id for entry in grouped)},
-        ("egrp_unrelated",),
-    ) is None
+    assert (
+        _safe_extractive_fallback(
+            plan,
+            grouped,
+            {"A1": tuple(entry.support_id for entry in grouped)},
+            ("egrp_unrelated",),
+        )
+        is None
+    )
 
 
 def test_duration_fallback_prefers_contextual_deadline() -> None:
@@ -428,8 +435,7 @@ def test_short_followup_rejects_other_document_duration() -> None:
         update={
             "original_query": "给供应商留几天？",
             "resolved_root_query": (
-                "文件 我们在准备直接采购文件 给供应商留几天 "
-                "给供应商留几天?"
+                "文件 我们在准备直接采购文件 给供应商留几天 给供应商留几天?"
             ),
             "context_resolution_mode": "RULE_CONTEXT",
         }
@@ -437,11 +443,14 @@ def test_short_followup_rejects_other_document_duration() -> None:
     assert _contextual_source_versions(plan, (direct, other)) == frozenset(
         {"dver_direct"}
     )
-    assert _safe_extractive_fallback(
-        plan,
-        (direct, other),
-        {"A1": (direct.support_id, other.support_id)},
-    ) is not None
+    assert (
+        _safe_extractive_fallback(
+            plan,
+            (direct, other),
+            {"A1": (direct.support_id, other.support_id)},
+        )
+        is not None
+    )
     generator = Mock()
     generator.generate.return_value = _draft(
         (
@@ -479,7 +488,8 @@ def test_fallback_uses_named_complete_table_row() -> None:
         "经周例会评审通过，以邮件发出会议纪要为准启动。",
     )
     generic = next(
-        item for item in evidence
+        item
+        for item in evidence
         if item.citation_text.startswith("开发中心模式包括")
     )
     row = [item for item in evidence if item is not generic]
@@ -513,16 +523,71 @@ def test_fallback_uses_named_complete_table_row() -> None:
     result = _safe_extractive_fallback(
         plan,
         items,
-        {
-            atom.atom_id: (generic.support_id,)
-            for atom in plan.atoms
-        },
+        {atom.atom_id: (generic.support_id,) for atom in plan.atoms},
         (group_id,),
     )
     assert result is not None
     assert "需求功能点描述" in result[0]
     assert "会议纪要" in result[0]
     assert "开发中心模式包括" not in result[0]
+
+
+def test_fallback_resolves_unique_short_name_of_table_row() -> None:
+    """口语简称只可指向唯一已闭合的表格行。"""
+    evidence = _evidence(
+        "临时快捷 | ",
+        "输入：提交任务说明。",
+        "启动：经会议评审通过。",
+        "标准模式 | ",
+        "输入：提交项目计划。",
+        "启动：由主管批准。",
+    )
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "evidence_group_id": (
+                            "egrp_quick"
+                            if any(
+                                phrase in item.citation_text
+                                for phrase in (
+                                    "临时快捷",
+                                    "任务说明",
+                                    "会议评审",
+                                )
+                            )
+                            else "egrp_standard"
+                        ),
+                        "evidence_group_type": "TABLE_ROW_GROUP",
+                        "group_complete": True,
+                    }
+                )
+            }
+        )
+        for item in evidence
+    )
+    plan = _plan("快捷", "输入和启动", shape=AtomAnswerShape.FACT).model_copy(
+        update={
+            "original_query": "想走快捷，先提交什么，满足什么才能开？",
+            "resolved_root_query": "想走快捷，先提交什么，满足什么才能开？",
+        }
+    )
+    result = _safe_extractive_fallback(
+        plan,
+        grouped,
+        {
+            atom.atom_id: tuple(item.support_id for item in grouped)
+            for atom in plan.atoms
+        },
+        ("egrp_quick", "egrp_standard"),
+    )
+
+    assert result is not None
+    assert "提交任务说明" in result[0]
+    assert "会议评审" in result[0]
+    assert "提交项目计划" not in result[0]
 
 
 def test_fallback_rejoins_one_source_paragraph_across_chunks() -> None:
@@ -570,8 +635,7 @@ def test_fallback_extends_selected_paragraph_to_complete_list() -> None:
         spans = item.source_spans
         if index < 2:
             spans = tuple(
-                span.model_copy(update={"node_id": node_id})
-                for span in spans
+                span.model_copy(update={"node_id": node_id}) for span in spans
             )
         grouped.append(
             item.model_copy(
@@ -628,6 +692,7 @@ def test_fallback_keeps_adjacent_preparation_and_stage_overview() -> None:
             for prefix, value in source_positions.items()
             if item.citation_text.startswith(prefix)
         )
+
     grouped = tuple(
         item.model_copy(
             update={
@@ -859,8 +924,10 @@ def test_compound_facts_keep_nearby_complete_source_groups() -> None:
     result = _safe_extractive_fallback(
         plan,
         grouped,
-        {atom.atom_id: tuple(item.support_id for item in grouped)
-         for atom in plan.atoms},
+        {
+            atom.atom_id: tuple(item.support_id for item in grouped)
+            for atom in plan.atoms
+        },
         ("egrp_process", "egrp_notice"),
     )
 
@@ -895,8 +962,9 @@ def test_compound_reimbursement_omits_orphan_heading() -> None:
                             "node_id": first_span.node_id,
                             "source_start_char": end,
                             "source_end_char": end + len(item.citation_text),
-                            "source_anchor": item.source_spans[0]
-                            .source_anchor.model_copy(
+                            "source_anchor": item.source_spans[
+                                0
+                            ].source_anchor.model_copy(
                                 update={
                                     "ordinal": first_span.source_anchor.ordinal
                                 }
@@ -919,7 +987,7 @@ def test_compound_reimbursement_omits_orphan_heading() -> None:
                         "evidence_group_type": "LIST_GROUP",
                         "group_complete": True,
                     }
-                )
+                ),
             }
         )
         for item in evidence

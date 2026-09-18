@@ -154,6 +154,8 @@ _FALLBACK_MIN_BIGRAM_OVERLAP = 2
 _FALLBACK_MAX_ORDINARY_EXCERPTS = 3
 _FALLBACK_TABLE_LABEL_MIN_CHARS = 3
 _FALLBACK_TABLE_LABEL_MAX_CHARS = 24
+_FALLBACK_TABLE_SHORT_NAME_MIN_CHARS = 4
+_FALLBACK_TABLE_SHORT_NAME_SUFFIX_CHARS = 2
 _FALLBACK_NODE_MIN_EXCERPTS = 2
 _FALLBACK_PREDECESSOR_MAX_GAP = 4
 _FALLBACK_PREDECESSOR_LIMIT = 2
@@ -2006,7 +2008,7 @@ class GroundedAnsweringService:
             reason,
         )
 
-    def _answer_with_plan(  # noqa: PLR0912, PLR0913, PLR0915
+    def _answer_with_plan(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
         self,
         query: str,
         evidence: tuple[EvidenceItem, ...],
@@ -2074,6 +2076,49 @@ class GroundedAnsweringService:
                 published_claim_count=1,
                 accepted_support_ids=(item.support_id,),
             )
+        if generation_evidence_pack is not None and len(query_plan.atoms) > 1:
+            named_row = _safe_extractive_fallback(
+                query_plan,
+                evidence,
+                linked_ids,
+                generation_evidence_pack.complete_group_ids,
+            )
+            if named_row is not None:
+                row_answer, row_ids, row_atoms = named_row
+                row_groups = {
+                    dict(by_id[support_id].metadata).get("evidence_group_id")
+                    for support_id in row_ids
+                }
+                if (
+                    len(row_ids) > 1
+                    and len(row_groups) == 1
+                    and next(iter(row_groups))
+                    in generation_evidence_pack.complete_group_ids
+                    and all(
+                        dict(by_id[support_id].metadata).get(
+                            "evidence_group_type"
+                        )
+                        == "TABLE_ROW_GROUP"
+                        for support_id in row_ids
+                    )
+                ):
+                    return GroundedOutcome(
+                        answer=row_answer,
+                        mode="extractive_fallback",
+                        reason_code="EXTRACTIVE_FALLBACK",
+                        published_support_ids=row_ids,
+                        atom_coverage=tuple(
+                            (
+                                atom.atom_id,
+                                (
+                                    AtomStatus.PARTIAL
+                                    if atom.atom_id in row_atoms
+                                    else AtomStatus.MISSING
+                                ).value,
+                            )
+                            for atom in query_plan.atoms
+                        ),
+                    )
         stream_claims = (
             query_plan.effort == "DIRECT"
             and len(query_plan.atoms) == 1
@@ -2561,23 +2606,33 @@ def _fallback_table_row(
             for item, _ in items
         ):
             continue
-        labels = (_STOP.sub("", sentence.casefold()) for _, sentence in items)
-        label_length = max(
-            (
-                len(label)
-                for label in labels
-                if (
-                    _FALLBACK_TABLE_LABEL_MIN_CHARS
-                    <= len(label)
-                    <= _FALLBACK_TABLE_LABEL_MAX_CHARS
-                    and label in query
-                )
-            ),
-            default=0,
-        )
-        if label_length:
-            matches.append((label_length, items))
-    return max(matches, key=lambda pair: pair[0])[1] if matches else []
+        score = 0
+        for _, sentence in items:
+            label, separator, remainder = sentence.partition("|")
+            if separator and remainder.strip():
+                continue
+            label = _STOP.sub("", label.casefold())
+            if not (
+                _FALLBACK_TABLE_LABEL_MIN_CHARS
+                <= len(label)
+                <= _FALLBACK_TABLE_LABEL_MAX_CHARS
+            ):
+                continue
+            if label in query:
+                score = max(score, len(label))
+            elif (
+                len(label) >= _FALLBACK_TABLE_SHORT_NAME_MIN_CHARS
+                and label[-_FALLBACK_TABLE_SHORT_NAME_SUFFIX_CHARS:] in query
+            ):
+                # 口语简称只在命中行名尾部且本次唯一时使用。
+                score = max(score, _FALLBACK_TABLE_SHORT_NAME_SUFFIX_CHARS)
+        if score:
+            matches.append((score, items))
+    if not matches:
+        return []
+    best = max(score for score, _items in matches)
+    winners = [items for score, items in matches if score == best]
+    return winners[0] if len(winners) == 1 else []
 
 
 def _fallback_source_node(
@@ -2864,6 +2919,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         ):
             ordinary.append((overlap, index, item, matched))
     selected: list[tuple[EvidenceItem, str]] = []
+    named_row_selected = False
     if direct_duration and ordinary:
         _, _, item, sentence = max(ordinary, key=lambda row: (row[0], -row[1]))
         selected = [(item, sentence)]
@@ -2878,6 +2934,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     )
     if not selected and multi_part:
         selected = _fallback_table_row(plan, grouped)
+        named_row_selected = bool(selected)
     ordinary_selection = [
         (item, sentence)
         for _, _, item, sentence in sorted(
@@ -3173,7 +3230,9 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         ]
     if not ids:
         return None
-    if not _fallback_has_question_anchor(plan.original_query, selected):
+    if not named_row_selected and not _fallback_has_question_anchor(
+        plan.original_query, selected
+    ):
         return None
     covered_atoms = frozenset(
         atom_id
