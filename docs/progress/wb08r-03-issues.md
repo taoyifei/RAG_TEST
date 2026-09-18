@@ -1,5 +1,31 @@
 # WB08R-03 阶段问题记录（2026-09-17）
 
+## WB08R-03R2 对照最新 Prompt 的系统审计（2026-09-18）
+
+本轮以 `399cf2184c4b3f47f6f4b274c4333913f610f1d2` 为阶段起点，先核对 S0～S8 的数据流和真实候选，再成组修改。下表的“代码已改”只说明本地实现及定向测试，不能替代 8289 的真实功能 Gate。
+
+| 合同 | 已复用且符合的主链 | 偏离或未证实之处 | 本轮处理与剩余 Gate |
+| --- | --- | --- | --- |
+| S0 身份与基线 | 保留同一分支、旧候选基线及 `merge_allowed=false` | 旧报告提交 SHA 与实际候选代码 SHA 容易混淆；Context/Ownership/Claims 真值尚未建立 | 状态字段已起草；最终记录 `candidate_code_sha`、镜像、运行树和报告提交差异，真实 Gate 未通过前维持 PAUSED |
+| S1 Planner | 单次调用、固定 `response_format`、8 秒 Transport、5/7 秒性能阈值及失败分类已接入 | 早期 160-token 探针有 2 次 Span 类型失败和 1 次截断；本次动态 Schema 将 ID 按类型约束，并删除服务端已决定的 `c:null` 重复输出 | 精确候选 `a71b692` 的 Planner-24 为 24/24 有记录、22 次调用、0 合同失败；p95 4.116 秒。最大真实输出 155 tokens；4 Atom 最坏上界仍需单独证明 |
+| S2 Context | 原问、Root、Digest、Span ID 与最近用户问题分离 | 陈述式上文缺可靠 TARGET；当前问句内的“其”曾错误触发跨轮澄清；原有上下文解析依赖少数问句形式 | 扩展通用陈述/状态片段、去除嵌套短目标、只读取 `上一问：` 用户行，并处理当前问句自己的先行词；Context-12 仍待冻结与真实核验 |
+| S3 Span Planner | 输出只含 ID 与 Answer Shape，服务端核验 CURRENT Clause、当前 Relation、字面限制；Planner-24 的 Schema/Span 合同已通过 | Span ID 有效仍不等于语义正确。冻结题中大量 TARGET/RELATION 回退为整 Clause；Planner 的 Answer Shape 也会选错，导致后续 Atom 召回为空或取错证据 | 必须从通用句法片段和真实来源结构重新核对 Span 语义；不能按题目或文档写正则补洞 |
+| S4 Degraded | 可按 Clause 拆规则 Atom，无法解指时澄清 | 规则拆出的多 Atom 曾标为 MEDIUM，可能被误解为完整覆盖 | 降级多 Atom 的 `coverage_confidence` 改为 LOW；Gate B 仍要求 0 非预期降级 |
+| S5 Ownership | Root/Atom 一次批量 Embedding、一次 Rerank、结构组及同源闭库纠错保留，关系和硬限制仍是发布门 | `a71b692` 的 24 题形成 435 次相关资格、139 次目标归属，却有 0 可发布支持；429 次关系资格失败。40 个 Atom 中 11 个没有局部候选；10 个有直接支持，仍全部被归属/组关系门清空 | 当前 `AnswerSupport`、表格行列 SourceSpan 和 Group 关系资格的证明粒度不一致。需让行名、列头、值形成可引用的同表交点证明，并区分独立 Direct Span 与 Group 支持；不能直接放松关系门或把裸值当完整引用 |
+| S6 Claim | 一 Claim 对应一 Atom、服务端回填原文、数字/否定/条件/强度校验仍在 | 原逻辑把不同主体分句的动作词合并，可能借用兄弟角色的动作；结构成员不能只凭相关性发布 | 多主体时按同一主体分句绑定动作；结构事实需同组关系导语与成员共同引用；Claims-16 真实蕴含仍待核验 |
+| S7 Coverage | 已区分 `SOURCE_MISSING`、`GENERATION_INCOMPLETE`、`CLAIM_REJECTED` 等原因，Scalar Claim 可直接闭合 | 同 Chunk 多事实曾可能因仅一个 `chunk_id` 就宣称列表完整；按组装包后的最终 Support ID 仍须复核 | 按各 SourceSpan/Support ID 核对最终列表事实；AnswerShape-12 与人工抽查仍待运行 |
+| S8 Trace/Runner | SAFE Trace 有 Planner、Embedding、归属、Claim 计数；新增逐 Atom 的候选、Group、直接支持及支持状态分布，无问题或答案正文；Runner 逐题校验终态与必要字段 | `gate-selections.json` 只冻结题目身份，缺 Context-12 的 3 个澄清输入及各 Gate 的来源跨度/Claim 真值；`claim_event_count` 无法代替 accepted 数 | 不把选择清单称为验收；按 B～H 顺序补全真实来源与 Claim 真值。Gate D 的直接支持样本失败，所以不运行 Full-96 |
+
+审计另发现：同一候选的 `structured_output_mode` 必须显式设置为 `response_format`，否则默认 `none` 会使 Planner Gate 结果不可比；现只在 8289 候选配置，生产服务未变。直接支持来自两个文档时的歧义和冲突、结构组导语以外的语义关系、同 Chunk 多事实的最终覆盖仍需真实来源逐条审阅，不能从定向合成测试推断质量通过。
+
+### 2026-09-18 精确候选 `a71b692` 的真实复核
+
+- 8289 候选 Code SHA 为 `a71b692829afb157b0da6249aed2bf32ba734afa`，镜像 ID 为 `sha256:a5e5c7d92842285323de3c48cee7aafe7473d32ed3f65833f4aa4f3e8a1ce6da`。镜像标签、容器 `SOURCE_REVISION` 和 378 个运行时 Python 文件的 SHA-256 树摘要 `d4c62b2e95f83b87c0ec2d4b40791eb5305a1a6cc17580e0f62ae5f9b2a746b1` 已与 Git 归档核对。8289 `/live` 与 18288 `/live` 均只读返回 200；只重建了 8289 app。
+- Planner-24：24/24 有记录，22 次 Planner 调用，0 Provider Timeout、0 JSON/Schema/Span/Literal 失败、0 非预期回退；p50/p95/max 为 3.713/4.116/5.559 秒，最大真实输出 155 tokens。Planner 合同及本阶段性能门通过；这不代表回答正确。
+- 同一批 24 题全部返回 `INSUFFICIENT_EVIDENCE`，可发布支持、accepted Claim 均为 0；因此 Evidence-Ownership 与 AnswerShape 的真实功能要求失败，Claims-16 不能以“没有接受错误 Claim”冒充通过。40 个 Atom 中 11 个局部候选为 0；其余还有 10 个直接支持项但无法发布。Root 命中、相似 Chunk、引用计数都不等于目标关系获证。
+- 表格实例只用于诊断：来源确有同一行中的行名、列头与值，但逐 Atom 支持可能只有裸单元格值，Group 关系门又将其拒绝。短追问实例的 Context mode 为 `RULE_CONTEXT/HIGH`，但 Atom scoped candidates 为 0。跨模块证明契约尚未闭合，不能通过提高 Top-K、业务词白名单或关闭校验解决。
+- `gate-selections.json` 中 Context-12 缺 3 个冻结输入，其余 Gate 缺人工来源跨度和 Claim 真值；B 之外的 Gate 不报通过，Full-96 未运行。阶段维持 `PAUSED`，`merge_allowed=false`。
+
 ## 2026-09-17 暂停时的状态与边界（历史快照）
 
 - 实际起始提交：`6e979f624c639d4316657daa4f6585455090b528`，工作分支始终为 `codex/wb-08r-adaptive-rag`。
