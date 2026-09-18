@@ -712,6 +712,32 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         ordinary_counts[document_id] += 1
         ordinary_tokens += cost
 
+    if len(query_plan.atoms) > 1:
+        first_seed = min(
+            (
+                candidate
+                for candidate in ranked_candidates
+                if candidate.rerank_rank is not None
+            ),
+            key=lambda candidate: candidate.rerank_rank or 2**31,
+            default=None,
+        )
+        if first_seed is not None:
+            primary_document_id = first_seed.hydrated.chunk.version.document_id
+            predecessor_top = (
+                key
+                for key in admitted
+                if key in root_keys
+                and candidates[key].document_id == primary_document_id
+                and (
+                    candidate := candidate_by_id.get(candidates[key].chunk_id)
+                ) is not None
+                and candidate.expansion_reason == "SECTION_PREDECESSOR"
+            )
+            # 多子问题保留同一来源中紧邻的前序阶段，后续仍受每文档、
+            # 总条数和 token 上限约束；只有已经过硬边界检查的来源可入包。
+            for key in list(predecessor_top)[:2]:
+                add_ordinary(key)
     root_top = [key for key in admitted if key in root_keys]
     for key in root_top[: policy.generation_root_top_k]:
         add_ordinary(key)

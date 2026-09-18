@@ -156,6 +156,67 @@ def test_root_candidate_without_atom_provenance_is_available() -> None:
     }
 
 
+def test_compound_question_keeps_prior_stage_within_document_cap() -> None:
+    """同文档的高排名片段不能耗尽前序阶段的生成证据名额。"""
+    seeds = tuple(
+        make_ranked_chunk(number, f"立项阶段{number}。")
+        .model_copy(update={"rerank_rank": number})
+        for number in range(1, 5)
+    )
+    predecessors = tuple(
+        make_ranked_chunk(
+            number,
+            text,
+            role=ChunkRole.LIST,
+            neighbor_group_id=f"stage-{number}",
+        ).model_copy(
+            update={
+                "expansion_reason": "SECTION_PREDECESSOR",
+                "expansion_seed_ids": (seeds[0].hydrated.chunk.chunk_id,),
+            }
+        )
+        for number, text in (
+            (5, "立项准备阶段需编制项目材料。"),
+            (6, "项目立项包括准备、申报、审核、决策和系统立项。"),
+        )
+    )
+    candidates = (*seeds, *predecessors)
+    root = tuple(
+        _evidence_item(
+            candidate,
+            candidate.hydrated.chunk.source_spans[0],
+            candidate.hydrated.chunk.citation_text,
+            "S1",
+        )
+        for candidate in candidates
+    )
+    atoms = (
+        QueryAtom(
+            atom_id="A1",
+            target="立项",
+            relation="材料",
+            answer_shape=AtomAnswerShape.FACT,
+        ),
+        QueryAtom(
+            atom_id="A2",
+            target="立项",
+            relation="步骤",
+            answer_shape=AtomAnswerShape.FACT,
+        ),
+    )
+
+    pack = _pack(
+        _plan(*atoms),
+        candidates,
+        root=root,
+        policy=RetrievalPolicy(generation_per_document_cap=4),
+    )
+
+    assert {item.hydrated.chunk.chunk_id for item in predecessors} <= {
+        item.chunk_id for item in pack.evidence
+    }
+
+
 def test_ordinary_chunk_keeps_adjacent_source_paragraph() -> None:
     """同块首选段落提到供应商时，前一段的时限仍可入包。"""
     first = "发布采购文件到应答截止时间，不得少于3日。"
