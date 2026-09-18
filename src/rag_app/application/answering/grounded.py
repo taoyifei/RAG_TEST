@@ -2227,6 +2227,7 @@ class GroundedAnsweringService:
                 query_plan,
                 evidence,
                 linked_ids,
+                generation_evidence_pack.complete_group_ids,
             )
             if fallback is not None:
                 fallback_answer, fallback_ids, fallback_atoms = fallback
@@ -2499,6 +2500,7 @@ def _safe_extractive_fallback(
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
     linked_ids: dict[str, tuple[str, ...]],
+    complete_group_ids: tuple[str, ...] = (),
 ) -> tuple[str, tuple[str, ...], frozenset[str]] | None:
     """模型未形成可发布事实时，仅展示相关且可引用的来源原句。"""
     if not linked_ids:
@@ -2508,9 +2510,19 @@ def _safe_extractive_fallback(
         for support_ids in linked_ids.values()
         for support_id in support_ids
     }
-    question_terms = _terms(plan.original_query + plan.resolved_root_query)
-    selected: list[tuple[EvidenceItem, str]] = []
-    for item in evidence:
+    question_terms = _terms(
+        " ".join(
+            (
+                plan.original_query,
+                plan.resolved_root_query,
+                *(atom.search_text for atom in plan.atoms),
+            )
+        )
+    )
+    complete_ids = frozenset(complete_group_ids)
+    grouped: dict[str, list[tuple[EvidenceItem, str]]] = {}
+    ordinary: list[tuple[int, int, EvidenceItem, str]] = []
+    for index, item in enumerate(evidence):
         if (
             item.support_id not in related
             or not item.publishable
@@ -2539,16 +2551,46 @@ def _safe_extractive_fallback(
             sentences,
             key=lambda sentence: len(_terms(sentence) & question_terms),
         )
+        overlap = len(_terms(matched) & question_terms)
+        group_id = metadata.get("evidence_group_id")
         if (
-            not certified
-            and not structured
-            and len(_terms(matched) & question_terms)
-            < _FALLBACK_MIN_BIGRAM_OVERLAP
+            structured
+            and isinstance(group_id, str)
+            and group_id in complete_ids
         ):
-            continue
-        selected.append((item, matched))
-        if len(selected) >= _FALLBACK_MAX_ORDINARY_EXCERPTS and not structured:
-            break
+            grouped.setdefault(group_id, []).append((item, matched))
+        elif certified or overlap >= _FALLBACK_MIN_BIGRAM_OVERLAP:
+            ordinary.append((overlap, index, item, matched))
+    selected: list[tuple[EvidenceItem, str]] = []
+    if grouped:
+        ranked_groups = sorted(
+            grouped.items(),
+            key=lambda pair: (
+                -len(
+                    question_terms
+                    & _terms(
+                        " ".join(item.citation_text for item, _ in pair[1])
+                    )
+                ),
+                next(
+                    index
+                    for index, item in enumerate(evidence)
+                    if item.support_id == pair[1][0][0].support_id
+                ),
+            ),
+        )
+        best_group = ranked_groups[0][1]
+        if question_terms & _terms(
+            " ".join(item.citation_text for item, _ in best_group)
+        ):
+            selected = best_group
+    if not selected:
+        selected = [
+            (item, sentence)
+            for _, _, item, sentence in sorted(
+                ordinary, key=lambda row: (-row[0], row[1])
+            )[:_FALLBACK_MAX_ORDINARY_EXCERPTS]
+        ]
     if not selected:
         return None
     selected.sort(

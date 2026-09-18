@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
@@ -205,6 +206,58 @@ def test_zero_model_claims_uses_one_safe_extractive_fallback() -> None:
     assert outcome.mode == "extractive_fallback"
     assert outcome.reason_code == "EXTRACTIVE_FALLBACK"
     assert outcome.published_support_ids == ("S1",)
+
+
+def test_fallback_uses_relevant_complete_group_only() -> None:
+    """完整结构组已命中时，不混入其它组的事实。"""
+    evidence = tuple(
+        _evidence(sentence)[0].model_copy(
+            update={"evidence_id": f"S{index}"}
+        )
+        for index, sentence in enumerate(
+            (
+                "乙部门保存设备记录 30 天。",
+                "甲部门保存记录 14 天。",
+                "甲部门每周核对记录。",
+            ),
+            1,
+        )
+    )
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "group_complete": True,
+                        "evidence_group_id": (
+                            "egrp_unrelated" if index == 0 else "egrp_relevant"
+                        ),
+                    }
+                )
+            }
+        )
+        for index, item in enumerate(evidence)
+    )
+    plan = _plan("甲部门")
+    pack = replace(
+        _pack(plan, grouped),
+        complete_group_ids=("egrp_unrelated", "egrp_relevant"),
+    )
+    generator = Mock()
+    generator.generate.return_value = _draft((), plan)
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        grouped,
+        ((AtomStatus.MISSING, ()),),
+        pack=pack,
+    )
+    assert outcome.mode == "extractive_fallback"
+    assert outcome.answer is not None
+    assert "甲部门保存记录 14 天。" in outcome.answer
+    assert "乙部门保存设备记录 30 天。" not in outcome.answer
+    assert len(outcome.published_support_ids) == 2
 
 
 def test_one_accepted_atom_keeps_limited_answer_for_unanswered_atom() -> None:
