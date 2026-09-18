@@ -199,3 +199,67 @@ def test_no_anchor_never_opens_all_sibling_groups() -> None:
             atom, groups, (), RetrievalPolicy()
         )
     )
+
+
+def test_complete_list_can_certify_structural_relation_from_its_lead_in() -> (
+    None
+):
+    group = _group(
+        1,
+        EvidenceGroupKind.LIST_GROUP,
+        ("甲类文具包括：", "钢笔。", "纸张。"),
+    )
+    atom = _atom(
+        "甲类文具",
+        shape=AtomAnswerShape.ENUMERATION,
+        relation="组成",
+    )
+
+    alignment = align_atom_to_groups(
+        atom, (group,), (), RetrievalPolicy()
+    )[0]
+
+    assert alignment.qualification is AlignmentQualification.STRONG
+    assert alignment.structural_relation_proven
+    assert alignment.relation_compatible
+    assert alignment.publishable
+
+
+def test_list_without_target_relation_lead_in_has_no_certificate() -> None:
+    group = _group(
+        1,
+        EvidenceGroupKind.LIST_GROUP,
+        ("甲类文具：", "钢笔。", "纸张。"),
+    )
+    atom = _atom(
+        "甲类文具",
+        shape=AtomAnswerShape.ENUMERATION,
+        relation="组成",
+    )
+
+    alignment = align_atom_to_groups(
+        atom, (group,), (), RetrievalPolicy()
+    )[0]
+
+    assert not alignment.structural_relation_proven
+    assert not alignment.publishable
+
+
+def test_relation_marker_in_sibling_member_cannot_certify_target() -> None:
+    group = _group(
+        1,
+        EvidenceGroupKind.LIST_GROUP,
+        ("甲类文具：", "乙类用品包括桌椅。", "钢笔。"),
+    )
+    atom = _atom(
+        "甲类文具",
+        shape=AtomAnswerShape.ENUMERATION,
+        relation="组成",
+    )
+
+    alignment = align_atom_to_groups(
+        atom, (group,), (), RetrievalPolicy()
+    )[0]
+
+    assert not alignment.structural_relation_proven
+    assert not alignment.publishable

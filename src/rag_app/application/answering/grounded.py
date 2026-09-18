@@ -2315,7 +2315,43 @@ def _validated_natural_claim(
             code="CLAIM_UNKNOWN_SUPPORT",
         )
     source_text = "\n".join(item.citation_text for item in atom_units)
-    _validate_natural_entailment(atom, natural.text, atom_units)
+    direct_relation = any(
+        isinstance(
+            certificate := dict(item.metadata).get("answer_support"), dict
+        )
+        and certificate.get("status") == "SUPPORTED"
+        for item in atom_units
+    )
+    group_ids = {
+        dict(item.metadata).get("evidence_group_id") for item in atom_units
+    }
+    group_certified = bool(
+        not direct_relation
+        and len(group_ids) == 1
+        and next(iter(group_ids)) in support.relation_certified_group_ids
+        and all(
+            dict(item.metadata).get("group_complete") is True
+            for item in atom_units
+        )
+    )
+    if group_certified and (
+        not any(
+            dict(item.metadata).get("group_member_index") == 1
+            for item in atom_units
+        )
+        or not any(
+            dict(item.metadata).get("group_member_index", 0) > 1
+            for item in atom_units
+        )
+    ):
+        raise ValidationFailed(
+            "结构事实缺少同组关系导语的引用。",
+            stage="answer.validate",
+            code="CLAIM_RELATION_UNSUPPORTED",
+        )
+    _validate_natural_entailment(
+        atom, natural.text, atom_units, group_certified=group_certified
+    )
     source_labels = "\n".join(
         " ".join(
             (
@@ -2405,6 +2441,8 @@ def _validate_natural_entailment(
     atom: QueryAtom,
     text: str,
     units: tuple[EvidenceItem, ...],
+    *,
+    group_certified: bool = False,
 ) -> None:
     """要求 Claim 的对象、关系和逻辑算子由同一组真实引用直接支持。"""
     source = "\n".join(item.citation_text for item in units)
@@ -2418,7 +2456,9 @@ def _validate_natural_entailment(
     certificates = tuple(
         dict(item.metadata).get("answer_support") for item in units
     )
-    if any(isinstance(item, dict) for item in certificates) and not any(
+    if not group_certified and any(
+        isinstance(item, dict) for item in certificates
+    ) and not any(
         isinstance(item, dict) and item.get("status") == "SUPPORTED"
         for item in certificates
     ):
@@ -2427,9 +2467,8 @@ def _validate_natural_entailment(
             stage="answer.validate",
             code="CLAIM_RELATION_UNSUPPORTED",
         )
-    source_clauses = [
-        clause for clause, _subject in _clauses_with_subject(source)
-    ]
+    source_with_subjects = _clauses_with_subject(source)
+    source_clauses = [clause for clause, _subject in source_with_subjects]
     for operator in _INFERENCE_OPERATOR.findall(text):
         if not any(operator in clause for clause in source_clauses):
             raise ValidationFailed(
@@ -2459,6 +2498,22 @@ def _validate_natural_entailment(
             stage="answer.validate",
             code="CLAIM_RELATION_UNSUPPORTED",
         )
+    source_subjects = {
+        subject for _clause, subject in source_with_subjects if subject
+    }
+    if claim_subject and len(source_subjects) > 1:
+        owned_actions = {
+            action
+            for clause, subject in source_with_subjects
+            if subject and _same_subject(subject, claim_subject)
+            for action in re.findall(_ACTION_VERB, _predicate(clause))
+        }
+        if claim_actions - owned_actions:
+            raise ValidationFailed(
+                "事实借用了另一个主体的动作关系。",
+                stage="answer.validate",
+                code="CLAIM_RELATION_UNSUPPORTED",
+            )
     matched = _best_negation_sources(text, source_clauses) or source_clauses
     claim_modality = _modality_class(text)
     if claim_modality is not None and not any(
@@ -2587,8 +2642,8 @@ def _structural_member_coverage(
 ) -> bool | None:
     """完整组按来源成员核对，不把导语当作列表事实。"""
     by_id = {item.support_id: item for item in evidence}
-    cited_chunks = {
-        item.chunk_id
+    cited_support_ids = {
+        item.support_id
         for claim in claims
         for support in claim.supports
         if (item := by_id.get(support.support_id)) is not None
@@ -2605,19 +2660,21 @@ def _structural_member_coverage(
         saw_group = True
         if metadata.get("group_complete") is not True:
             continue
-        groups.setdefault(group_id, {})[item.chunk_id] = item
+        groups.setdefault(group_id, {})[item.support_id] = item
         expected_counts[group_id] = member_count
     if not groups:
         return False if saw_group else None
     for group_id, members in groups.items():
-        if len(members) != expected_counts[group_id]:
+        if len({item.chunk_id for item in members.values()}) != (
+            expected_counts[group_id]
+        ):
             continue
         required = {
-            chunk_id
-            for chunk_id, item in members.items()
+            support_id
+            for support_id, item in members.items()
             if not _structural_lead_in(item)
         }
-        if required and required <= cited_chunks:
+        if required and required <= cited_support_ids:
             return True
     return False
 

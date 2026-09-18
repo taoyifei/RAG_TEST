@@ -403,10 +403,16 @@ def _annotate_group_evidence(
                 # 列表导语可同时属于段落组，优先保留覆盖完整结构的组。
                 owners[chunk_id] = (group, index)
     present_by_group: dict[str, set[str]] = defaultdict(set)
+    present_spans_by_group: dict[
+        str, set[tuple[object, ...]]
+    ] = defaultdict(set)
     for item in evidence:
         owner = owners.get(item.chunk_id)
         if owner is not None:
             present_by_group[owner[0].group_id].add(item.chunk_id)
+            present_spans_by_group[owner[0].group_id].update(
+                _group_span_identity(span) for span in item.source_spans
+            )
     annotated: list[EvidenceItem] = []
     for item in evidence:
         owner = owners.get(item.chunk_id)
@@ -425,15 +431,28 @@ def _annotate_group_evidence(
                 set(group.group.member_chunk_ids)
                 - (present_by_group[group.group_id])
             )
+            required_spans = {
+                _group_span_identity(span)
+                for source_map in group.group.member_source_maps
+                for span in source_map.source_spans
+                if span.is_citable
+            }
+            missing_spans = (
+                required_spans - present_spans_by_group[group.group_id]
+            )
             reasons = (*group.group.incomplete_reasons,)
             if missing_members:
                 reasons = (*reasons, "EVIDENCE_MEMBER_NOT_SELECTED")
+            if missing_spans:
+                reasons = (*reasons, "EVIDENCE_SOURCE_SPAN_NOT_SELECTED")
             group_metadata = {
                 "evidence_group_id": group.group_id,
                 "evidence_group_type": group.group.kind.value,
                 "group_member_index": index,
                 "group_member_count": len(group.group.member_chunk_ids),
-                "group_complete": group.complete and not missing_members,
+                "group_complete": (
+                    group.complete and not missing_members and not missing_spans
+                ),
                 "group_completeness_reason": (
                     ";".join(dict.fromkeys(reasons)) if reasons else "COMPLETE"
                 ),
@@ -448,6 +467,39 @@ def _annotate_group_evidence(
             )
         )
     return tuple(annotated)
+
+
+def _group_span_identity(span: SourceSpan) -> tuple[object, ...]:
+    """对照真实来源节点与区间，避免一个 Chunk 代表多项事实。"""
+    return (
+        span.node_id,
+        span.source_start_char,
+        span.source_end_char,
+        span.span_type.value,
+    )
+
+
+def group_source_maps_covered(
+    group: GroupCandidate, evidence: tuple[EvidenceItem, ...]
+) -> bool:
+    """最终装包后再次核对组的每个成员和可引用来源跨度。"""
+    if not group.complete:
+        return False
+    member_ids = set(group.group.member_chunk_ids)
+    selected = tuple(item for item in evidence if item.chunk_id in member_ids)
+    present_chunks = {item.chunk_id for item in selected}
+    present_spans = {
+        _group_span_identity(span)
+        for item in selected
+        for span in item.source_spans
+    }
+    required_spans = {
+        _group_span_identity(span)
+        for source_map in group.group.member_source_maps
+        for span in source_map.source_spans
+        if span.is_citable
+    }
+    return member_ids <= present_chunks and required_spans <= present_spans
 
 
 def _group_is_complete(item: EvidenceItem) -> bool:

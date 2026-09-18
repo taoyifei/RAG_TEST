@@ -21,6 +21,13 @@ _TABLE_ROW_LABEL = re.compile(r"r(?P<row>\d+):c0$")
 _RELATION_ANCHOR_THRESHOLD = 0.35
 _MIN_BIGRAM_CHARS = 2
 _MIN_FUZZY_TARGET_CHARS = 5
+_STRUCTURAL_RELATIONS = {
+    AtomAnswerShape.ENUMERATION: re.compile(
+        r"包括|包含|分为|分成|列为|组成|如下"
+    ),
+    AtomAnswerShape.DUTIES: re.compile(r"职责|负责|承担|任务"),
+    AtomAnswerShape.PROCEDURE: re.compile(r"流程|步骤|先|再|然后|随后"),
+}
 
 
 class AlignmentQualification(StrEnum):
@@ -62,6 +69,7 @@ class AtomGroupAlignment:
     qualification: AlignmentQualification
     publishable: bool
     reason_codes: tuple[str, ...]
+    structural_relation_proven: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,14 +121,14 @@ def qualify_atom_evidence(  # noqa: PLR0913
     group_id = metadata.get("evidence_group_id")
     group_id = group_id if isinstance(group_id, str) else None
     direct_support = metadata.get("answer_support")
-    relation_supported = (
+    direct_relation_supported = (
         isinstance(direct_support, dict)
         and direct_support.get("status") == "SUPPORTED"
     )
     own_link = any(
         link.atom_id == atom.atom_id and link.chunk_id == item.chunk_id
         for link in links
-    ) or (single_atom_direct and not links and relation_supported)
+    ) or (single_atom_direct and not links and direct_relation_supported)
     root_link = any(
         link.atom_id is None and link.chunk_id == item.chunk_id
         for link in links
@@ -145,9 +153,23 @@ def qualify_atom_evidence(  # noqa: PLR0913
         not atom.source_qualifier
         or _normalized(atom.source_qualifier) in _normalized(source_text)
     )
-    constraints_supported = all(
+    direct_constraints_supported = all(
         _constraint_supported(constraint.kind.value, constraint.value, item)
         for constraint in atom.constraints
+    )
+    group_constraints_supported = (
+        alignment is None
+        or not group_id
+        or alignment.group_id != group_id
+        or all(passed for _kind, passed in alignment.constraint_checks)
+    )
+    constraints_supported = group_constraints_supported and (
+        direct_constraints_supported
+        or bool(
+            alignment
+            and alignment.structural_relation_proven
+            and metadata.get("group_complete") is True
+        )
     )
     direct_target = bool(
         _normalized(atom.target)
@@ -157,6 +179,17 @@ def qualify_atom_evidence(  # noqa: PLR0913
         alignment is not None
         and alignment.qualification is not AlignmentQualification.REJECTED
         and alignment.group_id == group_id
+    )
+    group_gate = group_owned and alignment is not None and alignment.publishable
+    relation_supported = (
+        direct_relation_supported
+        or bool(
+            alignment
+            and alignment.structural_relation_proven
+            and metadata.get("group_complete") is True
+        )
+    ) and (
+        not group_owned or bool(alignment and alignment.relation_compatible)
     )
     target_owned = direct_target or group_owned
     root_trusted = (
@@ -170,10 +203,10 @@ def qualify_atom_evidence(  # noqa: PLR0913
         root_trusted = False
     structural = atom.answer_shape not in _SCALAR_SHAPES
     structure_safe = (
-        group_owned
+        group_gate
         if structural
         else alignment is None
-        or group_owned
+        or group_gate
         or group_id is None
     )
     retrieval_relevant = cited and (own_link or root_link or group_owned)
@@ -183,7 +216,7 @@ def qualify_atom_evidence(  # noqa: PLR0913
         and (own_link or root_trusted)
         and structure_safe
     )
-    group_allowed = group_owned and structure_safe
+    group_allowed = group_gate and structure_safe
     support_mode = (
         EvidenceSupportMode.ALIGNED_COMPLETE_GROUP
         if group_allowed and metadata.get("group_complete") is True
@@ -220,6 +253,8 @@ def qualify_atom_evidence(  # noqa: PLR0913
             reasons.append(code)
     if provenance is EvidenceProvenance.ROOT and not root_trusted:
         reasons.append("ROOT_RESCUE_UNTRUSTED")
+    if group_owned and not group_gate:
+        reasons.append("ATOM_ALIGNMENT_NOT_PUBLISHABLE")
     if support_mode is None:
         reasons.append("NO_PUBLISHABLE_SUPPORT_MODE")
     return AtomEvidenceQualification(
@@ -331,7 +366,20 @@ def align_atom_to_groups(
         if any(not passed for _kind, passed in checks):
             reasons.append("ATOM_CONSTRAINT_UNVERIFIED")
         relation = _normalized(atom.relation)
-        relation_compatible = bool(
+        structural_relation_proven = bool(
+            group.complete
+            and atom.answer_shape in _STRUCTURAL_RELATIONS
+            and len(group.member_chunk_ids) > 1
+            and score >= policy.atom_group_strong_anchor_threshold
+            and any(
+                _STRUCTURAL_RELATIONS[atom.answer_shape].search(
+                    _normalized(anchor)
+                )
+                for anchor in anchor_texts
+                if _normalized(atom.target) in _normalized(anchor)
+            )
+        )
+        relation_compatible = structural_relation_proven or bool(
             relation
             and _anchor_score(relation, group_text)
             >= _RELATION_ANCHOR_THRESHOLD
@@ -365,6 +413,7 @@ def align_atom_to_groups(
                 qualification=qualification,
                 publishable=publishable,
                 reason_codes=tuple(reasons),
+                structural_relation_proven=structural_relation_proven,
             )
         )
     return tuple(results)

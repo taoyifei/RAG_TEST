@@ -175,7 +175,7 @@ def test_budget_limited_group_is_only_a_model_candidate() -> None:
     metadata = dict(selected.model_evidence_candidates[0].metadata)
     assert metadata["group_complete"] is False
     assert metadata["group_completeness_reason"] == (
-        "EVIDENCE_MEMBER_NOT_SELECTED"
+        "EVIDENCE_MEMBER_NOT_SELECTED;EVIDENCE_SOURCE_SPAN_NOT_SELECTED"
     )
     assert selected.rejected_candidate_reasons == (
         (members[0].hydrated.chunk.chunk_id, "INCOMPLETE_EVIDENCE_GROUP"),

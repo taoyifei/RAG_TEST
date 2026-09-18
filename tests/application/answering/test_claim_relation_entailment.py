@@ -74,3 +74,12 @@ def test_claim_cannot_answer_for_another_explicit_subject() -> None:
     )
 
     assert "CLAIM_TARGET_UNSUPPORTED" in codes
+
+
+def test_claim_cannot_borrow_action_from_sibling_subject() -> None:
+    codes = _rejected(
+        "甲部门负责核对材料；乙部门负责批准材料。",
+        "甲部门负责批准材料。",
+    )
+
+    assert "CLAIM_RELATION_UNSUPPORTED" in codes

@@ -47,6 +47,7 @@ from rag_app.application.retrieval.context_resolution import (
 from rag_app.application.retrieval.dense import DenseChannel
 from rag_app.application.retrieval.evidence import (
     EvidenceAssembler,
+    group_source_maps_covered,
     requires_complete_evidence_group,
 )
 from rag_app.application.retrieval.evidence_groups import (
@@ -2817,6 +2818,7 @@ class RetrievalService:
             ]
         ] = []
         alignments_by_atom: dict[str, tuple[AtomGroupAlignment, ...]] = {}
+        groups_by_atom: dict[str, tuple[GroupCandidate, ...]] = {}
         qualifications_by_atom: dict[
             str, dict[tuple[object, ...], AtomEvidenceQualification]
         ] = {}
@@ -2833,6 +2835,7 @@ class RetrievalService:
                 ),
             )
             alignments_by_atom[atom.atom_id] = alignments
+            groups_by_atom[atom.atom_id] = atom_groups
             atom_analysis = self._analysis_for_atom(request, atom)
             atom_plan = self._planner.plan(
                 atom_analysis,
@@ -2892,10 +2895,24 @@ class RetrievalService:
             }
             direct_keys = tuple(
                 identity(item)
-                for item in selection.answer_support_set
+                for item in scoped_items
                 if identity(item) in allowed_keys
                 and qualifications[identity(item)].publishable
             )
+            if selection.ambiguous:
+                direct_keys = ()
+            elif atom.answer_shape in {
+                AtomAnswerShape.ENUMERATION,
+                AtomAnswerShape.DUTIES,
+                AtomAnswerShape.PROCEDURE,
+            } and not atom.source_qualifier:
+                direct_documents = {
+                    item.document_id
+                    for item in scoped_items
+                    if identity(item) in direct_keys
+                }
+                if len(direct_documents) > 1:
+                    direct_keys = ()
             candidate_keys = tuple(
                 identity(item)
                 for item in scoped_items
@@ -3000,15 +3017,24 @@ class RetrievalService:
                 AtomAnswerShape.PROCEDURE,
                 AtomAnswerShape.DUTIES,
             }
+            complete_group_ids = {
+                group.group_id
+                for group in groups_by_atom[atom.atom_id]
+                if group_source_maps_covered(
+                    group,
+                    tuple(
+                        item
+                        for item in direct
+                        if dict(item.metadata).get("evidence_group_id")
+                        == group.group_id
+                    ),
+                )
+            }
             if structural and self._policy.evidence_group_mode == "active":
                 checks.append(
                     (
                         "GROUP_COMPLETE",
-                        bool(direct)
-                        and all(
-                            dict(item.metadata).get("group_complete") is True
-                            for item in direct
-                        ),
+                        bool(complete_group_ids),
                     )
                 )
             if (
@@ -3024,11 +3050,7 @@ class RetrievalService:
                 checks.append(
                     (
                         "GROUP_ANCHORED",
-                        any(
-                            dict(item.metadata).get("evidence_group_id")
-                            in strong_group_ids
-                            for item in direct
-                        ),
+                        bool(complete_group_ids & strong_group_ids),
                     )
                 )
             conflicting = _numeric_conflict(atom, direct)
@@ -3038,14 +3060,14 @@ class RetrievalService:
                 else AtomStatus.SUPPORTED
                 if direct and all(passed for _name, passed in checks)
                 else AtomStatus.PARTIAL
-                if relevant
+                if direct or relevant
                 else AtomStatus.MISSING
             )
             support_items = (
                 conflicting
                 if status is AtomStatus.CONTRADICTORY
                 else direct
-                if status is AtomStatus.SUPPORTED
+                if direct
                 else relevant
             )
             groups_for_atom = tuple(
@@ -3066,7 +3088,19 @@ class RetrievalService:
                     status=status,
                     supporting_group_ids=groups_for_atom,
                     supporting_support_ids=tuple(
-                        item.support_id for item in support_items
+                        item.support_id
+                        for item in (
+                            conflicting
+                            if status is AtomStatus.CONTRADICTORY
+                            else direct
+                        )
+                    ),
+                    relation_certified_group_ids=tuple(
+                        alignment.group_id
+                        for alignment in alignments_by_atom[atom.atom_id]
+                        if alignment.structural_relation_proven
+                        and alignment.publishable
+                        and alignment.group_id in complete_group_ids
                     ),
                     missing_aspects=tuple(
                         (name for name, passed in checks if not passed)
@@ -3150,7 +3184,7 @@ class RetrievalService:
                 item.target_owned for item in all_qualifications
             ),
             "publishable_support_count": sum(
-                item.publishable for item in all_qualifications
+                len(support.supporting_support_ids) for support in supports
             ),
             "evidence_present_but_rejected": sum(
                 support.status is not AtomStatus.SUPPORTED

@@ -14,9 +14,9 @@ from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
 QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v3"
 QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v1"
-ATOM_GROUP_ALIGNMENT_REVISION = "wb08r-atom-group-alignment-v1"
+ATOM_GROUP_ALIGNMENT_REVISION = "wb08r-atom-group-alignment-v2"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v1"
-GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-claim-v4"
+GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-claim-v5"
 NATURAL_RENDERER_REVISION = "wb08r-natural-renderer-v3"
 CORRECTIVE_RETRIEVAL_REVISION = "wb08r-per-atom-correction-v2"
 _MAX_ATOMS = 4
@@ -189,6 +189,7 @@ class AtomSupport(FrozenModel):
     status: AtomStatus
     supporting_group_ids: tuple[str, ...] = ()
     supporting_support_ids: tuple[str, ...] = ()
+    relation_certified_group_ids: tuple[str, ...] = ()
     missing_aspects: tuple[str, ...] = ()
     contradictions: tuple[str, ...] = ()
     deterministic_checks: tuple[tuple[str, bool], ...] = ()

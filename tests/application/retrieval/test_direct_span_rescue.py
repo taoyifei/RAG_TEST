@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from rag_app.application.retrieval.atom_group_alignment import (
+    AlignmentQualification,
+    AtomGroupAlignment,
     EvidenceSupportMode,
     qualify_atom_evidence,
 )
@@ -161,3 +163,129 @@ def test_hard_constraint_and_structure_restrict_direct_span() -> None:
     assert "ATOM_CONSTRAINT_UNVERIFIED" in constrained.reason_codes
     assert not enumeration.publishable
     assert "ATOM_STRUCTURE_UNSAFE" in enumeration.reason_codes
+
+
+def test_group_alignment_relation_is_a_publication_gate() -> None:
+    item, link = _linked(root=False)
+    group_id = "egrp_" + "1" * 32
+    item = item.model_copy(
+        update={
+            "metadata": freeze_json_object(
+                {
+                    **dict(item.metadata),
+                    "evidence_group_id": group_id,
+                    "group_complete": True,
+                }
+            )
+        }
+    )
+    alignment = AtomGroupAlignment(
+        atom_id="A1",
+        group_id=group_id,
+        document_version_id=item.document_version_id,
+        provenance_hit=True,
+        target_anchor_score=1.0,
+        relation_compatible=False,
+        constraint_checks=(),
+        qualification=AlignmentQualification.STRONG,
+        publishable=False,
+        reason_codes=("ATOM_RELATION_UNVERIFIED",),
+    )
+
+    qualified = qualify_atom_evidence(
+        _atom(),
+        item,
+        (link,),
+        alignment=alignment,
+        resolved_root_query="甲设备 维护期限",
+    )
+
+    assert qualified.retrieval_relevant
+    assert not qualified.publishable
+    assert not qualified.relation_supported
+    assert "ATOM_ALIGNMENT_NOT_PUBLISHABLE" in qualified.reason_codes
+
+
+def test_group_alignment_hard_constraint_is_a_publication_gate() -> None:
+    item, link = _linked(root=False)
+    group_id = "egrp_" + "2" * 32
+    item = item.model_copy(
+        update={
+            "metadata": freeze_json_object(
+                {
+                    **dict(item.metadata),
+                    "evidence_group_id": group_id,
+                    "group_complete": True,
+                }
+            )
+        }
+    )
+    alignment = AtomGroupAlignment(
+        atom_id="A1",
+        group_id=group_id,
+        document_version_id=item.document_version_id,
+        provenance_hit=True,
+        target_anchor_score=1.0,
+        relation_compatible=True,
+        constraint_checks=(("NUMBER", False),),
+        qualification=AlignmentQualification.STRONG,
+        publishable=False,
+        reason_codes=("ATOM_CONSTRAINT_UNVERIFIED",),
+    )
+
+    qualified = qualify_atom_evidence(
+        _atom(),
+        item,
+        (link,),
+        alignment=alignment,
+        resolved_root_query="甲设备 维护期限",
+    )
+
+    assert qualified.retrieval_relevant
+    assert not qualified.publishable
+    assert not qualified.constraints_supported
+    assert "ATOM_CONSTRAINT_UNVERIFIED" in qualified.reason_codes
+
+
+def test_complete_group_can_publish_member_with_structural_certificate() -> (
+    None
+):
+    item, link = _linked(root=False, relation_supported=False)
+    group_id = "egrp_" + "4" * 32
+    item = item.model_copy(
+        update={
+            "metadata": freeze_json_object(
+                {
+                    **dict(item.metadata),
+                    "evidence_group_id": group_id,
+                    "group_complete": True,
+                }
+            )
+        }
+    )
+    alignment = AtomGroupAlignment(
+        atom_id="A1",
+        group_id=group_id,
+        document_version_id=item.document_version_id,
+        provenance_hit=True,
+        target_anchor_score=1.0,
+        relation_compatible=True,
+        constraint_checks=(),
+        qualification=AlignmentQualification.STRONG,
+        publishable=True,
+        reason_codes=(),
+        structural_relation_proven=True,
+    )
+    atom = _atom(shape=AtomAnswerShape.ENUMERATION)
+
+    qualified = qualify_atom_evidence(
+        atom,
+        item,
+        (link,),
+        alignment=alignment,
+        resolved_root_query="甲设备 维护期限",
+    )
+
+    assert qualified.relation_supported
+    assert qualified.publishable
+    assert qualified.support_mode is EvidenceSupportMode.ALIGNED_COMPLETE_GROUP
