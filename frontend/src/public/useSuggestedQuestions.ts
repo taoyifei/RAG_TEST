@@ -50,40 +50,43 @@ function addDiverseQuestions(
   random: () => number,
 ): void {
   const shuffled = shuffle(candidates, random);
-  const chosenIds = new Set(selected.map((item) => item.caseId));
+  const chosenQuestions = new Set(selected.map((item) => item.question));
   const chosenDocuments = new Set(selected.map((item) => item.documentId));
   for (const item of shuffled) {
     if (selected.length >= count) return;
-    if (chosenIds.has(item.caseId) || chosenDocuments.has(item.documentId)) {
+    if (
+      chosenQuestions.has(item.question) ||
+      chosenDocuments.has(item.documentId)
+    ) {
       continue;
     }
     selected.push(item);
-    chosenIds.add(item.caseId);
+    chosenQuestions.add(item.question);
     chosenDocuments.add(item.documentId);
   }
   for (const item of shuffled) {
     if (selected.length >= count) return;
-    if (chosenIds.has(item.caseId)) continue;
+    if (chosenQuestions.has(item.question)) continue;
     selected.push(item);
-    chosenIds.add(item.caseId);
+    chosenQuestions.add(item.question);
   }
 }
 
 export function pickSuggestedQuestions(
   askedQuestions: readonly string[],
   previous: readonly SuggestedQuestion[],
-  seenIds: ReadonlySet<string>,
+  seenQuestions: ReadonlySet<string>,
   random: () => number = Math.random,
 ): SuggestedQuestion[] {
   const asked = new Set(askedQuestions.map(questionKey));
-  const previousIds = new Set(previous.map((item) => item.caseId));
+  const previousQuestions = new Set(previous.map((item) => item.question));
   const available = SUGGESTED_QUESTIONS.filter(
     (item) =>
       !TEMPLATE_DOCUMENT_IDS.has(item.documentId) &&
       !asked.has(questionKey(item.question)) &&
-      !previousIds.has(item.caseId),
+      !previousQuestions.has(item.question),
   );
-  const fresh = available.filter((item) => !seenIds.has(item.caseId));
+  const fresh = available.filter((item) => !seenQuestions.has(item.question));
   const selected: SuggestedQuestion[] = [];
   addDiverseQuestions(fresh, selected, VISIBLE_COUNT, random);
   if (selected.length < VISIBLE_COUNT) {
@@ -97,17 +100,19 @@ export function useSuggestedQuestions(turns: readonly PublicTurn[]) {
     pickSuggestedQuestions([], [], new Set()),
   );
   const previousRef = useRef(questions);
-  const seenIdsRef = useRef(new Set(questions.map((item) => item.caseId)));
+  const seenQuestionsRef = useRef(
+    new Set(questions.map((item) => item.question)),
+  );
   const rotatedTurnRef = useRef("");
 
   const rotate = useCallback((askedQuestions: readonly string[]) => {
     const next = pickSuggestedQuestions(
       askedQuestions,
       previousRef.current,
-      seenIdsRef.current,
+      seenQuestionsRef.current,
     );
     previousRef.current = next;
-    for (const item of next) seenIdsRef.current.add(item.caseId);
+    for (const item of next) seenQuestionsRef.current.add(item.question);
     setQuestions(next);
   }, []);
 
