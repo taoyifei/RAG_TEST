@@ -41,6 +41,7 @@ from rag_app.application.retrieval.atom_group_alignment import (
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.context_resolution import (
     CONTEXT_RESOLUTION_REVISION,
+    SpanKind,
     build_input_spans,
     degraded_query_plan,
     resolve_root_query,
@@ -806,10 +807,26 @@ class RetrievalService:
         self._record(trace_id, "cache", {"result": "miss"})
         stage_started = _finish_timing(stage_timings, "cache", stage_started)
         if is_navigation_query(analysis.normalized_query):
+            referenced_targets = tuple(
+                dict.fromkeys(
+                    span.text
+                    for span in input_spans
+                    if resolved_root.mode == "RULE_CONTEXT"
+                    and span.turn == "PREVIOUS_1"
+                    and span.kind is SpanKind.TARGET
+                    and span.span_id in resolved_root.referenced_span_ids
+                )
+            )
+            catalog_query = (
+                f"{referenced_targets[0]} {analysis.normalized_query}"
+                if len(referenced_targets) == 1
+                else analysis.normalized_query
+            )
             catalog_result = self._catalog_fast_path(
                 request=request,
                 snapshot=snapshot,
                 analysis=analysis,
+                catalog_query=catalog_query,
                 plan=plan,
                 cache_key=cache_key,
                 trace_id=trace_id,
@@ -2190,6 +2207,7 @@ class RetrievalService:
         request: SearchRequest,
         snapshot: ActiveRevisionQuerySnapshot,
         analysis: QueryAnalysis,
+        catalog_query: str,
         plan: RetrievalPlan,
         cache_key: str,
         trace_id: str,
@@ -2239,7 +2257,7 @@ class RetrievalService:
             for document in documents
             if document.document_id in visible_ids
         )
-        matched = catalog_matches(analysis.normalized_query, visible)
+        matched = catalog_matches(catalog_query, visible)
         if matched and self._policy.evidence_group_mode != "off":
             group_started = perf_counter()
             catalog_groups = tuple(

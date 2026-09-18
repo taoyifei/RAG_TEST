@@ -56,6 +56,8 @@ _MEDIA_TYPE = (
         ("申请阶段要提交什么材料？", False),
         ("申请阶段应参考哪份材料？", True),
         ("申请阶段有哪些文档可参考？", True),
+        ("纪要该用哪份？", True),
+        ("纪要要写哪些内容？", False),
     ),
 )
 def test_document_navigation_excludes_required_input_materials(
@@ -225,6 +227,45 @@ def test_catalog_matches_colloquial_and_typo_without_answer_table() -> None:
     assert catalog_matches(query, (document,)) == (document,)
     assert is_navigation_query("设备变更用哪个纪要？")
     assert catalog_matches("设备变更用哪个纪要？", (document,)) == ()
+
+
+def test_contextual_document_navigation_uses_trusted_previous_target(
+    tmp_path: Path,
+) -> None:
+    """短追问只用上一条用户问句的对象定位唯一活动目录项。"""
+    title = "2-部署阶段-设备变更评审会议纪要模板"
+    project_id = deterministic_id("prj", "contextual-catalog")
+    scope = KnowledgeBaseScope(
+        project_id=project_id,
+        knowledge_base_id=deterministic_id("kb", project_id, "catalog"),
+    )
+    with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
+        runtime.persistence.control.put_project(project_id, "Catalog Project")
+        runtime.persistence.control.put_knowledge_base(
+            scope.knowledge_base_id,
+            project_id,
+            "Catalog KB",
+            profile_id="dev-p06-memory",
+        )
+        runtime.persistence.builder.build_and_activate(
+            project_id=project_id,
+            knowledge_base_id=scope.knowledge_base_id,
+            documents=_documents(scope, (title,)),
+            idempotency_key="contextual-catalog",
+            budgets=runtime.persistence.default_budgets(),
+        )
+        result = runtime.retrieval.search_and_answer(
+            SearchRequest(
+                scope=scope,
+                text="纪要该用哪份？",
+                conversation_context=("上一问：设备变更需要开评审会。",),
+            )
+        )
+
+    assert result.status is ConfidenceStatus.ANSWERABLE
+    assert result.rerank_execution_mode == "catalog_fast_path"
+    assert len(result.catalog_citations) == 1
+    assert result.catalog_citations[0].document_title == title
 
 
 def test_catalog_matches_separated_title_fragments() -> None:
