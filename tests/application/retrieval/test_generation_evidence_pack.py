@@ -274,6 +274,63 @@ def test_compound_question_keeps_prior_stage_within_document_cap() -> None:
     }
 
 
+def test_compound_question_keeps_distinct_reranked_primary_prose() -> None:
+    """旧装配器漏掉的高排名正文仍可按原 SourceSpan 补入证据包。"""
+    texts = (
+        "跨年领到证书的，在领取年份报销并占用当年额度。",
+        "报销前须向部门提交认证申请并获得审批。",
+        "一、报销说明",
+        "二、认证费用",
+        "其他制度中的跨年报销规定不属于这份资料。",
+        "员工通过认证取得证书后，在额度内按规定时间集中报销。",
+    )
+    candidates = tuple(
+        make_ranked_chunk(
+            number,
+            text,
+            role=ChunkRole.LIST if number in {1, 3, 4} else ChunkRole.TEXT,
+            document_number=3 if number == 5 else 2,
+        ).model_copy(update={"rerank_rank": number})
+        for number, text in enumerate(texts, 1)
+    )
+    first = candidates[0]
+    root = _evidence_item(
+        first,
+        first.hydrated.chunk.source_spans[0],
+        first.hydrated.chunk.citation_text,
+        "S1",
+    )
+    atoms = (
+        QueryAtom(
+            atom_id="A1",
+            target="认证费",
+            relation="跨年报销年份",
+            answer_shape=AtomAnswerShape.FACT,
+        ),
+        QueryAtom(
+            atom_id="A2",
+            target="认证费",
+            relation="报销条件",
+            answer_shape=AtomAnswerShape.FACT,
+        ),
+    )
+
+    pack = _pack(
+        _plan(*atoms),
+        candidates,
+        root=(root,),
+        policy=RetrievalPolicy(generation_per_document_cap=4),
+    )
+
+    ids = {item.chunk_id for item in pack.evidence}
+    required = {
+        candidates[index].hydrated.chunk.chunk_id for index in (0, 1, 5)
+    }
+    assert required <= ids
+    assert candidates[4].hydrated.chunk.chunk_id not in ids
+    assert all(item.source_spans[0].is_citable for item in pack.evidence)
+
+
 def test_ordinary_chunk_keeps_adjacent_source_paragraph() -> None:
     """同块首选段落提到供应商时，前一段的时限仍可入包。"""
     first = "发布采购文件到应答截止时间，不得少于3日。"

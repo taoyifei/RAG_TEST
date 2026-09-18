@@ -664,6 +664,68 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             for keys in member_keys_by_atom.values():
                 if item_key in keys:
                     keys.add(sibling_key)
+    # 旧证据装配器可能因软语义判断丢掉同文档的高排名正文。
+    # 多子问题保留少量真实 Rerank 正文候选，仍由下面的硬边界和预算把关。
+    supplemental_keys: list[tuple[object, ...]] = []
+    if len(query_plan.atoms) > 1:
+        ranked_top = sorted(
+            (
+                item
+                for item in ranked_candidates
+                if item.rerank_rank is not None
+            ),
+            key=lambda item: item.rerank_rank or 2**31,
+        )[: policy.generation_max_ordinary_items]
+        if ranked_top:
+            primary_version = ranked_top[0].hydrated.chunk.version
+            primary_source = (
+                primary_version.document_id,
+                primary_version.document_version_id,
+            )
+            anchored = any(
+                (item.document_id, item.document_version_id)
+                == primary_source
+                for item in (*root_evidence, *atom_evidence)
+            )
+            represented_chunks = {
+                item.chunk_id for item in (*root_evidence, *atom_evidence)
+            }
+            if anchored:
+                for candidate in ranked_top:
+                    chunk = candidate.hydrated.chunk
+                    if (
+                        chunk.role is not ChunkRole.TEXT
+                        or chunk.version != primary_version
+                        or chunk.chunk_id in represented_chunks
+                    ):
+                        continue
+                    quoted_spans = (
+                        (
+                            span,
+                            chunk.citation_text[
+                                span.chunk_start_char : span.chunk_end_char
+                            ].strip(),
+                        )
+                        for span in chunk.source_spans
+                        if span.is_citable and not span.is_repeated
+                    )
+                    best = max(
+                        (
+                            (span, quote)
+                            for span, quote in quoted_spans
+                            if quote
+                        ),
+                        key=lambda pair: len(pair[1]),
+                        default=None,
+                    )
+                    if best is None:
+                        continue
+                    item = _evidence_item(candidate, best[0], best[1], "S0")
+                    key = _identity(item)
+                    candidates.setdefault(key, item)
+                    root_keys.add(key)
+                    supplemental_keys.append(key)
+                    represented_chunks.add(chunk.chunk_id)
     linked_ids_by_chunk: dict[str, set[str]] = defaultdict(set)
     root_chunk_ids: set[str] = set()
     for link in links:
@@ -748,6 +810,28 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                     reserved_chunks.add(chunk_id)
                 if len(reserved_chunks) == _MAX_RESERVED_PREDECESSOR_CHUNKS:
                     break
+    # 前序阶段保留之后，给同一活动文档的其他高排名正文最多一半名额；
+    # 另一半仍留给原有 Root/Atom，防止某一个来源挤掉其余问答证据。
+    if supplemental_keys:
+        primary_document_id = candidates[supplemental_keys[0]].document_id or ""
+        reserve_limit = min(
+            policy.generation_per_document_cap // 2,
+            max(
+                0,
+                policy.generation_per_document_cap
+                - ordinary_counts[primary_document_id]
+                - 2,
+            ),
+        )
+        reserved = 0
+        for key in supplemental_keys:
+            if reserved >= reserve_limit:
+                break
+            if key not in admitted:
+                continue
+            add_ordinary(key)
+            if key in chosen:
+                reserved += 1
     root_top = [key for key in admitted if key in root_keys]
     for key in root_top[: policy.generation_root_top_k]:
         add_ordinary(key)
