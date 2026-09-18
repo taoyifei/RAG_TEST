@@ -152,6 +152,8 @@ _FALLBACK_MAX_ORDINARY_EXCERPTS = 3
 _FALLBACK_TABLE_LABEL_MIN_CHARS = 3
 _FALLBACK_TABLE_LABEL_MAX_CHARS = 24
 _FALLBACK_NODE_MIN_EXCERPTS = 2
+_FALLBACK_PREDECESSOR_MAX_GAP = 4
+_FALLBACK_PREDECESSOR_LIMIT = 2
 _FALLBACK_MIN_QUESTION_ANCHOR_CHARS = 3
 _FALLBACK_LONG_QUESTION_CHARS = 10
 _CONTEXT_SOURCE_MIN_MATCH_CHARS = 4
@@ -2626,6 +2628,75 @@ def _fallback_source_node(
     return selected[:8]
 
 
+def _fallback_prior_stage_excerpts(
+    selected: list[tuple[EvidenceItem, str]],
+    grouped: dict[str, list[tuple[EvidenceItem, str]]],
+    complete_ids: frozenset[str],
+    question_terms: set[str],
+) -> list[tuple[EvidenceItem, str]]:
+    """仅补入同文档章节、紧邻且已闭合的前序列表来源。"""
+    selected_groups = {
+        group_id
+        for item, _ in selected
+        if (group_id := dict(item.metadata).get("evidence_group_id"))
+        in complete_ids
+        and dict(item.metadata).get("evidence_group_type")
+        in {"LIST_GROUP", "PROCEDURE_GROUP"}
+    }
+    if len(selected_groups) != 1:
+        return selected
+    origins = {
+        (item.document_version_id, item.section_id)
+        for item, _ in selected
+    }
+    if len(origins) != 1 or None in next(iter(origins)):
+        return selected
+    origin = next(iter(origins))
+
+    def source_ordinal(item: EvidenceItem) -> int | None:
+        return min(
+            (
+                span.source_anchor.ordinal
+                for span in item.source_spans
+                if span.is_citable and span.source_anchor is not None
+            ),
+            default=None,
+        )
+
+    first = min(
+        (ordinal for item, _ in selected if (ordinal := source_ordinal(item))
+         is not None),
+        default=None,
+    )
+    if first is None:
+        return selected
+    by_chunk: dict[str, tuple[EvidenceItem, str]] = {}
+    for group_id, items in grouped.items():
+        if group_id not in complete_ids or group_id in selected_groups:
+            continue
+        for item, sentence in items:
+            ordinal = source_ordinal(item)
+            if (
+                (item.document_version_id, item.section_id) != origin
+                or dict(item.metadata).get("evidence_group_type")
+                not in {"LIST_GROUP", "PROCEDURE_GROUP"}
+                or ordinal is None
+                or not 0 < first - ordinal <= _FALLBACK_PREDECESSOR_MAX_GAP
+                or len(_terms(sentence) & question_terms)
+                < _FALLBACK_MIN_BIGRAM_OVERLAP
+                or _FALLBACK_LIST_MARKER.fullmatch(sentence)
+            ):
+                continue
+            previous = by_chunk.get(item.chunk_id)
+            if previous is None or len(sentence) > len(previous[1]):
+                by_chunk[item.chunk_id] = (item, sentence)
+    preceding = sorted(
+        by_chunk.values(),
+        key=lambda pair: -(source_ordinal(pair[0]) or 0),
+    )[:_FALLBACK_PREDECESSOR_LIMIT]
+    return [*preceding, *selected]
+
+
 def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
@@ -2798,6 +2869,10 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         ]
     if not selected:
         return None
+    if multi_part and grouped:
+        selected = _fallback_prior_stage_excerpts(
+            selected, grouped, complete_ids, question_terms
+        )
     selected.sort(
         key=lambda pair: min(
             (

@@ -601,6 +601,70 @@ def test_fallback_extends_selected_paragraph_to_complete_list() -> None:
     assert "- （二）" not in result[0]
 
 
+def test_fallback_keeps_adjacent_preparation_and_stage_overview() -> None:
+    """多子问题回退展示已入包的同章节前序阶段。"""
+    evidence = _evidence(
+        "项目立项包括准备、申报、审核、决策和系统立项。",
+        "立项准备阶段开展可行性分析并编制项目材料。",
+        "立项申报阶段提交目标材料和实施计划。",
+        "立项审核阶段审查材料并确认步骤。",
+        "立项决策阶段提交会议审议。",
+    )
+    source_positions = {
+        "项目立项包括准备": ("egrp_overview", 113),
+        "立项准备阶段": ("egrp_preparation", 114),
+        "立项申报阶段": ("egrp_later", 117),
+        "立项审核阶段": ("egrp_later", 118),
+        "立项决策阶段": ("egrp_later", 119),
+    }
+
+    def locate(item: EvidenceItem) -> tuple[str, int]:
+        return next(
+            value
+            for prefix, value in source_positions.items()
+            if item.citation_text.startswith(prefix)
+        )
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "chunk_id": f"chunk_{locate(item)[1]:032x}",
+                "source_spans": tuple(
+                    span.model_copy(
+                        update={
+                            "source_anchor": span.source_anchor.model_copy(
+                                update={"ordinal": locate(item)[1]}
+                            )
+                        }
+                    )
+                    for span in item.source_spans
+                    if span.source_anchor is not None
+                ),
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "evidence_group_id": locate(item)[0],
+                        "evidence_group_type": "LIST_GROUP",
+                        "group_complete": True,
+                    }
+                ),
+            }
+        )
+        for item in evidence
+    )
+    assert len({item.chunk_id for item in grouped}) == 5
+    plan = _plan("项目立项", "材料和步骤", shape=AtomAnswerShape.PROCEDURE)
+    result = _safe_extractive_fallback(
+        plan,
+        grouped,
+        {"A1": tuple(item.support_id for item in grouped)},
+        ("egrp_overview", "egrp_preparation", "egrp_later"),
+    )
+    assert result is not None
+    assert "立项准备阶段" in result[0]
+    assert "项目立项包括准备" in result[0]
+    assert "立项申报阶段" in result[0]
+
+
 def test_fallback_orders_source_spans_without_start_offset() -> None:
     """派生编号没有来源字符偏移时，摘录排序仍可完成。"""
     evidence = _evidence("立项申报阶段提交材料。", "立项审核阶段审查材料。")
