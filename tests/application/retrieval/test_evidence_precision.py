@@ -53,6 +53,46 @@ def test_query_aware_selection_rejects_higher_ranked_noise() -> None:
     assert evidence[0].citation_text == "液压系统额定压力为 16 MPa"
 
 
+def test_complex_list_keeps_preceding_stage_under_evidence_cap() -> None:
+    """复合阶段问题的前序来源不能被原始重排候选挤出预算。"""
+    analysis = QueryAnalyzer().analyze(
+        SearchRequest(
+            scope=_SCOPE,
+            text="项目立项要备哪些材料、走哪些步骤？",
+        )
+    )
+    current = make_ranked_chunk(
+        1, "立项申报阶段应提交项目材料。", role=ChunkRole.LIST
+    )
+    later = make_ranked_chunk(
+        2, "立项审核阶段应检查项目材料。", role=ChunkRole.LIST
+    )
+    preceding = make_ranked_chunk(
+        3, "立项准备阶段应编制项目材料。", role=ChunkRole.LIST
+    ).model_copy(update={"expansion_reason": "SECTION_PREDECESSOR"})
+    context = EvidenceSelectionContext(
+        analysis=analysis,
+        query_kind=QueryKind.COMPLEX,
+        rerank_mode="provider",
+        selected_slot=None,
+    )
+
+    selected = EvidenceAssembler().assemble_sets(
+        (current, later, preceding),
+        RetrievalPolicy(
+            max_evidence_items=2,
+            per_document_cap=2,
+            per_section_cap=2,
+        ),
+        context=context,
+        include_model_candidates=True,
+    )
+
+    assert preceding.hydrated.chunk.chunk_id in {
+        item.chunk_id for item in selected.model_evidence_candidates
+    }
+
+
 def test_unique_quoted_document_label_scopes_similar_templates() -> None:
     analysis = QueryAnalyzer().analyze(
         SearchRequest(

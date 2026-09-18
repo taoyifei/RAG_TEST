@@ -331,6 +331,17 @@ class EvidenceAssembler:
             )
             for candidate in unique_chunks
         )
+        if context is not None and context.query_kind is QueryKind.COMPLEX:
+            # 复合列表问题先保留同章节紧邻的前序阶段，避免原始重排项
+            # 在有限 Evidence 预算内把阶段开头全部挤掉。
+            ranked_by_chunk = tuple(
+                sorted(
+                    ranked_by_chunk,
+                    key=lambda pair: (
+                        pair[0].expansion_reason != "SECTION_PREDECESSOR"
+                    ),
+                )
+            )
         packing_order = _evidence_packing_order(
             ranked_by_chunk,
             diversify_chunks=allow_uncertain,

@@ -231,6 +231,10 @@ def test_section_expansion_recovers_preceding_list_stages() -> None:
         chunks[2].hydrated.chunk.chunk_id,
         chunks[1].hydrated.chunk.chunk_id,
     ]
+    assert [item.expansion_reason for item in outcome.candidates[1:]] == [
+        "SECTION_PREDECESSOR",
+        "SECTION_PREDECESSOR",
+    ]
 
 
 def test_list_chain_closes_from_middle_with_heading_intro() -> None:

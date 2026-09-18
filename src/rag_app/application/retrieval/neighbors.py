@@ -312,6 +312,7 @@ class NeighborExpander:
                 _hydrated_candidates(hydrated, originals).values()
             )
             selected = section_items[: policy.section_chunk_limit]
+            expansion_reason = "SECTION_SIBLING"
             if chunk.role is ChunkRole.LIST:
                 origin_ordinal = _source_ordinal(chunk)
                 if origin_ordinal is not None:
@@ -338,6 +339,7 @@ class NeighborExpander:
                     )
                     if predecessors:
                         selected = predecessors[: policy.section_chunk_limit]
+                        expansion_reason = "SECTION_PREDECESSOR"
             for item in selected:
                 _validate_boundary(chunk, item.chunk, require_group=False)
                 _add_context(
@@ -345,7 +347,7 @@ class NeighborExpander:
                     context,
                     item,
                     seed_id=chunk.chunk_id,
-                    reason="SECTION_SIBLING",
+                    reason=expansion_reason,
                 )
         return (*candidates, *context.values())
 
