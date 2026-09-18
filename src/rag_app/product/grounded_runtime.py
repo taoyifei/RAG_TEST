@@ -586,12 +586,16 @@ class ProductGroundedModel:
                 )
             try:
                 payload = _AdaptivePlanPayload.model_validate(payload_data)
-            except ValidationError:
+            except ValidationError as error:
+                first = error.errors(include_input=False)[0]
+                location = ".".join(str(part) for part in first["loc"])
                 return AdaptivePlanOutcome(
                     calls=calls,
                     reason_code="PLANNER_INVALID_SCHEMA",
                     attempted=True,
-                    schema_fallback_detail="INVALID_SCHEMA",
+                    schema_fallback_detail=(
+                        f"INVALID_SCHEMA:{location}:{first['type']}"
+                    ),
                     failure_category="PLANNER_INVALID_SCHEMA",
                     **telemetry,
                 )
@@ -636,6 +640,8 @@ class ProductGroundedModel:
             category = (
                 "PLANNER_PROVIDER_TIMEOUT"
                 if "TIMEOUT" in provider_reason
+                else "PLANNER_OUTPUT_TRUNCATED"
+                if provider_reason == "CHAT_OUTPUT_TRUNCATED"
                 else "PLANNER_PROVIDER_UNAVAILABLE"
             )
             return AdaptivePlanOutcome(

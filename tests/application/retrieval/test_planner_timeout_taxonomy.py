@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from rag_app.application.retrieval.adaptive import ReasoningEffort
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.core.errors import ProviderUnavailable
@@ -11,7 +13,16 @@ from rag_app.product.grounded_runtime import ProductGroundedModel
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
 
 
-def test_planner_timeout_has_separate_category_and_one_attempt() -> None:
+@pytest.mark.parametrize(
+    ("provider_reason", "expected_category"),
+    (
+        ("READ_TIMEOUT", "PLANNER_PROVIDER_TIMEOUT"),
+        ("CHAT_OUTPUT_TRUNCATED", "PLANNER_OUTPUT_TRUNCATED"),
+    ),
+)
+def test_planner_timeout_has_separate_category_and_one_attempt(
+    provider_reason: str, expected_category: str
+) -> None:
     request = SearchRequest(
         scope=KnowledgeBaseScope(
             project_id=deterministic_id("prj", "planner-timeout"),
@@ -31,7 +42,7 @@ def test_planner_timeout_has_separate_category_and_one_attempt() -> None:
             raise ProviderUnavailable(
                 "模型暂不可用。",
                 stage="test.planner",
-                details={"reason_code": "READ_TIMEOUT"},
+                details={"reason_code": provider_reason},
             )
 
     adapter = TimeoutAdapter()
@@ -46,7 +57,7 @@ def test_planner_timeout_has_separate_category_and_one_attempt() -> None:
 
     assert adapter.calls == 1
     assert adapter.timeout_seconds == 8.0
-    assert outcome.reason_code == "PLANNER_PROVIDER_TIMEOUT"
-    assert outcome.failure_category == "PLANNER_PROVIDER_TIMEOUT"
-    assert outcome.schema_fallback_detail == "READ_TIMEOUT"
+    assert outcome.reason_code == expected_category
+    assert outcome.failure_category == expected_category
+    assert outcome.schema_fallback_detail == provider_reason
     assert outcome.planner_transport_timeout_ms == 8000
