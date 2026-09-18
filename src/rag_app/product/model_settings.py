@@ -35,7 +35,7 @@ class KnowledgeBaseModelSettings(FrozenModel):
     planner_transport_timeout_seconds: float = Field(
         default=8.0, gt=0.0, le=30.0
     )
-    planner_max_output_tokens: StrictInt = Field(default=160, ge=32, le=160)
+    planner_max_output_tokens: StrictInt = Field(default=160, ge=32, le=192)
     planner_slo_target_ms: StrictInt = Field(default=5000, gt=0)
     planner_hard_ceiling_ms: StrictInt = Field(default=7000, gt=0)
     ocr_connection_id: str | None = None

@@ -61,3 +61,10 @@ def test_planner_timeout_has_separate_category_and_one_attempt(
     assert outcome.failure_category == expected_category
     assert outcome.schema_fallback_detail == provider_reason
     assert outcome.planner_transport_timeout_ms == 8000
+
+
+def test_candidate_can_measure_bounded_192_token_planner_output() -> None:
+    settings = KnowledgeBaseModelSettings(planner_max_output_tokens=192)
+    assert settings.planner_max_output_tokens == 192
+    with pytest.raises(ValueError):
+        KnowledgeBaseModelSettings(planner_max_output_tokens=193)
