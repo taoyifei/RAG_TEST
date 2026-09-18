@@ -10,6 +10,7 @@ import pytest
 from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     GroundedOutcome,
+    _safe_extractive_fallback,
 )
 from rag_app.application.retrieval.generation_evidence import (
     EvidenceAdmissionReason,
@@ -258,6 +259,29 @@ def test_fallback_uses_relevant_complete_group_only() -> None:
     assert "甲部门保存记录 14 天。" in outcome.answer
     assert "乙部门保存设备记录 30 天。" not in outcome.answer
     assert len(outcome.published_support_ids) == 2
+
+
+def test_fallback_ignores_group_with_only_generic_query_overlap() -> None:
+    """仅碰到“员工”等泛词的结构证据不能回答食堂菜单。"""
+    item = _evidence("为员工的专业提升提供更有针对性的指引。")[0]
+    item = item.model_copy(
+        update={
+            "metadata": freeze_json_object(
+                {
+                    **dict(item.metadata),
+                    "group_complete": True,
+                    "evidence_group_id": "egrp_unrelated",
+                }
+            )
+        }
+    )
+    plan = _plan("员工食堂本周三午餐菜品")
+    assert _safe_extractive_fallback(
+        plan,
+        (item,),
+        {"A1": (item.support_id,)},
+        ("egrp_unrelated",),
+    ) is None
 
 
 def test_one_accepted_atom_keeps_limited_answer_for_unanswered_atom() -> None:

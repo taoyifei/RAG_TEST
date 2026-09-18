@@ -2580,9 +2580,10 @@ def _safe_extractive_fallback(
             ),
         )
         best_group = ranked_groups[0][1]
-        if question_terms & _terms(
-            " ".join(item.citation_text for item, _ in best_group)
-        ):
+        if len(
+            question_terms
+            & _terms(" ".join(item.citation_text for item, _ in best_group))
+        ) >= _FALLBACK_MIN_BIGRAM_OVERLAP:
             selected = best_group
     if not selected:
         selected = [
