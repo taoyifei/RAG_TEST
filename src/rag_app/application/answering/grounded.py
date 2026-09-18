@@ -144,6 +144,9 @@ _STOP = re.compile(r"[\W_]|的|了|和|与|及|在|将|其|以|并|为|是", re.
 _MIN_QUOTE_CHARS = 2
 _FALLBACK_MIN_BIGRAM_OVERLAP = 2
 _FALLBACK_MAX_ORDINARY_EXCERPTS = 3
+_FALLBACK_DURATION = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:个工作日|工作日|天|日|周|个月|月|年|小时|分钟)"
+)
 _DIRECT_EXTRACT_MAX_CHARS = 500
 # 引用、对象、数字、频率与否定另有独立硬门。这里仅要求自然改写与
 # 来源谓语保留基本词面联系，避免把同义概括误判成无支持事实。
@@ -2496,7 +2499,7 @@ def _direct_extract(
     return None
 
 
-def _safe_extractive_fallback(
+def _safe_extractive_fallback(  # noqa: PLR0912
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
     linked_ids: dict[str, tuple[str, ...]],
@@ -2519,12 +2522,15 @@ def _safe_extractive_fallback(
             )
         )
     )
-    original_text = _STOP.sub("", plan.original_query.casefold())
+    original_text = _STOP.sub("", plan.resolved_root_query.casefold())
     original_trigrams = {
         original_text[index : index + 3]
         for index in range(len(original_text) - 2)
     }
     complete_ids = frozenset(complete_group_ids)
+    direct_duration = len(plan.atoms) == 1 and (
+        plan.atoms[0].answer_shape is AtomAnswerShape.DURATION
+    )
     grouped: dict[str, list[tuple[EvidenceItem, str]]] = {}
     ordinary: list[tuple[int, int, EvidenceItem, str]] = []
     for index, item in enumerate(evidence):
@@ -2572,10 +2578,16 @@ def _safe_extractive_fallback(
         elif (
             (certified or overlap >= _FALLBACK_MIN_BIGRAM_OVERLAP)
             and original_trigrams & sentence_trigrams
+            and (not direct_duration or _FALLBACK_DURATION.search(matched))
         ):
             ordinary.append((overlap, index, item, matched))
     selected: list[tuple[EvidenceItem, str]] = []
-    if grouped:
+    if direct_duration and ordinary:
+        _, _, item, sentence = max(
+            ordinary, key=lambda row: (row[0], -row[1])
+        )
+        selected = [(item, sentence)]
+    if not selected and grouped:
         ranked_groups = sorted(
             grouped.items(),
             key=lambda pair: (

@@ -25,7 +25,12 @@ from rag_app.core.models import (
     SourceSpanKind,
 )
 from rag_app.core.models.common import freeze_json_object
-from rag_app.core.models.query_plan import AtomStatus, QueryPlan
+from rag_app.core.models.query_plan import (
+    AtomAnswerShape,
+    AtomStatus,
+    QueryAtom,
+    QueryPlan,
+)
 from tests.application.answering.test_natural_grounded_answer import (
     _claim,
     _draft,
@@ -287,6 +292,45 @@ def test_fallback_ignores_group_with_only_generic_query_overlap() -> None:
         (_evidence("为员工的专业提升提供更有针对性的指引。")[0],),
         {"A1": (item.support_id,)},
     ) is None
+
+
+def test_duration_fallback_prefers_contextual_deadline() -> None:
+    """多轮时限问题优先展示直接时限，不借用同主题归档期限。"""
+    deadline = _evidence("发布采购文件到应答截止时间，不得少于3日。")[0]
+    archive = _evidence("采购文件需在项目结束后一个月内完成归档。")[0]
+    archive = archive.model_copy(
+        update={
+            "evidence_id": "S2",
+            "metadata": freeze_json_object(
+                {
+                    **dict(archive.metadata),
+                    "group_complete": True,
+                    "evidence_group_id": "egrp_archive",
+                }
+            ),
+        }
+    )
+    plan = _plan("给供应商留几天？").model_copy(
+        update={
+            "resolved_root_query": "我们在准备直接采购文件。给供应商留几天？",
+            "atoms": (
+                QueryAtom(
+                    atom_id="A1",
+                    target="供应商应答",
+                    relation="截止时限",
+                    answer_shape=AtomAnswerShape.DURATION,
+                ),
+            ),
+        }
+    )
+    result = _safe_extractive_fallback(
+        plan,
+        (deadline, archive),
+        {"A1": (deadline.support_id, archive.support_id)},
+        ("egrp_archive",),
+    )
+    assert result is not None
+    assert result[1] == (deadline.support_id,)
 
 
 def test_one_accepted_atom_keeps_limited_answer_for_unanswered_atom() -> None:
