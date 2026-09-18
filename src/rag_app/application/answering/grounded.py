@@ -156,6 +156,7 @@ _FALLBACK_PREDECESSOR_MAX_GAP = 4
 _FALLBACK_PREDECESSOR_LIMIT = 2
 _FALLBACK_MIN_QUESTION_ANCHOR_CHARS = 3
 _FALLBACK_LONG_QUESTION_CHARS = 10
+_FALLBACK_SHORT_QUESTION_CHARS = 14
 _CONTEXT_SOURCE_MIN_MATCH_CHARS = 4
 _CONTEXT_SOURCE_MIN_LEAD_CHARS = 2
 _FALLBACK_DURATION = re.compile(
@@ -2704,7 +2705,7 @@ def _fallback_continues_fragment(
     current_sentence: str,
     complete_ids: frozenset[str],
 ) -> bool:
-    """仅拼回同一完整来源组中因分块截断的相邻原文。"""
+    """仅拼回同一原文节点或完整来源组中被分块截断的相邻原文。"""
     if not previous_excerpt.endswith(("，", "、")):
         return False
     if _LEADING_SECTION_MARKER.match(current_sentence):
@@ -2712,9 +2713,19 @@ def _fallback_continues_fragment(
     previous_metadata = dict(previous.metadata)
     current_metadata = dict(current.metadata)
     group_id = previous_metadata.get("evidence_group_id")
+    previous_nodes = {span.node_id for span in previous.source_spans}
+    current_nodes = {span.node_id for span in current.source_spans}
+    same_node = (
+        len(previous_nodes) == len(current_nodes) == 1
+        and None not in previous_nodes
+        and previous_nodes == current_nodes
+    )
+    complete_group = (
+        group_id in complete_ids
+        and group_id == current_metadata.get("evidence_group_id")
+    )
     if (
-        group_id not in complete_ids
-        or group_id != current_metadata.get("evidence_group_id")
+        not (same_node or complete_group)
         or previous.document_version_id != current.document_version_id
         or previous.section_id != current.section_id
     ):
@@ -2808,7 +2819,9 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             )
             if sentence.strip()
         )
-        if not sentences and structured:
+        if not sentences and (
+            structured or item.citation_text.rstrip().endswith(("；", ";"))
+        ):
             sentences = (item.citation_text.strip(),)
         if not sentences:
             continue
@@ -2838,7 +2851,14 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             grouped.setdefault(group_id, []).append((item, matched))
         elif (
             (certified or overlap >= _FALLBACK_MIN_BIGRAM_OVERLAP)
-            and original_trigrams & sentence_trigrams
+            and (
+                original_trigrams & sentence_trigrams
+                or (
+                    len(_han_text(plan.original_query))
+                    <= _FALLBACK_SHORT_QUESTION_CHARS
+                    and overlap >= _FALLBACK_MIN_BIGRAM_OVERLAP
+                )
+            )
             and (not direct_duration or _FALLBACK_DURATION.search(matched))
         ):
             ordinary.append((overlap, index, item, matched))
@@ -2858,8 +2878,22 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     )
     if not selected and multi_part:
         selected = _fallback_table_row(plan, grouped)
-    if not selected and multi_part:
-        selected = _fallback_source_node(plan, evidence, related)
+    ordinary_selection = [
+        (item, sentence)
+        for _, _, item, sentence in sorted(
+            ordinary, key=lambda row: (-row[0], row[1])
+        )[:_FALLBACK_MAX_ORDINARY_EXCERPTS]
+    ]
+    if not selected and not multi_part:
+        selected = ordinary_selection
+    if not selected:
+        scoped_evidence = tuple(
+            item
+            for item in evidence
+            if scoped_versions is None
+            or item.document_version_id in scoped_versions
+        )
+        selected = _fallback_source_node(plan, scoped_evidence, related)
         # 段落片段若属于已闭合的列表或流程，展示同组后续步骤。
         # 只沿当前选中片段的组扩展，避免借用别的文档的相似流程。
         source_groups = {
@@ -2900,12 +2934,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         ) >= _FALLBACK_MIN_BIGRAM_OVERLAP:
             selected = best_group
     if not selected:
-        selected = [
-            (item, sentence)
-            for _, _, item, sentence in sorted(
-                ordinary, key=lambda row: (-row[0], row[1])
-            )[:_FALLBACK_MAX_ORDINARY_EXCERPTS]
-        ]
+        selected = ordinary_selection
     if not selected:
         return None
     if multi_part and grouped:
@@ -3071,6 +3100,53 @@ def _query_focus_in_source(focus: str, text: str) -> bool:
     ) is not None
 
 
+def _validate_short_question_source_anchor(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    units: tuple[EvidenceItem, ...],
+) -> None:
+    """短单问有更贴题的同版原文时，拒绝泛主题片段冒充答案。"""
+    if (
+        len(plan.atoms) != 1
+        or plan.atoms[0].answer_shape is AtomAnswerShape.DURATION
+        or len(_han_text(plan.original_query)) > _FALLBACK_SHORT_QUESTION_CHARS
+    ):
+        return
+    action = _YES_NO_ACTION_FOCUS.search(plan.original_query.strip())
+    if action is not None and any(
+        _query_focus_in_source(action["focus"], item.citation_text)
+        for item in units
+    ):
+        return
+    versions = {item.document_version_id for item in units}
+    if len(versions) != 1 or None in versions:
+        return
+    question_terms = _terms(plan.original_query)
+    cited_overlap = max(
+        (len(_terms(item.citation_text) & question_terms) for item in units),
+        default=0,
+    )
+    if cited_overlap >= _FALLBACK_MIN_BIGRAM_OVERLAP:
+        return
+    best_overlap = max(
+        (
+            len(_terms(item.citation_text) & question_terms)
+            for item in evidence
+            if item.document_version_id in versions
+            and item.publishable
+            and item.source_spans
+            and all(span.is_citable for span in item.source_spans)
+        ),
+        default=0,
+    )
+    if best_overlap >= _FALLBACK_MIN_BIGRAM_OVERLAP:
+        raise ValidationFailed(
+            "引用片段未命中短问中的关键对象，且同版资料存在更直接的原文。",
+            stage="answer.validate",
+            code="CLAIM_QUERY_RELATION_UNSUPPORTED",
+        )
+
+
 def _validate_yes_no_source_focus(
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
@@ -3150,6 +3226,7 @@ def _validated_natural_claim(
     units = tuple(by_id[support_id] for support_id in support_ids)
     _validate_contextual_source_scope(plan, evidence, units)
     _validate_yes_no_source_focus(plan, evidence, units)
+    _validate_short_question_source_anchor(plan, evidence, units)
     _validate_natural_support_structure(units)
     claim = AnswerClaim(
         text=natural.text,
