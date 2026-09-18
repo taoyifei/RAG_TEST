@@ -688,11 +688,6 @@ def _natural_messages(  # noqa: PLR0915
         for atom in atoms
         for support_id in linked_ids.get(atom.atom_id, admitted_ids)
     }
-    required_ids = {
-        item.support_id
-        for item in request.evidence
-        if dict(item.metadata).get("group_complete") is True
-    }
     candidates = [
         item
         for item in request.model_evidence_candidates or request.evidence
@@ -700,6 +695,56 @@ def _natural_messages(  # noqa: PLR0915
     ]
     if not candidates:
         raise ValueError("自然生成没有可引用的 Atom 证据。")
+
+    def complete_group_id(item: EvidenceItem) -> str | None:
+        """只把已闭合的来源组作为不可拆分的裁剪单位。"""
+        metadata = dict(item.metadata)
+        group_id = metadata.get("evidence_group_id")
+        return (
+            group_id
+            if metadata.get("group_complete") is True
+            and isinstance(group_id, str)
+            else None
+        )
+
+    complete_groups: dict[str, set[str]] = {}
+    for item in candidates:
+        if group_id := complete_group_id(item):
+            complete_groups.setdefault(group_id, set()).add(item.support_id)
+
+    protected_ids: set[str] = set()
+    for atom in atoms:
+        atom_allowed = set(linked_ids.get(atom.atom_id, admitted_ids))
+        atom_candidates = [
+            item for item in candidates if item.support_id in atom_allowed
+        ]
+        if not atom_candidates:
+            continue
+        preferred_ids = set(
+            matrix.for_atom(atom.atom_id).supporting_support_ids
+        )
+        chosen = next(
+            (
+                item
+                for item in atom_candidates
+                if item.support_id in preferred_ids
+                and complete_group_id(item) is not None
+            ),
+            None,
+        ) or next(
+            (
+                item
+                for item in atom_candidates
+                if complete_group_id(item) is not None
+            ),
+            atom_candidates[0],
+        )
+        group_id = complete_group_id(chosen)
+        protected_ids.update(
+            complete_groups[group_id]
+            if group_id is not None
+            else {chosen.support_id}
+        )
 
     def build_messages(items: list[EvidenceItem]) -> tuple[ChatMessage, ...]:
         """只传实际请求的 Atom 与对应证据。"""
@@ -800,27 +845,32 @@ def _natural_messages(  # noqa: PLR0915
     budget = min(max_input_tokens or 6000, 6000)
     messages = build_messages(candidates)
     while message_token_estimate(messages) > budget and len(candidates) > 1:
-        # 优先保留每个 Atom 的首条证据，超过预算则安全失败，不截断原文。
-        removable = None
-        for index in range(len(candidates) - 1, -1, -1):
-            candidate_id = candidates[index].support_id
-            if candidate_id in required_ids:
+        # 保留每个 Atom 的首个相关闭合组；其余闭合组整组裁剪。
+        current_ids = {item.support_id for item in candidates}
+        removable_ids: set[str] | None = None
+        for item in reversed(candidates):
+            group_id = complete_group_id(item)
+            candidate_ids = (
+                complete_groups[group_id]
+                if group_id is not None
+                else {item.support_id}
+            )
+            remaining_ids = current_ids - candidate_ids
+            if candidate_ids & protected_ids or not remaining_ids:
                 continue
-            if all(
-                candidate_id not in linked_ids.get(atom.atom_id, admitted_ids)
-                or sum(
-                    item.support_id
-                    in linked_ids.get(atom.atom_id, admitted_ids)
-                    for item in candidates
-                )
-                > 1
+            if any(
+                not remaining_ids
+                & set(linked_ids.get(atom.atom_id, admitted_ids))
                 for atom in atoms
             ):
-                removable = index
-                break
-        if removable is None:
+                continue
+            removable_ids = candidate_ids
             break
-        candidates.pop(removable)
+        if removable_ids is None:
+            break
+        candidates = [
+            item for item in candidates if item.support_id not in removable_ids
+        ]
         messages = build_messages(candidates)
     if message_token_estimate(messages) > budget:
         raise ValueError("逐原子证据超过生成输入预算。")

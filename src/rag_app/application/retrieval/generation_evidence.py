@@ -34,7 +34,7 @@ from rag_app.core.models.query_plan import (
     QueryPlan,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v1"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v2"
 _STRUCTURED_GROUP_TYPES = frozenset(
     {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
 )
@@ -185,9 +185,19 @@ class GenerationEvidencePack:
                 or group_type in _STRUCTURED_GROUP_TYPES
                 or entry.source_group_id is not None
             )
-            if structured and (
-                entry.source_group_id is None
-                or entry.source_group_id not in members_by_group
+            table_row_located = (
+                entry.evidence_item.table_context
+                and entry.source_group_id is None
+                and entry.table_node_id is not None
+                and entry.table_row_index is not None
+            )
+            if (
+                structured
+                and not table_row_located
+                and (
+                    entry.source_group_id is None
+                    or entry.source_group_id not in members_by_group
+                )
             ):
                 unknown_structural_count += 1
             if entry.evidence_item.table_context:
@@ -213,18 +223,14 @@ class GenerationEvidencePack:
             and entry.evidence_item.chunk_id
             not in members_by_group[entry.source_group_id]
         )
-        ambiguous_table_count = sum(
+        multi_row_table_count = sum(
             1 for rows in rows_by_table.values() if len(rows) > 1
         )
         return {
             "structural_sibling_pollution_count": conflict_count,
             "structural_sibling_observation_status": (
                 "PARTIAL"
-                if (
-                    unknown_structural_count
-                    or unknown_table_coordinate_count
-                    or ambiguous_table_count
-                )
+                if (unknown_structural_count or unknown_table_coordinate_count)
                 else "COMPLETE"
             ),
             "structural_sibling_unknown_group_count": unknown_group_count,
@@ -234,7 +240,8 @@ class GenerationEvidencePack:
             "structural_sibling_unknown_table_coordinate_count": (
                 unknown_table_coordinate_count
             ),
-            "structural_sibling_ambiguous_table_count": (ambiguous_table_count),
+            # 多行候选均有独立的表节点与行坐标，不等于无法辨别兄弟行。
+            "structural_sibling_multi_row_table_count": multi_row_table_count,
             "structural_sibling_observation_scope": (
                 "ADMITTED_STRUCTURAL_GROUP_AND_TABLE_ROW"
             ),

@@ -14,6 +14,7 @@ from rag_app.adapters.providers.aliyun_chat import (
     ChatUsage,
     _natural_answer_draft,
     _natural_messages,
+    message_token_estimate,
 )
 from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
@@ -28,6 +29,7 @@ from rag_app.core.models import (
     ProviderCall,
     QueryAnalysis,
 )
+from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomStatus,
@@ -356,6 +358,55 @@ def test_natural_prompt_omits_internal_coordinates() -> None:
     assert "anchors" not in projected["source_structure"]
     assert "document_version_id" not in projected["source_structure"]
     assert evidence[0].source_spans
+
+
+def test_natural_prompt_prunes_complete_groups_within_budget() -> None:
+    """多个完整来源组超预算时，保留一个完整组并整组裁剪其余组。"""
+    evidence = _evidence(
+        *(f"第{index}条规定：" + "甲部门按流程记录。" * 8 for index in range(6))
+    )
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "evidence_group_id": f"egrp_{index // 2:032x}",
+                        "group_complete": True,
+                        "group_member_index": index % 2 + 1,
+                        "group_member_count": 2,
+                    }
+                )
+            }
+        )
+        for index, item in enumerate(evidence)
+    )
+    plan = _plan("甲部门")
+    matrix = _matrix(
+        plan,
+        ((AtomStatus.SUPPORTED, tuple(item.support_id for item in grouped)),),
+    )
+    request = GenerationRequest(
+        query=plan.standalone_query,
+        evidence=grouped,
+        model_evidence_candidates=grouped,
+        citation_protocol="support-id-v2-natural-claims",
+        query_plan=plan,
+        atom_support_matrix=matrix,
+    )
+    full_estimate = message_token_estimate(_natural_messages(request))
+
+    messages = _natural_messages(request, max_input_tokens=full_estimate - 1)
+    selected = {
+        item["support_id"]
+        for item in json.loads(messages[1].content)["evidence"]
+    }
+
+    assert message_token_estimate(messages) <= full_estimate - 1
+    assert {item.support_id for item in grouped[:2]} <= selected
+    for start in (0, 2, 4):
+        members = {item.support_id for item in grouped[start : start + 2]}
+        assert members <= selected or members.isdisjoint(selected)
 
 
 def test_incomplete_enumeration_remains_limited() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TypedDict, Unpack
 
 from rag_app.application.retrieval.evidence import _evidence_item
@@ -340,7 +341,7 @@ def test_complete_group_fills_real_member_spans() -> None:
         "structural_sibling_unknown_group_count": 0,
         "structural_sibling_unknown_structural_count": 0,
         "structural_sibling_unknown_table_coordinate_count": 0,
-        "structural_sibling_ambiguous_table_count": 0,
+        "structural_sibling_multi_row_table_count": 0,
         "structural_sibling_observation_scope": (
             "ADMITTED_STRUCTURAL_GROUP_AND_TABLE_ROW"
         ),
@@ -372,7 +373,7 @@ def test_unknown_group_provenance_is_only_partially_observed() -> None:
     assert observation["structural_sibling_unknown_group_count"] == 1
 
 
-def test_ungrouped_table_row_keeps_coordinates_but_is_partial() -> None:
+def test_ungrouped_table_row_coordinates_are_observable() -> None:
     candidate = make_ranked_chunk(1, "机型", role=ChunkRole.TABLE)
     original_span = candidate.hydrated.chunk.source_spans[0]
     path = ("body", "tbl:2", "tr:2", "tc:0")
@@ -422,8 +423,15 @@ def test_ungrouped_table_row_keeps_coordinates_but_is_partial() -> None:
     assert pack.entries[0].table_row_index == 2
     observation = pack.structural_sibling_observation(())
     assert observation["structural_sibling_pollution_count"] == 0
-    assert observation["structural_sibling_observation_status"] == "PARTIAL"
-    assert observation["structural_sibling_unknown_structural_count"] == 1
+    assert observation["structural_sibling_observation_status"] == "COMPLETE"
+    assert observation["structural_sibling_unknown_structural_count"] == 0
+    other_row = replace(pack.entries[0], support_id="S2", table_row_index=3)
+    multi_row = replace(pack, entries=(*pack.entries, other_row))
+    multi_observation = multi_row.structural_sibling_observation(())
+    assert (
+        multi_observation["structural_sibling_observation_status"] == "COMPLETE"
+    )
+    assert multi_observation["structural_sibling_multi_row_table_count"] == 1
     matrix = AtomSupportMatrix(
         atoms=(AtomSupport(atom_id="A1", status=AtomStatus.PARTIAL),)
     )
