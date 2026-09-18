@@ -3799,7 +3799,17 @@ class RetrievalService:
             "expand_neighbors",
             {
                 "pass": retrieval_phase,
+                "neighbor_mode": plan.neighbor_mode,
                 "candidate_count": len(expansion.candidates),
+                "candidate_chunk_ids": tuple(
+                    item.hydrated.chunk.chunk_id
+                    for item in expansion.candidates
+                ),
+                "predecessor_chunk_ids": tuple(
+                    item.hydrated.chunk.chunk_id
+                    for item in expansion.candidates
+                    if item.expansion_reason == "SECTION_PREDECESSOR"
+                ),
                 "reason_codes": expansion.degraded_reason_codes,
             },
         )
