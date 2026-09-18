@@ -49,7 +49,7 @@ class RetrievalPolicy(FrozenModel):
     fusion_candidate_limit: StrictInt = Field(default=48, gt=0, le=200)
     unit_fusion_candidate_limit: StrictInt = Field(default=32, gt=0, le=48)
     unit_root_seed_limit: StrictInt = Field(default=6, gt=0, le=12)
-    unit_atom_seed_limit: StrictInt = Field(default=2, gt=0, le=8)
+    unit_atom_seed_limit: StrictInt = Field(default=4, gt=0, le=8)
     unit_root_weight: float = Field(default=1.0, gt=0)
     unit_atom_total_weight: float = Field(default=1.0, gt=0)
     atom_group_strong_anchor_threshold: float = Field(default=0.65, gt=0, le=1)

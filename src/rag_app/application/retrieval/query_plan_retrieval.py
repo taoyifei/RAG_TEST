@@ -45,6 +45,26 @@ class QueryPlanRetrievalOutcome:
     links: tuple[AtomCandidateLink, ...]
 
 
+def _atom_seeds(
+    candidates: tuple[FusedCandidate, ...], limit: int
+) -> tuple[FusedCandidate, ...]:
+    """先保留不同文档版本的高位候选，再按原排名填满配额。"""
+    diverse: list[FusedCandidate] = []
+    seen_versions: set[str] = set()
+    for candidate in candidates:
+        if candidate.document_version_id in seen_versions:
+            continue
+        diverse.append(candidate)
+        seen_versions.add(candidate.document_version_id)
+        if len(diverse) == limit:
+            break
+    selected = {candidate.chunk_id for candidate in diverse}
+    return (
+        *diverse,
+        *(item for item in candidates if item.chunk_id not in selected),
+    )[:limit]
+
+
 def fuse_query_units(
     retrieved: tuple[QueryUnitRetrieval, ...],
     *,
@@ -72,7 +92,12 @@ def fuse_query_units(
             if item.unit.unit_id == "ROOT"
             else policy.unit_atom_seed_limit
         )
-        seed_ids.extend(candidate.chunk_id for candidate in fused[:seed_limit])
+        seeds = (
+            fused[:seed_limit]
+            if item.unit.unit_id == "ROOT"
+            else _atom_seeds(fused, seed_limit)
+        )
+        seed_ids.extend(candidate.chunk_id for candidate in seeds)
         for rank, candidate in enumerate(fused, 1):
             previous = aggregate.get(candidate.chunk_id)
             if previous is not None and _identity(previous[0]) != _identity(

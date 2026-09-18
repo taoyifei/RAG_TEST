@@ -24,12 +24,26 @@ _SCOPE = KnowledgeBaseScope(
 )
 
 
-def _hit(number: int, rank: int, *, channel: str = "lexical") -> ChannelHit:
+def _hit(
+    number: int,
+    rank: int,
+    *,
+    channel: str = "lexical",
+    document_number: int | None = None,
+) -> ChannelHit:
     return ChannelHit(
         revision_id=_REVISION,
         chunk_id=f"chunk_{number:032x}",
-        document_id=f"doc_{'4' * 32}",
-        document_version_id=f"dver_{'5' * 32}",
+        document_id=(
+            f"doc_{document_number:032x}"
+            if document_number is not None
+            else f"doc_{'4' * 32}"
+        ),
+        document_version_id=(
+            f"dver_{document_number:032x}"
+            if document_number is not None
+            else f"dver_{'5' * 32}"
+        ),
         role="text",
         section_id="synthetic-section",
         content_sha256="6" * 64,
@@ -84,18 +98,16 @@ def test_root_recall_survives_wrong_atom_candidates() -> None:
     }
 
 
-def test_each_atom_has_two_seed_places_after_six_root_places() -> None:
+def test_each_atom_has_four_seed_places_after_six_root_places() -> None:
     root = _unit(
-        "ROOT", tuple(_hit(number, number) for number in range(1, 9)),
+        "ROOT",
+        tuple(_hit(number, number) for number in range(1, 9)),
         atom_count=3,
     )
     atoms = tuple(
         _unit(
             f"A{index}",
-            tuple(
-                _hit(index * 10 + offset, offset)
-                for offset in range(1, 4)
-            ),
+            tuple(_hit(index * 10 + offset, offset) for offset in range(1, 4)),
             atom_count=3,
         )
         for index in range(1, 4)
@@ -112,9 +124,34 @@ def test_each_atom_has_two_seed_places_after_six_root_places() -> None:
     )
     assert set(outcome.seed_chunk_ids[6:]) == {
         f"chunk_{number:032x}"
-        for number in (11, 12, 21, 22, 31, 32)
+        for number in (11, 12, 13, 21, 22, 23, 31, 32, 33)
     }
     assert len(outcome.candidates) <= 32
+
+
+def test_atom_seed_keeps_diverse_source_after_dominant_document() -> None:
+    root = _unit("ROOT", (_hit(100, 1),), atom_count=1)
+    atom = _unit(
+        "A1",
+        tuple(
+            _hit(
+                index,
+                index,
+                document_number=(1 if index <= 5 else index - 4),
+            )
+            for index in range(1, 9)
+        ),
+        atom_count=1,
+    )
+
+    outcome = fuse_query_units(
+        (root, atom), revision_id=_REVISION, policy=RetrievalPolicy()
+    )
+
+    assert f"chunk_{6:032x}" in outcome.seed_chunk_ids
+    assert f"chunk_{7:032x}" in outcome.seed_chunk_ids
+    assert f"chunk_{8:032x}" in outcome.seed_chunk_ids
+    assert len(outcome.seed_chunk_ids) <= 10
 
 
 def test_repeated_atom_hit_does_not_gain_linear_score() -> None:

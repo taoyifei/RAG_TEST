@@ -13,7 +13,7 @@ from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
 QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v8"
-QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v1"
+QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v2"
 ATOM_GROUP_ALIGNMENT_REVISION = "wb08r-atom-group-alignment-v3"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v2"
 GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-claim-v7"
