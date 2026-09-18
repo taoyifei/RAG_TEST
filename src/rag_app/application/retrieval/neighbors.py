@@ -183,7 +183,7 @@ class NeighborExpander:
         candidates: tuple[RankedChunk, ...],
         policy: RetrievalPolicy,
     ) -> ExpansionOutcome:
-        """补齐高排名正文中跨 canonical Chunk 的同一原文节点。"""
+        """补齐正文或表格单元格中跨 canonical Chunk 的同一原文节点。"""
         try:
             originals = _original_candidates(candidates)
             seeds = tuple(
@@ -193,10 +193,11 @@ class NeighborExpander:
                     key=lambda item: item.rerank_rank or 2**31,
                 )
                 if candidate.rerank_rank is not None
-                and candidate.hydrated.chunk.role is ChunkRole.TEXT
+                and candidate.hydrated.chunk.role
+                in {ChunkRole.TEXT, ChunkRole.TABLE}
                 and candidate.hydrated.chunk.next_chunk_id is not None
                 and candidate.hydrated.chunk.next_chunk_id not in originals
-            )[: policy.generation_max_ordinary_items]
+            )[: policy.rerank_candidate_limit]
             if not seeds:
                 return ExpansionOutcome(candidates)
             ids = tuple(
@@ -213,7 +214,7 @@ class NeighborExpander:
                 neighbor = hydrated.get(origin.next_chunk_id or "")
                 if (
                     neighbor is None
-                    or neighbor.chunk.role is not ChunkRole.TEXT
+                    or neighbor.chunk.role is not origin.role
                 ):
                     continue
                 _validate_neighbor(origin, neighbor.chunk)
@@ -228,6 +229,19 @@ class NeighborExpander:
                     if span.is_citable and not span.is_repeated and span.node_id
                 }
                 if origin_nodes.isdisjoint(neighbor_nodes):
+                    continue
+                if origin.role is ChunkRole.TABLE and not any(
+                    left.node_id == right.node_id
+                    and left.source_end_char is not None
+                    and left.source_end_char == right.source_start_char
+                    and left.structural_path == right.structural_path
+                    for left in origin.source_spans
+                    for right in neighbor.chunk.source_spans
+                    if left.is_citable
+                    and right.is_citable
+                    and not left.is_repeated
+                    and not right.is_repeated
+                ):
                     continue
                 _add_context(
                     originals,

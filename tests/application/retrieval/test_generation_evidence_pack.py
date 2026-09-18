@@ -498,6 +498,81 @@ def test_source_node_closure_keeps_cross_chunk_continuation() -> None:
     )
 
 
+def test_table_cell_keeps_same_node_continuation_across_chunks() -> None:
+    """同一表格单元格跨块时，生成包保留完整原文片段。"""
+    texts = ("甲团队负责系统联调，", "解决接口兼容性问题。")
+    node_id = f"node_{71:032x}"
+    table_node = f"node_{72:032x}"
+    path = ("body", "tbl:1", "tr:1", "tc:1", "p:1")
+    candidates: list[RankedChunk] = []
+    offset = 0
+    for number, source in enumerate(texts, 1):
+        candidate = make_ranked_chunk(number, source, role=ChunkRole.TABLE)
+        chunk = candidate.hydrated.chunk
+        span = chunk.source_spans[0]
+        assert span.source_anchor is not None
+        adjusted = span.model_copy(
+            update={
+                "node_id": node_id,
+                "structural_path": path,
+                "source_start_char": offset,
+                "source_end_char": offset + len(source),
+                "source_anchor": span.source_anchor.model_copy(
+                    update={"structural_path": path, "ordinal": 1}
+                ),
+            }
+        )
+        metadata = freeze_json_object(
+            {
+                "atoms": [
+                    {
+                        "metadata": {
+                            "row_index": 1,
+                            "table_node_id": table_node,
+                            "cell_source_node_ids": {"1": [node_id]},
+                        }
+                    }
+                ]
+            }
+        )
+        candidate = candidate.model_copy(
+            update={
+                "hydrated": candidate.hydrated.model_copy(
+                    update={
+                        "chunk": chunk.model_copy(
+                            update={
+                                "source_spans": (adjusted,),
+                                "metadata": metadata,
+                            }
+                        )
+                    }
+                )
+            }
+        )
+        candidates.append(candidate)
+        offset += len(source)
+    first = candidates[0]
+    evidence = _evidence_item(
+        first, first.hydrated.chunk.source_spans[0], texts[0], "S1"
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="甲团队",
+        relation="职责",
+        answer_shape=AtomAnswerShape.DUTIES,
+    )
+    pack = _pack(
+        _plan(atom),
+        tuple(candidates),
+        root=(evidence,),
+        policy=RetrievalPolicy(
+            generation_per_document_cap=1,
+            generation_max_ordinary_items=1,
+        ),
+    )
+    assert {item.citation_text for item in pack.evidence} == set(texts)
+
+
 def test_table_row_closure_keeps_mapped_duration_without_other_row() -> None:
     """表格行的合并单元格与时限须同包，未映射的兄弟行不可混入。"""
     report = "电话及邮件方式报送信息安全部。"

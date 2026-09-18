@@ -3034,6 +3034,73 @@ def _fallback_continues_fragment(
     )
 
 
+def _fallback_complete_selected_nodes(
+    selected: list[tuple[EvidenceItem, str]],
+    evidence: tuple[EvidenceItem, ...],
+) -> list[tuple[EvidenceItem, str]]:
+    """仅沿同一原文节点的连续 SourceSpan 补全已选片段。"""
+    nodes: dict[
+        tuple[str | None, str, tuple[str, ...]],
+        list[tuple[EvidenceItem, str, int, int]],
+    ] = {}
+    for item in evidence:
+        if len(item.source_spans) != 1:
+            continue
+        span = item.source_spans[0]
+        if (
+            not span.is_citable
+            or span.node_id is None
+            or span.source_start_char is None
+            or span.source_end_char is None
+        ):
+            continue
+        key = (item.document_version_id, span.node_id, span.structural_path)
+        nodes.setdefault(key, []).append(
+            (
+                item,
+                item.citation_text.strip(),
+                span.source_start_char,
+                span.source_end_char,
+            )
+        )
+    completed = list(selected)
+    seen = {item.support_id for item, _ in selected}
+    for item, _ in selected:
+        if len(item.source_spans) != 1:
+            continue
+        span = item.source_spans[0]
+        if span.node_id is None:
+            continue
+        key = (item.document_version_id, span.node_id, span.structural_path)
+        ordered = sorted(nodes.get(key, ()), key=lambda row: (row[2], row[3]))
+        if len(ordered) < _FALLBACK_NODE_MIN_EXCERPTS:
+            continue
+        current = next(
+            (
+                index
+                for index, row in enumerate(ordered)
+                if row[0].support_id == item.support_id
+            ),
+            None,
+        )
+        if current is None:
+            continue
+        left = current
+        right = current
+        while left > 0 and ordered[left - 1][3] == ordered[left][2]:
+            left -= 1
+        while (
+            right + 1 < len(ordered)
+            and ordered[right][3] == ordered[right + 1][2]
+        ):
+            right += 1
+        for peer, excerpt, _, _ in ordered[left : right + 1]:
+            if peer.support_id not in seen:
+                completed.append((peer, excerpt))
+                seen.add(peer.support_id)
+    return completed
+
+
 def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0915
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
@@ -3360,6 +3427,7 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0915
     }
     if requested_levels and selected_levels - requested_levels:
         return None
+    selected = _fallback_complete_selected_nodes(selected, evidence)
     if (
         len(plan.atoms) > 1
         and all(

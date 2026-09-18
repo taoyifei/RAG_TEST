@@ -206,6 +206,94 @@ def test_ranked_prose_closes_same_source_node_across_chunks() -> None:
     assert outcome.candidates[1].expansion_reason == "SOURCE_NODE_CONTINUATION"
 
 
+def test_ranked_table_cell_closes_only_same_row_node() -> None:
+    """表格单元格被切块后可补原文后半段，邻行不借用。"""
+    first = make_ranked_chunk(
+        1,
+        "甲团队负责完成系统联调，",
+        role=ChunkRole.TABLE,
+        next_chunk_id=f"chunk_{2:032x}",
+    ).model_copy(update={"rerank_rank": 1})
+    second = make_ranked_chunk(
+        2,
+        "解决接口兼容性问题。",
+        role=ChunkRole.TABLE,
+        previous_chunk_id=first.hydrated.chunk.chunk_id,
+    )
+    first_span = first.hydrated.chunk.source_spans[0]
+    second_span = second.hydrated.chunk.source_spans[0]
+    assert first_span.source_anchor is not None
+    assert second_span.source_anchor is not None
+    path = ("body", "tbl:1", "tr:1", "tc:1", "p:1")
+    first = first.model_copy(
+        update={
+            "hydrated": first.hydrated.model_copy(
+                update={
+                    "chunk": first.hydrated.chunk.model_copy(
+                        update={
+                            "source_spans": (
+                                first_span.model_copy(
+                                    update={"structural_path": path}
+                                ),
+                            )
+                        }
+                    )
+                }
+            )
+        }
+    )
+    continuation = second_span.model_copy(
+        update={
+            "node_id": first_span.node_id,
+            "structural_path": path,
+            "source_start_char": len(first.hydrated.chunk.citation_text),
+            "source_end_char": (
+                len(first.hydrated.chunk.citation_text)
+                + len(second.hydrated.chunk.citation_text)
+            ),
+        }
+    )
+    second = second.model_copy(
+        update={
+            "hydrated": second.hydrated.model_copy(
+                update={
+                    "chunk": second.hydrated.chunk.model_copy(
+                        update={"source_spans": (continuation,)}
+                    )
+                }
+            )
+        }
+    )
+    source = cast(EvidenceSourcePort, _NeighborSource((second.hydrated,)))
+    outcome = NeighborExpander(source).close_source_nodes(
+        _snapshot(), (first,), RetrievalPolicy()
+    )
+    assert len(outcome.candidates) == 2
+    assert outcome.candidates[1].expansion_reason == "SOURCE_NODE_CONTINUATION"
+
+    other_row = continuation.model_copy(
+        update={
+            "structural_path": ("body", "tbl:1", "tr:2", "tc:1", "p:1")
+        }
+    )
+    wrong = second.model_copy(
+        update={
+            "hydrated": second.hydrated.model_copy(
+                update={
+                    "chunk": second.hydrated.chunk.model_copy(
+                        update={"source_spans": (other_row,)}
+                    )
+                }
+            )
+        }
+    )
+    wrong_source = cast(EvidenceSourcePort, _NeighborSource((wrong.hydrated,)))
+    refused = NeighborExpander(wrong_source).close_source_nodes(
+        _snapshot(), (first,), RetrievalPolicy()
+    )
+    assert refused.candidates == (first,)
+
+
 def test_section_expansion_is_bounded() -> None:
     origin = make_ranked_chunk(1, "origin")
     sibling = make_ranked_chunk(2, "sibling")

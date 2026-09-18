@@ -146,6 +146,45 @@ def test_fallback_reads_citable_table_actions_without_punctuation() -> None:
     assert "开发团队负责完成系统联调和缺陷修复" in result[0]
 
 
+def test_fallback_restores_contiguous_table_source_sentence() -> None:
+    """表格长单元格跨块时，答复保留逗号前后完整原文。"""
+    first_text = "甲团队负责完成系统联调，"
+    second_text = "解决接口兼容性问题。"
+    by_text = {
+        item.citation_text: _table_cell(item, 1, 1)
+        for item in _evidence(first_text, second_text)
+    }
+    first = by_text[first_text]
+    second = by_text[second_text]
+    first_span = first.source_spans[0]
+    second_span = second.source_spans[0]
+    second = second.model_copy(
+        update={
+            "source_spans": (
+                second_span.model_copy(
+                    update={
+                        "node_id": first_span.node_id,
+                        "source_start_char": len(first_text),
+                        "source_end_char": len(first_text) + len(second_text),
+                    }
+                ),
+            )
+        }
+    )
+    plan = _plan("甲团队", shape=AtomAnswerShape.DUTIES).model_copy(
+        update={
+            "original_query": "甲团队负责哪些工作？",
+            "resolved_root_query": "甲团队负责哪些工作？",
+        }
+    )
+    result = _safe_extractive_fallback(
+        plan, (first, second), {"A1": (first.support_id, second.support_id)}
+    )
+    assert result is not None
+    assert first_text + second_text in result[0]
+    assert result[1] == (first.support_id, second.support_id)
+
+
 def _pack(
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],

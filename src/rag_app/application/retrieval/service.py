@@ -444,7 +444,7 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": "wb08r-evidence-first-v3",
+                "answer_pipeline_revision": "wb08r-evidence-first-v5",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -2652,7 +2652,7 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": "wb08r-evidence-first-v3",
+                "answer_pipeline_revision": "wb08r-evidence-first-v5",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }

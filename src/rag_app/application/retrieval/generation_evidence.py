@@ -38,7 +38,7 @@ from rag_app.core.models.query_plan import (
 )
 from rag_app.core.query_text import named_table_label_in_query
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v4"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v6"
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
 _STRUCTURED_GROUP_TYPES = frozenset(
     {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
@@ -634,9 +634,12 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     node_spans: dict[
         tuple[str, str], list[tuple[RankedChunk, SourceSpan, str]]
     ] = defaultdict(list)
-    table_spans: dict[str, list[tuple[RankedChunk, SourceSpan, str]]] = (
-        defaultdict(list)
-    )
+    table_spans_by_node: dict[
+        tuple[str, str], list[tuple[RankedChunk, SourceSpan, str]]
+    ] = defaultdict(list)
+    table_spans_by_chunk: dict[
+        str, list[tuple[RankedChunk, SourceSpan, str]]
+    ] = defaultdict(list)
     for candidate in candidate_by_id.values():
         chunk = candidate.hydrated.chunk
         if chunk.role is ChunkRole.TABLE:
@@ -688,7 +691,12 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                     span.chunk_start_char : span.chunk_end_char
                 ]
                 if quote.strip():
-                    table_spans[chunk.chunk_id].append((candidate, span, quote))
+                    table_spans_by_node[
+                        (chunk.version.document_version_id, span.node_id)
+                    ].append((candidate, span, quote))
+                    table_spans_by_chunk[chunk.chunk_id].append(
+                        (candidate, span, quote)
+                    )
             continue
         if chunk.role not in {ChunkRole.TEXT, ChunkRole.LIST}:
             continue
@@ -708,7 +716,12 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         item_key = _identity(item)
         node_id = next(iter(node_ids))
         same_node = (
-            table_spans.get(item.chunk_id, ())
+            (
+                *table_spans_by_chunk.get(item.chunk_id, ()),
+                *table_spans_by_node.get(
+                    (item.document_version_id or "", node_id), ()
+                ),
+            )
             if item.table_context
             else node_spans.get((item.document_version_id or "", node_id), ())
         )
@@ -798,6 +811,38 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             for atom in subject_atoms:
                 atom_keys.add(key)
                 member_keys_by_atom.setdefault(atom.atom_id, set()).add(key)
+    # 新补入的表格原句也可能在 canonical Chunk 边界处截断；沿同一
+    # SourceSpan 节点补后半段，不把同表相邻行当作续句。
+    for parent_key in exact_table_keys:
+        parent = candidates[parent_key]
+        node_ids = {span.node_id for span in parent.source_spans}
+        if len(node_ids) != 1 or None in node_ids:
+            continue
+        node_id = next(iter(node_ids))
+        continuation = sorted(
+            table_spans_by_node.get(
+                (parent.document_version_id or "", node_id), ()
+            ),
+            key=lambda row: (
+                row[1].source_start_char or 0,
+                row[0].fusion_rank,
+            ),
+        )[: policy.group_member_chunk_limit]
+        for candidate, span, quote in continuation:
+            sibling = _evidence_item(candidate, span, quote, "S0")
+            sibling_key = _identity(sibling)
+            if sibling_key == parent_key:
+                continue
+            candidates.setdefault(sibling_key, sibling)
+            sibling_keys_by_parent[parent_key].add(sibling_key)
+            node_sibling_keys_by_parent[parent_key].add(sibling_key)
+            if parent_key in root_keys:
+                root_keys.add(sibling_key)
+            if parent_key in atom_keys:
+                atom_keys.add(sibling_key)
+            for keys in member_keys_by_atom.values():
+                if parent_key in keys:
+                    keys.add(sibling_key)
     # 旧证据装配器可能因软语义判断丢掉同文档的高排名正文。
     # 多子问题保留少量真实 Rerank 正文候选，仍由下面的硬边界和预算把关。
     supplemental_keys: list[tuple[object, ...]] = []
