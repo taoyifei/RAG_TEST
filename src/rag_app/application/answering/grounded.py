@@ -144,8 +144,14 @@ _STOP = re.compile(r"[\W_]|的|了|和|与|及|在|将|其|以|并|为|是", re.
 _MIN_QUOTE_CHARS = 2
 _FALLBACK_MIN_BIGRAM_OVERLAP = 2
 _FALLBACK_MAX_ORDINARY_EXCERPTS = 3
+_FALLBACK_TABLE_LABEL_MIN_CHARS = 3
+_FALLBACK_TABLE_LABEL_MAX_CHARS = 24
+_FALLBACK_NODE_MIN_EXCERPTS = 2
 _FALLBACK_DURATION = re.compile(
     r"\d+(?:\.\d+)?\s*(?:个工作日|工作日|天|日|周|个月|月|年|小时|分钟)"
+)
+_FALLBACK_LIST_MARKER = re.compile(
+    r"^[（(]?[一二三四五六七八九十\d]+[）).、]?$"
 )
 _DIRECT_EXTRACT_MAX_CHARS = 500
 # 引用、对象、数字、频率与否定另有独立硬门。这里仅要求自然改写与
@@ -2499,7 +2505,93 @@ def _direct_extract(
     return None
 
 
-def _safe_extractive_fallback(  # noqa: PLR0912
+def _fallback_table_row(
+    plan: QueryPlan,
+    grouped: dict[str, list[tuple[EvidenceItem, str]]],
+) -> list[tuple[EvidenceItem, str]]:
+    """问题明确点名某个表格行时，优先展示该行的完整单元格。"""
+    query = _STOP.sub("", plan.resolved_root_query.casefold())
+    matches: list[tuple[int, list[tuple[EvidenceItem, str]]]] = []
+    for items in grouped.values():
+        if not any(
+            dict(item.metadata).get("evidence_group_type") == "TABLE_ROW_GROUP"
+            for item, _ in items
+        ):
+            continue
+        labels = (
+            _STOP.sub("", sentence.casefold())
+            for _, sentence in items
+        )
+        label_length = max(
+            (
+                len(label)
+                for label in labels
+                if (
+                    _FALLBACK_TABLE_LABEL_MIN_CHARS
+                    <= len(label)
+                    <= _FALLBACK_TABLE_LABEL_MAX_CHARS
+                    and label in query
+                )
+            ),
+            default=0,
+        )
+        if label_length:
+            matches.append((label_length, items))
+    return max(matches, key=lambda pair: pair[0])[1] if matches else []
+
+
+def _fallback_source_node(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    related: set[str],
+) -> list[tuple[EvidenceItem, str]]:
+    """把同一原文段落分块后的步骤重新按来源位置展示。"""
+    query_terms = _terms(plan.resolved_root_query)
+    nodes: dict[
+        tuple[str | None, str], list[tuple[EvidenceItem, str]]
+    ] = {}
+    for item in evidence:
+        if (
+            item.support_id not in related
+            or not item.publishable
+            or item.table_context
+            or not item.source_spans
+            or any(not span.is_citable for span in item.source_spans)
+        ):
+            continue
+        node_ids = {span.node_id for span in item.source_spans}
+        sentence = item.citation_text.strip()
+        if (
+            len(node_ids) != 1
+            or None in node_ids
+            or _FALLBACK_LIST_MARKER.fullmatch(sentence)
+        ):
+            continue
+        node_id = next(iter(node_ids))
+        nodes.setdefault((item.document_version_id, node_id), []).append(
+            (item, sentence)
+        )
+    candidates = [
+        (len(_terms(" ".join(text for _, text in items)) & query_terms), items)
+        for items in nodes.values()
+        if len({text for _, text in items}) >= _FALLBACK_NODE_MIN_EXCERPTS
+    ]
+    if not candidates:
+        return []
+    overlap, best = max(candidates, key=lambda pair: pair[0])
+    if overlap < _FALLBACK_MIN_BIGRAM_OVERLAP:
+        return []
+    seen: set[str] = set()
+    selected: list[tuple[EvidenceItem, str]] = []
+    for item, sentence in best:
+        if sentence in seen:
+            continue
+        seen.add(sentence)
+        selected.append((item, sentence))
+    return selected[:8]
+
+
+def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
     linked_ids: dict[str, tuple[str, ...]],
@@ -2587,6 +2679,18 @@ def _safe_extractive_fallback(  # noqa: PLR0912
             ordinary, key=lambda row: (row[0], -row[1])
         )
         selected = [(item, sentence)]
+    multi_part = any(
+        atom.answer_shape in {
+            AtomAnswerShape.ENUMERATION,
+            AtomAnswerShape.PROCEDURE,
+            AtomAnswerShape.DUTIES,
+        }
+        for atom in plan.atoms
+    )
+    if not selected and multi_part:
+        selected = _fallback_table_row(plan, grouped)
+    if not selected and multi_part:
+        selected = _fallback_source_node(plan, evidence, related)
     if not selected and grouped:
         ranked_groups = sorted(
             grouped.items(),
@@ -2622,12 +2726,15 @@ def _safe_extractive_fallback(  # noqa: PLR0912
     selected.sort(
         key=lambda pair: min(
             (
-                span.source_anchor.ordinal
+                (
+                    span.source_anchor.ordinal,
+                    span.source_start_char,
+                )
                 for span in pair[0].source_spans
                 if span.source_anchor is not None
             ),
-            default=2**31 - 1,
-        )
+            default=(2**31 - 1, 2**31 - 1),
+        ),
     )
     lines = ["资料中与该问题直接相关的规定如下："]
     ids: list[str] = []

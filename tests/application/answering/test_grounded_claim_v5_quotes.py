@@ -333,6 +333,87 @@ def test_duration_fallback_prefers_contextual_deadline() -> None:
     assert result[1] == (deadline.support_id,)
 
 
+def test_fallback_uses_named_complete_table_row() -> None:
+    """模式行的输入和启动条件均已入包时，不回退到模式介绍段。"""
+    evidence = _evidence(
+        "开发中心模式包括需求快验、项目交付和产品开发。",
+        "需求快验",
+        "需求功能点描述、验收标准；演示目标和用户场景。",
+        "经周例会评审通过，以邮件发出会议纪要为准启动。",
+    )
+    generic = next(
+        item for item in evidence
+        if item.citation_text.startswith("开发中心模式包括")
+    )
+    row = [item for item in evidence if item is not generic]
+    group_id = "egrp_mode_row"
+    row = [
+        item.model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "group_complete": True,
+                        "evidence_group_id": group_id,
+                        "evidence_group_type": "TABLE_ROW_GROUP",
+                    }
+                )
+            }
+        )
+        for item in row
+    ]
+    plan = _plan("需求快验", shape=AtomAnswerShape.PROCEDURE).model_copy(
+        update={
+            "original_query": "需求快验模式需要哪些输入内容，启动条件是什么？",
+            "resolved_root_query": (
+                "需求快验模式需要哪些输入内容，启动条件是什么？"
+            ),
+        }
+    )
+    items = (generic, *row)
+    result = _safe_extractive_fallback(
+        plan,
+        items,
+        {"A1": tuple(item.support_id for item in items)},
+        (group_id,),
+    )
+    assert result is not None
+    assert "需求功能点描述" in result[0]
+    assert "会议纪要" in result[0]
+    assert "开发中心模式包括" not in result[0]
+
+
+def test_fallback_rejoins_one_source_paragraph_across_chunks() -> None:
+    """同一原文段落分成数块后仍能展示完整人工成本核算步骤。"""
+    evidence = _evidence(
+        "研发人员记录项目人工工时。",
+        "每月底研发项目承担部门审批工时记录。",
+        "归口管理部门提交汇总工时表至人力资源岗。",
+        "财务岗审核入账。",
+    )
+    node_id = evidence[0].source_spans[0].node_id
+    joined = tuple(
+        item.model_copy(
+            update={
+                "source_spans": tuple(
+                    span.model_copy(update={"node_id": node_id})
+                    for span in item.source_spans
+                )
+            }
+        )
+        for item in evidence
+    )
+    plan = _plan("研发人工成本核算", shape=AtomAnswerShape.PROCEDURE)
+    result = _safe_extractive_fallback(
+        plan,
+        joined,
+        {"A1": tuple(item.support_id for item in joined)},
+    )
+    assert result is not None
+    assert len(result[1]) == 4
+    assert "财务岗审核入账" in result[0]
+
+
 def test_one_accepted_atom_keeps_limited_answer_for_unanswered_atom() -> None:
     evidence = _evidence("甲部门保存记录 14 天。", "乙部门审核记录 3 天。")
     by_text = {item.citation_text: item.support_id for item in evidence}
