@@ -76,6 +76,7 @@ class _PackOptions(TypedDict, total=False):
     links: tuple[AtomCandidateLink, ...]
     groups: tuple[GroupCandidate, ...]
     request: SearchRequest | None
+    policy: RetrievalPolicy
 
 
 def _pack(
@@ -93,7 +94,7 @@ def _pack(
         request=options.get("request") or _request(),
         active_revision_id=f"irev_{'c' * 32}",
         excluded_document_ids=(),
-        policy=RetrievalPolicy(),
+        policy=options.get("policy", RetrievalPolicy()),
     )
 
 
@@ -260,7 +261,15 @@ def test_source_node_closure_keeps_cross_chunk_continuation() -> None:
         answer_shape=AtomAnswerShape.PROCEDURE,
     )
 
-    pack = _pack(_plan(atom), tuple(candidates), root=(evidence,))
+    pack = _pack(
+        _plan(atom),
+        tuple(candidates),
+        root=(evidence,),
+        policy=RetrievalPolicy(
+            generation_per_document_cap=1,
+            generation_max_ordinary_items=1,
+        ),
+    )
 
     assert {item.citation_text for item in pack.evidence} == set(texts)
     assert pack.per_atom_candidate_support_ids == (

@@ -505,6 +505,61 @@ def test_one_accepted_atom_keeps_limited_answer_for_unanswered_atom() -> None:
     assert outcome.missing_atom_reasons == (("A2", "GENERATION_INCOMPLETE"),)
 
 
+def test_one_repair_fills_admitted_atom_missing_from_first_draft() -> None:
+    """准入证据存在时，首轮遗漏的 Atom 可获得唯一一次定向修复。"""
+    evidence = _evidence("甲部门保存记录 14 天。", "乙部门审核记录 3 天。")
+    by_text = {item.citation_text: item.support_id for item in evidence}
+    plan = _plan("甲部门", "乙部门")
+    pack = _pack(
+        plan,
+        evidence,
+        atom_ids_by_support={
+            by_text["甲部门保存记录 14 天。"]: ("A1",),
+            by_text["乙部门审核记录 3 天。"]: ("A2",),
+        },
+    )
+    generator = Mock()
+    generator.generate.side_effect = (
+        _draft(
+            (
+                _claim(
+                    "C1",
+                    "乙部门审核记录 3 天。",
+                    "A2",
+                    by_text["乙部门审核记录 3 天。"],
+                ),
+            ),
+            plan,
+        ),
+        _draft(
+            (
+                _claim(
+                    "C2",
+                    "甲部门保存记录 14 天。",
+                    "A1",
+                    by_text["甲部门保存记录 14 天。"],
+                ),
+            ),
+            plan,
+        ),
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()), (AtomStatus.MISSING, ())),
+        pack=pack,
+    )
+
+    assert generator.generate.call_count == 2
+    assert generator.generate.call_args.args[0].repair_atom_ids == ("A1",)
+    assert outcome.repair_calls == 1
+    assert outcome.answer is not None
+    assert "甲部门保存记录 14 天" in outcome.answer
+    assert "乙部门审核记录 3 天" in outcome.answer
+
+
 def test_empty_pack_does_not_call_generator() -> None:
     plan = _plan("甲部门")
     generator = Mock()

@@ -2181,8 +2181,16 @@ class GroundedAnsweringService:
                     atom.atom_id
                     for atom in query_plan.atoms
                     if atom.atom_id in eligible
-                    and atom_support_matrix.for_atom(atom.atom_id).status
-                    is AtomStatus.SUPPORTED
+                    and (
+                        linked_ids.get(atom.atom_id)
+                        or (
+                            generation_evidence_pack is None
+                            and atom_support_matrix.for_atom(
+                                atom.atom_id
+                            ).status
+                            is AtomStatus.SUPPORTED
+                        )
+                    )
                     and not _natural_atom_complete(
                         atom,
                         atom_support_matrix,
