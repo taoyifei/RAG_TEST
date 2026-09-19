@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import Mock
 
-from rag_app.core.models import EvidenceItem
+from rag_app.application.answering.grounded import (
+    GroundedAnsweringService,
+    GroundedOutcome,
+)
+from rag_app.core.models import (
+    ConfidenceDecision,
+    ConfidenceStatus,
+    EvidenceItem,
+)
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
@@ -13,6 +22,10 @@ from rag_app.core.models.query_plan import (
     QueryPlan,
 )
 from rag_app.core.models.retrieval import ClaimSupport, NaturalClaim
+from tests.application.answering.source_contract_fixtures import (
+    trusted_list_group,
+)
+from tests.application.answering.test_grounded_claim_v5_quotes import _pack
 from tests.application.answering.test_natural_grounded_answer import (
     _answer,
     _claim,
@@ -78,6 +91,30 @@ def _certified_matrix(
     return matrix.model_copy(update={"atoms": (support,)})
 
 
+def _answer_certified_group(
+    generator: Mock,
+    evidence: tuple[EvidenceItem, ...],
+    plan: QueryPlan,
+    matrix: AtomSupportMatrix,
+) -> GroundedOutcome:
+    """完整组的服务回放携带实际成员与原始跨度映射。"""
+    group_id = str(dict(evidence[0].metadata)["evidence_group_id"])
+    group = trusted_list_group(evidence, group_id=group_id)
+    pack = replace(
+        _pack(plan, evidence),
+        trusted_source_groups=(group,),
+        complete_group_ids=(group_id,),
+    )
+    return GroundedAnsweringService(generator).answer(
+        plan.standalone_query,
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        query_plan=plan,
+        atom_support_matrix=matrix,
+        generation_evidence_pack=pack,
+    )
+
+
 def test_complete_group_omission_is_generation_gap_after_one_repair() -> None:
     evidence = _complete_group()
     by_text = {item.citation_text: item.support_id for item in evidence}
@@ -85,13 +122,11 @@ def test_complete_group_omission_is_generation_gap_after_one_repair() -> None:
     matrix = _certified_matrix(plan, evidence)
     generator = Mock()
     generator.generate.return_value = _draft(
-        (
-            _group_claim("1.核对材料。", by_text),
-        ),
+        (_group_claim("1.核对材料。", by_text),),
         plan,
     )
 
-    outcome = _answer(generator, evidence, plan, matrix)
+    outcome = _answer_certified_group(generator, evidence, plan, matrix)
 
     assert outcome.atom_coverage == (("A1", "PARTIAL"),)
     assert outcome.missing_atom_reasons == (("A1", "GENERATION_INCOMPLETE"),)
@@ -116,7 +151,7 @@ def test_complete_group_all_members_closes_without_repair() -> None:
         plan,
     )
 
-    outcome = _answer(generator, evidence, plan, matrix)
+    outcome = _answer_certified_group(generator, evidence, plan, matrix)
 
     assert outcome.atom_coverage == (("A1", "SUPPORTED"),)
     assert outcome.missing_atom_reasons == ()

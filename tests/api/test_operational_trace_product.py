@@ -37,8 +37,12 @@ def _grounded_response(request: httpx.Request) -> httpx.Response:
     request_payload = json.loads(request.content)
     grounded = json.loads(request_payload["messages"][1]["content"])
     candidates = grounded["evidence"]
+    # 局部修复只携带失败 Atom；离线 Provider 同样按它的目标保持拒答。
+    question = grounded.get("question") or " ".join(
+        atom["target"] for atom in grounded["atoms"]
+    )
     claims = []
-    if candidates and "月球库存编号" not in grounded["question"]:
+    if candidates and "月球库存编号" not in question:
         evidence = candidates[0]
         claims = [
             {
@@ -449,7 +453,11 @@ def test_product_trace_records_cache_hit_and_refusal_terminal_state(
             == cached.status_code
             == refused.status_code
             == 200
-        )
+        ), {
+            "first": first.text,
+            "cached": cached.text,
+            "refused": refused.text,
+        }
         assert cached.json()["cache_hit"] is True
         cached_detail = harness.client.get(
             "/api/v1/admin/operational-traces/" + cached.json()["trace_id"]

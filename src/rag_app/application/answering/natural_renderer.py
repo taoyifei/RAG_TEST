@@ -6,15 +6,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomStatus,
+    AtomSupport,
     AtomSupportMatrix,
     QueryPlan,
 )
 from rag_app.core.models.retrieval import AnswerClaim, EvidenceItem
 
 _MIN_DESCRIPTIVE_FRAGMENT_CHARS = 5
+_MIN_CONFLICT_SOURCE_COUNT = 2
 
 
 class MissingAtomReason(StrEnum):
@@ -60,6 +63,58 @@ def _missing_description(shape: AtomAnswerShape, original: str) -> str:
     )
 
 
+def resolve_conflict_support_ids(
+    support: AtomSupport, evidence: tuple[EvidenceItem, ...]
+) -> tuple[str, ...]:
+    """把冲突双方稳定来源身份映射到当前包，缺任一方时不发布该组。
+
+    Args:
+        support: 检索阶段记录的同一 Atom 冲突来源。
+        evidence: 当前最终应用证据包及其唯一展示别名。
+
+    Returns:
+        全部冲突来源均唯一、可引用时的当前别名；否则为空。
+
+    """
+    if support.status is not AtomStatus.CONTRADICTORY:
+        return ()
+    identities = (
+        support.supporting_support_keys or support.supporting_support_ids
+    )
+    if len(identities) < _MIN_CONFLICT_SOURCE_COUNT or len(
+        set(identities)
+    ) != len(identities):
+        return ()
+    resolved: list[str] = []
+    for identity in identities:
+        matches = tuple(
+            item
+            for item in evidence
+            if (
+                stable_support_key(item)
+                if support.supporting_support_keys
+                else item.support_id
+            )
+            == identity
+        )
+        if len(matches) != 1:
+            return ()
+        item = matches[0]
+        if (
+            not item.publishable
+            or not item.source_spans
+            or any(not span.is_citable for span in item.source_spans)
+            or sum(
+                candidate.support_id == item.support_id
+                for candidate in evidence
+            )
+            != 1
+        ):
+            return ()
+        resolved.append(item.support_id)
+    return tuple(resolved)
+
+
 def _conflict_lines(
     plan: QueryPlan,
     matrix: AtomSupportMatrix,
@@ -72,15 +127,8 @@ def _conflict_lines(
         support = matrix.for_atom(atom.atom_id)
         if support.status is not AtomStatus.CONTRADICTORY:
             continue
-        for support_id in support.supporting_support_ids:
-            item = by_id.get(support_id)
-            if (
-                item is None
-                or not item.publishable
-                or not item.source_spans
-                or any(not span.is_citable for span in item.source_spans)
-            ):
-                continue
+        for support_id in resolve_conflict_support_ids(support, evidence):
+            item = by_id[support_id]
             lines.append(
                 f"- {item.source_label}：{item.citation_text} [{support_id}]"
             )
@@ -202,4 +250,5 @@ __all__ = [
     "MissingAtomReason",
     "ValidatedNaturalClaim",
     "render_natural_answer",
+    "resolve_conflict_support_ids",
 ]

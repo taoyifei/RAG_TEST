@@ -13,7 +13,7 @@ from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
 QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v8"
-QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v2"
+QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v3"
 ATOM_GROUP_ALIGNMENT_REVISION = "wb08r-atom-group-alignment-v3"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v2"
 GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-claim-v7"
@@ -189,6 +189,7 @@ class AtomSupport(FrozenModel):
     status: AtomStatus
     supporting_group_ids: tuple[str, ...] = ()
     supporting_support_ids: tuple[str, ...] = ()
+    supporting_support_keys: tuple[str, ...] = Field(default=(), exclude=True)
     relation_certified_group_ids: tuple[str, ...] = ()
     missing_aspects: tuple[str, ...] = ()
     contradictions: tuple[str, ...] = ()

@@ -25,6 +25,7 @@ from rag_app.core.models import (
     SearchRequest,
 )
 from tests.adapters.parsers.docx_fixtures import build_docx
+from tests.support.grounded_fixture_generator import GroundedFixtureGenerator
 from tests.support.p11_closure_replay import no_network
 
 _PROFILE = Path("configs/profiles/dev-p06-memory.json")
@@ -48,6 +49,10 @@ def runtime(tmp_path: Path) -> Iterator[P07Runtime]:
     project_id = deterministic_id("prj", "related-service")
     kb_id = deterministic_id("kb", "related-service")
     with no_network(), build_p07_runtime(_PROFILE, data_dir=tmp_path) as value:
+        value.retrieval = value.retrieval.with_generation(
+            GroundedFixtureGenerator(),
+            serving_identity="unit-synthetic-related-v1",
+        )
         control = value.persistence.control
         control.put_project(project_id, "Synthetic")
         control.put_knowledge_base(
@@ -148,6 +153,8 @@ def test_switch_preserves_formal_contract_and_provider_calls(
     answerable: bool,
 ) -> None:
     components = runtime.persistence.components
+    assert runtime.retrieval._grounded is not None
+    configured_generator = runtime.retrieval._grounded.generator
     with (
         patch.object(
             components.query_embedding_router,
@@ -158,9 +165,9 @@ def test_switch_preserves_formal_contract_and_provider_calls(
             components.reranker, "rerank", wraps=components.reranker.rerank
         ) as rerank,
         patch.object(
-            components.generator,
+            configured_generator,
             "generate",
-            wraps=components.generator.generate,
+            wraps=configured_generator.generate,
         ) as generator,
     ):
         plain = runtime.retrieval.search_and_answer(_request(query))
@@ -203,6 +210,8 @@ def test_legacy_result_defaults_and_cache_rechecks_deleted_document(
     request = _request("隐私专员联系电话是多少？", related=True)
     first = runtime.retrieval.search_and_answer(request)
     assert first.related_contents
+    # 模型 abstain 不自动缓存；显式旧缓存仅用于检验回读时的身份/删除边界。
+    runtime.cache.put(first.cache_key, first, ttl_seconds=30)
     second = runtime.retrieval.search_and_answer(request)
     assert second.cache_hit
     legacy = first.model_dump(exclude={"related_contents", "display_message"})

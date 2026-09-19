@@ -43,6 +43,8 @@ class PrivateReplayDraftRecorder:
         self.output_path = self.directory / _OUTPUT_NAME
         _prepare_private_output(self.output_path)
         self._captured = 0
+        self.skipped_count = 0
+        self.last_skip_reason: str | None = None
         self._lock = Lock()
 
     @classmethod
@@ -72,32 +74,45 @@ class PrivateReplayDraftRecorder:
             raise ValueError("PRIVATE_REPLAY_CAPTURE_LIMIT_INVALID") from error
         return cls(Path(directory or ""), capture_limit=capture_limit)
 
-    def record(self, request: GenerationRequest, draft: AnswerDraft) -> int:
+    def record(
+        self, request: GenerationRequest, draft: AnswerDraft
+    ) -> int | None:
         """原样记录模型请求、NaturalClaim、Quote 与来源跨度。
 
         Args:
-            request: 实际交给回答模型的有界生成请求。
+            request: 应用交给 adapter 的候选；不能冒充实际 HTTP 发送集合。
             draft: Provider 返回并完成结构解析、尚未业务校验的草稿。
 
         Returns:
-            本进程内从 1 开始的记录序号。
-
-        Raises:
-            RuntimeError: 超过显式记录上限或单条记录过大。
+            本进程内从 1 开始的记录序号；配额已满时返回 None。
 
         """
         with self._lock:
             if self._captured >= self.capture_limit:
-                raise RuntimeError("PRIVATE_REPLAY_CAPTURE_LIMIT_REACHED")
+                self.skipped_count += 1
+                self.last_skip_reason = "PRIVATE_REPLAY_CAPTURE_LIMIT_REACHED"
+                return None
             sequence = self._captured + 1
             payload = {
-                "schema_version": "private-grounded-draft-v1",
+                "schema_version": "private-grounded-draft-v2",
+                "evidence_level": "ADAPTER_INPUT",
                 "sequence": sequence,
+                "request_id": request.request_id,
+                "attempt_id": request.attempt_id,
                 "query_sha256": hashlib.sha256(
                     request.query.encode("utf-8")
                 ).hexdigest(),
-                "request": request.model_dump(mode="json"),
+                "request": _private_request_payload(request),
                 "draft": draft.model_dump(mode="json"),
+                "prepared_packet": (
+                    draft.prepared_packet.model_dump(mode="json")
+                    if draft.prepared_packet is not None
+                    else None
+                ),
+                "previous_prepared_packets": [
+                    packet.model_dump(mode="json")
+                    for packet in draft.previous_prepared_packets
+                ],
             }
             encoded = (
                 json.dumps(
@@ -109,10 +124,53 @@ class PrivateReplayDraftRecorder:
                 + "\n"
             ).encode("utf-8")
             if len(encoded) > _MAX_RECORD_BYTES:
-                raise RuntimeError("PRIVATE_REPLAY_RECORD_TOO_LARGE")
+                self.skipped_count += 1
+                self.last_skip_reason = "PRIVATE_REPLAY_RECORD_TOO_LARGE"
+                return None
             _append_private_record(self.output_path, encoded)
             self._captured = sequence
             return sequence
+
+
+def _private_request_payload(request: GenerationRequest) -> dict[str, object]:
+    """私有回放保留内部身份；公开序列化仍排除这些字段。"""
+    payload = request.model_dump(mode="json")
+    certificates = request.per_atom_source_certificates
+    payload.update(
+        {
+            "request_id": request.request_id,
+            "attempt_id": request.attempt_id,
+            "repair_raw_failures": request.repair_raw_failures,
+            "repair_allowed_support_keys": request.repair_allowed_support_keys,
+            "trusted_source_groups": [
+                group.model_dump(mode="json")
+                for group in request.trusted_source_groups
+            ],
+            "per_atom_source_certificates": [
+                [atom_id, key, dict(certificate)]
+                for atom_id, key, certificate in certificates
+            ],
+        }
+    )
+    for name in ("evidence", "answer_support_set", "model_evidence_candidates"):
+        payload[name] = [
+            {
+                **item.model_dump(mode="json"),
+                "source_identity_scope": item.source_identity_scope,
+            }
+            for item in getattr(request, name)
+        ]
+    if request.atom_support_matrix is not None:
+        payload["atom_support_matrix"] = {
+            "atoms": [
+                {
+                    **atom.model_dump(mode="json"),
+                    "supporting_support_keys": atom.supporting_support_keys,
+                }
+                for atom in request.atom_support_matrix.atoms
+            ]
+        }
+    return payload
 
 
 def _validated_private_directory(directory: Path) -> Path:

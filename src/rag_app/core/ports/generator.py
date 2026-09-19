@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Protocol, Self
+from uuid import uuid4
 
 from pydantic import Field, model_validator
 
@@ -13,7 +14,8 @@ from rag_app.core.models import (
     ProviderHealth,
     QuerySemantics,
 )
-from rag_app.core.models.common import FrozenModel
+from rag_app.core.models.common import FrozenModel, JsonObject
+from rag_app.core.models.evidence_group import EvidenceGroup
 from rag_app.core.models.query_plan import AtomSupportMatrix, QueryPlan
 
 
@@ -32,6 +34,20 @@ class GenerationRequest(FrozenModel):
     per_atom_candidate_support_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     repair_atom_ids: tuple[str, ...] = ()
     accepted_claim_ids: tuple[str, ...] = ()
+    request_id: str = Field(default_factory=lambda: uuid4().hex, exclude=True)
+    attempt_id: str = Field(default_factory=lambda: uuid4().hex, exclude=True)
+    repair_raw_failures: tuple[tuple[str, str], ...] = Field(
+        default=(), exclude=True
+    )
+    repair_allowed_support_keys: tuple[tuple[str, tuple[str, ...]], ...] = (
+        Field(default=(), exclude=True)
+    )
+    trusted_source_groups: tuple[EvidenceGroup, ...] = Field(
+        default=(), exclude=True, repr=False
+    )
+    per_atom_source_certificates: tuple[tuple[str, str, JsonObject], ...] = (
+        Field(default=(), exclude=True, repr=False)
+    )
 
     @model_validator(mode="after")
     def _validate_evidence_sets(self) -> Self:

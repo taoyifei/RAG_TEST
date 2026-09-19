@@ -229,7 +229,7 @@ class EvidenceAssembler:
                 item for item in supported if _group_is_complete(item)
             )
             supported = _structurally_supported_group_items(
-                supported, groups, context
+                supported, groups or (), context
             )
         support_set, ambiguous = _minimal_support_set(supported, context)
         if groups and context is not None:
@@ -820,8 +820,8 @@ def semantic_candidate_allowed(
     if actual_space is None and len(spaces) == 1:
         actual_space = spaces[0]
     return actual_space in spaces and any(
-        contribution.channel == f"dense:{context.selected_slot}"
-        for contribution in candidate.contributions
+        channel == f"dense:{context.selected_slot}"
+        for channel in candidate.retrieval_channels
     )
 
 
@@ -876,7 +876,9 @@ def _table_intersection_certificate(
         requested_relation_or_attribute=proof.requested_relation_or_attribute,
         answer_type=proof.answer_type,
         support_reason="TABLE_INTERSECTION",
-        supporting_span_ids=node_ids,
+        supporting_span_ids=tuple(
+            node_id for node_id in node_ids if isinstance(node_id, str)
+        ),
     )
 
 
@@ -2396,6 +2398,11 @@ def _evidence_item(
         source_spans=(_relative_span(span, quote, chunk.citation_text),),
         document_id=chunk.version.document_id,
         document_version_id=chunk.version.document_version_id,
+        source_identity_scope=(
+            chunk.project_id,
+            chunk.knowledge_base_id,
+            chunk.index_revision_id,
+        ),
         display_name=candidate.hydrated.display_name,
         heading_path=chunk.heading_path,
         section_id=chunk.section_id,
@@ -2410,9 +2417,7 @@ def _evidence_item(
         selection_reason=(candidate.expansion_reason or "retrieval_candidate"),
         publishable=True,
         metadata=metadata,
-        retrieval_origins=tuple(
-            contribution.channel for contribution in candidate.contributions
-        )
+        retrieval_origins=candidate.retrieval_channels
         + ((candidate.expansion_reason,) if candidate.expansion_reason else ()),
         fusion_rank=candidate.fusion_rank,
         rerank_rank=candidate.rerank_rank,
@@ -2458,7 +2463,9 @@ def _logical_table_row(
                 not isinstance(node_id, str) for node_id in values
             ):
                 return None
-            mapped_nodes.update(values)
+            mapped_nodes.update(
+                node_id for node_id in values if isinstance(node_id, str)
+            )
     if len(identities) != 1 or span.node_id not in mapped_nodes:
         return None
     return next(iter(identities))

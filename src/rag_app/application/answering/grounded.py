@@ -10,11 +10,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from html import unescape
 from typing import TYPE_CHECKING, Literal
+from uuid import uuid4
 
 from rag_app.application.answering.natural_renderer import (
     MissingAtomReason,
     ValidatedNaturalClaim,
     render_natural_answer,
+    resolve_conflict_support_ids,
 )
 from rag_app.application.answering.ocr_guard import (
     claim_pdf_visual_evidence,
@@ -39,6 +41,12 @@ from rag_app.core.models import (
     RequestedAnswerType,
     SourceSpanKind,
 )
+from rag_app.core.models.common import JsonObject, freeze_json_object
+from rag_app.core.models.evidence_group import EvidenceGroup
+from rag_app.core.models.generation_packet import (
+    PreparedGenerationPacket,
+    stable_support_key,
+)
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomStatus,
@@ -59,6 +67,15 @@ from rag_app.core.query_text import (
     normalize_catalog_label,
     normalize_semantic_text,
     section_heading_path_owns_target,
+)
+from rag_app.core.source_compatibility import (
+    certified_source_group,
+    compatible_partitions,
+    source_compatibility,
+    source_group_contains,
+    source_group_covered,
+    source_group_keys,
+    table_cell_coordinate,
 )
 
 if TYPE_CHECKING:
@@ -126,6 +143,14 @@ _CONDITION_SCOPE = re.compile(
     r"(?:在|当)(?P<temporal>[^，,。；;]{2,48}?)"
     r"(?:情况下|时)(?=[，,。；;]|可以|应|须|需|必|即|则)"
 )
+_BOUND_CONDITION = re.compile(
+    r"(?:在|当)(?P<scope>[^，,。；;]{2,32}?)(?P<end>之前|之后|时|前|后)"
+    r"(?=[，,]|可以|应|须|需|必|负责|完成|提交|启动|归档|可)"
+)
+_STAGE_SCOPE = re.compile(
+    r"(?:^|[，,。；;：:\s])(?:在)?"
+    r"(?P<scope>[^，,。；;：:\s]{1,20}?(?:阶段|期间|环节))"
+)
 _PARENTHETICAL_LEVEL = re.compile(
     r"[（(]\s*[IVXivxⅠⅡⅢⅣⅤⅥ\d一二三四五六七八九十]+\s*级\s*[）)]"
 )
@@ -185,6 +210,7 @@ _DIRECT_EXTRACT_MAX_CHARS = 500
 # 引用、对象、数字、频率与否定另有独立硬门。这里仅要求自然改写与
 # 来源谓语保留基本词面联系，避免把同义概括误判成无支持事实。
 _MIN_SUPPORTED_BIGRAM_RATIO = 0.20
+_MIN_COMPLETE_FACT_BIGRAM_RATIO = 0.60
 _MIN_LIST_ITEM_OVERLAP = 0.20
 _MIN_STRUCTURED_LIST_ITEMS = 2
 _QUOTED_DOCUMENT_TITLE = re.compile(r"《([^》]{3,200})》")
@@ -204,7 +230,7 @@ _MIN_TABLE_COLUMN_ROWS = 2
 _NAMED_SUBJECT = re.compile(
     r"(?:(?:并|且|同时|以及)?由)\s*"
     r"([A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]{1,16}"
-    r"(?:负责人|经理|主管|专员|工程师|部门|人员|设备|系统|模式|部))"
+    r"(?:负责人|经理|主管|专员|工程师|部门|人员|设备|系统|模式|实验室|中心|部|组))"
     r"\s*(?:负责(?!人)|承担|的(?:核心)?职责|的(?:维护)?周期)"
 )
 _ACTION_MODIFIER = r"(?:牵头|主要|直接|统一|共同|定期|自行|独立|擅自)"
@@ -242,7 +268,7 @@ _MODAL_ACTION = re.compile(
 _ENTITY_SUBJECT = re.compile(
     r"^\s*((?:[A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]某|"
     r"[\u4e00-\u9fff]{1,24}?(?:负责人|经理|主管|专员|工程师|部门|团队|"
-    r"单位|机构|公司|中心|用户|客户|人员|岗位|角色|小组|委员会|平台|"
+    r"单位|机构|公司|中心|实验室|用户|客户|人员|岗位|角色|小组|组|委员会|平台|"
     r"服务|应用|模块|组件|设备|系统|模式|库|部)))"
     r"\s*(?=(?:(?:应当|必须|可以|应|须|需|可|已)?"
     r"(?:不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|尚未|没有|未|无|不)?"
@@ -252,7 +278,7 @@ _ENTITY_SUBJECT = re.compile(
 _STANDALONE_SUBJECT = re.compile(
     r"(?:[A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]某|"
     r"[\u4e00-\u9fff]{1,24}?(?:负责人|经理|主管|专员|工程师|部门|团队|"
-    r"单位|机构|公司|中心|用户|客户|人员|岗位|角色|小组|委员会|平台|"
+    r"单位|机构|公司|中心|实验室|用户|客户|人员|岗位|角色|小组|组|委员会|平台|"
     r"服务|应用|模块|组件|设备|系统|模式|库|管代|部))"
 )
 _SECTION_NUMBER_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\s*")
@@ -351,6 +377,11 @@ class GroundedOutcome:
     accepted_support_ids: tuple[str, ...] = ()
     claim_rejection_diagnostics: tuple[ClaimRejectionDiagnostic, ...] = ()
     extractive_fallback_reason: str | None = None
+    prepared_packets: tuple[PreparedGenerationPacket, ...] = ()
+    repair_attempted: bool = False
+    repair_skip_reason: str | None = None
+    raw_failures: tuple[tuple[str, str], ...] = ()
+    recovery_results: tuple[tuple[str, str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +393,28 @@ class _ClaimSourceGroup:
     trusted_contexts: frozenset[str]
     trusted_term_contexts: frozenset[str] = frozenset()
     table_columns: tuple[str, ...] = ()
+
+
+def _failed_generation_packets(
+    error: RagError,
+) -> tuple[PreparedGenerationPacket, ...]:
+    """保留失败传输与兼容降级的发送记录，错误详情不携内部包。"""
+    previous = getattr(error, "_previous_prepared_generation_packets", ())
+    packets = (
+        tuple(
+            packet
+            for packet in previous
+            if isinstance(packet, PreparedGenerationPacket)
+        )
+        if isinstance(previous, tuple)
+        else ()
+    )
+    current = getattr(error, "_prepared_generation_packet", None)
+    return (
+        (*packets, current)
+        if isinstance(current, PreparedGenerationPacket)
+        else packets
+    )
 
 
 def _model_candidates_for_query(
@@ -643,6 +696,7 @@ def _validate_claim_target(
     evidence: tuple[EvidenceItem, ...] = (),
 ) -> None:
     """职责或表格回答必须绑定本次查询目标。"""
+    _validate_scalar_question_support(claim, analysis, cited_items)
     if (
         analysis is not None
         and _EXEMPTION_CONDITION_QUESTION.search(
@@ -680,9 +734,7 @@ def _validate_claim_target(
         analysis is None
         or analysis.semantics.answer_type is not RequestedAnswerType.DUTIES
         or not analysis.semantics.target
-        or _STANDALONE_SUBJECT.fullmatch(
-            analysis.semantics.target.strip()
-        )
+        or _STANDALONE_SUBJECT.fullmatch(analysis.semantics.target.strip())
         is None
     ):
         return
@@ -709,6 +761,95 @@ def _validate_claim_target(
             stage="answer.validate",
             code="CLAIM_QUERY_TARGET_MISMATCH",
         )
+
+
+def _validate_scalar_question_support(
+    claim: AnswerClaim,
+    analysis: QueryAnalysis | None,
+    units: tuple[EvidenceItem, ...],
+) -> None:
+    """最终数值事实必须回答所问对象属性，不能仅凭共同属性借值。"""
+    # retrieval 包的兼容导出包含回答服务，运行时复用关系门避免导入环。
+    from rag_app.application.retrieval.answer_support import (  # noqa: PLC0415
+        SupportStatus,
+        evaluate_span_support,
+    )
+
+    if analysis is None:
+        return
+    source = (
+        _claim_source_text(claim, units)
+        if units
+        else "\n".join(support.quote for support in claim.supports)
+    )
+    proof = evaluate_span_support(analysis, source)
+    if (
+        proof.answer_type
+        not in {
+            "CONTACT",
+            "MONEY",
+            "AREA",
+            "TEMPERATURE",
+            "PRESSURE",
+            "MASS",
+            "RATIO",
+            "DURATION",
+            "TIME",
+            "VERSION",
+            "BRAND",
+        }
+        or proof.status is SupportStatus.SUPPORTED
+    ):
+        return
+    decision = source_compatibility(units)
+    if decision.compatible and decision.reason == "TABLE_INTERSECTION":
+        certificates = [
+            dict(item.metadata).get("answer_support") for item in units
+        ]
+        if certificates and all(
+            isinstance(certificate, dict)
+            and normalize_semantic_text(
+                str(certificate.get("query_target") or "")
+            )
+            == normalize_semantic_text(proof.query_target)
+            and normalize_semantic_text(
+                str(certificate.get("requested_relation_or_attribute") or "")
+            )
+            == normalize_semantic_text(proof.requested_relation_or_attribute)
+            for certificate in certificates
+        ):
+            # 结构门已核实唯一目标行、真实列头和值，此处仍验证属性和值类型。
+            cells = tuple((item, table_cell_coordinate(item)) for item in units)
+            row = next(
+                coordinate[1]
+                for item, coordinate in cells
+                if coordinate is not None
+                and normalize_semantic_text(item.citation_text)
+                == normalize_semantic_text(proof.query_target)
+            )
+            header = " ".join(
+                item.citation_text
+                for item, coordinate in cells
+                if coordinate is not None and coordinate[1] != row
+            )
+            if any(
+                coordinate is not None
+                and coordinate[1] == row
+                and evaluate_span_support(
+                    analysis,
+                    item.citation_text,
+                    table_relation=True,
+                    table_header=header,
+                ).status
+                is SupportStatus.SUPPORTED
+                for item, coordinate in cells
+            ):
+                return
+    raise ValidationFailed(
+        "引文没有证明所问对象的对应属性和值。",
+        stage="answer.validate",
+        code="CLAIM_QUERY_RELATION_UNSUPPORTED",
+    )
 
 
 def _certified_list_exemption(
@@ -893,193 +1034,15 @@ def _check_negations(clause: str, source_clauses: list[str]) -> None:
 
 
 def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
-    """表格按真实行，完整列表或流程按认证组，其余正文按来源节点分组。"""
-    metadata = dict(item.metadata)
-    support = metadata.get("answer_support")
-    table_node_ids = {
-        span.node_id
-        for span in item.source_spans
-        if span.node_id is not None
-        and span.source_anchor is not None
-        and (
-            (
-                span.source_anchor.table_index is not None
-                and span.source_anchor.row_index is not None
-            )
-            or any(
-                re.fullmatch(r"tr:\d+", part)
-                for part in span.source_anchor.structural_path
-            )
-        )
-    }
-    if (
-        isinstance(support, dict)
-        and support.get("support_reason") == "TABLE_INTERSECTION"
-        and isinstance(support.get("supporting_span_ids"), list)
-        and table_node_ids.intersection(support["supporting_span_ids"])
-    ):
-        return {
-            (
-                "table-intersection",
-                item.document_version_id,
-                item.section_id,
-                item.table_locator,
-                tuple(support["supporting_span_ids"]),
-            )
-        }
-    if (
-        item.table_locator is not None
-        and item.table_context
-        and isinstance(support, dict)
-        and support.get("support_reason") == "TABLE_ROW_CONTENT"
-    ):
-        supporting_ids = support.get("supporting_span_ids")
-        if (
-            isinstance(supporting_ids, list)
-            and supporting_ids
-            and table_node_ids.intersection(
-                value for value in supporting_ids if isinstance(value, str)
-            )
-        ):
-            return {
-                (
-                    "table-row-content",
-                    item.document_version_id,
-                    item.section_id,
-                    item.table_locator,
-                    tuple(
-                        value
-                        for value in supporting_ids
-                        if isinstance(value, str)
-                    ),
-                )
-            }
-    if (
-        not item.table_context
-        and item.table_locator is None
-        and metadata.get("group_complete") is True
-        and metadata.get("evidence_group_type")
-        in {"LIST_GROUP", "PROCEDURE_GROUP"}
-        and isinstance(metadata.get("evidence_group_id"), str)
-        and item.source_spans
-        and all(span.source_anchor is not None for span in item.source_spans)
-    ):
-        stories = {
-            (span.source_anchor.part_uri, span.source_anchor.story_kind)
-            for span in item.source_spans
-            if span.source_anchor is not None
-        }
-        if len(stories) == 1:
-            part_uri, story_kind = next(iter(stories))
-            return {
-                (
-                    "complete-structured-group",
-                    item.document_version_id,
-                    item.section_id,
-                    part_uri,
-                    story_kind,
-                    metadata["evidence_group_id"],
-                )
-            }
-    groups: set[tuple[object, ...]] = set()
-    for span in item.source_spans:
-        anchor = span.source_anchor
-        if anchor is None:
-            continue
-        if not item.table_context and item.table_locator is None:
-            groups.add(
-                (
-                    "node",
-                    item.document_version_id,
-                    item.section_id,
-                    anchor.part_uri,
-                    anchor.story_kind,
-                    span.node_id,
-                )
-            )
-            continue
-        row_ends = [
-            index + 1
-            for index, part in enumerate(anchor.structural_path)
-            if re.fullmatch(r"tr:\d+", part)
-        ]
-        if row_ends:
-            row: object = anchor.structural_path[: row_ends[-1]]
-        elif anchor.table_index is not None and anchor.row_index is not None:
-            row = (anchor.table_index, anchor.row_index)
-        else:
-            row = span.node_id
-        groups.add(
-            (
-                "table-row",
-                item.document_version_id,
-                item.section_id,
-                item.table_locator,
-                anchor.part_uri,
-                anchor.story_kind,
-                row,
-            )
-        )
-    return groups
+    """来源分组只使用统一合同核对过的真实身份与坐标。"""
+    return source_group_keys(item)
 
 
 def _table_cell_coordinate(
     item: EvidenceItem,
 ) -> tuple[tuple[object, ...], int, int] | None:
-    """读取 Evidence 的唯一逻辑表格、行和列坐标。"""
-    cells: set[tuple[tuple[object, ...], int, int]] = set()
-    for span in item.source_spans:
-        anchor = span.source_anchor
-        if anchor is None or span.node_id is None:
-            continue
-        path = span.structural_path
-        located = False
-        for index in range(len(path) - 2):
-            if not path[index].startswith("tbl:"):
-                continue
-            row = re.fullmatch(r"tr:(\d+)", path[index + 1])
-            column = re.fullmatch(r"tc:(\d+)", path[index + 2])
-            if row is None or column is None:
-                continue
-            if any(part.startswith("tbl:") for part in path[index + 1 :]):
-                continue
-            cells.add(
-                (
-                    (
-                        item.document_version_id,
-                        item.section_id,
-                        item.table_locator,
-                        anchor.part_uri,
-                        anchor.story_kind,
-                        path[: index + 1],
-                    ),
-                    int(row[1]),
-                    int(column[1]),
-                )
-            )
-            located = True
-        if located:
-            continue
-        if (
-            anchor.table_index is not None
-            and anchor.row_index is not None
-            and anchor.cell_index is not None
-        ):
-            cells.add(
-                (
-                    (
-                        item.document_version_id,
-                        item.section_id,
-                        item.table_locator,
-                        anchor.part_uri,
-                        anchor.story_kind,
-                        ("table-index", anchor.table_index),
-                    ),
-                    anchor.row_index,
-                    anchor.cell_index,
-                )
-            )
-    return next(iter(cells)) if len(cells) == 1 else None
+    """表格组合、恢复和摘录复用同一套严格坐标解析。"""
+    return table_cell_coordinate(item)
 
 
 def _trusted_duty_subjects(
@@ -1302,6 +1265,8 @@ def _claim_source_groups(
     claim: AnswerClaim,
     units: list[EvidenceItem],
     analysis: QueryAnalysis | None,
+    *,
+    trusted_groups: tuple[EvidenceGroup, ...] = (),
 ) -> tuple[_ClaimSourceGroup, ...]:
     """按来源组聚合逐字引用及其同组结构化职责主体。"""
     grouped: dict[tuple[object, ...], list[str]] = {}
@@ -1328,16 +1293,21 @@ def _claim_source_groups(
         tuple[object, ...],
         list[tuple[tuple[object, ...], int, int, str]],
     ] = {}
-    for support, item in zip(claim.supports, units, strict=True):
-        groups = _source_groups(item)
-        if len(groups) != 1:
+    identities: dict[str, tuple[object, ...]] = {}
+    for decision, members in compatible_partitions(
+        tuple(units), trusted_groups=trusted_groups
+    ):
+        if not decision.compatible:
             raise ValidationFailed(
                 "一个引用跨越不同来源结构。",
                 stage="answer.validate",
                 code="CLAIM_SOURCE_MISMATCH",
                 details=(("validator", "_claim_source_groups"),),
             )
-        group = next(iter(groups))
+        for item in members:
+            identities[item.support_id] = decision.proof_key
+    for support, item in zip(claim.supports, units, strict=True):
+        group = identities[item.support_id]
         grouped.setdefault(group, []).append(support.quote)
         trusted.setdefault(group, set()).update(
             _trusted_duty_subjects(item, analysis)
@@ -1555,6 +1525,7 @@ def validate_grounded_draft(
     *,
     analysis: QueryAnalysis | None = None,
     complete: bool = True,
+    trusted_groups: tuple[EvidenceGroup, ...] = (),
 ) -> None:
     """校验逐字支持、来源关系与关键事实，允许有词汇依据的自然概括。
 
@@ -1563,6 +1534,7 @@ def validate_grounded_draft(
         evidence: 本次已通过范围筛选的有限证据。
         analysis: 可选的服务端查询语义，用于约束职责主体。
         complete: 增量 claim 校验时为 False；最终草稿必须检查完整列表。
+        trusted_groups: 服务端真实成员与跨度映射，不能由模型证书替代。
 
     Returns:
         无返回值；校验通过后调用方才可发布。
@@ -1599,7 +1571,9 @@ def validate_grounded_draft(
                     code="CLAIM_QUOTE_INVALID",
                 )
             units.append(item)
-        source_groups = _claim_source_groups(claim, units, analysis)
+        source_groups = _claim_source_groups(
+            claim, units, analysis, trusted_groups=trusted_groups
+        )
         _validate_claim_target(
             claim,
             analysis,
@@ -1882,6 +1856,8 @@ class GroundedAnsweringService:
                 else confidence.status.value,
             )
         calls: list[ProviderCall] = []
+        prepared_packets: list[PreparedGenerationPacket] = []
+        request_id = uuid4().hex
         reason: str | None = None
         direct_support = (
             evidence if answer_support_set is None else answer_support_set
@@ -1898,6 +1874,8 @@ class GroundedAnsweringService:
             delivered: list[AnswerClaim] = []
             try:
                 generation_request = GenerationRequest(
+                    request_id=request_id,
+                    attempt_id=uuid4().hex,
                     query=query,
                     evidence=evidence,
                     citation_protocol="support-id-v1-claims",
@@ -1964,6 +1942,12 @@ class GroundedAnsweringService:
                 else:
                     draft = self.generator.generate(generation_request)
                 calls.extend(draft.provider_calls)
+                prepared_packets.extend(draft.previous_prepared_packets)
+                if draft.prepared_packet is not None:
+                    prepared_packets.append(draft.prepared_packet)
+                    _validate_legacy_generation_packet(
+                        generation_request, draft
+                    )
                 if draft.reason_code == "GENERATION_ABSTAINED":
                     reason = draft.reason_code
                     break
@@ -1981,6 +1965,12 @@ class GroundedAnsweringService:
                     _render_claim_target(claim, analysis)
                     for claim in draft.claims
                 )
+                if rendered_claims != draft.claims:
+                    validate_grounded_draft(
+                        draft.model_copy(update={"claims": rendered_claims}),
+                        evidence,
+                        analysis=analysis,
+                    )
                 if buffered and draft.claims != tuple(buffered):
                     raise ValidationFailed(
                         "增量事实与最终草稿不一致。",
@@ -2016,11 +2006,13 @@ class GroundedAnsweringService:
                         )
                     ),
                     verification_states,
+                    prepared_packets=tuple(prepared_packets),
                 )
             except QueryCancelled as error:
                 error.provider_calls = (*calls, *error.provider_calls)
                 raise
             except ValidationFailed as error:
+                prepared_packets.extend(_failed_generation_packets(error))
                 calls.extend(
                     error.provider_calls
                     or (
@@ -2035,6 +2027,7 @@ class GroundedAnsweringService:
                 if reason == "GENERATION_ABSTAINED":
                     break
             except RagError as error:
+                prepared_packets.extend(_failed_generation_packets(error))
                 calls.extend(
                     error.provider_calls
                     or (
@@ -2064,6 +2057,7 @@ class GroundedAnsweringService:
             "none",
             tuple(calls),
             reason,
+            prepared_packets=tuple(prepared_packets),
         )
 
     def _answer_with_plan(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
@@ -2099,6 +2093,11 @@ class GroundedAnsweringService:
             else {}
         )
         by_id = {item.support_id: item for item in evidence}
+        trusted_groups = (
+            generation_evidence_pack.trusted_source_groups
+            if generation_evidence_pack is not None
+            else ()
+        )
         scoped_versions = _contextual_source_versions(query_plan, evidence)
         direct_evidence = (
             evidence
@@ -2109,6 +2108,69 @@ class GroundedAnsweringService:
                 if item.document_version_id in scoped_versions
             )
         )
+
+        if generation_evidence_pack is not None and len(query_plan.atoms) == 1:
+            direct_evidence = _atom_validation_evidence(
+                query_plan.atoms[0].atom_id,
+                direct_evidence,
+                generation_evidence_pack.per_atom_source_certificates,
+            )
+
+        def validate_source_excerpt(claim: AnswerClaim) -> bool:
+            """服务端摘录也执行最终事实核验，不能借回退绕过主体边界。
+
+            Args:
+                claim: 即将发布的最终原文事实及逐字引用。
+
+            Returns:
+                至少一个被分配的 Atom 完整事实核验通过时为 True。
+
+            """
+            for atom in query_plan.atoms:
+                if not {
+                    support.support_id for support in claim.supports
+                } <= set(linked_ids.get(atom.atom_id, ())):
+                    continue
+                try:
+                    _validated_natural_claim(
+                        NaturalClaim(
+                            atom_id=atom.atom_id,
+                            text=claim.text,
+                            supports=claim.supports,
+                        ),
+                        query_plan,
+                        atom_support_matrix,
+                        _atom_validation_evidence(
+                            atom.atom_id,
+                            evidence,
+                            generation_evidence_pack.per_atom_source_certificates
+                            if generation_evidence_pack is not None
+                            else (),
+                        ),
+                        analysis,
+                        trusted_groups=trusted_groups,
+                    )
+                    if analysis is not None and len(query_plan.atoms) == 1:
+                        validate_grounded_draft(
+                            AnswerDraft(
+                                text=claim.text,
+                                cited_evidence_ids=tuple(
+                                    support.support_id
+                                    for support in claim.supports
+                                ),
+                                claims=(claim,),
+                                generation_mode="extractive",
+                            ),
+                            evidence,
+                            analysis=analysis,
+                            complete=False,
+                            trusted_groups=trusted_groups,
+                        )
+                except (ValidationFailed, ValueError):
+                    continue
+                return True
+            return False
+
         if (
             generation_evidence_pack is not None
             and not any(
@@ -2141,6 +2203,7 @@ class GroundedAnsweringService:
                 linked_ids,
                 generation_evidence_pack.complete_group_ids,
                 require_named_row=True,
+                validate_claim=validate_source_excerpt,
             )
             if named_row is not None:
                 row_answer, row_ids, row_atoms = named_row
@@ -2205,11 +2268,19 @@ class GroundedAnsweringService:
         reason: str | None = None
         repair_calls = 0
         extractive_fallback_reason: str | None = None
+        request_id = uuid4().hex
+        active_request: GenerationRequest | None = None
+        prepared_packets: list[PreparedGenerationPacket] = []
+        attempt_linked_ids: dict[str, tuple[str, ...]] = {}
+        raw_failures: list[tuple[str, str]] = []
+        recovery_results: list[tuple[str, str, str]] = []
+        repair_skip_reason: str | None = "NO_MISSING_ATOM"
 
         def generate(
             repair_atom_ids: tuple[str, ...] = (),
         ) -> AnswerDraft:
             """从准入证据中选出本次 Atom 的候选，不以发布许可过滤。"""
+            nonlocal active_request
             requested = set(repair_atom_ids) if repair_atom_ids else eligible
             allowed = {
                 support_id
@@ -2225,6 +2296,8 @@ class GroundedAnsweringService:
             )
             candidate_ids = {item.support_id for item in candidates}
             request = GenerationRequest(
+                request_id=request_id,
+                attempt_id=uuid4().hex,
                 query=query,
                 evidence=candidates,
                 citation_protocol="support-id-v3-quoted-natural-claims",
@@ -2253,7 +2326,41 @@ class GroundedAnsweringService:
                 ),
                 repair_atom_ids=repair_atom_ids,
                 accepted_claim_ids=tuple(item.claim_id for item in accepted),
+                trusted_source_groups=trusted_groups,
+                per_atom_source_certificates=(
+                    generation_evidence_pack.per_atom_source_certificates
+                    if generation_evidence_pack is not None
+                    else ()
+                ),
+                repair_raw_failures=tuple(
+                    (atom_id, raw)
+                    for atom_id, raw in raw_failures
+                    if atom_id in requested
+                )
+                if repair_atom_ids
+                else (),
+                repair_allowed_support_keys=tuple(
+                    (
+                        atom_id,
+                        tuple(
+                            stable_support_key(item)
+                            for item in candidates
+                            if item.support_id
+                            in linked_ids.get(
+                                atom_id,
+                                atom_support_matrix.for_atom(
+                                    atom_id
+                                ).supporting_support_ids
+                                or tuple(by_id),
+                            )
+                        ),
+                    )
+                    for atom_id in sorted(requested)
+                )
+                if repair_atom_ids
+                else (),
             )
+            active_request = request
             stream_generate = getattr(self.generator, "generate_stream", None)
             if (
                 stream_claims
@@ -2275,35 +2382,51 @@ class GroundedAnsweringService:
             natural: NaturalClaim,
         ) -> tuple[AnswerClaim, ...]:
             """校验模型事实；只在安全边界内恢复来源原句。"""
-            if generation_evidence_pack is not None:
-                _validate_natural_atom_support_scope(
-                    natural,
-                    query_plan,
-                    linked_ids,
-                )
+            _validate_natural_atom_support_scope(
+                natural,
+                query_plan,
+                attempt_linked_ids,
+            )
+            validation_evidence = _atom_validation_evidence(
+                natural.atom_id,
+                evidence,
+                generation_evidence_pack.per_atom_source_certificates
+                if generation_evidence_pack is not None
+                else (),
+            )
             try:
                 claim = _validated_natural_claim(
                     natural,
                     query_plan,
                     atom_support_matrix,
-                    evidence,
+                    validation_evidence,
                     analysis,
+                    trusted_groups=trusted_groups,
                 )
             except (ValidationFailed, ValueError) as error:
-                if (
-                    generation_evidence_pack is not None
-                    and _natural_rejection_code(error)
+                raw = (
+                    error.code
+                    if isinstance(error, ValidationFailed)
+                    else "VALUE_ERROR"
+                )
+                raw_failures.append((natural.atom_id, raw))
+                if generation_evidence_pack is not None and (
+                    _natural_rejection_code(error)
                     == "CLAIM_SEMANTIC_SUPPORT_FAILED"
+                    or raw == "CLAIM_FRAGMENT_INCOMPLETE"
                 ):
-                    return (
-                        _validated_source_faithful_claim(
-                            natural,
-                            query_plan,
-                            atom_support_matrix,
-                            evidence,
-                            analysis,
-                        ),
+                    recovered_claim = _validated_source_faithful_claim(
+                        natural,
+                        query_plan,
+                        atom_support_matrix,
+                        validation_evidence,
+                        analysis,
+                        trusted_groups=trusted_groups,
                     )
+                    recovery_results.append(
+                        (natural.atom_id, raw, "SOURCE_SENTENCE_VALIDATED")
+                    )
+                    return (recovered_claim,)
                 if (
                     generation_evidence_pack is not None
                     and isinstance(error, ValidationFailed)
@@ -2313,23 +2436,23 @@ class GroundedAnsweringService:
                             natural,
                             query_plan,
                             atom_support_matrix,
-                            evidence,
+                            validation_evidence,
                             analysis,
+                            trusted_groups=trusted_groups,
                         )
                     )
                 ):
+                    recovery_results.append(
+                        (natural.atom_id, raw, "SOURCE_PARTITIONS_VALIDATED")
+                    )
                     return recovered
                 raise
-            if generation_evidence_pack is not None:
-                claim = _source_faithful_claim(
-                    claim,
-                    tuple(by_id[item.support_id] for item in claim.supports),
-                )
             return (claim,)
 
         def consume(draft: AnswerDraft) -> None:
             """只保留本地核验通过的 Claim，原文由证据回填。"""
             nonlocal generated_claim_count, generation_returned, reason
+            nonlocal attempt_linked_ids
             if draft.generation_mode != "natural":
                 raise ValidationFailed(
                     "类型化生成返回错误协议。",
@@ -2337,17 +2460,34 @@ class GroundedAnsweringService:
                     code="GENERATION_CLAIMS_INVALID",
                 )
             calls.extend(draft.provider_calls)
+            if active_request is None:
+                raise ValueError("生成草稿缺少对应的请求身份。")
+            attempt_linked_ids = _generation_attempt_allowance(
+                active_request, draft
+            )
+            if draft.prepared_packet is not None:
+                prepared_packets.append(draft.prepared_packet)
             generation_returned = True
             generated_claim_count += len(draft.natural_claims)
             if not draft.natural_claims:
                 reason = draft.reason_code or "GENERATION_ABSTAINED"
+                raw_failures.extend(
+                    (atom_id, reason) for atom_id in attempt_linked_ids
+                )
             for natural in draft.natural_claims:
                 try:
                     validated_claims = validate_natural(natural)
                 except (ValidationFailed, ValueError) as error:
+                    raw = (
+                        error.code
+                        if isinstance(error, ValidationFailed)
+                        else "VALUE_ERROR"
+                    )
+                    if (natural.atom_id, raw) not in raw_failures:
+                        raw_failures.append((natural.atom_id, raw))
                     public_reason = _natural_rejection_code(error)
                     claim_rejections[public_reason] += 1
-                    allowed_support_ids = linked_ids.get(
+                    allowed_support_ids = attempt_linked_ids.get(
                         natural.atom_id,
                         atom_support_matrix.for_atom(
                             natural.atom_id
@@ -2410,14 +2550,42 @@ class GroundedAnsweringService:
                         generation_evidence_pack=generation_evidence_pack,
                     )
                 )
-                if omitted and accepted:
+                repairable = tuple(
+                    atom_id
+                    for atom_id in omitted
+                    if _can_repair_atom(
+                        atom_id,
+                        evidence,
+                        linked_ids.get(
+                            atom_id,
+                            atom_support_matrix.for_atom(
+                                atom_id
+                            ).supporting_support_ids,
+                        ),
+                        tuple(raw_failures)
+                        if accepted
+                        else tuple(
+                            (atom_id, raw) for _atom, raw in raw_failures
+                        ),
+                        has_accepted=bool(accepted),
+                    )
+                )
+                repair_skip_reason = (
+                    None
+                    if repairable
+                    else "NON_RECOVERABLE_OR_NO_CITABLE_SOURCE"
+                    if omitted
+                    else "NO_MISSING_ATOM"
+                )
+                if repairable:
                     _raise_if_cancelled(cancellation)
                     repair_calls = 1
-                    consume(generate(omitted))
+                    consume(generate(repairable))
             except QueryCancelled as error:
                 error.provider_calls = (*calls, *error.provider_calls)
                 raise
             except RagError as error:
+                prepared_packets.extend(_failed_generation_packets(error))
                 calls.extend(
                     error.provider_calls
                     or (
@@ -2441,20 +2609,20 @@ class GroundedAnsweringService:
                 AtomAnswerShape.DEFINITION,
             }
             for atom in query_plan.atoms:
-                if (
-                    atom.answer_shape not in scalar_shapes
-                    or any(atom.atom_id in item.atom_ids for item in accepted)
+                if atom.answer_shape not in scalar_shapes or any(
+                    atom.atom_id in item.atom_ids for item in accepted
                 ):
                     continue
                 linked = set(linked_ids.get(atom.atom_id, ()))
-                for index, item in enumerate(accepted):
+                for index, shared_claim in enumerate(accepted):
                     if (
                         not all(
                             support.support_id in linked
-                            for support in item.claim.supports
+                            for support in shared_claim.claim.supports
                         )
                         or len(
-                            _terms(atom.search_text) & _terms(item.claim.text)
+                            _terms(atom.search_text)
+                            & _terms(shared_claim.claim.text)
                         )
                         < _FALLBACK_MIN_BIGRAM_OVERLAP
                     ):
@@ -2463,20 +2631,25 @@ class GroundedAnsweringService:
                         _validated_natural_claim(
                             NaturalClaim(
                                 atom_id=atom.atom_id,
-                                text=item.claim.text,
-                                supports=item.claim.supports,
+                                text=shared_claim.claim.text,
+                                supports=shared_claim.claim.supports,
                             ),
                             query_plan,
                             atom_support_matrix,
-                            evidence,
+                            _atom_validation_evidence(
+                                atom.atom_id,
+                                evidence,
+                                generation_evidence_pack.per_atom_source_certificates,
+                            ),
                             analysis,
+                            trusted_groups=trusted_groups,
                         )
                     except (ValidationFailed, ValueError):
                         continue
                     accepted[index] = ValidatedNaturalClaim(
-                        claim_id=item.claim_id,
-                        atom_ids=(*item.atom_ids, atom.atom_id),
-                        claim=item.claim,
+                        claim_id=shared_claim.claim_id,
+                        atom_ids=(*shared_claim.atom_ids, atom.atom_id),
+                        claim=shared_claim.claim,
                     )
                     break
 
@@ -2507,6 +2680,7 @@ class GroundedAnsweringService:
                 linked_ids,
                 generation_evidence_pack.complete_group_ids,
                 diagnostic_reasons=fallback_diagnostics,
+                validate_claim=validate_source_excerpt,
             )
             extractive_fallback_reason = (
                 fallback_diagnostics[-1]
@@ -2548,6 +2722,11 @@ class GroundedAnsweringService:
                         claim_rejection_diagnostics
                     ),
                     extractive_fallback_reason=extractive_fallback_reason,
+                    prepared_packets=tuple(prepared_packets),
+                    repair_attempted=repair_calls > 0,
+                    repair_skip_reason=repair_skip_reason,
+                    raw_failures=tuple(raw_failures),
+                    recovery_results=tuple(recovery_results),
                 )
 
         covered = {atom_id for item in accepted for atom_id in item.atom_ids}
@@ -2648,24 +2827,19 @@ class GroundedAnsweringService:
                 ),
                 false_limited_detected=false_limited_detected,
                 accepted_support_ids=accepted_support_ids,
-                claim_rejection_diagnostics=tuple(
-                    claim_rejection_diagnostics
-                ),
+                claim_rejection_diagnostics=tuple(claim_rejection_diagnostics),
                 extractive_fallback_reason=extractive_fallback_reason,
+                prepared_packets=tuple(prepared_packets),
+                repair_attempted=repair_calls > 0,
+                repair_skip_reason=repair_skip_reason,
+                raw_failures=tuple(raw_failures),
+                recovery_results=tuple(recovery_results),
             )
         published = list(accepted_support_ids)
-        for atom in atom_support_matrix.atoms:
-            if atom.status is not AtomStatus.CONTRADICTORY:
-                continue
-            for support_id in atom.supporting_support_ids:
-                item = by_id.get(support_id)
-                if (
-                    item is not None
-                    and item.publishable
-                    and item.source_spans
-                    and all(span.is_citable for span in item.source_spans)
-                ):
-                    published.append(support_id)
+        for matrix_atom in atom_support_matrix.atoms:
+            published.extend(
+                resolve_conflict_support_ids(matrix_atom, evidence)
+            )
         published_ids = tuple(dict.fromkeys(published))
         published_claim_count = len(
             {
@@ -2722,7 +2896,140 @@ class GroundedAnsweringService:
             accepted_support_ids=accepted_support_ids,
             claim_rejection_diagnostics=tuple(claim_rejection_diagnostics),
             extractive_fallback_reason=extractive_fallback_reason,
+            prepared_packets=tuple(prepared_packets),
+            repair_attempted=repair_calls > 0,
+            repair_skip_reason=repair_skip_reason,
+            raw_failures=tuple(raw_failures),
+            recovery_results=tuple(recovery_results),
         )
+
+
+def _validate_legacy_generation_packet(
+    request: GenerationRequest, draft: AnswerDraft
+) -> None:
+    """兼容协议同样核对发送集合；已计账的传输降级有独立 attempt。"""
+    packet = draft.prepared_packet
+    if packet is None:
+        return
+    chain = (*draft.previous_prepared_packets, packet)
+    by_id = {item.support_id: item for item in request.evidence}
+    if (
+        chain[0].attempt_id != request.attempt_id
+        or any(value.request_id != request.request_id for value in chain)
+        or len({value.attempt_id for value in chain}) != len(chain)
+        or any(
+            alias not in by_id or stable_support_key(by_id[alias]) != key
+            for value in chain
+            for alias, key in value.alias_to_support_key
+        )
+    ):
+        raise ValidationFailed(
+            "生成包身份不属于当前请求与证据集合。",
+            stage="answer.validate",
+            code="GENERATION_PACKET_IDENTITY_MISMATCH",
+        )
+    if any(
+        support.support_id not in packet.sent_support_ids
+        for claim in draft.claims
+        for support in claim.supports
+    ):
+        raise ValidationFailed(
+            "事实引用没有进入本次实际发送包。",
+            stage="answer.validate",
+            code="CLAIM_SUPPORT_NOT_SENT",
+        )
+
+
+def _generation_attempt_allowance(
+    request: GenerationRequest, draft: AnswerDraft
+) -> dict[str, tuple[str, ...]]:
+    """本次实际发送和 Atom 阅读许可取交集，拒绝跨请求别名污染。"""
+    requested = dict(request.per_atom_candidate_support_ids)
+    packet = draft.prepared_packet
+    if packet is None:
+        # 兼容离线固定 Provider；真实 adapter 必须返回发送包身份。
+        return requested
+    by_id = {item.support_id: item for item in request.evidence}
+    if (
+        packet.request_id != request.request_id
+        or packet.attempt_id != request.attempt_id
+        or any(
+            alias not in by_id or stable_support_key(by_id[alias]) != key
+            for alias, key in packet.alias_to_support_key
+        )
+        or any(
+            atom not in requested or not set(ids) <= set(requested[atom])
+            for atom, ids in packet.per_atom_support_ids
+        )
+    ):
+        raise ValidationFailed(
+            "生成包身份不属于当前请求与证据集合。",
+            stage="answer.validate",
+            code="GENERATION_PACKET_IDENTITY_MISMATCH",
+        )
+    sent = set(packet.sent_support_ids)
+    return {
+        atom: tuple(alias for alias in ids if alias in sent)
+        for atom, ids in packet.per_atom_support_ids
+    }
+
+
+def _atom_validation_evidence(
+    atom_id: str,
+    evidence: tuple[EvidenceItem, ...],
+    certificates: tuple[tuple[str, str, JsonObject], ...],
+) -> tuple[EvidenceItem, ...]:
+    """同一来源身份可以有不同 Atom 证书，核验时只应用当前关系。"""
+    if not certificates:
+        return evidence
+    by_key = {
+        key: certificate
+        for certificate_atom, key, certificate in certificates
+        if certificate_atom == atom_id
+    }
+    result: list[EvidenceItem] = []
+    for item in evidence:
+        metadata = dict(item.metadata)
+        metadata.pop("answer_support", None)
+        certificate = by_key.get(stable_support_key(item))
+        if certificate is not None:
+            metadata["answer_support"] = dict(certificate)
+        result.append(
+            item.model_copy(update={"metadata": freeze_json_object(metadata)})
+        )
+    return tuple(result)
+
+
+def _can_repair_atom(
+    atom_id: str,
+    evidence: tuple[EvidenceItem, ...],
+    allowed_support_ids: tuple[str, ...],
+    failures: tuple[tuple[str, str], ...],
+    *,
+    has_accepted: bool = False,
+) -> bool:
+    """只修组织缺项和低风险语义组织错误，硬边界失败不再试探。"""
+    recoverable = {
+        "GENERATION_ABSTAINED",
+        "GENERATION_INCOMPLETE",
+        "CLAIM_TEXT_UNSUPPORTED",
+        "CLAIM_FRAGMENT_INCOMPLETE",
+    }
+    if has_accepted:
+        recoverable.update({"CLAIM_NUMBER_UNSUPPORTED", "CLAIM_NUMBER_DRIFT"})
+    if any(
+        atom == atom_id and reason not in recoverable
+        for atom, reason in failures
+    ):
+        return False
+    return any(
+        item.support_id in allowed_support_ids
+        and item.publishable
+        and item.source_spans
+        and all(span.is_citable for span in item.source_spans)
+        and source_compatibility((item,)).compatible
+        for item in evidence
+    )
 
 
 def _direct_extract(
@@ -2991,10 +3298,13 @@ def _fallback_partial_table_row(
             < _CONTEXT_SOURCE_MIN_MATCH_CHARS
         ):
             continue
-        if len(
-            question_terms
-            & _terms(" ".join(excerpt for _, excerpt in items))
-        ) < _FALLBACK_MIN_BIGRAM_OVERLAP:
+        if (
+            len(
+                question_terms
+                & _terms(" ".join(excerpt for _, excerpt in items))
+            )
+            < _FALLBACK_MIN_BIGRAM_OVERLAP
+        ):
             continue
         eligible.append(items)
     # 行名未闭合时不以排名猜测多个候选行的关系。
@@ -3026,6 +3336,8 @@ def _fallback_source_node(
         ):
             continue
         node_id = next(iter(node_ids))
+        if node_id is None:
+            continue
         nodes.setdefault((item.document_version_id, node_id), []).append(
             (item, sentence)
         )
@@ -3033,6 +3345,9 @@ def _fallback_source_node(
         (len(_terms(" ".join(text for _, text in items)) & query_terms), items)
         for items in nodes.values()
         if len({text for _, text in items}) >= _FALLBACK_NODE_MIN_EXCERPTS
+        and source_compatibility(
+            tuple(item for item, _text in items)
+        ).compatible
     ]
     if not candidates:
         return []
@@ -3125,47 +3440,20 @@ def _fallback_continues_fragment(
     current: EvidenceItem,
     previous_excerpt: str,
     current_sentence: str,
-    complete_ids: frozenset[str],
+    _complete_ids: frozenset[str],
 ) -> bool:
-    """仅拼回同一原文节点或完整来源组中被分块截断的相邻原文。"""
+    """只有统一来源合同证明首尾相接时才恢复截断原句。"""
     if not previous_excerpt.endswith(("，", "、")):
         return False
     if _LEADING_SECTION_MARKER.match(current_sentence):
         return False
-    previous_metadata = dict(previous.metadata)
-    current_metadata = dict(current.metadata)
-    group_id = previous_metadata.get("evidence_group_id")
-    previous_nodes = {span.node_id for span in previous.source_spans}
-    current_nodes = {span.node_id for span in current.source_spans}
-    same_node = (
-        len(previous_nodes) == len(current_nodes) == 1
-        and None not in previous_nodes
-        and previous_nodes == current_nodes
-    )
-    complete_group = (
-        group_id in complete_ids
-        and group_id == current_metadata.get("evidence_group_id")
-    )
-    if (
-        not (same_node or complete_group)
-        or previous.document_version_id != current.document_version_id
-        or previous.section_id != current.section_id
-    ):
-        return False
-    previous_positions = {
-        span.source_anchor.ordinal
-        for span in previous.source_spans
-        if span.source_anchor is not None and span.is_citable
-    }
-    current_positions = {
-        span.source_anchor.ordinal
-        for span in current.source_spans
-        if span.source_anchor is not None and span.is_citable
-    }
+    decision = source_compatibility((previous, current))
     return bool(
-        previous_positions
-        and current_positions
-        and 0 <= min(current_positions) - max(previous_positions) <= 1
+        decision.compatible
+        and decision.reason == "CONTIGUOUS_NODE"
+        and len(previous.source_spans) == len(current.source_spans) == 1
+        and previous.source_spans[0].source_end_char
+        == current.source_spans[0].source_start_char
     )
 
 
@@ -3185,8 +3473,8 @@ def _fallback_complete_selected_nodes(
         if (
             not span.is_citable
             or span.node_id is None
-            or span.source_start_char is None
-            or span.source_end_char is None
+            or type(span.source_start_char) is not int
+            or type(span.source_end_char) is not int
         ):
             continue
         key = (item.document_version_id, span.node_id, span.structural_path)
@@ -3222,11 +3510,20 @@ def _fallback_complete_selected_nodes(
             continue
         left = current
         right = current
-        while left > 0 and ordered[left - 1][3] == ordered[left][2]:
+        while (
+            left > 0
+            and ordered[left - 1][3] == ordered[left][2]
+            and source_compatibility(
+                (ordered[left - 1][0], ordered[left][0])
+            ).compatible
+        ):
             left -= 1
         while (
             right + 1 < len(ordered)
             and ordered[right][3] == ordered[right + 1][2]
+            and source_compatibility(
+                (ordered[right][0], ordered[right + 1][0])
+            ).compatible
         ):
             right += 1
         for peer, excerpt, _, _ in ordered[left : right + 1]:
@@ -3244,6 +3541,7 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
     *,
     require_named_row: bool = False,
     diagnostic_reasons: list[str] | None = None,
+    validate_claim: Callable[[AnswerClaim], bool] | None = None,
 ) -> tuple[str, tuple[str, ...], frozenset[str]] | None:
     """模型未形成可发布事实时，仅展示相关且可引用的来源原句。
 
@@ -3254,6 +3552,7 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
         complete_group_ids: 已确认完整的来源组。
         require_named_row: 是否只允许带明确行名的完整表格行。
         diagnostic_reasons: 可选的 SAFE 失败原因接收列表，不含正文。
+        validate_claim: 应用最终事实门；未通过的摘录不得进入渲染器。
 
     Returns:
         可发布原句、Support ID 与覆盖 Atom；无安全结果时返回 ``None``。
@@ -3351,7 +3650,8 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
                     )
                     or _longest_common_han_run(
                         plan.original_query, item.citation_text
-                    ) >= _FALLBACK_MIN_QUESTION_ANCHOR_CHARS + 1
+                    )
+                    >= _FALLBACK_MIN_QUESTION_ANCHOR_CHARS + 1
                     for atom in plan.atoms
                     if atom.answer_shape
                     in {
@@ -3455,7 +3755,10 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
             source_groups = {
                 group_id
                 for item, _ in selected
-                if (group_id := dict(item.metadata).get("evidence_group_id"))
+                if isinstance(
+                    group_id := dict(item.metadata).get("evidence_group_id"),
+                    str,
+                )
                 and dict(item.metadata).get("evidence_group_type")
                 in {"LIST_GROUP", "PROCEDURE_GROUP"}
             }
@@ -3692,13 +3995,17 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
         if len(plan.atoms) == 1
         else None
     )
-    if focus_match is not None and selected and not any(
-        _query_focus_in_source(focus_match["focus"], sentence)
-        for _, sentence in selected
+    if (
+        focus_match is not None
+        and selected
+        and not any(
+            _query_focus_in_source(focus_match["focus"], sentence)
+            for _, sentence in selected
+        )
     ):
         # 是非问已有同版、同动作原句时，不用仅同主题的摘录代答。
         selected_versions = {item.document_version_id for item, _ in selected}
-        focused = [
+        focused_sources = [
             (item, sentence.strip())
             for item in evidence
             if item.document_version_id in selected_versions
@@ -3710,10 +4017,11 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
             if _query_focus_in_source(focus_match["focus"], sentence)
         ]
         unique_focused = {
-            (item.document_version_id, sentence) for item, sentence in focused
+            (item.document_version_id, sentence)
+            for item, sentence in focused_sources
         }
         if len(unique_focused) == 1:
-            selected = [focused[0]]
+            selected = [focused_sources[0]]
     selected.sort(
         key=lambda pair: min(
             (
@@ -3733,6 +4041,30 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
     pending_item: EvidenceItem | None = None
     pending_excerpt = ""
     pending_ids: list[str] = []
+    pending_supports: list[ClaimSupport] = []
+
+    def emit_excerpt() -> bool:
+        """先冻结最终事实与引文，再执行校验并只做格式化。
+
+        Args:
+            无参数；读取当前有界原文及独立引用。
+
+        Returns:
+            摘录通过核验并进入格式化结果时为 True。
+
+        """
+        if not pending_ids or pending_excerpt.endswith(("，", "、")):
+            return False
+        claim = AnswerClaim(
+            text=pending_excerpt, supports=tuple(pending_supports)
+        )
+        if validate_claim is not None and not validate_claim(claim):
+            reject("FALLBACK_CLAIM_NOT_SUPPORTED")
+            return False
+        refs = " ".join(f"[{support_id}]" for support_id in pending_ids)
+        lines.append(f"- {claim.text} {refs}")
+        return True
+
     for item, sentence in selected:
         excerpt = _LEADING_SECTION_MARKER.sub("", sentence).strip()
         excerpt_key = (item.document_version_id, excerpt)
@@ -3744,11 +4076,11 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
         ):
             pending_excerpt += excerpt
             pending_ids.append(item.support_id)
+            pending_supports.append(
+                ClaimSupport(support_id=item.support_id, quote=sentence)
+            )
         else:
-            if pending_ids and not pending_excerpt.endswith(("，", "、")):
-                refs = " ".join(f"[{support_id}]" for support_id in pending_ids)
-                lines.append(f"- {pending_excerpt} {refs}")
-            elif pending_ids:
+            if not emit_excerpt():
                 ids = [
                     support_id
                     for support_id in ids
@@ -3756,22 +4088,21 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
                 ]
             pending_excerpt = excerpt
             pending_ids = [item.support_id]
+            pending_supports = [
+                ClaimSupport(support_id=item.support_id, quote=sentence)
+            ]
         pending_item = item
         ids.append(item.support_id)
-    if pending_ids and not pending_excerpt.endswith(("，", "、")):
-        refs = " ".join(f"[{support_id}]" for support_id in pending_ids)
-        lines.append(f"- {pending_excerpt} {refs}")
-    elif pending_ids:
+    if not emit_excerpt():
         ids = [
             support_id for support_id in ids if support_id not in pending_ids
         ]
     if not ids:
         reject("NO_CITABLE_COMPLETE_EXCERPT")
         return None
-    if (
-        not (named_row_selected or partial_table_selected)
-        and not _fallback_has_question_anchor(plan.original_query, selected)
-    ):
+    if not (
+        named_row_selected or partial_table_selected
+    ) and not _fallback_has_question_anchor(plan.original_query, selected):
         reject("QUESTION_ANCHOR_MISSING")
         return None
     covered_atoms = frozenset(
@@ -3963,45 +4294,75 @@ def _validate_yes_no_source_focus(
 
 def _validate_natural_support_structure(
     units: tuple[EvidenceItem, ...],
+    *,
+    trusted_groups: tuple[EvidenceGroup, ...] = (),
 ) -> None:
-    """单条事实的多个引用必须属于同一结构组或认证表格交点。"""
-    if len(units) <= 1:
-        return
-    group_ids = {dict(item.metadata).get("evidence_group_id") for item in units}
-    certificates = tuple(
-        dict(item.metadata).get("answer_support") for item in units
-    )
-    same_group = len(group_ids) == 1 and None not in group_ids
-    same_table_fact = (
-        all(isinstance(item, dict) for item in certificates)
-        and all(item == certificates[0] for item in certificates)
-        and certificates[0].get("support_reason") == "TABLE_INTERSECTION"
-    )
-    if not same_group and not same_table_fact:
+    """结构相容不表示事实支持；语义和 Atom 边界仍须另行核验。"""
+    decision = source_compatibility(units, trusted_groups=trusted_groups)
+    if not decision.compatible:
         raise ValidationFailed(
             "单条事实不能拼接互不相属的证据。",
             stage="answer.validate",
             code="CLAIM_SOURCE_MISMATCH",
-            details=(("validator", "_validate_natural_support_structure"),),
+            details=(
+                ("validator", "_validate_natural_support_structure"),
+                ("source_reason", decision.reason),
+            ),
         )
 
 
-def _complete_source_sentence(source: str, quote: str) -> str:
-    """把模型选中的逐字片段扩展到同一来源中的完整原句。"""
-    position = source.find(quote)
-    if position < 0:
-        return quote.strip()
-    previous = tuple(_SOURCE_SENTENCE_END.finditer(source, 0, position))
+def _complete_source_sentence(
+    source: str,
+    quote: str,
+    *,
+    quote_start: int | None = None,
+) -> str:
+    """在已证明的位置恢复有界原句，完整句末和段落边界保持幂等。"""
+    positions = tuple(
+        match.start() for match in re.finditer(re.escape(quote), source)
+    )
+    if (
+        not quote
+        or not positions
+        or (
+            quote_start is not None
+            and (type(quote_start) is not int or quote_start not in positions)
+        )
+    ):
+        raise ValidationFailed(
+            "原句恢复缺少准确逐字引文位置。",
+            stage="answer.validate",
+            code="CLAIM_QUOTE_INVALID",
+        )
+    if quote_start is None and len(positions) != 1:
+        raise ValidationFailed(
+            "重复引文缺少来源位置证明。",
+            stage="answer.validate",
+            code="CLAIM_QUOTE_AMBIGUOUS",
+        )
+    position = positions[0] if quote_start is None else quote_start
+    boundary = re.compile(r"[。！？!?；;][\u201d\u2019\"'）)】\]]*|[\r\n]+")
+    previous = tuple(boundary.finditer(source, 0, position))
     start = previous[-1].end() if previous else 0
-    ending = _SOURCE_SENTENCE_END.search(source, position + len(quote))
-    end = ending.end() if ending else len(source)
+    quoted_end = position + len(quote.rstrip())
+    already_ended = re.search(
+        r"[。！？!?；;][\u201d\u2019\"'）)】\]]*$", quote.rstrip()
+    )
+    if already_ended is not None or quote.endswith(("\n", "\r")):
+        end = quoted_end
+        closing = re.match(r"[\u201d\u2019\"'）)】\]]+", source[end:])
+        if closing is not None:
+            end += closing.end()
+    else:
+        ending = boundary.search(source, quoted_end)
+        end = ending.end() if ending else len(source)
     return source[start:end].strip()
 
 
 def _source_faithful_claim(
     claim: AnswerClaim, units: tuple[EvidenceItem, ...]
 ) -> AnswerClaim:
-    """发布被引用的完整原句，避免模型只回显问题或裁掉事实主体。"""
+    """构造待重新核验的原句草稿；本函数的结果不得直接发布。"""
     supports = tuple(
         ClaimSupport(
             support_id=support.support_id,
@@ -4033,18 +4394,18 @@ def _validate_natural_atom_support_scope(
             "自然事实引用了未分配给当前 Atom 的来源。",
             stage="answer.validate",
             code="CLAIM_SUPPORT_OUTSIDE_ATOM",
-            details=(
-                ("validator", "_validate_natural_atom_support_scope"),
-            ),
+            details=(("validator", "_validate_natural_atom_support_scope"),),
         )
 
 
-def _validated_source_faithful_claim(
+def _validated_source_faithful_claim(  # noqa: PLR0913
     natural: NaturalClaim,
     plan: QueryPlan,
     matrix: AtomSupportMatrix,
     evidence: tuple[EvidenceItem, ...],
     analysis: QueryAnalysis | None,
+    *,
+    trusted_groups: tuple[EvidenceGroup, ...] = (),
 ) -> AnswerClaim:
     """只为低风险语义改写恢复原句，并重新执行全部安全校验。"""
     by_id = {item.support_id: item for item in evidence}
@@ -4069,33 +4430,38 @@ def _validated_source_faithful_claim(
         matrix,
         evidence,
         analysis,
+        trusted_groups=trusted_groups,
     )
-    return _source_faithful_claim(
-        validated,
-        tuple(by_id[item.support_id] for item in validated.supports),
-    )
+    return validated
 
 
-def _validated_source_group_claims(
+def _validated_source_group_claims(  # noqa: PLR0913
     natural: NaturalClaim,
     plan: QueryPlan,
     matrix: AtomSupportMatrix,
     evidence: tuple[EvidenceItem, ...],
     analysis: QueryAnalysis | None,
+    *,
+    trusted_groups: tuple[EvidenceGroup, ...] = (),
 ) -> tuple[AnswerClaim, ...]:
     """把模型混合的来源组拆开，各自恢复原句并独立核验。"""
     by_id = {item.support_id: item for item in evidence}
-    grouped: dict[tuple[object, ...], list[ClaimSupport]] = {}
+    selected: list[EvidenceItem] = []
     for support in natural.supports:
         item = by_id.get(support.support_id)
         if item is None:
             return ()
-        groups = _source_groups(item)
-        if len(groups) != 1:
-            return ()
-        grouped.setdefault(next(iter(groups)), []).append(support)
+        selected.append(item)
     recovered: list[AnswerClaim] = []
-    for supports in grouped.values():
+    for decision, units in compatible_partitions(
+        tuple(selected), trusted_groups=trusted_groups
+    ):
+        if not decision.compatible:
+            continue
+        ids = {item.support_id for item in units}
+        supports = tuple(
+            support for support in natural.supports if support.support_id in ids
+        )
         candidate = natural.model_copy(update={"supports": tuple(supports)})
         try:
             claim = _validated_source_faithful_claim(
@@ -4104,6 +4470,7 @@ def _validated_source_group_claims(
                 matrix,
                 evidence,
                 analysis,
+                trusted_groups=trusted_groups,
             )
         except (ValidationFailed, ValueError):
             continue
@@ -4112,12 +4479,14 @@ def _validated_source_group_claims(
     return tuple(recovered)
 
 
-def _validated_natural_claim(
+def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
     natural: NaturalClaim,
     plan: QueryPlan,
     matrix: AtomSupportMatrix,
     evidence: tuple[EvidenceItem, ...],
     analysis: QueryAnalysis | None,
+    *,
+    trusted_groups: tuple[EvidenceGroup, ...] = (),
 ) -> AnswerClaim:
     """核对逐原子来源后复用既有事实与引用安全门。"""
     atoms = {atom.atom_id: atom for atom in plan.atoms}
@@ -4146,7 +4515,7 @@ def _validated_natural_claim(
     _validate_contextual_source_scope(plan, evidence, units)
     _validate_yes_no_source_focus(plan, evidence, units)
     _validate_short_question_source_anchor(plan, evidence, units)
-    _validate_natural_support_structure(units)
+    _validate_natural_support_structure(units, trusted_groups=trusted_groups)
     claim = AnswerClaim(
         text=natural.text,
         supports=natural.supports,
@@ -4165,6 +4534,21 @@ def _validated_natural_claim(
             code="CLAIM_UNKNOWN_SUPPORT",
         )
     source_text = "\n".join(item.quote for item in claim.supports)
+    if (
+        natural.text.strip() == source_text.strip()
+        and not _SOURCE_SENTENCE_END.search(natural.text)
+        and not re.search(_ACTION_VERB, natural.text)
+        and not _number_tokens(natural.text)
+        and any(
+            support.quote != item.citation_text
+            for support, item in zip(natural.supports, units, strict=True)
+        )
+    ):
+        raise ValidationFailed(
+            "模型只返回不能独立构成事实的原句片段。",
+            stage="answer.validate",
+            code="CLAIM_FRAGMENT_INCOMPLETE",
+        )
     claim_subject = _leading_explicit_subject(natural.text)
     if (
         claim_subject is not None
@@ -4185,34 +4569,24 @@ def _validated_natural_claim(
         and certificate.get("status") == "SUPPORTED"
         for item in atom_units
     )
-    group_ids = {
-        dict(item.metadata).get("evidence_group_id") for item in atom_units
-    }
+    certified_group = certified_source_group(atom_units, trusted_groups)
     group_certified = bool(
         not direct_relation
-        and len(group_ids) == 1
-        and next(iter(group_ids)) in support.relation_certified_group_ids
-        and all(
-            dict(item.metadata).get("group_complete") is True
-            for item in atom_units
-        )
+        and certified_group is not None
+        and certified_group.group_id in support.relation_certified_group_ids
     )
     if group_certified and (
-        not any(
-            dict(item.metadata).get("group_member_index") == 1
-            for item in atom_units
-        )
-        or not any(
-            dict(item.metadata).get("group_member_index", 0) > 1
-            for item in atom_units
-        )
+        not any(_structural_lead_in(item) for item in atom_units)
+        or not any(not _structural_lead_in(item) for item in atom_units)
     ):
         raise ValidationFailed(
             "结构事实缺少同组关系导语的引用。",
             stage="answer.validate",
             code="CLAIM_RELATION_UNSUPPORTED",
         )
-    _validate_natural_entailment(claim)
+    _validate_natural_entailment(
+        claim, source_text=_claim_source_text(claim, units)
+    )
     source_labels = "\n".join(
         " ".join(
             (
@@ -4286,6 +4660,7 @@ def _validated_natural_claim(
         evidence,
         analysis=atom_analysis,
         complete=False,
+        trusted_groups=trusted_groups,
     )
     return claim
 
@@ -4332,12 +4707,159 @@ def _modality_class(text: str) -> str | None:
     )
 
 
+def _claim_source_text(
+    claim: AnswerClaim, units: tuple[EvidenceItem, ...]
+) -> str:
+    """有原文位置证明时按源序核验半句，引用仍保留各自的 Support。"""
+    decision = source_compatibility(units)
+    supports = {support.support_id: support for support in claim.supports}
+    by_id = {item.support_id: item for item in units}
+    if decision.reason != "CONTIGUOUS_NODE" or any(
+        supports[item.support_id].quote != item.citation_text for item in units
+    ):
+        return "\n".join(support.quote for support in claim.supports)
+    parts: list[str] = []
+    previous_end = 0
+    for support_id in decision.ordered_support_ids:
+        item = by_id[support_id]
+        span = item.source_spans[0]
+        if span.source_start_char is None or span.source_end_char is None:
+            return "\n".join(support.quote for support in claim.supports)
+        overlap = max(0, previous_end - span.source_start_char) if parts else 0
+        parts.append(supports[support_id].quote[overlap:])
+        previous_end = max(previous_end, span.source_end_char)
+    return "".join(parts)
+
+
+def _condition_labels(text: str) -> set[str]:
+    """保留条件正文和前后顺序，统一等价的长短时间连接词。"""
+    labels = {
+        match["scope"] or match["temporal"]
+        for match in _CONDITION_SCOPE.finditer(text)
+    }
+    labels.update(
+        match["scope"]
+        + match["end"].replace("之前", "前").replace("之后", "后")
+        for match in _BOUND_CONDITION.finditer(text)
+    )
+    return {normalize_semantic_text(label) for label in labels}
+
+
+def _validate_bound_scope(text: str, source: str) -> None:
+    """同一段内不同阶段和条件的动作不能互借，条件也不能被删去。"""
+    source_sentences = tuple(
+        value.strip()
+        for value in re.split(r"[。；;！？!?\n]", source)
+        if value.strip()
+    )
+    for sentence in re.split(r"[。；;！？!?\n]", text):
+        if not sentence.strip():
+            continue
+        stages = {match["scope"] for match in _STAGE_SCOPE.finditer(sentence)}
+        if stages:
+            scoped = tuple(
+                candidate
+                for candidate in source_sentences
+                if all(stage in candidate for stage in stages)
+            )
+            if not scoped:
+                raise ValidationFailed(
+                    "事实阶段没有对应来源。",
+                    stage="answer.validate",
+                    code="CLAIM_STAGE_UNSUPPORTED",
+                )
+            for clause, subject in _clauses_with_subject(sentence):
+                if not re.search(_ACTION_VERB, clause):
+                    continue
+                try:
+                    content = _terms(
+                        re.sub(r"负责|承担|包括|包含", "", _predicate(clause))
+                    )
+                    scoped_content = set().union(
+                        *(
+                            _terms(
+                                re.sub(
+                                    r"负责|承担|包括|包含",
+                                    "",
+                                    _predicate(value),
+                                )
+                            )
+                            for candidate in scoped
+                            for value, _owner in _clauses_with_subject(
+                                candidate
+                            )
+                            if re.search(_ACTION_VERB, value)
+                        )
+                    )
+                    if content and not content.intersection(scoped_content):
+                        raise ValidationFailed(
+                            "阶段中没有对应动作内容。",
+                            stage="answer.validate",
+                            code="CLAIM_STAGE_UNSUPPORTED",
+                        )
+                    _validate_clause_support(
+                        clause,
+                        subject,
+                        _ClaimSourceGroup(
+                            "\n".join(scoped), frozenset(), frozenset()
+                        ),
+                    )
+                except ValidationFailed as error:
+                    raise ValidationFailed(
+                        "事实借用了另一阶段的动作。",
+                        stage="answer.validate",
+                        code="CLAIM_STAGE_UNSUPPORTED",
+                    ) from error
+        relevant = _best_negation_sources(sentence, list(source_sentences))
+        if not relevant:
+            continue
+        required = set.intersection(
+            *(_condition_labels(value) for value in relevant)
+        )
+        normalized = (
+            normalize_semantic_text(sentence)
+            .replace("之后", "后")
+            .replace("之前", "前")
+        )
+        if any(condition not in normalized for condition in required):
+            raise ValidationFailed(
+                "事实遗漏了对应动作的适用条件或先后顺序。",
+                stage="answer.validate",
+                code="CLAIM_CONDITION_UNSUPPORTED",
+            )
+
+
+def _validate_owned_action_content(
+    text: str,
+    claim_subject: str,
+    source_clauses: list[tuple[str, str | None]],
+) -> None:
+    """共同的“负责/包括”不能替代每个主体独有的动作内容。"""
+    owned_content = set().union(
+        *(
+            _terms(re.sub(r"负责|承担|包括|包含", "", _predicate(clause)))
+            for clause, subject in source_clauses
+            if subject and _same_subject(subject, claim_subject)
+        )
+    )
+    claim_content = _terms(re.sub(r"负责|承担|包括|包含", "", _predicate(text)))
+    if claim_content and not claim_content.intersection(owned_content):
+        raise ValidationFailed(
+            "事实动作内容仅属于另一个主体。",
+            stage="answer.validate",
+            code="CLAIM_RELATION_UNSUPPORTED",
+        )
+
+
 def _validate_natural_entailment(
     claim: AnswerClaim,
+    *,
+    source_text: str | None = None,
 ) -> None:
     """核对 Claim 的动作、条件与逻辑算子是否由所选引文支持。"""
     text = claim.text
-    source = "\n".join(item.quote for item in claim.supports)
+    source = source_text or "\n".join(item.quote for item in claim.supports)
+    _validate_bound_scope(text, source)
     claim_subject = _leading_explicit_subject(text)
     source_with_subjects = _clauses_with_subject(source)
     source_clauses = [clause for clause, _subject in source_with_subjects]
@@ -4396,6 +4918,9 @@ def _validate_natural_entailment(
                 stage="answer.validate",
                 code="CLAIM_RELATION_UNSUPPORTED",
             )
+        _validate_owned_action_content(
+            text, claim_subject, source_with_subjects
+        )
     matched = _best_negation_sources(text, source_clauses) or source_clauses
     claim_modality = _modality_class(text)
     if claim_modality is not None and not any(
@@ -4518,6 +5043,12 @@ def _natural_atom_complete(  # noqa: PLR0911, PLR0913
     generation_evidence_pack: GenerationEvidencePack | None = None,
 ) -> bool:
     """列表和流程还须通过来源集合完整性门，不能只看相关 Claim。"""
+    if generation_evidence_pack is not None:
+        evidence = _atom_validation_evidence(
+            atom.atom_id,
+            evidence,
+            generation_evidence_pack.per_atom_source_certificates,
+        )
     atom_claims = tuple(
         item.claim for item in claims if atom.atom_id in item.atom_ids
     )
@@ -4549,8 +5080,22 @@ def _natural_atom_complete(  # noqa: PLR0911, PLR0913
             support.supporting_support_ids,
         )
     )
-    group_complete = _structural_member_coverage(atom_evidence, atom_claims)
-    if generation_evidence_pack is not None and group_complete is not True:
+    group_complete = _structural_member_coverage(
+        atom_evidence,
+        atom_claims,
+        trusted_groups=(
+            generation_evidence_pack.trusted_source_groups
+            if generation_evidence_pack is not None
+            else ()
+        ),
+    )
+    if (
+        generation_evidence_pack is not None
+        and group_complete is not True
+        and not _certified_node_answer_complete(
+            atom, atom_evidence, atom_claims
+        )
+    ):
         return False
     if group_complete is False:
         return False
@@ -4582,8 +5127,10 @@ def _natural_atom_complete(  # noqa: PLR0911, PLR0913
 def _structural_member_coverage(
     evidence: tuple[EvidenceItem, ...],
     claims: tuple[AnswerClaim, ...],
+    *,
+    trusted_groups: tuple[EvidenceGroup, ...] = (),
 ) -> bool | None:
-    """完整组按来源成员核对，不把导语当作列表事实。"""
+    """组成员、可引用跨度和所问事实分别核对，不相信 group_complete。"""
     by_id = {item.support_id: item for item in evidence}
     cited_support_ids = {
         item.support_id
@@ -4591,43 +5138,142 @@ def _structural_member_coverage(
         for support in claim.supports
         if (item := by_id.get(support.support_id)) is not None
     }
-    groups: dict[str, dict[str, EvidenceItem]] = {}
-    expected_counts: dict[str, int] = {}
-    saw_group = False
-    for item in evidence:
-        metadata = dict(item.metadata)
-        group_id = metadata.get("evidence_group_id")
-        member_count = metadata.get("group_member_count")
-        if not isinstance(group_id, str) or not isinstance(member_count, int):
+    if not trusted_groups:
+        return (
+            False
+            if any(
+                dict(item.metadata).get("evidence_group_id")
+                for item in evidence
+            )
+            else None
+        )
+    cited = tuple(
+        item for item in evidence if item.support_id in cited_support_ids
+    )
+    for group in trusted_groups:
+        if not source_group_covered(
+            evidence, group
+        ) or not source_group_covered(cited, group):
             continue
-        saw_group = True
-        if metadata.get("group_complete") is not True:
-            continue
-        groups.setdefault(group_id, {})[item.support_id] = item
-        expected_counts[group_id] = member_count
-    if not groups:
-        return False if saw_group else None
-    for group_id, members in groups.items():
-        if (
-            len({item.chunk_id for item in members.values()})
-            != (expected_counts[group_id])
+        required = tuple(
+            item
+            for item in evidence
+            if source_group_contains(item, group)
+            and not _structural_lead_in(item)
+        )
+        if required and all(
+            _source_fact_content_covered(item, claims) for item in required
         ):
-            continue
-        required = {
-            support_id
-            for support_id, item in members.items()
-            if not _structural_lead_in(item)
-        }
-        if required and required <= cited_support_ids:
             return True
     return False
 
 
+def _source_fact_content_covered(
+    item: EvidenceItem, claims: tuple[AnswerClaim, ...]
+) -> bool:
+    """完整性反向核对每个原文事实，不能用整段引用掩盖只回答一项。"""
+    cited_claims = tuple(
+        claim
+        for claim in claims
+        if any(
+            support.support_id == item.support_id
+            and support.quote == item.citation_text
+            for support in claim.supports
+        )
+    )
+    if not cited_claims:
+        return False
+    answer = "\n".join(claim.text for claim in cited_claims)
+    for source_clause, _subject in _clauses_with_subject(item.citation_text):
+        clause = _LEADING_LIST_MARKER.sub("", source_clause)
+        terms = _terms(_predicate(clause))
+        if (
+            terms
+            and len(terms & _terms(answer)) / len(terms)
+            < _MIN_COMPLETE_FACT_BIGRAM_RATIO
+        ) or not _number_tokens(clause) <= _number_tokens(answer):
+            return False
+        if set(re.findall(_DUTY_ACTION_VERB, clause)) - set(
+            re.findall(_DUTY_ACTION_VERB, answer)
+        ):
+            return False
+    return True
+
+
+def _certified_node_answer_complete(
+    atom: QueryAtom,
+    evidence: tuple[EvidenceItem, ...],
+    claims: tuple[AnswerClaim, ...],
+) -> bool:
+    """无组的完整节点须有独立问题范围证书，不能自动代表整份职责表。"""
+    if not evidence or not all(
+        _source_fact_content_covered(item, claims) for item in evidence
+    ):
+        return False
+    nodes = {span.node_id for item in evidence for span in item.source_spans}
+    for item in evidence:
+        certificate = dict(item.metadata).get("answer_support")
+        if not isinstance(certificate, dict):
+            return False
+        required = certificate.get("supporting_span_ids")
+        if (
+            certificate.get("status") != "SUPPORTED"
+            or certificate.get("query_target") != atom.target
+            or certificate.get("answer_type") != atom.answer_shape.value
+            or certificate.get("support_reason")
+            not in {
+                "SECTION_HEADING_BODY",
+                "TABLE_ROW_CONTENT",
+                "STRUCTURED_LIST_RELATION",
+            }
+            or not isinstance(required, list)
+            or not required
+            or set(required) != nodes
+        ):
+            return False
+    for node in nodes:
+        units = tuple(
+            item
+            for item in evidence
+            if any(span.node_id == node for span in item.source_spans)
+        )
+        if not source_compatibility(units).compatible:
+            return False
+        spans = tuple(span for item in units for span in item.source_spans)
+        original_ends = {
+            span.source_anchor.source_end_char
+            for span in spans
+            if span.source_anchor is not None
+        }
+        starts = tuple(
+            span.source_start_char
+            for span in spans
+            if type(span.source_start_char) is int
+        )
+        ends = tuple(
+            span.source_end_char
+            for span in spans
+            if type(span.source_end_char) is int
+        )
+        if (
+            None in original_ends
+            or len(original_ends) != 1
+            or not all(
+                type(span.source_start_char) is int
+                and type(span.source_end_char) is int
+                for span in spans
+            )
+            or not starts
+            or not ends
+            or min(starts) != 0
+            or max(ends) != next(iter(original_ends))
+        ):
+            return False
+    return True
+
+
 def _structural_lead_in(item: EvidenceItem) -> bool:
     """只豁免完整组的引导句，不豁免编号事实成员。"""
-    metadata = dict(item.metadata)
-    if metadata.get("group_member_index") != 1:
-        return False
     text = item.citation_text.strip()
     if _LEADING_LIST_MARKER.match(text):
         return False

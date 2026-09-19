@@ -292,7 +292,7 @@ def pack_evidence_groups_with_diagnostics(  # noqa: PLR0913
         ValueError: 任一预算不是正数。
 
     """
-    limits = (token_budget, max_groups, max_chunks)
+    limits: tuple[int, ...] = (token_budget, max_groups, max_chunks)
     if per_document_cap is not None:
         limits = (*limits, per_document_cap)
     if per_section_cap is not None:
@@ -483,7 +483,7 @@ def _table_groups(
                 rerank_text_char_limit=rerank_text_char_limit,
             ),
         )
-    if not header_rows and _has_short_column_headers(rows.get(0, ())):
+    if not header_rows and _has_short_column_headers(rows.get(0, [])):
         header_rows.add(0)
     headers = tuple(
         item for row in sorted(header_rows) for item in rows.get(row, ())
@@ -652,9 +652,7 @@ def _source_order(member: RankedChunk) -> tuple[int, int, int, str]:
     positions = (
         (
             span.source_anchor.ordinal,
-            span.source_start_char
-            if span.source_start_char is not None
-            else 0,
+            span.source_start_char if span.source_start_char is not None else 0,
         )
         for span in member.hydrated.chunk.source_spans
         if span.source_anchor is not None and span.is_citable

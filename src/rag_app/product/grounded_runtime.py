@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from threading import RLock
 from time import perf_counter
-from typing import TypeVar
+from typing import TypedDict, TypeVar
 
 from pydantic import (
     Field,
@@ -93,10 +93,22 @@ _MAX_INTERPRET_FIELD_CHARS = 512
 _MAX_GROUNDED_INPUT_TOKENS = 6_144
 # 内网演示模型的上下文窗口同时容纳输入与输出。回答采用结构化、逐条的
 # claim，固定为输出保留 1536 token；输入预算限制在 6144 token，为 8K
-# 上下文窗口留出固定余量。证据候选由 Provider adapter 按重排顺序裁剪，
-# 不改变引用校验所能看到的完整有界证据包。
+# 上下文窗口留出固定余量。Provider 在发送前固定 PreparedPacket；
+# 模型引用的准入集合严格限制为当前尝试实际发送且对应 Atom 可读的来源。
 _MAX_GROUNDED_OUTPUT_TOKENS = 1536
 _RotationResult = TypeVar("_RotationResult")
+
+
+class _PlannerTelemetry(TypedDict):
+    """记录既有 Planner 计量字段，不让字典展开模糊事实类型。"""
+
+    planner_latency_ms: int
+    planner_input_tokens: int | None
+    planner_output_tokens: int | None
+    planner_finish_reason: str | None
+    planner_transport_timeout_ms: int
+
+
 _LOW_CONFIDENCE_RULE_REASONS = frozenset(
     {
         "AMBIGUOUS_ACTION_QUESTION_SYNTAX",
@@ -504,7 +516,7 @@ class ProductGroundedModel:
                 failure_category=error.code,
             )
         mode = (
-            self.adapter.config.structured_output_mode
+            self.adapter.compatible_config.structured_output_mode
             if isinstance(self.adapter, OpenAICompatibleChatAdapter)
             else "none"
         )
@@ -592,7 +604,7 @@ class ProductGroundedModel:
                 )
             calls = (completion.call,)
             usage = getattr(completion, "usage", None)
-            telemetry = {
+            telemetry: _PlannerTelemetry = {
                 "planner_latency_ms": round((perf_counter() - started) * 1000),
                 "planner_input_tokens": getattr(usage, "prompt_tokens", None),
                 "planner_output_tokens": getattr(
@@ -625,9 +637,7 @@ class ProductGroundedModel:
                 location = ".".join(str(part) for part in first["loc"])
                 shape = ""
                 if isinstance(payload_data, dict):
-                    raw_atoms = payload_data.get(
-                        "a", payload_data.get("atoms")
-                    )
+                    raw_atoms = payload_data.get("a", payload_data.get("atoms"))
                     raw_intent = payload_data.get(
                         "i", payload_data.get("intent")
                     )

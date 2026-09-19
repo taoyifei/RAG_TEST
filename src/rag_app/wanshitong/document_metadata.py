@@ -236,7 +236,11 @@ def build_document_metadata(  # noqa: PLR0913
         project_id=project_id,
         knowledge_base_id=knowledge_base_id,
         created_at=created_at,
-        updated_at=existing.updated_at if unchanged else timestamp,
+        updated_at=(
+            existing.updated_at
+            if unchanged and existing is not None
+            else timestamp
+        ),
     )
 
 

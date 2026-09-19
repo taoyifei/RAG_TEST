@@ -71,21 +71,29 @@ class ConfidenceEvaluator:
         )
         exact = float(
             any(
-                contribution.channel == "exact"
+                channel == "exact"
                 for item in supported_candidates
-                for contribution in item.contributions
+                for channel in item.retrieval_channels
             )
         )
         lexical = float(
             any(
-                contribution.channel.startswith("lexical")
+                channel.startswith("lexical")
                 for item in supported_candidates
-                for contribution in item.contributions
+                for channel in item.retrieval_channels
             )
         )
         agreement = float(
             max(
-                (len(item.contributions) for item in supported_candidates),
+                (
+                    len(
+                        {
+                            channel.split(":", 1)[0]
+                            for channel in item.retrieval_channels
+                        }
+                    )
+                    for item in supported_candidates
+                ),
                 default=0,
             )
         )
@@ -110,9 +118,9 @@ class ConfidenceEvaluator:
             "METADATA_ONLY" in item.quality_flags for item in answer_support_set
         )
         dense_only = any(
-            contribution.channel.startswith("dense:")
+            channel.startswith("dense:")
             for item in supported_candidates
-            for contribution in item.contributions
+            for channel in item.retrieval_channels
         ) and not (exact or lexical)
         semantic_context = EvidenceSelectionContext(
             analysis=analysis,
@@ -135,10 +143,10 @@ class ConfidenceEvaluator:
             item.hydrated.chunk.chunk_id
             for item in supported_candidates
             if any(
-                contribution.channel == "exact"
-                or contribution.channel.startswith("lexical")
-                or contribution.channel.startswith("structural:")
-                for contribution in item.contributions
+                channel == "exact"
+                or channel.startswith("lexical")
+                or channel.split(":", 1)[0] == "structural"
+                for channel in item.retrieval_channels
             )
         }
         qualified_support = _qualified_support(

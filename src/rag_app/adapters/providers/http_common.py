@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC
 from email.utils import parsedate_to_datetime
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypedDict, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -34,6 +34,14 @@ from rag_app.core.models.common import freeze_json_object
 from rag_app.core.ports import CancellationPort
 
 _DEFAULT_RETRY_STATUSES = frozenset({408, 429, 502, 503, 504})
+
+
+class _RequestTimeoutOptions(TypedDict, total=False):
+    """仅显式配置时传递请求超时，保留 Client 的默认时限。"""
+
+    timeout: httpx.Timeout
+
+
 _AUTH_OR_MODEL_STATUSES = frozenset({401, 403, 404})
 _INPUT_INVALID_STATUSES = frozenset({400, 422})
 _HTTP_RATE_LIMITED = 429
@@ -244,6 +252,9 @@ class ProviderHttpClient:
         encountered_rate_limit = False
         # 有显式时限的轻量 Planner 只发送一次，避免重试放大整体时延。
         max_attempts = 1 if timeout_seconds is not None else self._max_attempts
+        timeout_options: _RequestTimeoutOptions = {}
+        if timeout_seconds is not None:
+            timeout_options["timeout"] = httpx.Timeout(timeout_seconds)
         for attempt in range(1, max_attempts + 1):
             attempt_started = self._monotonic()
             try:
@@ -267,11 +278,7 @@ class ProviderHttpClient:
                             else {}
                         ),
                     },
-                    **(
-                        {"timeout": httpx.Timeout(timeout_seconds)}
-                        if timeout_seconds is not None
-                        else {}
-                    ),
+                    **timeout_options,
                 )
             except httpx.TransportError as error:
                 diagnostics, transport_category = self._transport_details(

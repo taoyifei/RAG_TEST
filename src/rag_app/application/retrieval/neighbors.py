@@ -202,7 +202,10 @@ class NeighborExpander:
                 return ExpansionOutcome(candidates)
             ids = tuple(
                 dict.fromkeys(
-                    seed.hydrated.chunk.next_chunk_id for seed in seeds
+                    identifier
+                    for seed in seeds
+                    if (identifier := seed.hydrated.chunk.next_chunk_id)
+                    is not None
                 )
             )
             hydrated = _hydrated_candidates(
@@ -212,10 +215,7 @@ class NeighborExpander:
             for seed in seeds:
                 origin = seed.hydrated.chunk
                 neighbor = hydrated.get(origin.next_chunk_id or "")
-                if (
-                    neighbor is None
-                    or neighbor.chunk.role is not origin.role
-                ):
+                if neighbor is None or neighbor.chunk.role is not origin.role:
                     continue
                 _validate_neighbor(origin, neighbor.chunk)
                 origin_nodes = {
@@ -382,9 +382,7 @@ class NeighborExpander:
                 section_id=chunk.section_id,
                 limit=policy.section_search_limit,
             )
-            hydrated = self._source.hydrate_chunks(
-                snapshot, ids
-            )
+            hydrated = self._source.hydrate_chunks(snapshot, ids)
             section_items = tuple(
                 _hydrated_candidates(hydrated, originals).values()
             )
@@ -405,7 +403,8 @@ class NeighborExpander:
                                     item_ordinal := _source_ordinal(item.chunk)
                                 )
                                 is not None
-                                and 0 < origin_ordinal - item_ordinal
+                                and 0
+                                < origin_ordinal - item_ordinal
                                 <= policy.section_predecessor_max_gap
                             ),
                             key=lambda item: (

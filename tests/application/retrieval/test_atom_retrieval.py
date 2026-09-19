@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path
 from types import MethodType
 
@@ -53,9 +54,7 @@ def test_atom_grounding_uses_own_hits_and_closed_group_members() -> None:
         update={"expansion_seed_ids": (first.hydrated.chunk.chunk_id,)}
     )
 
-    def group(
-        number: int, members: tuple[RankedChunk, ...]
-    ) -> GroupCandidate:
+    def group(number: int, members: tuple[RankedChunk, ...]) -> GroupCandidate:
         chunk = members[0].hydrated.chunk
         return GroupCandidate(
             group=EvidenceGroup(
@@ -392,9 +391,10 @@ def test_atom_channels_merge_before_one_rerank(tmp_path: Path) -> None:
     assert rerank_calls == 1
     assert question in lexical_texts
     assert len(dense_batches) == 1
-    assert dense_batches[0][0] == question
+    normalized_question = unicodedata.normalize("NFKC", question)
+    assert dense_batches[0][0] == normalized_question
     assert len(dense_batches[0]) == 3
-    assert rerank_queries[0].startswith("原始问题：" + question)
+    assert rerank_queries[0].startswith("原始问题：" + normalized_question)
     assert "A1" in rerank_queries[0] and "A2" in rerank_queries[0]
     assert observed_plan == [2]
     assert result.reasoning_effort == "DEEP"

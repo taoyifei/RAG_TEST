@@ -34,14 +34,18 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
         candidates = data["evidence"]
         atom_ids = [atom["atom_id"] for atom in data["atoms"]]
         claims = []
-        if "手机号" not in data["question"]:
+        if "手机号" not in json.dumps(data, ensure_ascii=False):
             evidence = candidates[0]
             claims = [
                 {
-                    "claim_id": "C1",
+                    "atom_id": atom_ids[0],
                     "text": evidence["text"],
-                    "atom_ids": atom_ids,
-                    "support_ids": [evidence["support_id"]],
+                    "supports": [
+                        {
+                            "support_id": evidence["support_id"],
+                            "quote": evidence["text"],
+                        }
+                    ],
                 }
             ]
         return httpx.Response(
@@ -54,21 +58,7 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
                         "message": {
                             "role": "assistant",
                             "content": json.dumps(
-                                    {
-                                        "claims": claims,
-                                        "atom_coverage": [
-                                            {
-                                                "atom_id": atom_id,
-                                                "status": "SUPPORTED"
-                                                if claims
-                                                else "MISSING",
-                                            }
-                                            for atom_id in atom_ids
-                                        ],
-                                        "missing_atoms": (
-                                            [] if claims else atom_ids
-                                        ),
-                                    },
+                                {"claims": claims},
                                 ensure_ascii=False,
                             ),
                         },
@@ -120,7 +110,8 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
         assert response.status_code == 200, response.text
         return response.json()
 
-    first = query("MX-41")
+    # 章节要求由生成链处理；单一设备标识可直接返回已认证标量事实。
+    first = query("MX-41有哪些要求")
     assert first["generation_mode"] == "llm", first
     assert first["cache_hit"] is False
     assert first["result_origin"] == "fresh"
@@ -134,14 +125,14 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
         "user",
     ]
     grounded_input = json.loads(first_payload["messages"][1]["content"])
-    assert grounded_input["question"] == "MX-41"
+    assert grounded_input["question"] == "MX-41有哪些要求"
     assert [item["support_id"] for item in grounded_input["evidence"]] == [
         item["evidence_id"] for item in first["evidence"]
     ]
     assert [item["text"] for item in grounded_input["evidence"]] == [
         item["citation_text"] for item in first["evidence"]
     ]
-    cached = query("MX-41")
+    cached = query("MX-41有哪些要求")
     assert cached["cache_hit"] is True
     assert cached["result_origin"] == "cache"
     assert cached["generation_mode"] == "llm"
@@ -159,13 +150,19 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
     assert refused_input["evidence"]
     assert "answer_support_set" not in refused_input
     assert "model_evidence_candidates" not in refused_input
+    assert len(requests) == 3
+    repair_payload = json.loads(requests[2].content)
+    repair_input = json.loads(repair_payload["messages"][1]["content"])
+    assert repair_input["repair_only"] is True
+    assert repair_input["accepted_claim_ids"] == []
     failing = True
-    failure = query("设备 MX-41 的维护周期是多少？")
+    # 泛问需要资料生成；标量维护周期题已有直接证书，不应调用 Provider。
+    failure = query("MX-41具体有哪些要求")
     assert failure["status"] == "PROVIDER_UNAVAILABLE", failure
     assert failure["answer"] is None
     assert failure["generation_mode"] == "none"
     assert failure["generation_called_this_request"] is True
-    assert len(requests) == 3
+    assert len(requests) == 4
     page = harness.runtime.history.list_history()
     assert {item["status"] for item in page["items"]} == {
         "ANSWERED",

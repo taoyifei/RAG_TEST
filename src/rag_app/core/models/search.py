@@ -244,6 +244,16 @@ class StructuralSearchRequest(FrozenModel):
     limit: StrictInt = Field(default=20, gt=0, le=100)
 
 
+class RetrievalOrigin(FrozenModel):
+    """真实召回路径；与 Root/Atom 的二级评分解释分别保存。"""
+
+    unit_id: str = Field(default="ROOT", min_length=1, max_length=32)
+    logical_channel: str = Field(min_length=1, max_length=80)
+    variant_id: str = Field(min_length=1, max_length=160)
+    source_channel: str = Field(min_length=1, max_length=80)
+    native_rank: StrictInt = Field(gt=0)
+
+
 class ChannelHit(FrozenModel):
     """不携带正文的单通道候选。"""
 
@@ -259,6 +269,9 @@ class ChannelHit(FrozenModel):
     raw_score: StrictFloat
     match_type: str | None = Field(default=None, max_length=80)
     must_keep: bool = False
+    retrieval_origins: tuple[RetrievalOrigin, ...] = Field(
+        default=(), exclude=True
+    )
 
     @field_validator("raw_score")
     @classmethod
@@ -291,6 +304,13 @@ class FusedCandidate(FrozenModel):
     best_channel_rank: StrictInt = Field(gt=0)
     must_keep: bool = False
     contributions: tuple[RrfContribution, ...] = Field(min_length=1)
+    unit_rank_contributions: tuple[RrfContribution, ...] = Field(
+        default=(), exclude=True
+    )
+    retrieval_origins: tuple[RetrievalOrigin, ...] = Field(
+        default=(), exclude=True
+    )
+    retention_reasons: tuple[str, ...] = Field(default=(), exclude=True)
 
 
 class HydratedChunk(FrozenModel):
@@ -313,8 +333,40 @@ class RankedChunk(FrozenModel):
     rerank_score: StrictFloat | None = None
     must_keep: bool = False
     contributions: tuple[RrfContribution, ...] = ()
+    unit_rank_contributions: tuple[RrfContribution, ...] = Field(
+        default=(), exclude=True
+    )
+    retrieval_origins: tuple[RetrievalOrigin, ...] = Field(
+        default=(), exclude=True
+    )
+    retention_reasons: tuple[str, ...] = Field(default=(), exclude=True)
     expansion_reason: str | None = None
     expansion_seed_ids: tuple[str, ...] = ()
+
+    @property
+    def retrieval_channels(self) -> tuple[str, ...]:
+        """只返回真实通道；兼容没有新来源字段的历史候选。
+
+        Args:
+            无参数；读取当前候选的独立检索来源。
+
+        Returns:
+            去重后的真实通道；查询单元名称不视为检索通道。
+
+        """
+        channels = (
+            (origin.source_channel for origin in self.retrieval_origins)
+            if self.retrieval_origins
+            else (item.channel for item in self.contributions)
+        )
+        return tuple(
+            dict.fromkeys(
+                channel
+                for channel in channels
+                if channel.split(":", 1)[0]
+                in {"exact", "lexical", "dense", "structural"}
+            )
+        )
 
     @field_validator("rerank_score")
     @classmethod

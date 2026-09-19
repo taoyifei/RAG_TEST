@@ -16,6 +16,7 @@ from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query_plan import (
     QueryAtom,
     QueryPlan,
+    ReasoningEffortValue,
     fallback_query_plan,
     make_query_plan,
 )
@@ -59,9 +60,7 @@ _TIME_MODIFIER = re.compile(
 )
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 _HAN = re.compile(r"[\u4e00-\u9fff]")
-_NEGATION = re.compile(
-    r"不得|无需|不必|禁止|严禁|没有|未|不(?![呢吗呀啊]?$)"
-)
+_NEGATION = re.compile(r"不得|无需|不必|禁止|严禁|没有|未|不(?![呢吗呀啊]?$)")
 _SEQUENCE = re.compile(r"先|再|然后|随后")
 _MIN_SEQUENCE_PARTS = 2
 _MAX_ATOMS = 4
@@ -132,7 +131,9 @@ def build_input_spans(  # noqa: PLR0912, PLR0915
                 update={"text": question, "conversation_context": ()}
             )
         )
-        normalized = whole_analysis.resolved_query.strip()
+        normalized = (
+            whole_analysis.resolved_query or whole_analysis.normalized_query
+        ).strip()
         clauses = tuple(
             match[0].strip()
             for match in _CLAUSES.finditer(normalized)
@@ -159,9 +160,7 @@ def build_input_spans(  # noqa: PLR0912, PLR0915
                 semantics.target
                 and semantics.target in clause
                 and "分别" not in semantics.target
-                and not _PRONOUN_TARGET.match(
-                    _clean_target(semantics.target)
-                )
+                and not _PRONOUN_TARGET.match(_clean_target(semantics.target))
             ):
                 targets.append(semantics.target)
             syntax_target = _TARGET_BEFORE_QUESTION.search(clause)
@@ -226,8 +225,7 @@ def build_input_spans(  # noqa: PLR0912, PLR0915
                     target
                     for target in targets
                     if not any(
-                        target != other and target in other
-                        for other in targets
+                        target != other and target in other for other in targets
                     )
                 ),
             )
@@ -284,8 +282,10 @@ def resolve_root_query(
     request: SearchRequest, spans: tuple[QueryInputSpan, ...]
 ) -> ResolvedRootQuery:
     """仅在先行对象唯一时组合短追问；歧义交给服务端澄清。"""
+    original_analysis = QueryAnalyzer().analyze(request)
     original = unicodedata.normalize(
-        "NFKC", QueryAnalyzer().analyze(request).resolved_query
+        "NFKC",
+        original_analysis.resolved_query or original_analysis.normalized_query,
     ).strip()
     digest = canonical_sha256(
         trusted_user_questions(request.conversation_context)
@@ -335,14 +335,11 @@ def resolve_root_query(
         >= _MIN_TARGET_CHARS
         and len({span.text for span in current_antecedents}) == 1
     )
-    if (
-        not previous_targets
-        and (
-            local_topic_before_reference
-            or (
-                len(current_clauses) > 1
-                and len({span.text for span in current_antecedents}) == 1
-            )
+    if not previous_targets and (
+        local_topic_before_reference
+        or (
+            len(current_clauses) > 1
+            and len({span.text for span in current_antecedents}) == 1
         )
     ):
         return ResolvedRootQuery(
@@ -461,17 +458,15 @@ def _declarative_target(clause: str) -> str | None:
     actions = tuple(_DECLARATIVE_ACTION.finditer(clause))
     if actions:
         candidate = _clean_target(clause[actions[-1].end() :])
-        if (
-            len(candidate) >= _MIN_TARGET_CHARS
-            and not _PRONOUN_TARGET.match(candidate)
+        if len(candidate) >= _MIN_TARGET_CHARS and not _PRONOUN_TARGET.match(
+            candidate
         ):
             return candidate
     state = _STATE_PIVOT.search(clause)
     if state:
         candidate = _clean_target(clause[: state.start()])
-        if (
-            len(candidate) >= _MIN_TARGET_CHARS
-            and not _PRONOUN_TARGET.match(candidate)
+        if len(candidate) >= _MIN_TARGET_CHARS and not _PRONOUN_TARGET.match(
+            candidate
         ):
             return candidate
     return None
@@ -533,7 +528,7 @@ def degraded_query_plan(  # noqa: PLR0913
     spans: tuple[QueryInputSpan, ...],
     root: ResolvedRootQuery,
     *,
-    effort: str,
+    effort: ReasoningEffortValue,
     reason_code: str,
     planner_called: bool,
 ) -> QueryPlan:
@@ -564,9 +559,10 @@ def degraded_query_plan(  # noqa: PLR0913
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
     )
     modifier_clauses = current_context_modifier_clauses(clauses)
-    answer_clauses = tuple(
-        span for span in clauses if span not in modifier_clauses
-    ) or clauses
+    answer_clauses = (
+        tuple(span for span in clauses if span not in modifier_clauses)
+        or clauses
+    )
     targets = tuple(
         span
         for span in spans
@@ -575,7 +571,7 @@ def degraded_query_plan(  # noqa: PLR0913
     atoms: list[QueryAtom] = []
     if len(clauses) > 1 or len(targets) > 1:
         for clause in answer_clauses:
-            clause_targets = tuple(
+            clause_targets: tuple[QueryInputSpan | None, ...] = tuple(
                 span for span in targets if span.text in clause.text
             )
             if not clause_targets:

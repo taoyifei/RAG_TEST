@@ -116,6 +116,7 @@ def _certified_table_items(
     if (
         not isinstance(ids, list)
         or len(ids) != _TABLE_CERTIFICATE_SPAN_COUNT
+        or any(not isinstance(node_id, str) or not node_id for node_id in ids)
         or len(set(ids)) != _TABLE_CERTIFICATE_SPAN_COUNT
     ):
         return ()
@@ -147,7 +148,7 @@ def _certified_table_items(
                     span.source_anchor.part_uri,
                     path[: index + 1],
                 )
-                if span.node_id in ids:
+                if span.node_id is not None and span.node_id in ids:
                     by_node[span.node_id] = (
                         proof,
                         (table_identity, int(row[1]), int(column[1])),
@@ -155,7 +156,9 @@ def _certified_table_items(
                 break
     if set(ids) != set(by_node):
         return ()
-    row_label, header, value = (by_node[node] for node in ids)
+    row_label, header, value = (
+        by_node[node] for node in ids if isinstance(node, str)
+    )
     label_table, label_row, label_column = row_label[1]
     header_table, header_row, header_column = header[1]
     value_table, value_row, value_column = value[1]

@@ -1,14 +1,11 @@
-"""WB08R-03G-P0 已确认合同断点的真实函数反例。"""
+"""保留 P0 真实形状，并验证 V8 修复后的来源结构合同。"""
 
 from __future__ import annotations
-
-import pytest
 
 from rag_app.application.answering.grounded import (
     _source_groups,
     _validate_natural_support_structure,
 )
-from rag_app.core.errors import ValidationFailed
 from rag_app.core.models import EvidenceItem
 from tests.application.answering.test_grounded_claim_v5_quotes import (
     _table_cell,
@@ -20,10 +17,11 @@ def _contiguous_same_row_fragments() -> tuple[EvidenceItem, EvidenceItem]:
     """构造同节点、同表行且首尾连续的两个可引用片段。"""
     first_text = "甲组完成事项一，"
     second_text = "并完成事项二。"
-    first, second = (
-        _table_cell(item, 1, 1)
+    by_text = {
+        item.citation_text: _table_cell(item, 1, 1)
         for item in _evidence(first_text, second_text)
-    )
+    }
+    first, second = by_text[first_text], by_text[second_text]
     first_span = first.source_spans[0]
     second_span = second.source_spans[0]
     second = second.model_copy(
@@ -44,8 +42,8 @@ def _contiguous_same_row_fragments() -> tuple[EvidenceItem, EvidenceItem]:
     return first, second
 
 
-def test_same_row_identity_is_lost_before_source_group_recovery() -> None:
-    """真实分组认出同一行，但前置结构门仍以缺组证书拒绝。"""
+def test_contiguous_same_node_cell_passes_without_group_certificate() -> None:
+    """连续的真实节点片段无需虚构组证书即可通过结构门。"""
     first, second = _contiguous_same_row_fragments()
     first_span = first.source_spans[0]
     second_span = second.source_spans[0]
@@ -56,10 +54,4 @@ def test_same_row_identity_is_lost_before_source_group_recovery() -> None:
     assert _source_groups(first) == _source_groups(second)
     assert len(_source_groups(first)) == 1
 
-    with pytest.raises(ValidationFailed) as error:
-        _validate_natural_support_structure((first, second))
-
-    assert error.value.code == "CLAIM_SOURCE_MISMATCH"
-    assert dict(error.value.details)["validator"] == (
-        "_validate_natural_support_structure"
-    )
+    _validate_natural_support_structure((first, second))

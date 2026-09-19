@@ -14,6 +14,7 @@ from rag_app.core.models import (
     SearchRequest,
 )
 from tests.adapters.parsers.docx_fixtures import build_docx
+from tests.support.grounded_fixture_generator import GroundedFixtureGenerator
 
 _PROFILE = Path("configs/profiles/dev-p06-memory.json")
 _MEDIA_TYPE = (
@@ -26,9 +27,7 @@ def test_cache_hit_precedes_query_embedding_and_reranker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project_id = deterministic_id("prj", "pre-provider-cache")
-    knowledge_base_id = deterministic_id(
-        "kb", project_id, "pre-provider-cache"
-    )
+    knowledge_base_id = deterministic_id("kb", project_id, "pre-provider-cache")
     document = DocumentRef(
         project_id=project_id,
         knowledge_base_id=knowledge_base_id,
@@ -36,6 +35,10 @@ def test_cache_hit_precedes_query_embedding_and_reranker(
         display_name="cache.docx",
     )
     with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
+        runtime.retrieval = runtime.retrieval.with_generation(
+            GroundedFixtureGenerator(),
+            serving_identity="unit-synthetic-cache-v1",
+        )
         runtime.persistence.control.put_project(project_id, "Cache Project")
         runtime.persistence.control.put_knowledge_base(
             knowledge_base_id,

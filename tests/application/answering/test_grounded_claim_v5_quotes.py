@@ -37,6 +37,9 @@ from rag_app.core.models.query_plan import (
     QueryAtom,
     QueryPlan,
 )
+from tests.application.answering.source_contract_fixtures import (
+    contiguous_node_fragments,
+)
 from tests.application.answering.test_natural_grounded_answer import (
     _claim,
     _draft,
@@ -302,9 +305,10 @@ def test_rejection_diagnostic_preserves_raw_atom_scope_reason() -> None:
     assert diagnostic.selected_support_ids == (second.support_id,)
     assert diagnostic.allowed_support_ids == (first.support_id,)
     assert outcome.repair_calls == 0
-    assert diagnostic.claim_sha256 == hashlib.sha256(
-        second.citation_text.encode("utf-8")
-    ).hexdigest()
+    assert (
+        diagnostic.claim_sha256
+        == hashlib.sha256(second.citation_text.encode("utf-8")).hexdigest()
+    )
     assert diagnostic.quote_sha256s == (
         hashlib.sha256(second.citation_text.encode("utf-8")).hexdigest(),
     )
@@ -350,7 +354,7 @@ def test_soft_atom_mismatch_still_reaches_generation_and_publishes_quote() -> (
     assert outcome.accepted_claim_count == 1
 
 
-def test_pack_publishes_full_source_instead_of_paraphrase() -> None:
+def test_pack_preserves_validated_paraphrase_without_source_rewrite() -> None:
     source = "对于员工跨年领到证书的情况，请在证书领取年份进行报销。"
     evidence = _evidence(source)
     plan = _plan("费用跨年还能报吗？")
@@ -373,7 +377,7 @@ def test_pack_publishes_full_source_instead_of_paraphrase() -> None:
     )
 
     assert outcome.mode == "llm"
-    assert outcome.answer == f"{source} [S1]"
+    assert outcome.answer == "员工跨年领到证书，在证书领取年份进行报销。 [S1]"
 
 
 def test_pack_expands_selected_fragment_to_full_source_sentence() -> None:
@@ -691,7 +695,7 @@ def test_invalid_model_quote_cannot_publish_claim_and_uses_excerpt() -> None:
     assert "15 天" not in outcome.answer
 
 
-def test_zero_model_claims_uses_one_safe_extractive_fallback() -> None:
+def test_zero_claims_uses_safe_fallback_after_one_local_repair() -> None:
     evidence = _evidence("甲部门保存记录 14 天。")
     plan = _plan("甲部门")
     generator = Mock()
@@ -704,7 +708,8 @@ def test_zero_model_claims_uses_one_safe_extractive_fallback() -> None:
         ((AtomStatus.MISSING, ()),),
     )
 
-    assert generator.generate.call_count == 1
+    assert generator.generate.call_count == 2
+    assert outcome.repair_calls == 1
     assert outcome.mode == "extractive_fallback"
     assert outcome.reason_code == "EXTRACTIVE_FALLBACK"
     assert outcome.published_support_ids == ("S1",)
@@ -1301,18 +1306,7 @@ def test_fallback_rejoins_one_source_paragraph_across_chunks() -> None:
         "归口管理部门提交汇总工时表至人力资源岗。",
         "财务岗审核入账。",
     )
-    node_id = evidence[0].source_spans[0].node_id
-    joined = tuple(
-        item.model_copy(
-            update={
-                "source_spans": tuple(
-                    span.model_copy(update={"node_id": node_id})
-                    for span in item.source_spans
-                )
-            }
-        )
-        for item in evidence
-    )
+    joined = contiguous_node_fragments(evidence)
     plan = _plan("研发人工成本核算", shape=AtomAnswerShape.PROCEDURE)
     result = _safe_extractive_fallback(
         plan,
@@ -1332,14 +1326,15 @@ def test_fallback_extends_selected_paragraph_to_complete_list() -> None:
         "立项审核阶段，审查材料完整性。",
         "立项决策阶段，提交会议审议。",
     )
-    node_id = evidence[0].source_spans[0].node_id
+    evidence = contiguous_node_fragments(
+        evidence,
+        lambda item: item.citation_text.startswith(
+            ("（二）立项申报", "并附上相关材料")
+        ),
+    )
     grouped: list[EvidenceItem] = []
-    for index, item in enumerate(evidence):
+    for item in evidence:
         spans = item.source_spans
-        if index < 2:
-            spans = tuple(
-                span.model_copy(update={"node_id": node_id}) for span in spans
-            )
         grouped.append(
             item.model_copy(
                 update={
@@ -1726,25 +1721,11 @@ def test_single_atom_fallback_restores_one_split_source_paragraph() -> None:
         "考核指标等内容，并附上签字盖章的相关附件。",
         "立项决策阶段，审议项目目标和实施计划。",
     )
-    node_id = next(
-        item.source_spans[0].node_id
-        for item in evidence
-        if item.citation_text.startswith("立项申报阶段")
-    )
-    joined = tuple(
-        item.model_copy(
-            update={
-                "source_spans": tuple(
-                    span.model_copy(update={"node_id": node_id})
-                    for span in item.source_spans
-                )
-                if item.citation_text.startswith(
-                    ("立项申报阶段", "考核指标等内容")
-                )
-                else item.source_spans
-            }
-        )
-        for item in evidence
+    joined = contiguous_node_fragments(
+        evidence,
+        lambda item: item.citation_text.startswith(
+            ("立项申报阶段", "考核指标等内容")
+        ),
     )
     plan = _plan("立项材料还得补哪些？")
     result = _safe_extractive_fallback(
@@ -1765,22 +1746,15 @@ def test_material_enumeration_does_not_expand_into_later_stages() -> None:
         "考核指标等内容，并附上签字盖章的相关附件。",
         "立项决策阶段，审议项目目标和实施计划。",
     )
-    material_node = next(
-        item.source_spans[0].node_id
-        for item in evidence
-        if item.citation_text.startswith("立项申报阶段")
+    evidence = contiguous_node_fragments(
+        evidence,
+        lambda item: item.citation_text.startswith(
+            ("立项申报阶段", "考核指标等内容")
+        ),
     )
     grouped = tuple(
         item.model_copy(
             update={
-                "source_spans": tuple(
-                    span.model_copy(update={"node_id": material_node})
-                    for span in item.source_spans
-                )
-                if item.citation_text.startswith(
-                    ("立项申报阶段", "考核指标等内容")
-                )
-                else item.source_spans,
                 "metadata": freeze_json_object(
                     {
                         **dict(item.metadata),

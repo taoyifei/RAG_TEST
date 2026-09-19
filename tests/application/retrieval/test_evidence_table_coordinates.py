@@ -305,7 +305,7 @@ def test_atom_table_intersection_requires_citable_row_header_and_value() -> (
             supports,
             context.analysis,
         )
-    assert failure.value.code == "CLAIM_RELATION_UNSUPPORTED"
+    assert failure.value.code == "CLAIM_QUERY_RELATION_UNSUPPORTED"
     accepted = _validated_natural_claim(
         NaturalClaim(
             atom_id="A1",

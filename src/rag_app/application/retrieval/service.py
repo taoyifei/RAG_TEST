@@ -62,7 +62,11 @@ from rag_app.application.retrieval.evidence_groups import (
 from rag_app.application.retrieval.exact import ExactChannel
 from rag_app.application.retrieval.expansion import RuleBasedNormalizer
 from rag_app.application.retrieval.filters import apply_candidate_filters
-from rag_app.application.retrieval.fusion import reciprocal_rank_fusion
+from rag_app.application.retrieval.fusion import (
+    candidate_source_identity,
+    reciprocal_rank_fusion,
+    validated_channel_identities,
+)
 from rag_app.application.retrieval.generation_evidence import (
     GENERATION_EVIDENCE_PACK_REVISION,
     build_generation_evidence_pack,
@@ -73,6 +77,7 @@ from rag_app.application.retrieval.neighbors import (
     ExpansionOutcome,
     NeighborExpander,
 )
+from rag_app.application.retrieval.observations import candidate_observation
 from rag_app.application.retrieval.per_atom_correction import (
     PerAtomCorrectionOutcome,
     correct_per_atom,
@@ -94,6 +99,7 @@ from rag_app.application.retrieval.reranking import (
     CircuitAwareReranker,
     RerankingOutcome,
 )
+from rag_app.application.retrieval.retention import structural_seed_ids
 from rag_app.application.retrieval.structural import StructuralChannel
 from rag_app.core.errors import (
     ChannelRateLimited,
@@ -145,6 +151,13 @@ from rag_app.core.models import (
     StageTiming,
 )
 from rag_app.core.models.common import freeze_json_object
+from rag_app.core.models.generation_packet import (
+    EVIDENCE_IDENTITY_REVISION,
+    GENERATION_BUDGET_REVISION,
+    PREPARED_PACKET_REVISION,
+    safe_support_source,
+    stable_support_key,
+)
 from rag_app.core.models.query import RequestedAnswerType
 from rag_app.core.models.query_plan import (
     ATOM_GROUP_ALIGNMENT_REVISION,
@@ -165,6 +178,7 @@ from rag_app.core.models.query_plan import (
     fallback_query_plan,
     make_query_plan,
 )
+from rag_app.core.models.search import RetrievalOrigin
 from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import (
     CancellationPort,
@@ -435,6 +449,9 @@ class RetrievalService:
                 ),
                 "query_plan_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
                 "query_unit_fusion_revision": QUERY_UNIT_FUSION_REVISION,
+                "evidence_identity_revision": EVIDENCE_IDENTITY_REVISION,
+                "prepared_packet_revision": PREPARED_PACKET_REVISION,
+                "generation_budget_revision": GENERATION_BUDGET_REVISION,
                 "atom_group_alignment_revision": ATOM_GROUP_ALIGNMENT_REVISION,
                 "evidence_group_schema_revision": (
                     EVIDENCE_GROUP_SCHEMA_REVISION
@@ -1645,6 +1662,10 @@ class RetrievalService:
                 ),
                 "admitted_sources": tuple(
                     {
+                        "support_key": stable_support_key(item.evidence_item),
+                        "source_locators": safe_support_source(
+                            item.evidence_item
+                        ),
                         "support_id": item.support_id,
                         "document_version_id": (
                             item.evidence_item.document_version_id
@@ -1708,32 +1729,8 @@ class RetrievalService:
         )
         if self._grounded is not None:
             model_evidence_candidates = generation_evidence_pack.evidence
-            supported_ids = {
-                support_id
-                for item in atom_matrix.atoms
-                if item.status is AtomStatus.SUPPORTED
-                for support_id in item.supporting_support_ids
-            }
-            supported_sources = {
-                (
-                    item.document_version_id,
-                    item.chunk_id,
-                    item.citation_text,
-                    tuple(span.node_id for span in item.source_spans),
-                )
-                for item in atom_evidence
-                if item.support_id in supported_ids
-            }
-            evidence = tuple(
-                item
-                for item in generation_evidence_pack.evidence
-                if (
-                    item.document_version_id,
-                    item.chunk_id,
-                    item.citation_text,
-                    tuple(span.node_id for span in item.source_spans),
-                )
-                in supported_sources
+            evidence = _supported_generation_evidence(
+                atom_matrix, atom_evidence, generation_evidence_pack.evidence
             )
         if query_plan.needs_clarification:
             confidence = confidence.model_copy(
@@ -1989,7 +1986,7 @@ class RetrievalService:
         }
         final_coverage_by_atom = {
             atom.atom_id: coverage_labels.get(
-                observed_coverage.get(atom.atom_id), "NOT_OBSERVED"
+                observed_coverage.get(atom.atom_id, ""), "NOT_OBSERVED"
             )
             for atom in query_plan.atoms
         }
@@ -1999,6 +1996,20 @@ class RetrievalService:
             {
                 "answer_path": answer_path,
                 "generation_called": generation_called,
+                "publication_path": (
+                    "NO_PUBLICATION"
+                    if answer is None
+                    else "SERVER_VALIDATED_EXTRACT"
+                    if generation_mode in {"extractive", "extractive_fallback"}
+                    else "MODEL_VALIDATED_CLAIM"
+                ),
+                "cache_hit": False,
+                "prepared_packets": tuple(
+                    packet.model_dump(mode="json")
+                    for packet in generated.prepared_packets
+                )
+                if generated
+                else (),
                 "extractive_fallback_used": (
                     generation_mode == "extractive_fallback"
                 ),
@@ -2016,7 +2027,27 @@ class RetrievalService:
                 if generated
                 else (),
                 "published_support_ids": published_ids,
+                "published_support_keys": tuple(
+                    stable_support_key(item)
+                    for item in evidence
+                    if item.support_id in published_ids
+                ),
+                "published_sources": tuple(
+                    safe_support_source(item)
+                    for item in evidence
+                    if item.support_id in published_ids
+                ),
                 "published_quote_sha256s": published_quotes,
+                "repair_attempted": generated.repair_attempted
+                if generated
+                else False,
+                "repair_skip_reason": generated.repair_skip_reason
+                if generated
+                else "GENERATION_NOT_RUN",
+                "raw_failures": generated.raw_failures if generated else (),
+                "recovery_results": generated.recovery_results
+                if generated
+                else (),
                 "claim_rejection_code_distribution": dict(
                     generated.claim_rejection_codes
                 )
@@ -2175,7 +2206,7 @@ class RetrievalService:
             confidence=confidence,
             query_kind=plan.query_kind,
             requested_answer_type=effective_analysis.semantics.answer_type,
-            query_semantic_source=effective_analysis.semantics.source,
+            query_semantic_source=_public_semantic_source(effective_analysis),
             active_index_revision_id=snapshot.revision.index_revision_id,
             index_fingerprint=snapshot.revision.index_fingerprint,
             serving_fingerprint=snapshot.serving_fingerprint,
@@ -2429,7 +2460,7 @@ class RetrievalService:
                 else ReasoningEffort.ASSISTED.value
             ),
             requested_answer_type=analysis.semantics.answer_type,
-            query_semantic_source=analysis.semantics.source,
+            query_semantic_source=_public_semantic_source(analysis),
             active_index_revision_id=snapshot.revision.index_revision_id,
             index_fingerprint=snapshot.revision.index_fingerprint,
             serving_fingerprint=snapshot.serving_fingerprint,
@@ -2708,6 +2739,9 @@ class RetrievalService:
                 "context_resolution_mode": resolved_root.mode,
                 "context_digest": resolved_root.context_digest,
                 "query_unit_fusion_revision": QUERY_UNIT_FUSION_REVISION,
+                "evidence_identity_revision": EVIDENCE_IDENTITY_REVISION,
+                "prepared_packet_revision": PREPARED_PACKET_REVISION,
+                "generation_budget_revision": GENERATION_BUDGET_REVISION,
                 "atom_group_alignment_revision": ATOM_GROUP_ALIGNMENT_REVISION,
                 "evidence_group_schema_revision": (
                     EVIDENCE_GROUP_SCHEMA_REVISION
@@ -2881,10 +2915,29 @@ class RetrievalService:
             return top_k.get(channel, self._policy.channel_top_k)
 
         def add(
-            unit_id: str, channel: str, hits: tuple[ChannelHit, ...]
+            unit_id: str,
+            channel: str,
+            hits: tuple[ChannelHit, ...],
+            *,
+            variant_id: str = "original",
         ) -> None:
             normalized_hits = tuple(
-                hit.model_copy(update={"channel": channel}) for hit in hits
+                hit.model_copy(
+                    update={
+                        "channel": channel,
+                        "retrieval_origins": (
+                            RetrievalOrigin(
+                                unit_id=unit_id,
+                                logical_channel=channel.split(":", 1)[0],
+                                variant_id=variant_id,
+                                source_channel=channel,
+                                native_rank=hit.rank,
+                            ),
+                        ),
+                    }
+                )
+                for hit in hits
+                if hit.document_id not in snapshot.excluded_document_ids
             )
             unit_channels[unit_id][channel] = normalized_hits
             channel_items = merged.setdefault(channel, {})
@@ -2962,6 +3015,7 @@ class RetrievalService:
                                 ),
                                 request,
                             ),
+                            variant_id=variant.identity,
                         )
                     except (ChannelRateLimited, ChannelUnavailable) as error:
                         degraded.append(error.code)
@@ -3027,6 +3081,47 @@ class RetrievalService:
             ),
             revision_id=snapshot.revision.index_revision_id,
             policy=self._policy,
+        )
+        for unit in units:
+            for channel, hits in unit_channels[unit.unit_id].items():
+                self._record(
+                    trace_id,
+                    "unit_channel_hits",
+                    {
+                        "unit_id": unit.unit_id,
+                        "logical_channel": channel.split(":", 1)[0],
+                        **candidate_observation(hits),
+                    },
+                )
+        for stage in fusion.unit_stages:
+            self._record(
+                trace_id,
+                "unit_fusion",
+                {
+                    "unit_id": stage.unit_id,
+                    "before": candidate_observation(
+                        stage.before,
+                        selected_ids=frozenset(
+                            item.chunk_id for item in stage.after
+                        ),
+                        drop_reason="UNIT_FUSION_CAP",
+                    ),
+                    "after": candidate_observation(stage.after),
+                },
+            )
+        self._record(
+            trace_id,
+            "global_unit_fusion",
+            {
+                "before": candidate_observation(
+                    fusion.global_before_limit,
+                    selected_ids=frozenset(
+                        item.chunk_id for item in fusion.candidates
+                    ),
+                    drop_reason="GLOBAL_UNIT_FUSION_CAP",
+                ),
+                "after": candidate_observation(fusion.candidates),
+            },
         )
         channels = {
             channel: tuple(
@@ -3095,12 +3190,7 @@ class RetrievalService:
         """按每个原子的语义复用 EvidenceAssembler，不以相似命中冒充支持。"""
 
         def identity(item: EvidenceItem) -> tuple[object, ...]:
-            return (
-                item.document_version_id,
-                item.chunk_id,
-                item.citation_text,
-                tuple(span.node_id for span in item.source_spans),
-            )
+            return (stable_support_key(item),)
 
         vector_space = (
             snapshot.topology.slot(selected_slot).vector_space_identity
@@ -3108,6 +3198,9 @@ class RetrievalService:
             else None
         )
         selected_by_key: dict[tuple[object, ...], EvidenceItem] = {}
+        source_items_by_atom: dict[
+            str, dict[tuple[object, ...], EvidenceItem]
+        ] = {}
         per_atom: list[
             tuple[
                 QueryAtom,
@@ -3162,6 +3255,10 @@ class RetrievalService:
                 *selection.answer_support_set,
                 *selection.model_evidence_candidates,
             )
+            atom_source_items: dict[tuple[object, ...], EvidenceItem] = {}
+            for item in scoped_items:
+                atom_source_items.setdefault(identity(item), item)
+            source_items_by_atom[atom.atom_id] = atom_source_items
             atom_evidence_audit.append(
                 {
                     "atom_id": atom.atom_id,
@@ -3195,8 +3292,15 @@ class RetrievalService:
                     atom,
                     item,
                     links,
-                    alignment=alignment_by_group.get(
-                        dict(item.metadata).get("evidence_group_id")
+                    alignment=(
+                        alignment_by_group.get(group_id)
+                        if isinstance(
+                            group_id := dict(item.metadata).get(
+                                "evidence_group_id"
+                            ),
+                            str,
+                        )
+                        else None
                     ),
                     resolved_root_query=query_plan.resolved_root_query,
                     context_resolution_confidence=(
@@ -3220,10 +3324,12 @@ class RetrievalService:
                 if qualification.retrieval_relevant or qualification.publishable
             }
             direct_keys = tuple(
-                identity(item)
-                for item in scoped_items
-                if identity(item) in allowed_keys
-                and qualifications[identity(item)].publishable
+                dict.fromkeys(
+                    identity(item)
+                    for item in scoped_items
+                    if identity(item) in allowed_keys
+                    and qualifications[identity(item)].publishable
+                )
             )
             if selection.ambiguous:
                 direct_keys = ()
@@ -3244,10 +3350,12 @@ class RetrievalService:
                 if len(direct_documents) > 1:
                     direct_keys = ()
             candidate_keys = tuple(
-                identity(item)
-                for item in scoped_items
-                if identity(item) in allowed_keys
-                and identity(item) not in direct_keys
+                dict.fromkeys(
+                    identity(item)
+                    for item in scoped_items
+                    if identity(item) in allowed_keys
+                    and identity(item) not in direct_keys
+                )
             )
             if atom.answer_shape not in {
                 AtomAnswerShape.ENUMERATION,
@@ -3308,9 +3416,21 @@ class RetrievalService:
             tuple[str, tuple[EvidenceItem, ...]]
         ] = []
         for atom, direct_keys, candidate_keys in per_atom:
-            direct = tuple(by_key[key] for key in direct_keys if key in by_key)
+            atom_sources = source_items_by_atom[atom.atom_id]
+            # 来源渲染复用一次 alias，各 Atom 的关系证书保留各自原始 metadata。
+            direct = tuple(
+                atom_sources[key].model_copy(
+                    update={"evidence_id": by_key[key].evidence_id}
+                )
+                for key in direct_keys
+                if key in by_key
+            )
             relevant = tuple(
-                by_key[key] for key in candidate_keys if key in by_key
+                atom_sources[key].model_copy(
+                    update={"evidence_id": by_key[key].evidence_id}
+                )
+                for key in candidate_keys
+                if key in by_key
             )
             atom_candidate_membership.append(
                 (atom.atom_id, (*direct, *relevant))
@@ -3425,6 +3545,14 @@ class RetrievalService:
                     supporting_group_ids=groups_for_atom,
                     supporting_support_ids=tuple(
                         item.support_id
+                        for item in (
+                            conflicting
+                            if status is AtomStatus.CONTRADICTORY
+                            else direct
+                        )
+                    ),
+                    supporting_support_keys=tuple(
+                        stable_support_key(item)
                         for item in (
                             conflicting
                             if status is AtomStatus.CONTRADICTORY
@@ -3634,21 +3762,23 @@ class RetrievalService:
         excluded_documents = frozenset(snapshot.excluded_document_ids)
         filtered_channels = {
             name: tuple(
-                hit for hit in hits if hit.document_id not in excluded_documents
+                hit
+                for hit in apply_candidate_filters(hits, request)
+                if hit.document_id not in excluded_documents
             )
             for name, hits in channel_hits.items()
         }
         channel_hits.clear()
         channel_hits.update(filtered_channels)
-        if pre_fused is None:
-            structural_closure_ids = tuple(
-                dict.fromkeys(
-                    (
-                        *_required_structural_candidate_ids(channel_hits),
-                        *(item for item in atom_required_ids if item),
-                    )
+        structural_closure_ids = tuple(
+            dict.fromkeys(
+                (
+                    *_required_structural_candidate_ids(channel_hits),
+                    *(item for item in atom_required_ids if item),
                 )
             )
+        )
+        if pre_fused is None:
             fused = reciprocal_rank_fusion(
                 channel_hits,
                 expected_revision_id=snapshot.revision.index_revision_id,
@@ -3657,16 +3787,42 @@ class RetrievalService:
                 required_candidate_ids=frozenset(structural_closure_ids),
             )
         else:
+            authorized = validated_channel_identities(
+                channel_hits,
+                expected_revision_id=snapshot.revision.index_revision_id,
+            )
             fused = tuple(
                 candidate
                 for candidate in pre_fused
                 if candidate.document_id not in excluded_documents
+                and candidate.chunk_id in authorized
             )
-            fused_ids = {candidate.chunk_id for candidate in fused}
-            structural_closure_ids = tuple(
-                candidate_id
-                for candidate_id in atom_required_ids
-                if candidate_id in fused_ids
+            if any(
+                candidate.revision_id != snapshot.revision.index_revision_id
+                or candidate_source_identity(candidate)
+                != authorized[candidate.chunk_id]
+                for candidate in fused
+            ):
+                raise IndexCorrupt(
+                    "预融合候选与授权通道身份不一致。", stage="retrieval.fuse"
+                )
+        fused_ids = {candidate.chunk_id for candidate in fused}
+        structural_closure_ids = tuple(
+            candidate_id
+            for candidate_id in structural_closure_ids
+            if candidate_id in fused_ids
+        )
+        for channel, hits in channel_hits.items():
+            self._record(
+                trace_id,
+                "authorized_channel_hits",
+                {
+                    "pass": retrieval_phase,
+                    "unit_id": "ROOT" if pre_fused is None else "MULTI_UNIT",
+                    "variant_id": channel,
+                    "logical_channel": channel.split(":", 1)[0],
+                    **candidate_observation(hits),
+                },
             )
         self._record(
             trace_id,
@@ -3675,6 +3831,8 @@ class RetrievalService:
                 "pass": retrieval_phase,
                 "candidate_count": len(fused),
                 "rrf_k": self._policy.rrf_k,
+                **candidate_observation(fused),
+                "required_candidate_ids": structural_closure_ids,
                 "rank_contributions": [
                     [
                         [
@@ -3699,7 +3857,11 @@ class RetrievalService:
         self._record(
             trace_id,
             "hydrate",
-            {"pass": retrieval_phase, "candidate_count": len(hydrated)},
+            {
+                "pass": retrieval_phase,
+                "candidate_count": len(hydrated),
+                **candidate_observation(hydrated),
+            },
         )
         rank_started = perf_counter()
         resolved_query = (
@@ -3719,6 +3881,35 @@ class RetrievalService:
                 self._policy.rerank_candidate_limit if broad_rerank else 0,
             ),
             required_candidate_ids=frozenset(structural_closure_ids),
+        )
+        self._record(
+            trace_id,
+            "pre_rerank_selection",
+            {
+                "pass": retrieval_phase,
+                **candidate_observation(
+                    hydrated,
+                    selected_ids=frozenset(reranked.preselection_chunk_ids),
+                    drop_reason="DIVERSITY_POOL_CAP",
+                ),
+            },
+        )
+        self._record(
+            trace_id,
+            "rerank_input",
+            {
+                "pass": retrieval_phase,
+                "provider_called": bool(reranked.input_candidates),
+                "after_protected_restoration": candidate_observation(
+                    hydrated,
+                    selected_ids=frozenset(
+                        item.hydrated.chunk.chunk_id
+                        for item in reranked.input_candidates
+                    ),
+                    decisions=reranked.retention_decisions,
+                ),
+                **candidate_observation(reranked.input_candidates),
+            },
         )
         expansion = self._neighbors.expand(
             snapshot,
@@ -3880,9 +4071,9 @@ class RetrievalService:
                 "reason_code": reranked.reason_code,
                 "candidate_count": len(reranked.candidates),
                 "candidate_chunk_ids": tuple(
-                    item.hydrated.chunk.chunk_id
-                    for item in reranked.candidates
+                    item.hydrated.chunk.chunk_id for item in reranked.candidates
                 ),
+                **candidate_observation(reranked.candidates),
             },
         )
         degraded.extend(expansion.degraded_reason_codes)
@@ -4193,6 +4384,15 @@ class RetrievalService:
             {
                 "answer_path": origin,
                 "generation_called": False,
+                "cache_hit": result.cache_hit,
+                "publication_path": (
+                    "NO_PUBLICATION"
+                    if result.answer is None
+                    else "CACHE_REPLAY"
+                    if origin == "CACHE_REPLAY"
+                    else "SERVER_VALIDATED_EXTRACT"
+                ),
+                "prepared_packets": (),
                 "extractive_fallback_used": False,
                 "final_coverage_by_atom": {"A1": "NOT_OBSERVED"},
                 "generated_claim_count": 0,
@@ -4200,6 +4400,12 @@ class RetrievalService:
                 "published_claim_count": 0,
                 "accepted_support_ids": (),
                 "published_support_ids": support_ids,
+                "published_support_keys": tuple(
+                    stable_support_key(item) for item in result.evidence
+                ),
+                "published_sources": tuple(
+                    safe_support_source(item) for item in result.evidence
+                ),
                 "published_quote_sha256s": tuple(
                     hashlib.sha256(
                         item.citation_text.encode("utf-8")
@@ -4244,38 +4450,21 @@ def _provider_call_count_by_operation(
     return dict(counts)
 
 
+def _public_semantic_source(
+    analysis: QueryAnalysis,
+) -> Literal["RULE", "LLM_INTERPRET", "LLM_REWRITE", "ORIGINAL_FALLBACK"]:
+    """公开结果只接受原合同枚举；内部 Atom 分析不得被直接序列化。"""
+    source = analysis.semantics.source
+    if source == "SPAN_REFERENCED":
+        raise ValueError("内部 Atom 语义来源不能直接发布为公共结果。")
+    return source
+
+
 def _required_structural_candidate_ids(
     channel_hits: dict[str, tuple[ChannelHit, ...]],
 ) -> tuple[str, ...]:
-    """保留完整阶段组、表格行及每类首个强结构候选到证据验证。"""
-    # 一个 canonical 表格行可能被 Chunker 拆成角色、表头和多个职责片段。
-    # EvidenceAssembler 才能根据真实 table 坐标判断哪些片段属于同一行；
-    # 因此重排前必须保留全部强表格候选，不能只保留首个命中。
-    closure_types = {
-        "STRUCTURAL_STAGE_HEADING",
-        "STRUCTURAL_GLOSSARY_ROW",
-        "STRUCTURAL_TABLE_ROW",
-    }
-    singleton_types = {
-        "STRUCTURAL_SECTION_HEADING_BODY",
-        "STRUCTURAL_CONTIGUOUS_LIST",
-    }
-    selected: list[str] = []
-    seen_singletons: set[str] = set()
-    for name, hits in channel_hits.items():
-        if not name.startswith("structural"):
-            continue
-        for hit in hits:
-            match_type = hit.match_type or ""
-            if match_type in closure_types:
-                selected.append(hit.chunk_id)
-            elif (
-                match_type in singleton_types
-                and match_type not in seen_singletons
-            ):
-                selected.append(hit.chunk_id)
-                seen_singletons.add(match_type)
-    return tuple(dict.fromkeys(selected))
+    """复用裁剪前结构锚点配额；不能把整条结构通道无限 must-keep。"""
+    return structural_seed_ids(channel_hits)
 
 
 def _formal_span_is_current(
@@ -4455,6 +4644,48 @@ def _emit_final(
     except RagError as error:
         error.provider_calls = (*provider_calls, *error.provider_calls)
         raise
+
+
+def _supported_generation_evidence(
+    matrix: AtomSupportMatrix,
+    atom_evidence: tuple[EvidenceItem, ...],
+    final_evidence: tuple[EvidenceItem, ...],
+) -> tuple[EvidenceItem, ...]:
+    """将已认证 Atom 支持映射到最终包的来源。
+
+    Args:
+        matrix: 与原 Atom 证据同时生成的支持矩阵。
+        atom_evidence: 重排和重编号前的原 Atom 证据。
+        final_evidence: 完成去重及组装的最终可读来源。
+
+    Returns:
+        最终包中仍对应已认证 Atom 支持的证据。
+
+    """
+    original_keys: set[str] = set()
+    keys_by_alias: dict[str, set[str]] = {}
+    for item in atom_evidence:
+        key = stable_support_key(item)
+        original_keys.add(key)
+        keys_by_alias.setdefault(item.support_id, set()).add(key)
+    supported_keys: set[str] = set()
+    for atom in matrix.atoms:
+        if atom.status is not AtomStatus.SUPPORTED:
+            continue
+        if atom.supporting_support_keys:
+            supported_keys.update(atom.supporting_support_keys)
+        else:
+            # 旧矩阵的 alias 只在其原始证据包内唯一解析，绝不读取新包同名 S。
+            for alias in atom.supporting_support_ids:
+                source_keys = keys_by_alias.get(alias, set())
+                if len(source_keys) == 1:
+                    supported_keys.update(source_keys)
+    supported_keys.intersection_update(original_keys)
+    return tuple(
+        item
+        for item in final_evidence
+        if stable_support_key(item) in supported_keys
+    )
 
 
 def _published_evidence(

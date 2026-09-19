@@ -144,6 +144,46 @@ def test_table_action_reenters_pack_from_bounded_rerank_pool() -> None:
     assert [item.citation_text for item in pack.evidence] == [source]
 
 
+def test_missing_atom_can_read_reranked_source_without_old_certificate() -> (
+    None
+):
+    """旧装配器未证明关系不能使有界池内真实原文彻底失去阅读资格。"""
+    source = "启动前须确认工装可用并完成材料登记。"
+    candidate = make_ranked_chunk(21, source).model_copy(
+        update={"rerank_rank": 1}
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="试运行",
+        relation="开工准备",
+        answer_shape=AtomAnswerShape.FACT,
+    )
+    pack = _pack(_plan(atom), (candidate,))
+    assert tuple(item.citation_text for item in pack.evidence) == (source,)
+    assert pack.per_atom_candidate_support_ids == (("A1", ("S1",)),)
+
+
+def test_old_root_document_does_not_exclude_other_authorized_source() -> None:
+    """阅读范围来自硬权限和显式来源，不能由旧装配器选中的文档推定。"""
+    root, root_item = _item(1, "启动前须备齐材料。")
+    other = make_ranked_chunk(
+        2, "开始前还须完成设备检查。", document_number=3
+    ).model_copy(update={"rerank_rank": 1})
+    atom = QueryAtom(
+        atom_id="A1",
+        target="试运行",
+        relation="启动前置条件",
+        answer_shape=AtomAnswerShape.FACT,
+    )
+    pack = _pack(_plan(atom), (root, other), root=(root_item,))
+    assert {root.hydrated.chunk.chunk_id, other.hydrated.chunk.chunk_id} == {
+        item.chunk_id for item in pack.evidence
+    }
+    assert pack.per_atom_candidate_support_ids == (
+        ("A1", tuple(item.support_id for item in pack.evidence)),
+    )
+
+
 def test_procedure_overlap_does_not_displace_root_evidence() -> None:
     """流程问句的词片重合不应先占据表格职责配额。"""
     distractor = make_ranked_chunk(
@@ -373,7 +413,7 @@ def test_compound_question_keeps_prior_stage_within_document_cap() -> None:
 
 
 def test_compound_question_keeps_distinct_reranked_primary_prose() -> None:
-    """旧装配器漏掉的高排名正文仍可按原 SourceSpan 补入证据包。"""
+    """显式来源限定内的高排名正文可补入，其他制度仍被硬边界排除。"""
     texts = (
         "跨年领到证书的，在领取年份报销并占用当年额度。",
         "报销前须向部门提交认证申请并获得审批。",
@@ -391,6 +431,20 @@ def test_compound_question_keeps_distinct_reranked_primary_prose() -> None:
         ).model_copy(update={"rerank_rank": number})
         for number, text in enumerate(texts, 1)
     )
+    candidates = tuple(
+        item.model_copy(
+            update={
+                "hydrated": item.hydrated.model_copy(
+                    update={
+                        "display_name": "other.docx"
+                        if index == 4
+                        else "fixture.docx",
+                    }
+                )
+            }
+        )
+        for index, item in enumerate(candidates)
+    )
     root = tuple(
         _evidence_item(
             candidate,
@@ -406,12 +460,14 @@ def test_compound_question_keeps_distinct_reranked_primary_prose() -> None:
             target="认证费",
             relation="跨年报销年份",
             answer_shape=AtomAnswerShape.FACT,
+            source_qualifier="fixture.docx",
         ),
         QueryAtom(
             atom_id="A2",
             target="认证费",
             relation="报销条件",
             answer_shape=AtomAnswerShape.FACT,
+            source_qualifier="fixture.docx",
         ),
     )
 

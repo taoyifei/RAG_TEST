@@ -16,6 +16,7 @@ from pydantic import (
 from rag_app.core.models.chunk import Chunk, SourceSpan, SourceSpanKind
 from rag_app.core.models.common import FrozenModel, MetadataModel
 from rag_app.core.models.document import KnowledgeBaseScope
+from rag_app.core.models.generation_packet import PreparedGenerationPacket
 from rag_app.core.models.lifecycle import IndexRevisionRef
 from rag_app.core.models.provider import ProviderCall
 
@@ -80,6 +81,7 @@ class EvidenceItem(MetadataModel):
     fusion_rank: StrictInt | None = Field(default=None, gt=0)
     rerank_rank: StrictInt | None = Field(default=None, gt=0)
     quality_flags: tuple[str, ...] = ()
+    source_identity_scope: tuple[str, ...] = Field(default=(), exclude=True)
 
     @property
     def support_id(self) -> str:
@@ -158,6 +160,12 @@ class AnswerDraft(FrozenModel):
         default="extractive", pattern=r"^(extractive|llm|natural)$"
     )
     reason_code: str | None = None
+    prepared_packet: PreparedGenerationPacket | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    previous_prepared_packets: tuple[PreparedGenerationPacket, ...] = Field(
+        default=(), exclude=True, repr=False
+    )
 
 
 class AnswerResult(FrozenModel):

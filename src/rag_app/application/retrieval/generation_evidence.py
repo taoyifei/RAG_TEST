@@ -21,13 +21,15 @@ from rag_app.application.retrieval.filters import apply_candidate_filters
 from rag_app.core.models import (
     ChannelHit,
     ChunkRole,
+    EvidenceGroup,
     EvidenceItem,
     RankedChunk,
     RetrievalPolicy,
     SearchRequest,
     SourceSpan,
 )
-from rag_app.core.models.common import freeze_json_object
+from rag_app.core.models.common import JsonObject, freeze_json_object
+from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomCandidateLink,
@@ -38,7 +40,7 @@ from rag_app.core.models.query_plan import (
 )
 from rag_app.core.query_text import named_table_label_in_query
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v6"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v7"
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
 _STRUCTURED_GROUP_TYPES = frozenset(
     {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
@@ -117,6 +119,8 @@ class GenerationEvidencePack:
     partial_group_ids: tuple[str, ...]
     missing_atom_ids: tuple[str, ...]
     pack_revision: str = GENERATION_EVIDENCE_PACK_REVISION
+    trusted_source_groups: tuple[EvidenceGroup, ...] = ()
+    per_atom_source_certificates: tuple[tuple[str, str, JsonObject], ...] = ()
 
     @property
     def evidence(self) -> tuple[EvidenceItem, ...]:
@@ -267,23 +271,14 @@ def _question_source_run(query: str, source: str) -> bool:
     words = "".join(char for char in query if "\u4e00" <= char <= "\u9fff")
     normalized_source = _normalized(source)
     return any(
-        words[index : index + _MIN_QUESTION_SOURCE_RUN]
-        in normalized_source
+        words[index : index + _MIN_QUESTION_SOURCE_RUN] in normalized_source
         for index in range(len(words) - _MIN_QUESTION_SOURCE_RUN + 1)
     )
 
 
 def _identity(item: EvidenceItem) -> tuple[object, ...]:
     """一个来源片段跨 Root/Atom/Group 的稳定去重键。"""
-    return (
-        item.document_version_id,
-        item.chunk_id,
-        item.citation_text,
-        tuple(
-            (span.node_id, span.source_start_char, span.source_end_char)
-            for span in item.source_spans
-        ),
-    )
+    return (stable_support_key(item),)
 
 
 def _rank(item: EvidenceItem) -> tuple[int, int, int, str]:
@@ -345,7 +340,7 @@ def _candidate_visible(
 
 
 def _table_rows(item: EvidenceItem) -> frozenset[str]:
-    rows = set()
+    rows: set[str] = set()
     for span in item.source_spans:
         rows.update(
             part for part in span.structural_path if _TABLE_ROW.fullmatch(part)
@@ -597,8 +592,8 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             ]
             if not quote.strip():
                 continue
-            previous = alternatives.get(span.node_id)
-            if previous is None or len(quote) > len(previous[1]):
+            previous_span = alternatives.get(span.node_id)
+            if previous_span is None or len(quote) > len(previous_span[1]):
                 alternatives[span.node_id] = (span, quote)
         if not alternatives:
             continue
@@ -649,9 +644,11 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             rows: set[int] = set()
             allowed_nodes: set[str] = set()
             valid_mapping = True
-            for atom in atoms:
+            for raw_atom in atoms:
                 metadata = (
-                    atom.get("metadata") if isinstance(atom, dict) else None
+                    raw_atom.get("metadata")
+                    if isinstance(raw_atom, dict)
+                    else None
                 )
                 if not isinstance(metadata, dict):
                     valid_mapping = False
@@ -715,6 +712,8 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             continue
         item_key = _identity(item)
         node_id = next(iter(node_ids))
+        if node_id is None:
+            continue
         same_node = (
             (
                 *table_spans_by_chunk.get(item.chunk_id, ()),
@@ -820,6 +819,8 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         if len(node_ids) != 1 or None in node_ids:
             continue
         node_id = next(iter(node_ids))
+        if node_id is None:
+            continue
         continuation = sorted(
             table_spans_by_node.get(
                 (parent.document_version_id or "", node_id), ()
@@ -907,6 +908,29 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             root_chunk_ids.add(link.chunk_id)
         else:
             linked_ids_by_chunk[link.chunk_id].add(link.atom_id)
+    # 最终有界池中的真实 SourceSpan 具有阅读资格；旧证书缺失只影响
+    # 证明与完整性。后面的 ACL、活动版本、显式来源和结构冲突仍硬过滤。
+    for candidate in ranked_candidates:
+        if candidate.rerank_rank is None:
+            continue
+        chunk = candidate.hydrated.chunk
+        for span in chunk.source_spans:
+            if not span.is_citable or span.is_repeated:
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ].strip()
+            if not quote:
+                continue
+            item = _evidence_item(candidate, span, quote, "S0")
+            key = _identity(item)
+            candidates.setdefault(key, item)
+            linked_atoms = linked_ids_by_chunk.get(chunk.chunk_id, set())
+            if chunk.chunk_id in root_chunk_ids or not linked_atoms:
+                root_keys.add(key)
+            for atom_id in linked_atoms:
+                atom_keys.add(key)
+                member_keys_by_atom.setdefault(atom_id, set()).add(key)
     atoms_by_id = {atom.atom_id: atom for atom in query_plan.atoms}
     excluded = frozenset(excluded_document_ids)
 
@@ -1254,6 +1278,18 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         complete_group_ids=tuple(complete_group_ids),
         partial_group_ids=partial_group_ids,
         missing_atom_ids=tuple(missing),
+        trusted_source_groups=tuple(
+            group.group for group in groups if group.group_id in selected_groups
+        ),
+        per_atom_source_certificates=tuple(
+            (atom_id, stable_support_key(item), freeze_json_object(certificate))
+            for atom_id, items in atom_candidates_by_atom
+            for item in items
+            if _identity(item) in selected
+            and isinstance(
+                certificate := dict(item.metadata).get("answer_support"), dict
+            )
+        ),
     )
 
 

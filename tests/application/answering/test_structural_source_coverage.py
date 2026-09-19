@@ -18,6 +18,9 @@ from rag_app.core.models.query_plan import (
     AtomSupportMatrix,
 )
 from rag_app.core.models.retrieval import NaturalClaim
+from tests.application.answering.source_contract_fixtures import (
+    trusted_list_group,
+)
 from tests.application.answering.test_natural_grounded_answer import (
     _evidence,
     _plan,
@@ -137,6 +140,7 @@ def test_group_certificate_requires_lead_in_in_claim_citations() -> None:
         matrix,
         grouped,
         None,
+        trusted_groups=(trusted_list_group(grouped, group_id=group_id),),
     )
     assert tuple(item.support_id for item in validated.supports) == (
         lead.support_id,

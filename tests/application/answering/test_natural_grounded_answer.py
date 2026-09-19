@@ -30,6 +30,7 @@ from rag_app.core.models import (
     QueryAnalysis,
 )
 from rag_app.core.models.common import freeze_json_object
+from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomStatus,
@@ -41,6 +42,7 @@ from rag_app.core.models.query_plan import (
 )
 from rag_app.core.models.retrieval import ClaimSupport, NaturalClaim
 from rag_app.core.ports import GenerationRequest
+from tests.adapters.providers.generation_packet_helpers import trusted_groups
 from tests.application.retrieval.test_descriptive_answers import (
     _POLICY,
     _candidates,
@@ -393,6 +395,7 @@ def test_natural_prompt_prunes_complete_groups_within_budget() -> None:
         citation_protocol="support-id-v2-natural-claims",
         query_plan=plan,
         atom_support_matrix=matrix,
+        trusted_source_groups=trusted_groups(grouped),
     )
     full_estimate = message_token_estimate(_natural_messages(request))
 
@@ -425,7 +428,7 @@ def test_natural_prompt_protects_named_table_row_when_budget_is_tight() -> None:
                     {
                         **dict(item.metadata),
                         "evidence_group_id": (
-                            "egrp_unrelated" if index < 2 else "egrp_named_row"
+                            "egrp_" + ("1" if index < 2 else "2") * 32
                         ),
                         "evidence_group_type": (
                             "PARAGRAPH_GROUP"
@@ -457,6 +460,7 @@ def test_natural_prompt_protects_named_table_row_when_budget_is_tight() -> None:
         citation_protocol="support-id-v2-natural-claims",
         query_plan=plan,
         atom_support_matrix=matrix,
+        trusted_source_groups=trusted_groups(grouped),
     )
     full_estimate = message_token_estimate(_natural_messages(request))
 
@@ -476,6 +480,9 @@ def test_natural_prompt_protects_direct_support_without_group() -> None:
         "无关项目的归档记录。" * 16,
         "负责人以电话报送值班人员，须在30分钟内完成。",
     )
+    direct = next(
+        item for item in evidence if item.citation_text.startswith("负责人")
+    )
     grouped = (
         evidence[0].model_copy(
             update={
@@ -488,10 +495,23 @@ def test_natural_prompt_protects_direct_support_without_group() -> None:
                 )
             }
         ),
-        evidence[1],
+        direct,
     )
     plan = _plan("报送方式和时限")
-    matrix = _matrix(plan, ((AtomStatus.SUPPORTED, (evidence[1].support_id,)),))
+    matrix = _matrix(plan, ((AtomStatus.SUPPORTED, (direct.support_id,)),))
+    matrix = matrix.model_copy(
+        update={
+            "atoms": (
+                matrix.atoms[0].model_copy(
+                    update={
+                        "supporting_support_keys": (
+                            stable_support_key(direct),
+                        ),
+                    }
+                ),
+            ),
+        }
+    )
     request = GenerationRequest(
         query=plan.standalone_query,
         evidence=grouped,
@@ -509,7 +529,7 @@ def test_natural_prompt_protects_direct_support_without_group() -> None:
     )
 
     assert [item["support_id"] for item in payload["evidence"]] == [
-        evidence[1].support_id
+        direct.support_id
     ]
 
 
