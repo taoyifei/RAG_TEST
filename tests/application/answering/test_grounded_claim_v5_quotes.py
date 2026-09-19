@@ -310,6 +310,11 @@ def test_rejection_diagnostic_preserves_raw_atom_scope_reason() -> None:
     assert diagnostic.raw_reason_code == "CLAIM_SUPPORT_OUTSIDE_ATOM"
     assert diagnostic.public_reason_code == "CLAIM_SUPPORT_NOT_OWNED"
     assert diagnostic.validator == "_validate_natural_atom_support_scope"
+    assert diagnostic.origin_module == "rag_app.application.answering.grounded"
+    assert diagnostic.origin_function == "_validate_natural_atom_support_scope"
+    assert isinstance(diagnostic.origin_line, int)
+    assert diagnostic.origin_line > 0
+    assert second.citation_text not in repr(diagnostic)
     assert diagnostic.selected_support_ids == (second.support_id,)
     assert diagnostic.allowed_support_ids == (first.support_id,)
     assert outcome.repair_calls == 0

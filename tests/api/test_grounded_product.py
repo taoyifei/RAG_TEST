@@ -43,10 +43,12 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
             assert candidate["supports"] == [
                 {
                     "support_key": evidence["support_key"],
-                    "quote": evidence["quote"],
+                    "quote": quote,
                 }
                 for evidence in data["evidence"]
+                for quote in evidence["quotes"]
             ]
+            assert candidate["context_support_keys"] == []
             content = {
                 "results": [
                     {

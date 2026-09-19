@@ -7,6 +7,7 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 
 from rag_app.core.models.common import FrozenModel
+from rag_app.core.models.evidence_group import EvidenceGroup, EvidenceGroupKind
 from rag_app.core.models.generation_packet import (
     PreparedGenerationPacket,
     stable_support_key,
@@ -15,8 +16,13 @@ from rag_app.core.models.provider import ProviderCall
 from rag_app.core.models.query import QueryAnalysis
 from rag_app.core.models.query_plan import QueryAtom
 from rag_app.core.models.retrieval import EvidenceItem, NaturalClaim
+from rag_app.core.query_text import normalize_semantic_text
+from rag_app.core.source_compatibility import (
+    source_group_contains,
+    table_cell_coordinate,
+)
 
-RELATION_REVIEW_REVISION = "wb08r-relation-review-v1"
+RELATION_REVIEW_REVISION = "wb08r-relation-review-v2"
 
 
 class RelationReviewCandidate(FrozenModel):
@@ -26,12 +32,99 @@ class RelationReviewCandidate(FrozenModel):
     claim: NaturalClaim
     atom: QueryAtom
     analysis: QueryAnalysis
+    context_support_ids: tuple[str, ...] = Field(default=(), max_length=32)
 
     @model_validator(mode="after")
     def _validate_atom(self) -> Self:
         if self.claim.atom_id != self.atom.atom_id:
             raise ValueError("RELATION_REVIEW_ATOM_MISMATCH")
         return self
+
+
+def review_context_support_ids(
+    candidate: RelationReviewCandidate,
+    evidence: tuple[EvidenceItem, ...],
+    packet: PreparedGenerationPacket,
+    trusted_groups: tuple[EvidenceGroup, ...],
+) -> tuple[str, ...]:
+    """只闭合已发送表格值的规范行名与同列表头，不借其他行或列。"""
+    registry = dict(packet.alias_to_support_key)
+    allowed = set(
+        dict(packet.per_atom_support_ids).get(candidate.atom.atom_id, ())
+    )
+    sent = tuple(
+        item
+        for item in evidence
+        if item.support_id in allowed
+        and item.publishable
+        and item.source_spans
+        and all(span.is_citable for span in item.source_spans)
+        and registry.get(item.support_id) == stable_support_key(item)
+    )
+    by_id = {item.support_id: item for item in sent}
+    selected = {support.support_id for support in candidate.claim.supports}
+    target = normalize_semantic_text(
+        candidate.analysis.semantics.target or candidate.atom.target
+    )
+    contexts: set[str] = set()
+    for support_id in selected:
+        value = by_id.get(support_id)
+        coordinate = table_cell_coordinate(value) if value is not None else None
+        if value is None or coordinate is None or coordinate[2] <= 0:
+            continue
+        value_key = stable_support_key(value)
+        reading_keys = set().union(
+            *(
+                set(keys)
+                for owner, keys in packet.retained_source_units
+                if owner in {"ROOT", candidate.atom.atom_id}
+                and value_key in keys
+            )
+        )
+        for group in trusted_groups:
+            headers = dict(group.metadata).get("canonical_header_node_ids")
+            if (
+                group.kind is not EvidenceGroupKind.TABLE_ROW_GROUP
+                or group.group_id not in packet.complete_group_ids
+                or not isinstance(headers, (list, tuple))
+                or not headers
+                or not source_group_contains(value, group)
+            ):
+                continue
+            labels: list[str] = []
+            columns: list[str] = []
+            for item in sent:
+                if (
+                    item.support_id in selected
+                    or stable_support_key(item) not in reading_keys
+                    or not source_group_contains(item, group)
+                ):
+                    continue
+                cell = table_cell_coordinate(item)
+                if cell is None or cell[0] != coordinate[0]:
+                    continue
+                nodes = {span.node_id for span in item.source_spans}
+                is_header = bool(nodes) and nodes <= set(headers)
+                if (
+                    not is_header
+                    and cell[1] == coordinate[1]
+                    and cell[2] == 0
+                    and target
+                    and normalize_semantic_text(item.citation_text) == target
+                ):
+                    labels.append(item.support_id)
+                if (
+                    is_header
+                    and cell[1] < coordinate[1]
+                    and cell[2] == coordinate[2]
+                ):
+                    columns.append(item.support_id)
+            # 缺规范表头或目标行名时保持保守，不用首行猜测、不补半组。
+            if labels and columns:
+                contexts.update((*labels, *columns))
+    return tuple(
+        item.support_id for item in sent if item.support_id in contexts
+    )
 
 
 class RelationReviewRequest(FrozenModel):
@@ -42,6 +135,7 @@ class RelationReviewRequest(FrozenModel):
         min_length=1, max_length=24
     )
     evidence: tuple[EvidenceItem, ...] = Field(min_length=1)
+    trusted_source_groups: tuple[EvidenceGroup, ...] = ()
     sent_packet: PreparedGenerationPacket
     request_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
@@ -84,6 +178,10 @@ class RelationReviewRequest(FrozenModel):
                     raise ValueError("RELATION_REVIEW_SUPPORT_OUTSIDE_ATOM")
                 if support.quote not in item.citation_text:
                     raise ValueError("RELATION_REVIEW_QUOTE_NOT_VERBATIM")
+            if candidate.context_support_ids != review_context_support_ids(
+                candidate, self.evidence, packet, self.trusted_source_groups
+            ):
+                raise ValueError("RELATION_REVIEW_CONTEXT_NOT_PROVED")
         return self
 
 

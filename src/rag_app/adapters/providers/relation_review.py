@@ -37,6 +37,7 @@ _SYSTEM = (
     "仅来源限定情形成立时必须保留全部限定，不能推广到全部情形或所有阶段。"
     "明确跨角色、跨阶段或条件冲突必须contradicted，不确定返回undetermined。"
     "supported必须原样返回该claim全部support_key和quote；不可借其他claim的引用。"
+    "context_support_keys仅解释本claim原引用的行列语境，不是可新增的事实引用。"
     "covered_scope写明来源支持的主体、关系、阶段和条件。只输出严格JSON，"
     "不输出解释、推理、新事实或改写的claim，结果必须完整对应输入claim_id。"
 )
@@ -71,6 +72,26 @@ def review_relations(
     )
 
     by_id = {item.support_id: item for item in request.evidence}
+    context_ids = {
+        support_id
+        for candidate in request.candidates
+        for support_id in candidate.context_support_ids
+    }
+    source_quotes = {
+        item.support_id: (
+            (item.citation_text,)
+            if item.support_id in context_ids
+            else tuple(
+                dict.fromkeys(
+                    support.quote
+                    for candidate in request.candidates
+                    for support in candidate.claim.supports
+                    if support.support_id == item.support_id
+                )
+            )
+        )
+        for item in request.evidence
+    }
     body = {
         "original_query": request.original_query,
         "candidates": [
@@ -78,7 +99,27 @@ def review_relations(
                 "claim_id": candidate.claim_id,
                 "claim": candidate.claim.text,
                 "atom": candidate.atom.model_dump(mode="json"),
-                "analysis": candidate.analysis.model_dump(mode="json"),
+                "semantics": candidate.analysis.semantics.model_dump(
+                    mode="json", exclude_none=True
+                ),
+                "trusted_signals": {
+                    field: getattr(candidate.analysis, field)
+                    for field in (
+                        "quoted_phrases",
+                        "identifiers",
+                        "numbers",
+                        "units",
+                        "date_version_signals",
+                        "negation_signals",
+                        "structural_table_signals",
+                    )
+                    if getattr(candidate.analysis, field)
+                },
+                "resolved_query": candidate.analysis.resolved_query,
+                "context_support_keys": [
+                    stable_support_key(by_id[support_id])
+                    for support_id in candidate.context_support_ids
+                ],
                 "supports": [
                     {
                         "support_key": stable_support_key(by_id[s.support_id]),
@@ -92,10 +133,8 @@ def review_relations(
         "evidence": [
             {
                 "support_key": stable_support_key(item),
-                "quote": item.citation_text,
-                "source_spans": [
-                    span.model_dump(mode="json") for span in item.source_spans
-                ],
+                "quotes": source_quotes[item.support_id],
+                "source_spans": safe_support_source(item)["spans"],
                 "source_label": item.source_label,
                 "heading_path": item.heading_path,
             }
@@ -161,7 +200,14 @@ def review_relations(
         else "TRANSPORT_PREPARED",
         alias_to_support_key=registry,
         support_sources=tuple(
-            safe_support_source(item) for item in request.evidence
+            {
+                **safe_support_source(item),
+                "sent_quote_sha256s": [
+                    canonical_sha256(quote)
+                    for quote in source_quotes[item.support_id]
+                ],
+            }
+            for item in request.evidence
         ),
         per_atom_support_ids=tuple(
             (atom, tuple(alias for alias in ids if alias in aliases))

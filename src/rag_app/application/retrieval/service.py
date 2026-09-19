@@ -462,7 +462,9 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": "wb08r-unified-request-relation-v9",
+                "answer_pipeline_revision": (
+                    "wb08r-unified-request-relation-v9-c2"
+                ),
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -1841,6 +1843,16 @@ class RetrievalService:
                         "relation_review_skip_reason": (
                             generated.relation_review_skip_reason
                         ),
+                        "relation_review_results": tuple(
+                            {
+                                "claim_sha256": claim_hash,
+                                "model_status": status,
+                                "server_reason": reason,
+                            }
+                            for claim_hash, status, reason in (
+                                generated.relation_review_results
+                            )
+                        ),
                         "claim_rejection_codes": (
                             generated.claim_rejection_codes
                         ),
@@ -1851,6 +1863,9 @@ class RetrievalService:
                                 "public_reason_code": item.public_reason_code,
                                 "validator_stage": item.validator_stage,
                                 "validator": item.validator,
+                                "origin_module": item.origin_module,
+                                "origin_function": item.origin_function,
+                                "origin_line": item.origin_line,
                                 "selected_support_ids": (
                                     item.selected_support_ids
                                 ),
@@ -2082,6 +2097,9 @@ class RetrievalService:
                         "public_reason_code": item.public_reason_code,
                         "validator_stage": item.validator_stage,
                         "validator": item.validator,
+                        "origin_module": item.origin_module,
+                        "origin_function": item.origin_function,
+                        "origin_line": item.origin_line,
                         "selected_support_ids": item.selected_support_ids,
                         "allowed_support_ids": item.allowed_support_ids,
                         "claim_sha256": item.claim_sha256,
@@ -2774,7 +2792,9 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": "wb08r-unified-request-relation-v9",
+                "answer_pipeline_revision": (
+                    "wb08r-unified-request-relation-v9-c2"
+                ),
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }

@@ -71,6 +71,7 @@ from rag_app.core.models.relation_review import (
     RelationReviewPayload,
     RelationReviewRequest,
     RelationReviewResponse,
+    review_context_support_ids,
     validate_review_payload,
 )
 from rag_app.core.models.retrieval import ClaimSupport, NaturalClaim
@@ -372,6 +373,9 @@ class ClaimRejectionDiagnostic:
     allowed_support_ids: tuple[str, ...]
     claim_sha256: str
     quote_sha256s: tuple[str, ...]
+    origin_module: str | None = None
+    origin_function: str | None = None
+    origin_line: int | None = None
 
 
 @dataclass(frozen=True)
@@ -389,6 +393,7 @@ class GroundedOutcome:
     relation_review_calls: int = 0
     relation_review_elapsed_ms: float = 0.0
     relation_review_skip_reason: str | None = None
+    relation_review_results: tuple[tuple[str, str, str], ...] = ()
     target_member_coverage: tuple[JsonObject, ...] = ()
     claim_rejection_codes: tuple[tuple[str, int], ...] = ()
     generated_claim_count: int = 0
@@ -2161,17 +2166,22 @@ class GroundedAnsweringService:
                 generation_evidence_pack.per_atom_source_certificates,
             )
 
-        def validate_source_excerpt(claim: AnswerClaim) -> bool:
+        def validate_source_excerpt(
+            claim: AnswerClaim, atom_id: str | None = None
+        ) -> bool:
             """服务端摘录也执行最终事实核验，不能借回退绕过主体边界。
 
             Args:
                 claim: 即将发布的最终原文事实及逐字引用。
+                atom_id: 交点摘录指定的当前 Atom；普通摘录保持原选择规则。
 
             Returns:
                 至少一个被分配的 Atom 完整事实核验通过时为 True。
 
             """
             for atom in query_plan.atoms:
+                if atom_id is not None and atom.atom_id != atom_id:
+                    continue
                 if not {
                     support.support_id for support in claim.supports
                 } <= set(linked_ids.get(atom.atom_id, ())):
@@ -2249,6 +2259,7 @@ class GroundedAnsweringService:
                 generation_evidence_pack.complete_group_ids,
                 require_named_row=True,
                 validate_claim=validate_source_excerpt,
+                validate_atom_claim=validate_source_excerpt,
             )
             if named_row is not None:
                 row_answer, row_ids, row_atoms = named_row
@@ -2341,6 +2352,7 @@ class GroundedAnsweringService:
         relation_review_calls = 0
         relation_review_elapsed_ms = 0.0
         relation_review_skip_reason: str | None = "NO_UNDETERMINED_CLAIM"
+        relation_review_results: list[tuple[str, str, str]] = []
         pending_relations: list[NaturalClaim] = []
         pending_diagnostics: dict[NaturalClaim, ClaimRejectionDiagnostic] = {}
         generation_started: float | None = None
@@ -2619,12 +2631,24 @@ class GroundedAnsweringService:
                         )
                     )
 
-        def review_pending() -> None:  # noqa: PLR0915
+        def review_pending() -> None:  # noqa: PLR0912, PLR0915
             """对已发送且只差语义判断的事实使用唯一补充名额。"""
             nonlocal relation_review_calls, relation_review_elapsed_ms
             nonlocal relation_review_skip_reason
             if not pending_relations:
                 return
+            unique = tuple(dict.fromkeys(pending_relations))
+
+            def observed(natural: NaturalClaim, status: str, code: str) -> None:
+                """仅保留事实摘要、固定模型状态和服务器判定码。"""
+                relation_review_results.append(
+                    (
+                        hashlib.sha256(natural.text.encode()).hexdigest(),
+                        status,
+                        code,
+                    )
+                )
+
             review_method = getattr(
                 type(self.generator), "review_relations", None
             )
@@ -2642,6 +2666,10 @@ class GroundedAnsweringService:
                 relation_review_skip_reason = (
                     "NO_SENT_PACKET_OR_PROVIDER_DEADLINE"
                 )
+                for natural in unique:
+                    observed(
+                        natural, "NOT_OBSERVED", relation_review_skip_reason
+                    )
                 return
             deadline = generation_started + timeout
             outer_deadline = getattr(cancellation, "deadline_monotonic", None)
@@ -2649,30 +2677,50 @@ class GroundedAnsweringService:
                 deadline = min(deadline, outer_deadline)
             if deadline <= monotonic():
                 relation_review_skip_reason = "DEADLINE_EXHAUSTED"
+                for natural in unique:
+                    observed(
+                        natural, "NOT_OBSERVED", relation_review_skip_reason
+                    )
                 return
             atoms = {atom.atom_id: atom for atom in query_plan.atoms}
-            unique = tuple(dict.fromkeys(pending_relations))
+            candidates = tuple(
+                RelationReviewCandidate(
+                    claim_id=f"R{index}",
+                    claim=natural,
+                    atom=atoms[natural.atom_id],
+                    analysis=_natural_atom_analysis(
+                        atoms[natural.atom_id], analysis
+                    ),
+                )
+                for index, natural in enumerate(unique, 1)
+            )
+            candidates = tuple(
+                candidate.model_copy(
+                    update={
+                        "context_support_ids": review_context_support_ids(
+                            candidate, evidence, packet, trusted_groups
+                        )
+                    }
+                )
+                for candidate in candidates
+            )
             selected_ids = {
                 support.support_id
                 for natural in unique
                 for support in natural.supports
             }
+            selected_ids.update(
+                support_id
+                for candidate in candidates
+                for support_id in candidate.context_support_ids
+            )
             request = RelationReviewRequest(
                 original_query=query_plan.original_query,
-                candidates=tuple(
-                    RelationReviewCandidate(
-                        claim_id=f"R{index}",
-                        claim=natural,
-                        atom=atoms[natural.atom_id],
-                        analysis=_natural_atom_analysis(
-                            atoms[natural.atom_id], analysis
-                        ),
-                    )
-                    for index, natural in enumerate(unique, 1)
-                ),
+                candidates=candidates,
                 evidence=tuple(
                     item for item in evidence if item.support_id in selected_ids
                 ),
+                trusted_source_groups=trusted_groups,
                 sent_packet=packet,
                 request_id=request_id,
                 attempt_id=uuid4().hex,
@@ -2692,9 +2740,32 @@ class GroundedAnsweringService:
             started = monotonic()
             try:
                 response = review_method(self.generator, request)
+            except (RagError, ValueError) as error:
+                reason = (
+                    "RELATION_REVIEW_RESPONSE_INVALID"
+                    if isinstance(error, ProviderInvalidResponse)
+                    else error.code
+                    if isinstance(error, RagError)
+                    and error.code
+                    in {
+                        "RELATION_REVIEW_INPUT_BUDGET_EXCEEDED",
+                        "RELATION_REVIEW_DEADLINE_EXHAUSTED",
+                        "RELATION_REVIEW_RESPONSE_INVALID",
+                    }
+                    else "RELATION_REVIEW_PROVIDER_ERROR"
+                )
+                for candidate in request.candidates:
+                    observed(candidate.claim, "NOT_OBSERVED", reason)
+                raise
             finally:
                 relation_review_elapsed_ms = (monotonic() - started) * 1000
             if not isinstance(response, RelationReviewResponse):
+                for candidate in request.candidates:
+                    observed(
+                        candidate.claim,
+                        "NOT_OBSERVED",
+                        "RELATION_REVIEW_RESPONSE_INVALID",
+                    )
                 raise ValueError("关系复核没有返回严格协议。")
             calls.append(response.call)
             prepared_packets.append(response.prepared_packet)
@@ -2708,6 +2779,9 @@ class GroundedAnsweringService:
             for result in response.results:
                 candidate = by_claim[result.claim_id]
                 if result.status != "supported":
+                    observed(
+                        candidate.claim, result.status, "MODEL_NOT_SUPPORTED"
+                    )
                     continue
                 units = tuple(
                     by_id[s.support_id] for s in candidate.claim.supports
@@ -2715,6 +2789,10 @@ class GroundedAnsweringService:
                 scope = result.covered_scope
                 source_scope = "\n".join(
                     [s.quote for s in candidate.claim.supports]
+                    + [
+                        by_id[support_id].citation_text
+                        for support_id in candidate.context_support_ids
+                    ]
                     + [
                         heading
                         for item in units
@@ -2732,6 +2810,11 @@ class GroundedAnsweringService:
                         *scope.conditions,
                     )
                 ):
+                    observed(
+                        candidate.claim,
+                        result.status,
+                        "SCOPE_NOT_IN_BOUND_SOURCE",
+                    )
                     continue
                 plain = AnswerClaim(
                     text=candidate.claim.text, supports=candidate.claim.supports
@@ -2740,19 +2823,30 @@ class GroundedAnsweringService:
                     relation_review_key(candidate.atom, plain, units)
                 )
                 # 引用、角色、阶段、数字和条件硬门再次运行，模型不能覆盖它们。
-                claim = _validated_natural_claim(
-                    candidate.claim,
-                    query_plan,
-                    atom_support_matrix,
-                    _atom_validation_evidence(
-                        candidate.atom.atom_id,
-                        evidence,
-                        generation_evidence_pack.per_atom_source_certificates
-                        if generation_evidence_pack
-                        else (),
-                    ),
-                    analysis,
-                    trusted_groups=trusted_groups,
+                try:
+                    claim = _validated_natural_claim(
+                        candidate.claim,
+                        query_plan,
+                        atom_support_matrix,
+                        _atom_validation_evidence(
+                            candidate.atom.atom_id,
+                            evidence,
+                            generation_evidence_pack.per_atom_source_certificates
+                            if generation_evidence_pack
+                            else (),
+                        ),
+                        analysis,
+                        trusted_groups=trusted_groups,
+                    )
+                except (ValidationFailed, ValueError):
+                    observed(
+                        candidate.claim,
+                        result.status,
+                        "HARD_VALIDATOR_REJECTED",
+                    )
+                    raise
+                observed(
+                    candidate.claim, result.status, "RELATION_REVIEW_VALIDATED"
                 )
                 accepted.append(
                     ValidatedNaturalClaim(
@@ -2941,6 +3035,7 @@ class GroundedAnsweringService:
                 generation_evidence_pack.complete_group_ids,
                 diagnostic_reasons=fallback_diagnostics,
                 validate_claim=validate_source_excerpt,
+                validate_atom_claim=validate_source_excerpt,
             )
             extractive_fallback_reason = (
                 fallback_diagnostics[-1]
@@ -2970,6 +3065,7 @@ class GroundedAnsweringService:
                     relation_review_calls=relation_review_calls,
                     relation_review_elapsed_ms=relation_review_elapsed_ms,
                     relation_review_skip_reason=relation_review_skip_reason,
+                    relation_review_results=tuple(relation_review_results),
                     claim_rejection_codes=tuple(
                         sorted(claim_rejections.items())
                     ),
@@ -3092,6 +3188,7 @@ class GroundedAnsweringService:
                 relation_review_calls=relation_review_calls,
                 relation_review_elapsed_ms=relation_review_elapsed_ms,
                 relation_review_skip_reason=relation_review_skip_reason,
+                relation_review_results=tuple(relation_review_results),
                 claim_rejection_codes=tuple(sorted(claim_rejections.items())),
                 generated_claim_count=generated_claim_count,
                 accepted_claim_count=len(accepted),
@@ -3162,6 +3259,7 @@ class GroundedAnsweringService:
             relation_review_calls=relation_review_calls,
             relation_review_elapsed_ms=relation_review_elapsed_ms,
             relation_review_skip_reason=relation_review_skip_reason,
+            relation_review_results=tuple(relation_review_results),
             claim_rejection_codes=tuple(sorted(claim_rejections.items())),
             generated_claim_count=generated_claim_count,
             accepted_claim_count=len(accepted),
@@ -3811,6 +3909,107 @@ def _fallback_complete_selected_nodes(
     return completed
 
 
+def _certified_table_excerpts(  # noqa: PLR0912
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    linked_ids: dict[str, tuple[str, ...]],
+    validate_atom_claim: Callable[[AnswerClaim, str], bool] | None,
+) -> tuple[str, tuple[str, ...], frozenset[str]] | None:
+    """原有交点证书的三个成员必须一起进入最终事实门。"""
+    if validate_atom_claim is None:
+        return None
+    lines: list[str] = []
+    ids: list[str] = []
+    covered: set[str] = set()
+    for atom in plan.atoms:
+        semantics = _natural_atom_analysis(atom, None).semantics
+        allowed = set(linked_ids.get(atom.atom_id, ()))
+        seen: set[tuple[str, ...]] = set()
+        for item in evidence:
+            certificate = dict(item.metadata).get("answer_support")
+            if not (
+                isinstance(certificate, dict)
+                and certificate.get("status") == "SUPPORTED"
+                and certificate.get("support_reason") == "TABLE_INTERSECTION"
+                and semantics.target
+                and semantics.relation
+                and normalize_semantic_text(
+                    str(certificate.get("query_target") or "")
+                )
+                == normalize_semantic_text(semantics.target)
+                and normalize_semantic_text(
+                    str(
+                        certificate.get("requested_relation_or_attribute") or ""
+                    )
+                )
+                == normalize_semantic_text(semantics.relation)
+            ):
+                continue
+            nodes = certificate.get("supporting_span_ids")
+            if not isinstance(nodes, list) or not all(
+                isinstance(node, str) for node in nodes
+            ):
+                continue
+            identity = tuple(node for node in nodes if isinstance(node, str))
+            if (
+                len(set(identity)) != _TABLE_INTERSECTION_SPAN_COUNT
+                or identity in seen
+            ):
+                continue
+            seen.add(identity)
+            units = tuple(
+                unit
+                for unit in evidence
+                if unit.support_id in allowed
+                and dict(unit.metadata).get("answer_support") == certificate
+                and len(unit.source_spans) == 1
+                and unit.source_spans[0].node_id in identity
+            )
+            if len(units) != _TABLE_INTERSECTION_SPAN_COUNT:
+                continue
+            try:
+                _validate_table_claim_certificate(units)
+            except ValidationFailed:
+                continue
+            if source_compatibility(units).reason != "TABLE_INTERSECTION":
+                continue
+            values = tuple(
+                unit
+                for unit in units
+                if (coordinate := table_cell_coordinate(unit)) is not None
+                and coordinate[1] > 0
+                and coordinate[2] > 0
+            )
+            if len(values) != 1:
+                continue
+            claim = AnswerClaim(
+                text=values[0].citation_text,
+                supports=tuple(
+                    ClaimSupport(
+                        support_id=unit.support_id, quote=unit.citation_text
+                    )
+                    for unit in units
+                ),
+            )
+            try:
+                _validate_natural_request_support(atom, claim, units, None)
+            except ValidationFailed:
+                continue
+            if not validate_atom_claim(claim, atom.atom_id):
+                continue
+            refs = " ".join(f"[{unit.support_id}]" for unit in units)
+            lines.append(f"- {claim.text} {refs}")
+            ids.extend(unit.support_id for unit in units)
+            covered.add(atom.atom_id)
+    if not lines:
+        return None
+    return (
+        "资料中与该问题直接相关的规定如下：\n" + "\n".join(lines),
+        tuple(dict.fromkeys(ids)),
+        frozenset(covered),
+    )
+
+
 def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
@@ -3820,6 +4019,7 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
     require_named_row: bool = False,
     diagnostic_reasons: list[str] | None = None,
     validate_claim: Callable[[AnswerClaim], bool] | None = None,
+    validate_atom_claim: Callable[[AnswerClaim, str], bool] | None = None,
 ) -> tuple[str, tuple[str, ...], frozenset[str]] | None:
     """模型未形成可发布事实时，仅展示相关且可引用的来源原句。
 
@@ -3831,6 +4031,7 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
         require_named_row: 是否只允许带明确行名的完整表格行。
         diagnostic_reasons: 可选的 SAFE 失败原因接收列表，不含正文。
         validate_claim: 应用最终事实门；未通过的摘录不得进入渲染器。
+        validate_atom_claim: 交点摘录必须指定当前 Atom 并保留完整根问题约束。
 
     Returns:
         可发布原句、Support ID 与覆盖 Atom；无安全结果时返回 ``None``。
@@ -3845,6 +4046,11 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
     if not linked_ids:
         reject("NO_LINKED_SUPPORTS")
         return None
+    certified_excerpt = _certified_table_excerpts(
+        plan, evidence, linked_ids, validate_atom_claim
+    )
+    if certified_excerpt is not None:
+        return certified_excerpt
     scoped_versions = _contextual_source_versions(plan, evidence)
     related = {
         support_id
@@ -5439,12 +5645,27 @@ def _claim_rejection_diagnostic(
         validator = None
     if not isinstance(validator, str):
         validator = "_validated_natural_claim"
+    # 只记录仓库代码位置；不读取异常正文、局部变量或业务内容。
+    origin_module = None
+    origin_function = None
+    origin_line = None
+    traceback = error.__traceback__
+    while traceback is not None:
+        module = traceback.tb_frame.f_globals.get("__name__", "")
+        if isinstance(module, str) and module.startswith("rag_app."):
+            origin_module = module
+            origin_function = traceback.tb_frame.f_code.co_name
+            origin_line = traceback.tb_lineno
+        traceback = traceback.tb_next
     return ClaimRejectionDiagnostic(
         atom_id=natural.atom_id,
         raw_reason_code=raw_reason,
         public_reason_code=public_reason,
         validator_stage=validator_stage,
         validator=validator,
+        origin_module=origin_module,
+        origin_function=origin_function,
+        origin_line=origin_line,
         selected_support_ids=tuple(
             support.support_id for support in natural.supports
         ),
