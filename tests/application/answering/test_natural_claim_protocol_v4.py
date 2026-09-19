@@ -51,7 +51,11 @@ def _completion(payload: dict[str, object]) -> ChatCompletion:
 
 
 def test_model_schema_contains_only_single_atom_claims() -> None:
-    assert set(_NaturalDraftPayload.model_fields) == {"claims"}
+    assert set(_NaturalDraftPayload.model_fields) == {
+        "claims",
+        "table_fact_selections",
+        "unanswered_atom_ids",
+    }
     assert set(NaturalClaim.model_fields) == {
         "atom_id",
         "text",
@@ -114,7 +118,9 @@ def test_model_cannot_report_coverage_or_repeat_quote() -> None:
             _natural_answer_draft(_completion({**valid, **extra}), request)
 
 
-def test_bad_claim_does_not_delete_valid_claim_after_repair_failure() -> None:
+def test_bad_claim_does_not_delete_valid_claim_without_cross_atom_repair() -> (
+    None
+):
     evidence = _evidence("甲部门保存记录 14 天。", "乙部门审核记录 3 天。")
     by_text = {item.citation_text: item.support_id for item in evidence}
     first_id = by_text["甲部门保存记录 14 天。"]
@@ -128,21 +134,18 @@ def test_bad_claim_does_not_delete_valid_claim_after_repair_failure() -> None:
         ),
     )
     generator = Mock()
-    generator.generate.side_effect = (
-        _draft(
-            (
-                _claim("C1", "甲部门保存记录 14 天。", "A1", first_id),
-                _claim(
-                    "C2",
-                    "乙部门审核记录 4 天。",
-                    "A2",
-                    second_id,
-                    "乙部门审核记录 3 天。",
-                ),
+    generator.generate.return_value = _draft(
+        (
+            _claim("C1", "甲部门保存记录 14 天。", "A1", first_id),
+            _claim(
+                "C2",
+                "乙部门审核记录 4 天。",
+                "A2",
+                second_id,
+                "乙部门审核记录 3 天。",
             ),
-            plan,
         ),
-        ValueError("repair contract invalid"),
+        plan,
     )
 
     outcome = _answer(generator, evidence, plan, matrix)
@@ -153,10 +156,8 @@ def test_bad_claim_does_not_delete_valid_claim_after_repair_failure() -> None:
     assert outcome.reason_code == "LIMITED_ANSWER"
     assert outcome.atom_coverage == (("A1", "SUPPORTED"), ("A2", "MISSING"))
     assert outcome.claim_rejection_codes == (("CLAIM_NUMBER_MISMATCH", 1),)
-    assert outcome.repair_calls == 1
-    repair = generator.generate.call_args_list[1].args[0]
-    assert repair.repair_atom_ids == ("A2",)
-    assert tuple(item.support_id for item in repair.evidence) == (second_id,)
+    assert outcome.repair_calls == 0
+    assert generator.generate.call_count == 1
 
 
 def test_invalid_json_does_not_trigger_second_generation() -> None:

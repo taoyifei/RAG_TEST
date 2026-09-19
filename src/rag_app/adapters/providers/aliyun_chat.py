@@ -63,6 +63,7 @@ from rag_app.core.models.retrieval import (
     ClaimSupport,
     EvidenceItem,
     NaturalClaim,
+    TableFactSelection,
 )
 from rag_app.core.ports import CancellationPort
 from rag_app.core.ports.generator import GenerationRequest
@@ -158,9 +159,9 @@ _NATURAL_GROUNDED_SYSTEM = (
     "每条事实只绑定能直接证明它的Atom和support_id。"
     "对每个support_id逐字复制覆盖该事实的完整相关原句或结构成员作为quote；"
     "若原句分散在多个ID中，分别引用这些ID，不把半句拼成未经证明的新事实。"
-    "若提供table_fact_units，对应Atom只选择fact_support_id作为事实引用；"
-    "context_support_ids只是已认证的行名或表头语境，不得单独作为事实引用，"
-    "服务端会在模型选中事实值后补齐这些结构依赖。"
+    "若提供table_facts，表格回答只能在table_fact_selections中选择fact_id；"
+    "不要把行名、表头或值改写成普通claims。行名和表头只是物理结构依赖，"
+    "不能单独成为事实；服务端会按fact_id恢复值及全部结构来源。"
     "source_structure.table_cell是真实表格坐标；仅用来关联同表的行列，"
     "不能从坐标推测未提供的表头、主体或值。"
     "列表和流程须按来源顺序逐项表达，不把未给出的成员补齐。"
@@ -169,7 +170,9 @@ _NATURAL_GROUNDED_SYSTEM = (
     "目录项只可证明标题、存在性、分类和参考对象，不能证明模板正文。"
     '仅输出JSON对象：{"claims":[{"atom_id":"A1",'
     '"text":"自然语言事实句","supports":'
-    '[{"support_id":"S1","quote":"证据中的逐字片段"}]}]}。'
+    '[{"support_id":"S1","quote":"证据中的逐字片段"}]}],'
+    '"table_fact_selections":[{"atom_id":"A1","fact_id":"sha256:..."}],'
+    '"unanswered_atom_ids":[]}。'
     "不得输出answer、claim_id或覆盖状态；无法支持时输出空claims。"
 )
 
@@ -177,7 +180,29 @@ _NATURAL_GROUNDED_SYSTEM = (
 class _NaturalDraftPayload(FrozenModel):
     """模型产生事实和逐字引文；覆盖与 Claim ID 由服务端计算。"""
 
-    claims: tuple[NaturalClaim, ...] = Field(max_length=_MAX_CLAIMS)
+    claims: tuple[NaturalClaim, ...] = Field(default=(), max_length=_MAX_CLAIMS)
+    table_fact_selections: tuple[TableFactSelection, ...] = Field(
+        default=(), max_length=_MAX_CLAIMS
+    )
+    unanswered_atom_ids: tuple[str, ...] = Field(default=(), max_length=4)
+
+    @model_validator(mode="after")
+    def _validate_selections(self) -> _NaturalDraftPayload:
+        selection_keys = [
+            (selection.atom_id, selection.fact_id)
+            for selection in self.table_fact_selections
+        ]
+        if len(selection_keys) != len(set(selection_keys)):
+            raise ValueError("表格事实选择不允许重复。")
+        if len(self.unanswered_atom_ids) != len(set(self.unanswered_atom_ids)):
+            raise ValueError("未回答 Atom 不允许重复。")
+        answered = {
+            *(claim.atom_id for claim in self.claims),
+            *(selection.atom_id for selection in self.table_fact_selections),
+        }
+        if answered & set(self.unanswered_atom_ids):
+            raise ValueError("同一 Atom 不能同时回答并标记为未回答。")
+        return self
 
 
 class ChatMessage(FrozenModel):
@@ -702,6 +727,7 @@ class _PreparedMessages:
     pre_budget_support_keys: frozenset[str]
     retained_source_units: tuple[tuple[str, tuple[str, ...]], ...] = ()
     input_budget_exceeded: bool = False
+    retained_table_fact_ids: tuple[str, ...] = ()
 
 
 def _natural_messages(
@@ -755,14 +781,47 @@ class _TableProofUnit:
     atom_id: str | None
     support_ids: frozenset[str]
     reason: str
+    fact_id: str | None = None
+    value_support_ids: tuple[str, ...] = ()
     fact_support_id: str | None = None
     context_support_ids: tuple[str, ...] = ()
 
 
-def _table_proof_units(
+def _table_proof_units(  # noqa: PLR0912
     candidates: tuple[EvidenceItem, ...], request: GenerationRequest
 ) -> tuple[_TableProofUnit, ...]:
     """复用统一来源合同认证最小行列单元，不以组字符串认证表格。"""
+    if request.physical_table_facts:
+        available_ids = {item.support_id for item in candidates}
+        allowed = _natural_allowance(request)
+        fact_by_id = {
+            fact.fact_id: fact for fact in request.physical_table_facts
+        }
+        physical_units: list[_TableProofUnit] = []
+        for binding in request.atom_fact_bindings:
+            fact = fact_by_id.get(binding.fact_id)
+            if fact is None:
+                continue
+            support_ids = frozenset(fact.all_support_ids)
+            if not support_ids <= available_ids or not support_ids <= set(
+                allowed.get(binding.atom_id, available_ids)
+            ):
+                continue
+            physical_units.append(
+                _TableProofUnit(
+                    atom_id=binding.atom_id,
+                    support_ids=support_ids,
+                    reason="PHYSICAL_TABLE_FACT",
+                    fact_id=fact.fact_id,
+                    value_support_ids=fact.value_support_ids,
+                    context_support_ids=tuple(
+                        support_id
+                        for support_id in fact.all_support_ids
+                        if support_id not in fact.value_support_ids
+                    ),
+                )
+            )
+        return tuple(dict.fromkeys(physical_units))
     scoped_certificates = {
         (atom_id, key): dict(certificate)
         for atom_id, key, certificate in request.per_atom_source_certificates
@@ -832,8 +891,7 @@ def _table_proof_units(
                     values = tuple(
                         item
                         for item, cell in located
-                        if cell[1] == label_cell[1]
-                        and cell[2] != label_cell[2]
+                        if cell[1] == label_cell[1] and cell[2] != label_cell[2]
                     )
                     if len(values) == 1:
                         fact_support_id = values[0].support_id
@@ -845,9 +903,7 @@ def _table_proof_units(
             result.append(
                 _TableProofUnit(
                     atom_id=atom_id,
-                    support_ids=frozenset(
-                        item.support_id for item in units
-                    ),
+                    support_ids=frozenset(item.support_id for item in units),
                     reason=decision.reason,
                     fact_support_id=fact_support_id,
                     context_support_ids=context_support_ids,
@@ -1161,13 +1217,23 @@ def _prepare_natural_messages(  # noqa: PLR0915
                             "atom_id": unit.atom_id,
                             "role": (
                                 "fact_value"
-                                if unit.fact_support_id == item.support_id
+                                if item.support_id
+                                in (
+                                    unit.value_support_ids
+                                    or (
+                                        (unit.fact_support_id,)
+                                        if unit.fact_support_id is not None
+                                        else ()
+                                    )
+                                )
                                 else "context_only"
                             ),
+                            "fact_id": unit.fact_id,
                         }
                         for unit in table_proof_units
                         if unit.atom_id is not None
-                        and unit.reason == "TABLE_INTERSECTION"
+                        and unit.reason
+                        in {"TABLE_INTERSECTION", "PHYSICAL_TABLE_FACT"}
                         and item.support_id in unit.support_ids
                     )
                     if table_roles:
@@ -1226,7 +1292,34 @@ def _prepare_natural_messages(  # noqa: PLR0915
             payload["original_query"] = plan.original_query
             payload["resolved_root_query"] = plan.resolved_root_query
         current_ids = {item.support_id for item in items}
-        table_fact_units = tuple(
+        physical_facts = {
+            fact.fact_id: fact for fact in request.physical_table_facts
+        }
+        table_facts = tuple(
+            {
+                "atom_id": unit.atom_id,
+                "fact_id": unit.fact_id,
+                "value_support_ids": unit.value_support_ids,
+                "row_label_support_ids": physical_facts[
+                    unit.fact_id
+                ].row_label_support_ids,
+                "headers": tuple(
+                    {
+                        "support_ids": header.support_ids,
+                        "column_indexes": header.column_indexes,
+                    }
+                    for header in physical_facts[unit.fact_id].headers
+                ),
+            }
+            for unit in table_proof_units
+            if unit.atom_id is not None
+            and unit.reason == "PHYSICAL_TABLE_FACT"
+            and unit.fact_id in physical_facts
+            and unit.support_ids <= current_ids
+        )
+        if table_facts:
+            payload["table_facts"] = table_facts
+        legacy_table_fact_units = tuple(
             {
                 "atom_id": unit.atom_id,
                 "fact_support_id": unit.fact_support_id,
@@ -1238,8 +1331,8 @@ def _prepare_natural_messages(  # noqa: PLR0915
             and unit.fact_support_id is not None
             and unit.support_ids <= current_ids
         )
-        if table_fact_units:
-            payload["table_fact_units"] = table_fact_units
+        if legacy_table_fact_units:
+            payload["table_fact_units"] = legacy_table_fact_units
         if request.repair_atom_ids:
             payload["repair_only"] = True
             payload["accepted_claim_ids"] = request.accepted_claim_ids
@@ -1305,6 +1398,12 @@ def _prepare_natural_messages(  # noqa: PLR0915
             for owner, ids in retained_units
         ),
         budget_exceeded,
+        tuple(
+            unit.fact_id
+            for unit in table_proof_units
+            if unit.fact_id is not None
+            and unit.support_ids <= {item.support_id for item in candidates}
+        ),
     )
 
 
@@ -1412,6 +1511,7 @@ def _prepared_packet(
             if alias in prepared.protected_ids
         ),
         retained_source_units=prepared.retained_source_units,
+        retained_table_fact_ids=prepared.retained_table_fact_ids,
         preparation_failure=(
             "GENERATION_INPUT_BUDGET_EXCEEDED"
             if prepared.input_budget_exceeded
@@ -1448,6 +1548,18 @@ def _prepared_packet(
                 if item.support_id in sent_ids
             ),
             "per_atom_candidate_support_ids": per_atom,
+            "physical_table_facts": tuple(
+                fact
+                for fact in request.physical_table_facts
+                if fact.fact_id in prepared.retained_table_fact_ids
+                and set(fact.all_support_ids) <= sent_ids
+            ),
+            "atom_fact_bindings": tuple(
+                binding
+                for binding in request.atom_fact_bindings
+                if binding.fact_id in prepared.retained_table_fact_ids
+                and binding.atom_id in {atom_id for atom_id, _ids in per_atom}
+            ),
         }
     )
     return narrowed, packet
@@ -1636,8 +1748,7 @@ def _table_certificate(  # noqa: PLR0911
                 for candidate_atom, key, certificate in (
                     request.per_atom_source_certificates
                 )
-                if candidate_atom == atom_id
-                and key == stable_support_key(item)
+                if candidate_atom == atom_id and key == stable_support_key(item)
             ),
             None,
         )
@@ -1736,22 +1847,14 @@ def _close_verified_table_supports(
     located_pool = tuple(
         (item, certificate, cell)
         for item in pool
-        if (
-            certificate := _table_certificate(
-                item, request, atom_id=atom_id
-            )
-        )
+        if (certificate := _table_certificate(item, request, atom_id=atom_id))
         is not None
         and (cell := _table_cell(item)) is not None
     )
     selected_locations = tuple(
         (item, certificate, cell)
         for item in selected
-        if (
-            certificate := _table_certificate(
-                item, request, atom_id=atom_id
-            )
-        )
+        if (certificate := _table_certificate(item, request, atom_id=atom_id))
         is not None
         and (cell := _table_cell(item)) is not None
     )
@@ -1835,11 +1938,7 @@ def _closed_verified_table_target(
         (item, certificate, cell)
         for support in claim.supports
         if (item := evidence[support.support_id])
-        and (
-            certificate := _table_certificate(
-                item, request, atom_id=atom_id
-            )
-        )
+        and (certificate := _table_certificate(item, request, atom_id=atom_id))
         is not None
         and (cell := _table_cell(item)) is not None
     )
@@ -2482,6 +2581,55 @@ def _call_usage(call: ProviderCall, usage: ChatUsage) -> ProviderCall:
     )
 
 
+def _physical_table_claim(
+    selection: TableFactSelection, request: GenerationRequest
+) -> NaturalClaim:
+    """将模型选择的事实 ID 展开为服务端登记的全部物理来源。"""
+    bindings = {
+        (binding.atom_id, binding.fact_id)
+        for binding in request.atom_fact_bindings
+    }
+    facts = {fact.fact_id: fact for fact in request.physical_table_facts}
+    evidence = {item.support_id: item for item in request.evidence}
+    if (selection.atom_id, selection.fact_id) not in bindings:
+        raise ValueError("TABLE_FACT_BINDING_UNKNOWN")
+    fact = facts.get(selection.fact_id)
+    if fact is None or not set(fact.all_support_ids) <= evidence.keys():
+        raise ValueError("TABLE_FACT_SOURCE_INCOMPLETE")
+    value_items = tuple(evidence[value] for value in fact.value_support_ids)
+    decision = source_compatibility(value_items)
+    if decision.reason == "CONTIGUOUS_NODE":
+        by_id = {item.support_id: item for item in value_items}
+        text_parts: list[str] = []
+        previous_end: int | None = None
+        for support_id in decision.ordered_support_ids:
+            item = by_id[support_id]
+            span = item.source_spans[0]
+            start = span.source_start_char
+            end = span.source_end_char
+            if start is None or end is None:
+                raise ValueError("TABLE_FACT_SOURCE_RANGE_MISSING")
+            overlap = (
+                max(0, previous_end - start) if previous_end is not None else 0
+            )
+            text_parts.append(item.citation_text[overlap:])
+            previous_end = max(previous_end or end, end)
+        text = "".join(text_parts)
+    else:
+        text = "\n".join(item.citation_text for item in value_items)
+    return NaturalClaim(
+        atom_id=selection.atom_id,
+        text=text,
+        supports=tuple(
+            ClaimSupport(
+                support_id=support_id,
+                quote=evidence[support_id].citation_text,
+            )
+            for support_id in fact.all_support_ids
+        ),
+    )
+
+
 def _natural_answer_draft(
     completion: ChatCompletion,
     request: GenerationRequest,
@@ -2492,8 +2640,31 @@ def _natural_answer_draft(
     payload = _NaturalDraftPayload.model_validate(
         extract_json_object(completion.content)
     )
+    atom_ids = {atom.atom_id for atom in request.query_plan.atoms}
+    if not set(payload.unanswered_atom_ids) <= atom_ids:
+        raise ValueError("UNKNOWN_UNANSWERED_ATOM")
+    output_atom_ids = {
+        *(claim.atom_id for claim in payload.claims),
+        *(selection.atom_id for selection in payload.table_fact_selections),
+        *payload.unanswered_atom_ids,
+    }
+    allowed_output_atom_ids = set(request.repair_atom_ids) or atom_ids
+    if not output_atom_ids <= allowed_output_atom_ids:
+        raise ValueError("REPAIR_ATOM_SCOPE_VIOLATION")
+    bound_supports: dict[str, set[str]] = {}
+    fact_by_id = {fact.fact_id: fact for fact in request.physical_table_facts}
+    for binding in request.atom_fact_bindings:
+        fact = fact_by_id.get(binding.fact_id)
+        if fact is not None:
+            bound_supports.setdefault(binding.atom_id, set()).update(
+                fact.all_support_ids
+            )
     closed_claims: list[NaturalClaim] = []
     for claim in payload.claims:
+        if {support.support_id for support in claim.supports} & (
+            bound_supports.get(claim.atom_id, set())
+        ):
+            raise ValueError("TABLE_FACT_ID_REQUIRED")
         closed = _close_verified_table_supports(
             AnswerClaim(text=claim.text, supports=claim.supports),
             request,
@@ -2509,6 +2680,10 @@ def _natural_answer_draft(
                 supports=normalized.supports,
             )
         )
+    closed_claims.extend(
+        _physical_table_claim(selection, request)
+        for selection in payload.table_fact_selections
+    )
     claims = tuple(closed_claims)
     ids = tuple(
         dict.fromkeys(

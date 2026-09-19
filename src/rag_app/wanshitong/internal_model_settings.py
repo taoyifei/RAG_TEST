@@ -33,6 +33,7 @@ _LLM_MODEL = "RAG_WANSHITONG_LLM_MODEL"
 _LLM_DISABLE_THINKING_SUPPORTED = (
     "RAG_WANSHITONG_LLM_DISABLE_THINKING_SUPPORTED"
 )
+_LLM_DISABLE_THINKING = "RAG_WANSHITONG_LLM_DISABLE_THINKING"
 _LLM_STRUCTURED_OUTPUT_MODE = "RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE"
 _CREDENTIAL_ENV_SUFFIX = "_CREDENTIAL_ENV"
 _API_KEY_FILE_SUFFIX = "_API_KEY_FILE"
@@ -99,6 +100,7 @@ class InternalModelSettings:
     reranker_path: str = "/rerank"
     llm_model: str = "Qwen/Qwen3-8B-AWQ"
     llm_disable_thinking_supported: bool = False
+    llm_disable_thinking: bool = False
     llm_structured_output_mode: Literal[
         "none", "response_format", "structured_outputs", "guided_json"
     ] = "none"
@@ -134,9 +136,7 @@ class InternalModelSettings:
                 source.get(_EMBEDDING_DIMENSION, "1024"),
                 _EMBEDDING_DIMENSION,
             ),
-            reranker_model=source.get(
-                _RERANKER_MODEL, "Qwen3-Reranker-0.6B"
-            ),
+            reranker_model=source.get(_RERANKER_MODEL, "Qwen3-Reranker-0.6B"),
             reranker_protocol=normalize_rerank_protocol(
                 source.get(_RERANKER_PROTOCOL, "tei")
             ),
@@ -148,6 +148,10 @@ class InternalModelSettings:
             llm_disable_thinking_supported=_boolean(
                 source.get(_LLM_DISABLE_THINKING_SUPPORTED, "false"),
                 _LLM_DISABLE_THINKING_SUPPORTED,
+            ),
+            llm_disable_thinking=_boolean(
+                source.get(_LLM_DISABLE_THINKING, "false"),
+                _LLM_DISABLE_THINKING,
             ),
             llm_structured_output_mode=_structured_output_mode(
                 source.get(_LLM_STRUCTURED_OUTPUT_MODE, "none")
@@ -196,6 +200,11 @@ class InternalModelSettings:
         validate_model("openai-compatible", self.llm_model, "generation")
         if self.embedding_dimension > _MAX_EMBEDDING_DIMENSION:
             raise ValueError("Embedding Dimension 不能超过 65536。")
+        if (
+            self.llm_disable_thinking
+            and not self.llm_disable_thinking_supported
+        ):
+            raise ValueError("关闭 thinking 前必须确认 LLM 端点支持该参数。")
 
 
 def _base_url(environment: Mapping[str, str], key: str) -> str:

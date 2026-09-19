@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import (
     Field,
@@ -137,6 +137,101 @@ class NaturalClaim(FrozenModel):
     atom_id: str = Field(pattern=r"^A[1-4]$")
     text: str = Field(min_length=1, max_length=6000, repr=False)
     supports: tuple[ClaimSupport, ...] = Field(min_length=1, max_length=8)
+
+
+class TableFactSelection(FrozenModel):
+    """模型只选择服务端登记的物理表格事实，不自行拼装表头和值。"""
+
+    atom_id: str = Field(pattern=r"^A[1-4]$")
+    fact_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class PhysicalTableHeader(FrozenModel):
+    """一个由解析器认证的表头单元格及其实际覆盖列。"""
+
+    row_index: StrictInt = Field(ge=0)
+    column_indexes: tuple[StrictInt, ...] = Field(min_length=1)
+    support_ids: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_identity(self) -> Self:
+        if (
+            len(self.column_indexes) != len(set(self.column_indexes))
+            or any(column < 0 for column in self.column_indexes)
+            or len(self.support_ids) != len(set(self.support_ids))
+        ):
+            raise ValueError("表头列和来源 ID 必须是非负且无重复的。")
+        return self
+
+
+class PhysicalTableFact(FrozenModel):
+    """与问句无关的真实表格坐标、值片段及结构依赖。"""
+
+    fact_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    table_key: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
+    document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+    table_node_id: str = Field(pattern=r"^node_[0-9a-f]{32}$")
+    row_index: StrictInt = Field(ge=0)
+    row_label_column_index: StrictInt = Field(ge=0)
+    value_column_index: StrictInt = Field(ge=0)
+    row_label_support_ids: tuple[str, ...] = Field(min_length=1)
+    value_support_ids: tuple[str, ...] = Field(min_length=1)
+    headers: tuple[PhysicalTableHeader, ...] = Field(min_length=1)
+
+    @property
+    def header_support_ids(self) -> tuple[str, ...]:
+        """返回按规范表头层次排列的实际来源别名。"""
+        return tuple(
+            support_id
+            for header in self.headers
+            for support_id in header.support_ids
+        )
+
+    @property
+    def all_support_ids(self) -> tuple[str, ...]:
+        """返回一个事实不可拆分的行名、表头和值来源。"""
+        return tuple(
+            dict.fromkeys(
+                (
+                    *self.value_support_ids,
+                    *self.row_label_support_ids,
+                    *self.header_support_ids,
+                )
+            )
+        )
+
+    @model_validator(mode="after")
+    def _validate_dependencies(self) -> Self:
+        groups = (
+            self.row_label_support_ids,
+            self.value_support_ids,
+            self.header_support_ids,
+        )
+        if self.row_label_column_index == self.value_column_index:
+            raise ValueError("表格事实的行名列和值列不能相同。")
+        if any(len(values) != len(set(values)) for values in groups):
+            raise ValueError("表格事实的来源 ID 不允许重复。")
+        if set(self.row_label_support_ids) & set(self.value_support_ids):
+            raise ValueError("行名来源和值来源不能复用。")
+        if not any(
+            self.value_column_index in header.column_indexes
+            for header in self.headers
+        ):
+            raise ValueError("表格事实缺少覆盖值列的规范表头。")
+        return self
+
+
+class AtomFactBinding(FrozenModel):
+    """当前 Atom 到物理事实的语义候选，不改变任何来源坐标。"""
+
+    atom_id: str = Field(pattern=r"^A[1-4]$")
+    fact_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    relation_status: Literal["SUPPORTED", "UNDETERMINED"] = "UNDETERMINED"
+    requested_target: str = Field(min_length=1, max_length=500)
+    requested_relation: str = Field(min_length=1, max_length=500)
+    requested_stage_labels: tuple[str, ...] = ()
+    requested_conditions: tuple[str, ...] = ()
 
 
 class GeneratedAtomCoverage(FrozenModel):

@@ -20,7 +20,7 @@ from rag_app.application.answering.grounded import (
     GroundedOutcome,
 )
 from rag_app.clients.resilience import StreamCancellation
-from rag_app.core.errors import QueryCancelled
+from rag_app.core.errors import ProviderInputTooLarge, QueryCancelled
 from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
@@ -31,9 +31,14 @@ from rag_app.core.models.query_plan import (
     AtomStatus,
     QueryPlan,
 )
+from rag_app.core.models.relation_review import (
+    RelationReviewRequest,
+    RelationReviewResponse,
+)
 from rag_app.core.models.retrieval import NaturalClaim
 from tests.application.answering.test_grounded_claim_v5_quotes import _pack
 from tests.application.answering.test_natural_grounded_answer import (
+    _answer,
     _claim,
     _draft,
     _evidence,
@@ -64,6 +69,20 @@ def _fixture(
     return plan, evidence, claims
 
 
+class _PreparationFailingAdapter(OpenAICompatibleChatAdapter):
+    """在发送关系复核 HTTP 前模拟本地输入预算拒绝。"""
+
+    def review_relations(
+        self, request: RelationReviewRequest
+    ) -> RelationReviewResponse:
+        del request
+        raise ProviderInputTooLarge(
+            "synthetic preparation rejection",
+            stage="relation_review.prepare",
+            code="RELATION_REVIEW_INPUT_BUDGET_EXCEEDED",
+        )
+
+
 class _HttpHarness:
     """保存真实发送请求，第二次响应只能是repair或review之一。"""
 
@@ -74,16 +93,24 @@ class _HttpHarness:
         repair: tuple[NaturalClaim, ...] | None = None,
         failure: str | None = None,
         after_send: Callable[[int], None] | None = None,
+        fail_review_preparation: bool = False,
     ) -> None:
         self.sent: list[httpx.Request] = []
         self.claims = claims
         self.repair = repair
         self.failure = failure
         self.after_send = after_send
-        self.adapter = OpenAICompatibleChatAdapter(
+        adapter_type = (
+            _PreparationFailingAdapter
+            if fail_review_preparation
+            else OpenAICompatibleChatAdapter
+        )
+        self.adapter = adapter_type(
             OpenAICompatibleChatConfig(
                 model="synthetic",
                 egress_allowed=True,
+                disable_thinking_supported=True,
+                disable_thinking=True,
                 structured_output_mode="response_format",
             ),
             http_client=ProviderHttpClient(
@@ -98,6 +125,7 @@ class _HttpHarness:
         self.sent.append(request)
         assert len(self.sent) <= 2, "generation和唯一补充之外不得发送第三次HTTP"
         body = json.loads(request.content)
+        assert body["chat_template_kwargs"] == {"enable_thinking": False}
         data = json.loads(body["messages"][1]["content"])
         if self.after_send:
             self.after_send(len(self.sent))
@@ -138,22 +166,16 @@ class _HttpHarness:
                             "relation_label": "报销",
                             "subject_anchor_ids": [
                                 source_anchors[source_id]
-                                for source_id in candidate[
-                                    "fact_source_ids"
-                                ]
+                                for source_id in candidate["fact_source_ids"]
                             ],
                             "relation_anchor_ids": [
                                 source_anchors[source_id]
-                                for source_id in candidate[
-                                    "fact_source_ids"
-                                ]
+                                for source_id in candidate["fact_source_ids"]
                             ],
                             "stage_anchor_ids": [],
                             "condition_anchor_ids": [
                                 source_anchors[source_id]
-                                for source_id in candidate[
-                                    "fact_source_ids"
-                                ]
+                                for source_id in candidate["fact_source_ids"]
                             ],
                         },
                     }
@@ -228,17 +250,15 @@ def test_multiple_unknown_claims_share_one_review_http() -> None:
     assert len(second["candidates"]) == 2
 
 
-def test_review_consumes_slot_even_when_another_atom_is_missing() -> None:
+def test_missing_atom_repair_is_chosen_over_unrelated_relation_review() -> None:
     fixture = _fixture()
-    harness = _HttpHarness(fixture[2][:1])
+    harness = _HttpHarness(fixture[2][:1], repair=fixture[2][1:])
     outcome = _run(harness.adapter, fixture)
-    assert outcome.accepted_claim_count == 1
-    assert outcome.relation_review_calls == 1
-    assert outcome.repair_calls == 0
-    assert (
-        outcome.repair_skip_reason == "SUPPLEMENT_SLOT_USED_BY_RELATION_REVIEW"
+    assert outcome.relation_review_calls == 0
+    assert outcome.repair_calls == 1
+    assert outcome.relation_review_skip_reason == (
+        "SUPPLEMENT_SLOT_RESERVED_FOR_ATOM_REPAIR"
     )
-    assert ("A2", "MISSING") in outcome.atom_coverage
     assert len(harness.sent) == len(outcome.prepared_packets) == 2
 
 
@@ -312,6 +332,74 @@ def test_failed_optional_review_keeps_already_valid_fact(
     assert len(harness.sent) == len(outcome.prepared_packets) == 2
 
 
+def test_review_preparation_failure_does_not_consume_repair_slot() -> None:
+    fixture = _fixture(direct_first=True)
+    harness = _HttpHarness(
+        fixture[2],
+        repair=fixture[2][1:],
+        fail_review_preparation=True,
+    )
+
+    outcome = _run(harness.adapter, fixture)
+
+    assert outcome.answer is not None and _DIRECT in outcome.answer
+    assert outcome.relation_review_calls == 0
+    assert outcome.repair_calls == 1
+    assert len(harness.sent) == len(outcome.prepared_packets) == 2
+
+
+def test_hard_failure_on_a2_does_not_change_a1_repair_eligibility() -> None:
+    evidence = _evidence(
+        "甲部门负责归档记录。",
+        "乙部门负责复核记录。",
+    )
+    by_text = {item.citation_text: item.support_id for item in evidence}
+    plan = _plan("甲部门", "乙部门")
+    wrong_a2 = _claim(
+        "C1",
+        "丙部门负责复核记录。",
+        "A2",
+        by_text["乙部门负责复核记录。"],
+        "乙部门负责复核记录。",
+    )
+    repaired_a1 = _claim(
+        "C2",
+        "甲部门负责归档记录。",
+        "A1",
+        by_text["甲部门负责归档记录。"],
+    )
+    generator = Mock()
+    generator.generate.side_effect = (
+        _draft((wrong_a2,), plan),
+        _draft((repaired_a1,), plan),
+    )
+
+    outcome = _answer(
+        generator,
+        evidence,
+        plan,
+        _matrix(
+            plan,
+            (
+                (
+                    AtomStatus.SUPPORTED,
+                    (by_text["甲部门负责归档记录。"],),
+                ),
+                (
+                    AtomStatus.SUPPORTED,
+                    (by_text["乙部门负责复核记录。"],),
+                ),
+            ),
+        ),
+    )
+
+    assert outcome.answer is not None
+    assert _DIRECT in outcome.answer
+    assert outcome.repair_calls == 1
+    repair_request = generator.generate.call_args_list[1].args[0]
+    assert repair_request.repair_atom_ids == ("A1",)
+
+
 @pytest.mark.parametrize("cancel_on_send", [1, 2])
 def test_cancelled_request_never_publishes_review_result(
     cancel_on_send: int,
@@ -375,5 +463,6 @@ def test_hard_boundary_never_reaches_supported_review_response(
     outcome = _run(harness.adapter, fixture)
 
     assert outcome.accepted_claim_count == outcome.published_claim_count == 0
-    assert outcome.relation_review_calls == outcome.repair_calls == 0
+    assert outcome.relation_review_calls == 0
+    assert outcome.repair_calls == 0
     assert len(harness.sent) == len(outcome.prepared_packets) == 1

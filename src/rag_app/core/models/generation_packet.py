@@ -113,6 +113,7 @@ class PreparedGenerationPacket(FrozenModel):
     per_atom_support_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     protected_support_keys: tuple[str, ...] = ()
     retained_source_units: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    retained_table_fact_ids: tuple[str, ...] = ()
     preparation_failure: str | None = None
     original_support_keys: tuple[str, ...]
     removed_support_keys: tuple[tuple[str, str], ...] = ()

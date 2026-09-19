@@ -173,9 +173,7 @@ def test_internal_model_configurator_rejects_configuration_drift(
             llm_base_url="https://llm.internal.example/v1",
         )
 
-        with pytest.raises(
-            InternalModelConfigurationError, match="配置已变化"
-        ):
+        with pytest.raises(InternalModelConfigurationError, match="配置已变化"):
             configurator.configure(drifted)
     finally:
         harness.close()
@@ -199,6 +197,7 @@ def test_internal_model_configurator_updates_verified_thinking_capability(
             reranker_base_url="https://reranker.internal.example",
             llm_base_url="https://llm.internal.example/v1",
             llm_disable_thinking_supported=True,
+            llm_disable_thinking=True,
             llm_structured_output_mode="response_format",
         )
 
@@ -210,6 +209,9 @@ def test_internal_model_configurator_updates_verified_thinking_capability(
         assert harness.runtime.models.get(
             first.knowledge_base_id
         ).disable_thinking_supported
+        assert harness.runtime.models.get(
+            first.knowledge_base_id
+        ).disable_thinking
         assert (
             harness.runtime.models.get(
                 first.knowledge_base_id

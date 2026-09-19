@@ -29,6 +29,7 @@ class KnowledgeBaseModelSettings(FrozenModel):
     )
     rewrite_enabled: bool = False
     disable_thinking_supported: bool = False
+    disable_thinking: bool = False
     structured_output_mode: Literal[
         "none", "response_format", "structured_outputs", "guided_json"
     ] = "none"
@@ -56,6 +57,8 @@ class KnowledgeBaseModelSettings(FrozenModel):
     def _paired_references(self) -> KnowledgeBaseModelSettings:
         if self.planner_slo_target_ms > self.planner_hard_ceiling_ms:
             raise ValueError("Planner SLO 不得超过硬时延上限。")
+        if self.disable_thinking and not self.disable_thinking_supported:
+            raise ValueError("关闭 thinking 前必须确认 Provider 支持该参数。")
         if any(
             len(value) != _SHA256_LENGTH
             or any(char not in "0123456789abcdef" for char in value)

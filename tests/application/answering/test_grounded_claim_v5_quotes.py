@@ -317,7 +317,9 @@ def test_rejection_diagnostic_preserves_raw_atom_scope_reason() -> None:
     assert second.citation_text not in repr(diagnostic)
     assert diagnostic.selected_support_ids == (second.support_id,)
     assert diagnostic.allowed_support_ids == (first.support_id,)
-    assert outcome.repair_calls == 0
+    assert outcome.repair_calls == 1
+    repair_request = generator.generate.call_args_list[1].args[0]
+    assert repair_request.repair_atom_ids == ("A2",)
     assert (
         diagnostic.claim_sha256
         == hashlib.sha256(second.citation_text.encode("utf-8")).hexdigest()

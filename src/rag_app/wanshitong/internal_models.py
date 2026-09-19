@@ -138,16 +138,20 @@ class InternalModelConfigurator:
             settings,
         )
         current_models = self._runtime.models.get(scope.knowledge_base_id)
-        capability_only_change = current_models.model_copy(
-            update={
-                "disable_thinking_supported": (
-                    desired_models.disable_thinking_supported
-                ),
-                "structured_output_mode": (
-                    desired_models.structured_output_mode
-                ),
-            }
-        ) == desired_models
+        capability_only_change = (
+            current_models.model_copy(
+                update={
+                    "disable_thinking_supported": (
+                        desired_models.disable_thinking_supported
+                    ),
+                    "disable_thinking": desired_models.disable_thinking,
+                    "structured_output_mode": (
+                        desired_models.structured_output_mode
+                    ),
+                }
+            )
+            == desired_models
+        )
         if (
             ready is not None
             and current_models != desired_models
@@ -256,10 +260,9 @@ class InternalModelConfigurator:
                 )
             )
         )
-        if (
-            not connection.enabled
-            or _connection_contract(actual) != _connection_contract(expected)
-        ):
+        if not connection.enabled or _connection_contract(
+            actual
+        ) != _connection_contract(expected):
             raise InternalModelConfigurationError(
                 "湾事通模型角色引用的 Connection 与冻结配置不一致。",
                 stage="wanshitong.models.connection.verify",
@@ -563,9 +566,7 @@ class InternalModelConfigurator:
                 InternalModelValidationReport(
                     operation=operation,
                     validation_id=run.validation_id,
-                    validation_mode=cast(
-                        _ValidationMode, run.validation_mode
-                    ),
+                    validation_mode=cast(_ValidationMode, run.validation_mode),
                 )
             )
         return tuple(reports)
@@ -586,9 +587,8 @@ class InternalModelConfigurator:
                 "disable_thinking_supported": (
                     settings.llm_disable_thinking_supported
                 ),
-                "structured_output_mode": (
-                    settings.llm_structured_output_mode
-                ),
+                "disable_thinking": settings.llm_disable_thinking,
+                "structured_output_mode": (settings.llm_structured_output_mode),
             }
         )
 

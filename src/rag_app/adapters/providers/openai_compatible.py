@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, model_validator
 
 from rag_app.adapters.providers.aliyun_chat import (
     AliyunChatAdapter,
@@ -128,9 +128,16 @@ class OpenAICompatibleChatConfig(FrozenModel):
     max_messages: StrictInt = Field(default=6, gt=0, le=32)
     prompt_version: str = Field(default="grounded-chat-v9", max_length=64)
     disable_thinking_supported: bool = False
+    disable_thinking: bool = False
     structured_output_mode: Literal[
         "none", "response_format", "structured_outputs", "guided_json"
     ] = "none"
+
+    @model_validator(mode="after")
+    def _validate_thinking_strategy(self) -> OpenAICompatibleChatConfig:
+        if self.disable_thinking and not self.disable_thinking_supported:
+            raise ValueError("关闭 thinking 前必须确认 Provider 支持该参数。")
+        return self
 
 
 class OpenAICompatibleEmbeddingAdapter:
@@ -490,7 +497,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             messages,
             self._compatible_config,
             max_output_tokens=max_output_tokens,
-            disable_thinking=operation == "query.interpret",
+            disable_thinking=self._compatible_config.disable_thinking,
             json_schema=json_schema,
             schema_revision=schema_revision,
         )
@@ -517,7 +524,10 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
                 stage="provider.openai_compatible.chat",
             )
         payload = openai_compatible_chat_payload(
-            messages, self._compatible_config, stream=True
+            messages,
+            self._compatible_config,
+            stream=True,
+            disable_thinking=self._compatible_config.disable_thinking,
         )
         observe_generation_transport(payload)
 

@@ -820,7 +820,9 @@ def test_one_generic_claim_cannot_certify_multiple_atoms() -> None:
     assert outcome.answer is None
     assert outcome.claim_rejection_codes == (("CLAIM_SUPPORT_NOT_OWNED", 1),)
     assert outcome.atom_coverage == (("A1", "MISSING"), ("A2", "MISSING"))
-    assert outcome.repair_calls == 0
+    assert outcome.repair_calls == 1
+    repair_request = generator.generate.call_args_list[1].args[0]
+    assert repair_request.repair_atom_ids == ("A2",)
 
 
 def test_procedure_renderer_uses_source_order() -> None:

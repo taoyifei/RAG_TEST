@@ -41,13 +41,16 @@ from rag_app.core.errors import (
     StreamDeliveryError,
     ValidationFailed,
 )
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AnswerClaim,
     AnswerDraft,
+    AtomFactBinding,
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
     OcrVerificationState,
+    PhysicalTableFact,
     ProviderCall,
     QueryAnalysis,
     RequestedAnswerType,
@@ -2204,6 +2207,16 @@ class GroundedAnsweringService:
                         ),
                         analysis,
                         trusted_groups=trusted_groups,
+                        physical_table_facts=(
+                            generation_evidence_pack.physical_table_facts
+                            if generation_evidence_pack is not None
+                            else ()
+                        ),
+                        atom_fact_bindings=(
+                            generation_evidence_pack.atom_fact_bindings
+                            if generation_evidence_pack is not None
+                            else ()
+                        ),
                     )
                     if analysis is not None and len(query_plan.atoms) == 1:
                         validate_grounded_draft(
@@ -2374,6 +2387,27 @@ class GroundedAnsweringService:
             if generation_started is None:
                 generation_started = monotonic()
             requested = set(repair_atom_ids) if repair_atom_ids else eligible
+            available_bindings = tuple(
+                binding
+                for binding in (
+                    generation_evidence_pack.atom_fact_bindings
+                    if generation_evidence_pack is not None
+                    else ()
+                )
+                if binding.atom_id in requested
+            )
+            available_fact_ids = {
+                binding.fact_id for binding in available_bindings
+            }
+            available_facts = tuple(
+                fact
+                for fact in (
+                    generation_evidence_pack.physical_table_facts
+                    if generation_evidence_pack is not None
+                    else ()
+                )
+                if fact.fact_id in available_fact_ids
+            )
             allowed = {
                 support_id
                 for atom_id in requested
@@ -2383,10 +2417,60 @@ class GroundedAnsweringService:
                     or tuple(by_id),
                 )
             }
+            allowed.update(
+                support_id
+                for fact in available_facts
+                for support_id in fact.all_support_ids
+            )
             candidates = tuple(
                 item for item in evidence if item.support_id in allowed
             )
             candidate_ids = {item.support_id for item in candidates}
+            selected_facts = tuple(
+                fact
+                for fact in available_facts
+                if set(fact.all_support_ids) <= candidate_ids
+            )
+            selected_fact_ids = {fact.fact_id for fact in selected_facts}
+            selected_bindings = tuple(
+                binding
+                for binding in available_bindings
+                if binding.fact_id in selected_fact_ids
+            )
+
+            def atom_candidate_ids(atom_id: str) -> tuple[str, ...]:
+                """逐 Atom 加入完整事实依赖，不借给其他 Atom。"""
+                ids = set(
+                    linked_ids.get(
+                        atom_id,
+                        atom_support_matrix.for_atom(
+                            atom_id
+                        ).supporting_support_ids
+                        or tuple(by_id),
+                    )
+                )
+                bound_fact_ids = {
+                    binding.fact_id
+                    for binding in selected_bindings
+                    if binding.atom_id == atom_id
+                }
+                ids.update(
+                    support_id
+                    for fact in selected_facts
+                    if fact.fact_id in bound_fact_ids
+                    for support_id in fact.all_support_ids
+                )
+                return tuple(
+                    item.support_id
+                    for item in candidates
+                    if item.support_id in ids
+                )
+
+            per_atom_candidate_ids = tuple(
+                (atom_id, atom_candidate_ids(atom_id))
+                for atom_id in sorted(requested)
+            )
+            candidate_keys = {stable_support_key(item) for item in candidates}
             request = GenerationRequest(
                 request_id=request_id,
                 attempt_id=uuid4().hex,
@@ -2399,23 +2483,7 @@ class GroundedAnsweringService:
                 model_evidence_candidates=candidates,
                 query_plan=query_plan,
                 atom_support_matrix=atom_support_matrix,
-                per_atom_candidate_support_ids=tuple(
-                    (
-                        atom_id,
-                        tuple(
-                            support_id
-                            for support_id in linked_ids.get(
-                                atom_id,
-                                atom_support_matrix.for_atom(
-                                    atom_id
-                                ).supporting_support_ids
-                                or tuple(by_id),
-                            )
-                            if support_id in candidate_ids
-                        ),
-                    )
-                    for atom_id in requested
-                ),
+                per_atom_candidate_support_ids=per_atom_candidate_ids,
                 repair_atom_ids=repair_atom_ids,
                 accepted_claim_ids=tuple(item.claim_id for item in accepted),
                 trusted_source_groups=trusted_groups,
@@ -2425,10 +2493,19 @@ class GroundedAnsweringService:
                     else ()
                 ),
                 priority_source_units=(
-                    generation_evidence_pack.priority_source_units
+                    tuple(
+                        (owner, keys)
+                        for owner, keys in (
+                            generation_evidence_pack.priority_source_units
+                        )
+                        if owner in requested
+                        or (owner == "ROOT" and set(keys) <= candidate_keys)
+                    )
                     if generation_evidence_pack is not None
                     else ()
                 ),
+                physical_table_facts=selected_facts,
+                atom_fact_bindings=selected_bindings,
                 repair_raw_failures=tuple(
                     (atom_id, raw)
                     for atom_id, raw in raw_failures
@@ -2442,14 +2519,7 @@ class GroundedAnsweringService:
                         tuple(
                             stable_support_key(item)
                             for item in candidates
-                            if item.support_id
-                            in linked_ids.get(
-                                atom_id,
-                                atom_support_matrix.for_atom(
-                                    atom_id
-                                ).supporting_support_ids
-                                or tuple(by_id),
-                            )
+                            if item.support_id in atom_candidate_ids(atom_id)
                         ),
                     )
                     for atom_id in sorted(requested)
@@ -2499,6 +2569,16 @@ class GroundedAnsweringService:
                     validation_evidence,
                     analysis,
                     trusted_groups=trusted_groups,
+                    physical_table_facts=(
+                        generation_evidence_pack.physical_table_facts
+                        if generation_evidence_pack is not None
+                        else ()
+                    ),
+                    atom_fact_bindings=(
+                        generation_evidence_pack.atom_fact_bindings
+                        if generation_evidence_pack is not None
+                        else ()
+                    ),
                 )
             except (ValidationFailed, ValueError) as error:
                 raw = (
@@ -2519,6 +2599,16 @@ class GroundedAnsweringService:
                         validation_evidence,
                         analysis,
                         trusted_groups=trusted_groups,
+                        physical_table_facts=(
+                            generation_evidence_pack.physical_table_facts
+                            if generation_evidence_pack is not None
+                            else ()
+                        ),
+                        atom_fact_bindings=(
+                            generation_evidence_pack.atom_fact_bindings
+                            if generation_evidence_pack is not None
+                            else ()
+                        ),
                     )
                     recovery_results.append(
                         (natural.atom_id, raw, "SOURCE_SENTENCE_VALIDATED")
@@ -2567,6 +2657,12 @@ class GroundedAnsweringService:
                 prepared_packets.append(draft.prepared_packet)
             generation_returned = True
             generated_claim_count += len(draft.natural_claims)
+            repair_scope = set(active_request.repair_atom_ids)
+            if repair_scope and any(
+                natural.atom_id not in repair_scope
+                for natural in draft.natural_claims
+            ):
+                raise ValueError("REPAIR_ATOM_SCOPE_VIOLATION")
             if not draft.natural_claims:
                 reason = draft.reason_code or "GENERATION_ABSTAINED"
                 raw_failures.extend(
@@ -2736,7 +2832,6 @@ class GroundedAnsweringService:
                 ),
             )
             _raise_if_cancelled(cancellation)
-            relation_review_calls = 1
             relation_review_skip_reason = None
             started = monotonic()
             try:
@@ -2758,14 +2853,20 @@ class GroundedAnsweringService:
                 relation_review_skip_reason = review_reason
                 reason = review_reason
                 if isinstance(error, RagError):
-                    prepared_packets.extend(_failed_generation_packets(error))
-                    calls.extend(
-                        error.provider_calls
-                        or (
-                            ()
-                            if error.provider_call is None
-                            else (error.provider_call,)
+                    failed_packets = _failed_generation_packets(error)
+                    failed_calls = error.provider_calls or (
+                        ()
+                        if error.provider_call is None
+                        else (error.provider_call,)
+                    )
+                    prepared_packets.extend(failed_packets)
+                    calls.extend(failed_calls)
+                    relation_review_calls = int(
+                        any(
+                            packet.evidence_level == "TRANSPORT_SENT"
+                            for packet in failed_packets
                         )
+                        or any(call.call_count for call in failed_calls)
                     )
                 for candidate in request.candidates:
                     observed(candidate.claim, "NOT_OBSERVED", review_reason)
@@ -2780,6 +2881,7 @@ class GroundedAnsweringService:
                         "RELATION_REVIEW_RESPONSE_INVALID",
                     )
                 raise ValueError("关系复核没有返回严格协议。")
+            relation_review_calls = 1
             calls.append(response.call)
             prepared_packets.append(response.prepared_packet)
             _raise_if_cancelled(cancellation)
@@ -2849,6 +2951,16 @@ class GroundedAnsweringService:
                         ),
                         analysis,
                         trusted_groups=trusted_groups,
+                        physical_table_facts=(
+                            generation_evidence_pack.physical_table_facts
+                            if generation_evidence_pack is not None
+                            else ()
+                        ),
+                        atom_fact_bindings=(
+                            generation_evidence_pack.atom_fact_bindings
+                            if generation_evidence_pack is not None
+                            else ()
+                        ),
                     )
                 except (ValidationFailed, ValueError):
                     observed(
@@ -2887,7 +2999,6 @@ class GroundedAnsweringService:
             try:
                 _raise_if_cancelled(cancellation)
                 consume(generate())
-                review_pending()
                 # 资料完整但模型漏掉结构成员时，也只补对应 Atom。
                 omitted = tuple(
                     atom.atom_id
@@ -2924,12 +3035,7 @@ class GroundedAnsweringService:
                                 atom_id
                             ).supporting_support_ids,
                         ),
-                        tuple(raw_failures)
-                        if accepted
-                        else tuple(
-                            (atom_id, raw) for _atom, raw in raw_failures
-                        ),
-                        has_accepted=bool(accepted),
+                        tuple(raw_failures),
                     )
                 )
                 repair_skip_reason = (
@@ -2939,11 +3045,38 @@ class GroundedAnsweringService:
                     if omitted
                     else "NO_MISSING_ATOM"
                 )
-                if repairable and relation_review_calls:
-                    repair_skip_reason = (
-                        "SUPPLEMENT_SLOT_USED_BY_RELATION_REVIEW"
-                    )
-                if repairable and not relation_review_calls:
+                pending_atom_ids = {
+                    natural.atom_id for natural in pending_relations
+                }
+                repair_first = tuple(
+                    atom_id
+                    for atom_id in repairable
+                    if atom_id not in pending_atom_ids
+                )
+                if repair_first:
+                    if pending_relations:
+                        relation_review_skip_reason = (
+                            "SUPPLEMENT_SLOT_RESERVED_FOR_ATOM_REPAIR"
+                        )
+                    _raise_if_cancelled(cancellation)
+                    repair_calls = 1
+                    consume(generate(repair_first))
+                elif pending_relations:
+                    review_pending()
+                    if (
+                        repairable
+                        and not relation_review_calls
+                        and relation_review_skip_reason
+                        == "RELATION_REVIEW_INPUT_BUDGET_EXCEEDED"
+                    ):
+                        _raise_if_cancelled(cancellation)
+                        repair_calls = 1
+                        consume(generate(repairable))
+                    elif repairable and relation_review_calls:
+                        repair_skip_reason = (
+                            "SUPPLEMENT_SLOT_USED_BY_RELATION_REVIEW"
+                        )
+                elif repairable:
                     _raise_if_cancelled(cancellation)
                     repair_calls = 1
                     consume(generate(repairable))
@@ -3009,6 +3142,12 @@ class GroundedAnsweringService:
                             ),
                             analysis,
                             trusted_groups=trusted_groups,
+                            physical_table_facts=(
+                                generation_evidence_pack.physical_table_facts
+                            ),
+                            atom_fact_bindings=(
+                                generation_evidence_pack.atom_fact_bindings
+                            ),
                         )
                     except (ValidationFailed, ValueError):
                         continue
@@ -3393,8 +3532,6 @@ def _can_repair_atom(
     evidence: tuple[EvidenceItem, ...],
     allowed_support_ids: tuple[str, ...],
     failures: tuple[tuple[str, str], ...],
-    *,
-    has_accepted: bool = False,
 ) -> bool:
     """只修组织缺项和低风险语义组织错误，硬边界失败不再试探。"""
     recoverable = {
@@ -3402,15 +3539,9 @@ def _can_repair_atom(
         "GENERATION_INCOMPLETE",
         "CLAIM_TEXT_UNSUPPORTED",
         "CLAIM_FRAGMENT_INCOMPLETE",
+        "CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
+        "CLAIM_QUERY_RELATION_UNDETERMINED",
     }
-    if has_accepted:
-        recoverable.update(
-            {
-                "CLAIM_NUMBER_UNSUPPORTED",
-                "CLAIM_NUMBER_DRIFT",
-                "CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
-            }
-        )
     if any(
         atom == atom_id and reason not in recoverable
         for atom, reason in failures
@@ -4909,6 +5040,8 @@ def _validated_source_faithful_claim(  # noqa: PLR0913
     analysis: QueryAnalysis | None,
     *,
     trusted_groups: tuple[EvidenceGroup, ...] = (),
+    physical_table_facts: tuple[PhysicalTableFact, ...] = (),
+    atom_fact_bindings: tuple[AtomFactBinding, ...] = (),
 ) -> AnswerClaim:
     """只为低风险语义改写恢复原句，并重新执行全部安全校验。"""
     by_id = {item.support_id: item for item in evidence}
@@ -4934,6 +5067,8 @@ def _validated_source_faithful_claim(  # noqa: PLR0913
         evidence,
         analysis,
         trusted_groups=trusted_groups,
+        physical_table_facts=physical_table_facts,
+        atom_fact_bindings=atom_fact_bindings,
     )
     return validated
 
@@ -4993,6 +5128,109 @@ def _validated_source_group_claims(  # noqa: PLR0913
     return tuple(recovered)
 
 
+def _physical_fact_for_claim(
+    atom_id: str,
+    units: tuple[EvidenceItem, ...],
+    facts: tuple[PhysicalTableFact, ...],
+    bindings: tuple[AtomFactBinding, ...],
+) -> PhysicalTableFact | None:
+    """只接受服务端已绑定且完整展开全部依赖的物理事实。"""
+    selected_ids = {item.support_id for item in units}
+    bound_ids = {
+        binding.fact_id for binding in bindings if binding.atom_id == atom_id
+    }
+    return next(
+        (
+            fact
+            for fact in facts
+            if fact.fact_id in bound_ids
+            and set(fact.all_support_ids) == selected_ids
+        ),
+        None,
+    )
+
+
+def _physical_binding_proves_relation(
+    atom_id: str,
+    fact: PhysicalTableFact | None,
+    bindings: tuple[AtomFactBinding, ...],
+) -> bool:
+    """只复用当前 Atom 对当前事实的独立确定性关系证明。"""
+    return fact is not None and any(
+        binding.atom_id == atom_id
+        and binding.fact_id == fact.fact_id
+        and binding.relation_status == "SUPPORTED"
+        for binding in bindings
+    )
+
+
+def _validate_physical_table_fact(
+    fact: PhysicalTableFact, units: tuple[EvidenceItem, ...]
+) -> None:
+    """重新核对事实登记的表、行、列和规范表头来源。"""
+    by_id = {item.support_id: item for item in units}
+    if set(by_id) != set(fact.all_support_ids):
+        raise ValidationFailed(
+            "表格事实没有完整引用登记的物理来源。",
+            stage="answer.validate",
+            code="CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
+        )
+
+    def coordinate(support_id: str) -> tuple[tuple[object, ...], int, int]:
+        item = by_id[support_id]
+        cell = table_cell_coordinate(item)
+        node = dict(item.metadata).get("table_logical_node_id")
+        if cell is None or node != fact.table_node_id:
+            raise ValidationFailed(
+                "表格事实来源缺少规范坐标。",
+                stage="answer.validate",
+                code="CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
+            )
+        table, row, column = cell
+        table_key = canonical_sha256(
+            {
+                "revision": "wb08r-physical-table-v1",
+                "identity": (
+                    *item.source_identity_scope,
+                    *table[:4],
+                    node,
+                    table[-1],
+                ),
+            }
+        )
+        if table_key != fact.table_key:
+            raise ValidationFailed(
+                "表格事实来源跨越不同物理表。",
+                stage="answer.validate",
+                code="CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
+            )
+        return table, row, column
+
+    if any(
+        coordinate(support_id)[1:]
+        != (fact.row_index, fact.row_label_column_index)
+        for support_id in fact.row_label_support_ids
+    ) or any(
+        coordinate(support_id)[1:] != (fact.row_index, fact.value_column_index)
+        for support_id in fact.value_support_ids
+    ):
+        raise ValidationFailed(
+            "表格事实的行名或值不在登记坐标。",
+            stage="answer.validate",
+            code="CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
+        )
+    for header in fact.headers:
+        if fact.value_column_index not in header.column_indexes or any(
+            coordinate(support_id)[1] != header.row_index
+            for support_id in header.support_ids
+        ):
+            raise ValidationFailed(
+                "表格事实的规范表头没有覆盖值列。",
+                stage="answer.validate",
+                code="CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
+            )
+
+
 def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
     natural: NaturalClaim,
     plan: QueryPlan,
@@ -5001,6 +5239,8 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
     analysis: QueryAnalysis | None,
     *,
     trusted_groups: tuple[EvidenceGroup, ...] = (),
+    physical_table_facts: tuple[PhysicalTableFact, ...] = (),
+    atom_fact_bindings: tuple[AtomFactBinding, ...] = (),
 ) -> AnswerClaim:
     """核对逐原子来源后复用既有事实与引用安全门。"""
     atoms = {atom.atom_id: atom for atom in plan.atoms}
@@ -5027,7 +5267,18 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
     support = matrix.for_atom(natural.atom_id)
     units = tuple(by_id[support_id] for support_id in support_ids)
     _validate_contextual_source_scope(plan, evidence, units)
-    _validate_natural_support_structure(units, trusted_groups=trusted_groups)
+    physical_fact = _physical_fact_for_claim(
+        natural.atom_id,
+        units,
+        physical_table_facts,
+        atom_fact_bindings,
+    )
+    if physical_fact is None:
+        _validate_natural_support_structure(
+            units, trusted_groups=trusted_groups
+        )
+    else:
+        _validate_physical_table_fact(physical_fact, units)
     claim = AnswerClaim(
         text=natural.text,
         supports=natural.supports,
@@ -5073,7 +5324,7 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
             stage="answer.validate",
             code="CLAIM_TARGET_UNSUPPORTED",
         )
-    _validate_table_claim_certificate(atom_units)
+    _validate_table_claim_certificate(atom_units, physical_fact=physical_fact)
     direct_relation = any(
         isinstance(
             certificate := dict(item.metadata).get("answer_support"), dict
@@ -5181,7 +5432,12 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
         claim,
         units,
         atom_analysis,
-        relation_proved=_matrix_proves_source_relation(matrix, atom, units),
+        relation_proved=(
+            _matrix_proves_source_relation(matrix, atom, units)
+            or _physical_binding_proves_relation(
+                natural.atom_id, physical_fact, atom_fact_bindings
+            )
+        ),
         contextual_source_proved=(
             atom.answer_shape is AtomAnswerShape.DURATION
             and _contextual_source_versions(plan, evidence) is not None
@@ -5331,8 +5587,15 @@ def _matrix_proves_source_relation(
     )
 
 
-def _validate_table_claim_certificate(units: tuple[EvidenceItem, ...]) -> None:
+def _validate_table_claim_certificate(
+    units: tuple[EvidenceItem, ...],
+    *,
+    physical_fact: PhysicalTableFact | None = None,
+) -> None:
     """表格 Claim 必须引用证书声明的全部真实结构依赖。"""
+    if physical_fact is not None:
+        _validate_physical_table_fact(physical_fact, units)
+        return
     for item in units:
         certificate = dict(item.metadata).get("answer_support")
         if (
@@ -5748,7 +6011,7 @@ def _target_coverage_records(
     return tuple(records)
 
 
-def _natural_atom_complete(  # noqa: PLR0911, PLR0913
+def _natural_atom_complete(  # noqa: PLR0911, PLR0912, PLR0913
     atom: QueryAtom,
     matrix: AtomSupportMatrix,
     claims: tuple[ValidatedNaturalClaim, ...],
@@ -5770,6 +6033,39 @@ def _natural_atom_complete(  # noqa: PLR0911, PLR0913
     if not atom_claims:
         return False
     by_id = {item.support_id: item for item in evidence}
+    if generation_evidence_pack is not None:
+        selected_fact_ids: set[str] = set()
+        all_claims_are_physical_facts = True
+        for claim in atom_claims:
+            try:
+                units = tuple(
+                    by_id[support.support_id] for support in claim.supports
+                )
+            except KeyError:
+                return False
+            fact = _physical_fact_for_claim(
+                atom.atom_id,
+                units,
+                generation_evidence_pack.physical_table_facts,
+                generation_evidence_pack.atom_fact_bindings,
+            )
+            if fact is None:
+                all_claims_are_physical_facts = False
+                break
+            try:
+                _validate_physical_table_fact(fact, units)
+            except ValidationFailed:
+                return False
+            selected_fact_ids.add(fact.fact_id)
+        if all_claims_are_physical_facts:
+            required_fact_ids = {
+                binding.fact_id
+                for binding in generation_evidence_pack.atom_fact_bindings
+                if binding.atom_id == atom.atom_id
+                and binding.relation_status == "SUPPORTED"
+            }
+            if required_fact_ids:
+                return required_fact_ids <= selected_fact_ids
     for claim in atom_claims:
         try:
             units = tuple(

@@ -10,7 +10,9 @@ from pydantic import Field, model_validator
 from rag_app.core.capabilities import ComponentCapabilities, ComponentDescriptor
 from rag_app.core.models import (
     AnswerDraft,
+    AtomFactBinding,
     EvidenceItem,
+    PhysicalTableFact,
     ProviderHealth,
     QuerySemantics,
 )
@@ -52,9 +54,15 @@ class GenerationRequest(FrozenModel):
     priority_source_units: tuple[tuple[str, tuple[str, ...]], ...] = Field(
         default=(), exclude=True, repr=False
     )
+    physical_table_facts: tuple[PhysicalTableFact, ...] = Field(
+        default=(), exclude=True, repr=False
+    )
+    atom_fact_bindings: tuple[AtomFactBinding, ...] = Field(
+        default=(), exclude=True, repr=False
+    )
 
     @model_validator(mode="after")
-    def _validate_evidence_sets(self) -> Self:
+    def _validate_evidence_sets(self) -> Self:  # noqa: PLR0912
         """保证直接支持集和模型候选均来自有界 evidence 包。"""
         evidence_ids = {item.support_id for item in self.evidence}
         for name, items in (
@@ -113,6 +121,31 @@ class GenerationRequest(FrozenModel):
             for _, keys in self.priority_source_units
         ):
             raise ValueError("优先阅读单元必须完整引用本次真实来源身份。")
+        fact_ids = [fact.fact_id for fact in self.physical_table_facts]
+        if len(fact_ids) != len(set(fact_ids)):
+            raise ValueError("物理表格事实 ID 不允许重复。")
+        if any(
+            not set(fact.all_support_ids) <= evidence_ids
+            for fact in self.physical_table_facts
+        ):
+            raise ValueError("物理表格事实必须完整来自本次 Evidence。")
+        binding_keys = [
+            (binding.atom_id, binding.fact_id)
+            for binding in self.atom_fact_bindings
+        ]
+        if len(binding_keys) != len(set(binding_keys)):
+            raise ValueError("Atom 与物理事实绑定不允许重复。")
+        if self.atom_fact_bindings and self.query_plan is None:
+            raise ValueError("无计划请求不能绑定物理表格事实。")
+        if self.query_plan is not None:
+            fact_id_set = set(fact_ids)
+            atom_id_set = {atom.atom_id for atom in self.query_plan.atoms}
+            if any(
+                binding.fact_id not in fact_id_set
+                or binding.atom_id not in atom_id_set
+                for binding in self.atom_fact_bindings
+            ):
+                raise ValueError("Atom 只能绑定本次请求内的物理表格事实。")
         return self
 
 

@@ -25,6 +25,7 @@ from rag_app.application.retrieval.adaptive import (
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.application.revision_builder import IngestionDocument
+from rag_app.clients.resilience import StreamCancellation
 from rag_app.composition.p07_runtime import build_p07_runtime
 from rag_app.core.errors import ValidationFailed
 from rag_app.core.identifiers import deterministic_id
@@ -286,16 +287,19 @@ def test_catalog_matches_separated_title_fragments() -> None:
         for title in titles
     )
 
-    assert catalog_matches(
-        "准备设备部署阶段时应该参考哪份材料", documents
-    ) == (documents[1],)
-    assert catalog_matches("安装验收用哪个报告？", documents) == (
-        documents[0],
+    assert catalog_matches("准备设备部署阶段时应该参考哪份材料", documents) == (
+        documents[1],
     )
+    assert catalog_matches("安装验收用哪个报告？", documents) == (documents[0],)
 
 
-def test_planner_timeout_reaches_provider_http_client() -> None:
-    """轻量 Planner 的单次超时必须穿透 Chat Adapter。"""
+@pytest.mark.parametrize(
+    "operation", ("generation", "query.interpret", "query.rewrite")
+)
+def test_chat_strategy_and_timeout_reach_provider_http_client(
+    operation: str,
+) -> None:
+    """各 Chat 用途使用同一显式推理策略，超时继续穿透 Adapter。"""
     transport = Mock()
     transport.request_json.side_effect = ValueError("sentinel")
     adapter = OpenAICompatibleChatAdapter(
@@ -303,6 +307,7 @@ def test_planner_timeout_reaches_provider_http_client() -> None:
             model="test-chat",
             egress_allowed=True,
             disable_thinking_supported=True,
+            disable_thinking=True,
         ),
         http_client=transport,
         api_key_resolver=lambda: "",
@@ -311,13 +316,40 @@ def test_planner_timeout_reaches_provider_http_client() -> None:
     with pytest.raises(ValueError, match="sentinel"):
         adapter.complete(
             (ChatMessage(role="user", content="只理解检索问题。"),),
-            operation="query.interpret",
+            operation=operation,
             max_output_tokens=256,
             timeout_seconds=3.0,
         )
 
     assert transport.request_json.call_args.kwargs["timeout_seconds"] == 3.0
     assert transport.request_json.call_args.kwargs["payload"][
+        "chat_template_kwargs"
+    ] == {"enable_thinking": False}
+
+
+def test_chat_strategy_reaches_stream_provider_http_client() -> None:
+    """流式正式回答与同步生成使用同一个显式推理策略。"""
+    transport = Mock()
+    transport.request_stream.side_effect = ValueError("sentinel")
+    adapter = OpenAICompatibleChatAdapter(
+        OpenAICompatibleChatConfig(
+            model="test-chat",
+            egress_allowed=True,
+            disable_thinking_supported=True,
+            disable_thinking=True,
+        ),
+        http_client=transport,
+        api_key_resolver=lambda: "",
+    )
+
+    with pytest.raises(ValueError, match="sentinel"):
+        adapter.complete_stream(
+            (ChatMessage(role="user", content="只回答检索结果。"),),
+            on_delta=lambda _delta: None,
+            cancellation=StreamCancellation(),
+        )
+
+    assert transport.request_stream.call_args.kwargs["payload"][
         "chat_template_kwargs"
     ] == {"enable_thinking": False}
 
@@ -335,8 +367,7 @@ def test_reasoning_effort_is_bounded_by_question_shape() -> None:
         )
 
     assert (
-        classify("《项目发布阶段参考说明》在哪里？")
-        is ReasoningEffort.DIRECT
+        classify("《项目发布阶段参考说明》在哪里？") is ReasoningEffort.DIRECT
     )
     assert classify("项目发布有哪些职责？") is ReasoningEffort.DIRECT
     assert classify("甲计划包括哪些类型？") is ReasoningEffort.DIRECT
@@ -377,9 +408,7 @@ def test_invalid_adaptive_plan_returns_deterministic_fallback() -> None:
     model._campaign_required = False  # type: ignore[assignment]
     model.adapter = adapter  # type: ignore[assignment]
     model.settings = KnowledgeBaseModelSettings()  # type: ignore[assignment]
-    outcome = model.plan_adaptive(
-        request, analysis, ReasoningEffort.ASSISTED
-    )
+    outcome = model.plan_adaptive(request, analysis, ReasoningEffort.ASSISTED)
 
     assert adapter.calls == 1
     assert outcome.attempted
@@ -521,9 +550,7 @@ def test_structured_output_payload_uses_one_explicit_mode(
         },
         schema_revision="fictional-probe-v1",
     )
-    structured_fields = {
-        "response_format", "structured_outputs", "guided_json"
-    }
+    structured_fields = {"response_format", "structured_outputs", "guided_json"}
     assert structured_fields.intersection(payload) == (
         {field} if field else set()
     )

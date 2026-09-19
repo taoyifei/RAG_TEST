@@ -18,11 +18,15 @@ from rag_app.application.retrieval.evidence import (
 )
 from rag_app.application.retrieval.evidence_groups import GroupCandidate
 from rag_app.application.retrieval.filters import apply_candidate_filters
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
+    AtomFactBinding,
     ChannelHit,
     ChunkRole,
     EvidenceGroup,
     EvidenceItem,
+    PhysicalTableFact,
+    PhysicalTableHeader,
     RankedChunk,
     RetrievalPolicy,
     SearchRequest,
@@ -44,7 +48,9 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v9"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v10"
+_MIN_TABLE_FACT_COLUMNS = 2
+_TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
 _STRUCTURED_GROUP_TYPES = frozenset(
     {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
@@ -131,6 +137,8 @@ class GenerationEvidencePack:
     per_atom_source_certificates: tuple[tuple[str, str, JsonObject], ...] = ()
     priority_source_units: tuple[tuple[str, tuple[str, ...]], ...] = ()
     reading_unit_reason_codes: tuple[str, ...] = ()
+    physical_table_facts: tuple[PhysicalTableFact, ...] = ()
+    atom_fact_bindings: tuple[AtomFactBinding, ...] = ()
 
     @property
     def evidence(self) -> tuple[EvidenceItem, ...]:
@@ -703,6 +711,228 @@ def _reading_header_columns(
             if match and (int(match[1]), int(match[2])) == (row, column):
                 columns.update(range(column, column + int(match[4])))
     return frozenset(columns)
+
+
+def _ordered_cell_members(
+    items: tuple[EvidenceItem, ...],
+) -> tuple[EvidenceItem, ...]:
+    """按原始节点和字符位置稳定排列同一物理单元格的多个片段。"""
+    return tuple(
+        sorted(
+            items,
+            key=lambda item: (
+                min(
+                    (
+                        span.source_anchor.ordinal
+                        for span in item.source_spans
+                        if span.source_anchor is not None
+                    ),
+                    default=2**31,
+                ),
+                min(
+                    (
+                        span.source_start_char
+                        for span in item.source_spans
+                        if span.source_start_char is not None
+                    ),
+                    default=2**31,
+                ),
+                item.support_id,
+            ),
+        )
+    )
+
+
+def _physical_table_facts(
+    items: tuple[EvidenceItem, ...],
+    candidate_by_id: dict[str, RankedChunk],
+) -> tuple[PhysicalTableFact, ...]:
+    """先按真实坐标建立事实，再由问句单独选择可用事实。"""
+    rows: dict[
+        tuple[tuple[object, ...], int], dict[int, list[EvidenceItem]]
+    ] = defaultdict(lambda: defaultdict(list))
+    headers: dict[
+        tuple[object, ...],
+        dict[tuple[int, int, tuple[int, ...]], list[EvidenceItem]],
+    ] = defaultdict(lambda: defaultdict(list))
+    for item in items:
+        cell = _reading_table_identity(item)
+        candidate = candidate_by_id.get(item.chunk_id)
+        if cell is None or candidate is None:
+            continue
+        table, row, column = cell
+        if _reading_header(item, candidate):
+            covered = tuple(sorted(_reading_header_columns(item, candidate)))
+            if covered:
+                headers[table][row, column, covered].append(item)
+            continue
+        rows[table, row][column].append(item)
+
+    facts: list[PhysicalTableFact] = []
+    for (table, row), columns in sorted(rows.items(), key=repr):
+        if (
+            len(columns) < _MIN_TABLE_FACT_COLUMNS
+            or _TABLE_ROW_LABEL_COLUMN not in columns
+        ):
+            continue
+        label_column = _TABLE_ROW_LABEL_COLUMN
+        labels = _ordered_cell_members(tuple(columns[label_column]))
+        first = labels[0]
+        node = dict(first.metadata).get("table_logical_node_id")
+        if (
+            not first.document_id
+            or not first.document_version_id
+            or not isinstance(node, str)
+        ):
+            continue
+        table_key = canonical_sha256(
+            {"revision": "wb08r-physical-table-v1", "identity": table}
+        )
+        for value_column, raw_values in sorted(columns.items()):
+            if value_column == label_column:
+                continue
+            header_groups = tuple(
+                PhysicalTableHeader(
+                    row_index=header_row,
+                    column_indexes=covered,
+                    support_ids=tuple(
+                        item.support_id
+                        for item in _ordered_cell_members(tuple(raw_headers))
+                    ),
+                )
+                for (
+                    header_row,
+                    _header_column,
+                    covered,
+                ), raw_headers in sorted(headers.get(table, {}).items())
+                if value_column in covered
+            )
+            if not header_groups:
+                continue
+            facts.append(
+                PhysicalTableFact(
+                    fact_id=canonical_sha256(
+                        {
+                            "revision": "wb08r-physical-table-fact-v1",
+                            "table_key": table_key,
+                            "row": row,
+                            "value_column": value_column,
+                        }
+                    ),
+                    table_key=table_key,
+                    document_id=first.document_id,
+                    document_version_id=first.document_version_id,
+                    table_node_id=node,
+                    row_index=row,
+                    row_label_column_index=label_column,
+                    value_column_index=value_column,
+                    row_label_support_ids=tuple(
+                        item.support_id for item in labels
+                    ),
+                    value_support_ids=tuple(
+                        item.support_id
+                        for item in _ordered_cell_members(tuple(raw_values))
+                    ),
+                    headers=header_groups,
+                )
+            )
+    return tuple(facts)
+
+
+def _atom_fact_bindings(
+    query_plan: QueryPlan,
+    facts: tuple[PhysicalTableFact, ...],
+    evidence: tuple[EvidenceItem, ...],
+    per_atom: tuple[tuple[str, tuple[str, ...]], ...],
+    priority_units: tuple[tuple[str, tuple[str, ...]], ...],
+) -> tuple[AtomFactBinding, ...]:
+    """绑定 Atom 与事实候选，但不把候选关系升级成语义证明。"""
+    by_id = {item.support_id: item for item in evidence}
+    allowed = {atom_id: set(ids) for atom_id, ids in per_atom}
+    priority = {
+        owner: set(keys) for owner, keys in priority_units if owner != "ROOT"
+    }
+    bindings: list[AtomFactBinding] = []
+    for atom in query_plan.atoms:
+        focus = " ".join(
+            (
+                query_plan.original_query,
+                atom.search_text,
+                atom.target,
+                atom.relation,
+            )
+        )
+        for fact in facts:
+            fact_ids = set(fact.all_support_ids)
+            if not fact_ids <= allowed.get(atom.atom_id, set()):
+                continue
+            fact_keys = {
+                stable_support_key(by_id[support_id])
+                for support_id in fact.all_support_ids
+            }
+            label = "".join(
+                by_id[support_id].citation_text
+                for support_id in fact.row_label_support_ids
+            )
+            if not (
+                fact_keys <= priority.get(atom.atom_id, set())
+                or _reading_label_score(focus, label)[0]
+            ):
+                continue
+            headers = " ".join(
+                by_id[support_id].citation_text
+                for support_id in fact.header_support_ids
+            )
+            values = " ".join(
+                by_id[support_id].citation_text
+                for support_id in fact.value_support_ids
+            )
+            target = _normalized(atom.target)
+            relation = _normalized(atom.relation)
+            normalized_label = _normalized(label)
+            normalized_headers = _normalized(headers)
+            constraint_values = tuple(
+                _normalized(constraint.value) for constraint in atom.constraints
+            )
+            physical_text = _normalized(" ".join((label, headers, values)))
+            relation_supported = bool(
+                target
+                and relation
+                and (target in normalized_label or normalized_label in target)
+                and (
+                    relation in normalized_headers
+                    or any(
+                        header and header in relation
+                        for header in (
+                            _normalized(by_id[support_id].citation_text)
+                            for support_id in fact.header_support_ids
+                        )
+                    )
+                )
+                and all(value in physical_text for value in constraint_values)
+            )
+            bindings.append(
+                AtomFactBinding(
+                    atom_id=atom.atom_id,
+                    fact_id=fact.fact_id,
+                    relation_status=(
+                        "SUPPORTED" if relation_supported else "UNDETERMINED"
+                    ),
+                    requested_target=atom.target,
+                    requested_relation=atom.relation,
+                    requested_stage_labels=tuple(
+                        constraint.value
+                        for constraint in atom.constraints
+                        if constraint.kind.value == "STAGE"
+                    ),
+                    requested_conditions=tuple(
+                        constraint.value
+                        for constraint in atom.constraints
+                        if constraint.kind.value == "CONDITION"
+                    ),
+                )
+            )
+    return tuple(bindings)
 
 
 def _priority_reading_units(  # noqa: PLR0912, PLR0913
@@ -1679,6 +1909,21 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         per_atom.append((atom.atom_id, ids))
         if not ids:
             missing.append(atom.atom_id)
+    priority_source_units = tuple(
+        (owner, tuple(stable_support_key(candidates[key]) for key in unit))
+        for owner, unit in selected_priority_units
+        if set(unit) <= set(selected)
+    )
+    physical_table_facts = _physical_table_facts(
+        tuple(item.evidence_item for item in entries), candidate_by_id
+    )
+    atom_fact_bindings = _atom_fact_bindings(
+        query_plan,
+        physical_table_facts,
+        tuple(item.evidence_item for item in entries),
+        tuple(per_atom),
+        priority_source_units,
+    )
     return GenerationEvidencePack(
         original_query=query_plan.original_query,
         resolved_root_query=query_plan.resolved_root_query,
@@ -1700,12 +1945,10 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                 certificate := dict(item.metadata).get("answer_support"), dict
             )
         ),
-        priority_source_units=tuple(
-            (owner, tuple(stable_support_key(candidates[key]) for key in unit))
-            for owner, unit in selected_priority_units
-            if set(unit) <= set(selected)
-        ),
+        priority_source_units=priority_source_units,
         reading_unit_reason_codes=tuple(dict.fromkeys(reading_unit_reasons)),
+        physical_table_facts=physical_table_facts,
+        atom_fact_bindings=atom_fact_bindings,
     )
 
 
