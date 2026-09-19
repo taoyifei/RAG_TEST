@@ -5,7 +5,7 @@
   "completed_phases": ["WB08R-00", "WB08R-01", "WB08R-02"],
   "current_phase": "WB08R-03",
   "phase_status": "PAUSED",
-  "implementation_status": "wb08r03g_p0_blocked_missing_audit_inputs_and_runtime_access",
+  "implementation_status": "wb08r03g_p0_pass_with_declared_package_input_gaps",
   "wb08r03r2_phase_start_sha": "399cf2184c4b3f47f6f4b274c4333913f610f1d2",
   "candidate_code_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
@@ -22,7 +22,7 @@
     "R3_root_atom_retrieval": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
     "R4_group_alignment": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
     "R5_natural_claims": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
-    "03G_P0_evidence_freeze": "BLOCKED"
+    "03G_P0_evidence_freeze": "PASS_WITH_DECLARED_PACKAGE_INPUT_GAPS"
   },
   "verification_gates": {
     "candidate_identity": "PASSED_BD00C56",
@@ -167,33 +167,69 @@
   "wb08r03g_p0_verification": {
     "phase_start_sha": "661498176a2c885f7a109c0af0024ae2ad59b88f",
     "historical_runtime_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
-    "status": "BLOCKED",
+    "observation_source_sha": "65214b9a186008b7b27919483dc389b06f22855f",
+    "status": "PASS_WITH_DECLARED_PACKAGE_INPUT_GAPS",
     "report": "docs/progress/wb08r-03g-p0-report.md",
-    "report_sha256": "335dd26bd5cc7eeed9d5e498b7e86001b9c78f40f5c797b36e56ff442edb235a",
+    "report_sha256": "88f9b0d0be2ce97ea0efa00a6660c81957729ee695d0ff37598ed4df0c9f4d11",
     "safe_manifest": "docs/progress/wb08r-03g-p0-manifest.json",
-    "safe_manifest_sha256": "e9b4df11a9d778c83c978bee897a2573b616dbdc648ad33784f9aa63b0340e8a",
-    "private_replay": "EXTERNAL_OWNER_ONLY_ACL",
-    "historical_n031_trace_id": "trace_6c780ebd91b5b419110e8a72c993abff",
-    "historical_n033_trace_id": "NOT_OBSERVED",
-    "observability_patch": "LOCAL_ONLY_NOT_DEPLOYED_PRIVATE_DRAFT_CAPTURE_READY",
-    "observability_source_sha": "f9599dd4a1c42ee1c2cc9e7743826ccfe8599b5e",
-    "contract_probe_regression": "PASSED_6",
-    "targeted_pytest": "PASSED_151",
-    "private_draft_targeted_pytest": "PASSED_64",
+    "safe_manifest_sha256": "7d5d4b39fffe7a02d561d8ab3362de0691dd9b128b9d4b11d49627b6d5438aa0",
+    "private_replay": "EXTERNAL_OWNER_AND_SYSTEM_ONLY_ACL",
+    "historical_trace_ids": {
+      "WB08R-N-031": "trace_6c780ebd91b5b419110e8a72c993abff",
+      "WB08R-N-033": "trace_19c87593a5df45fa15b369c2bdbd3bcb"
+    },
+    "live_trace_ids": {
+      "WB08R-F-013": "trace_c98bdd0ee664529ddaaa23892e3731da",
+      "WB08R-F-015": "trace_f56aaa0bce5be4188fe603c480326cd7",
+      "WB08R-N-031": "trace_3e3322c7179cbd0af1f0eb932e0f846c",
+      "WB08R-N-033": "trace_ec1d9ffd516309772714520e15b98854"
+    },
+    "n031_first_observed_breakpoint": "GOLD_SUPPORTS_ABSENT_AT_RERANK_INPUT",
+    "n031_exact_pre_rerank_breakpoint": "NOT_OBSERVED_CHANNEL_AND_FUSION_IDS_NOT_RETAINED",
+    "n033_raw_reason": "CLAIM_SOURCE_MISMATCH",
+    "n033_validator": "_validate_natural_support_structure",
+    "n033_public_reason": "CLAIM_SUPPORT_NOT_OWNED",
+    "n033_fallback_reason": "NO_SAFE_EXCERPT",
+    "n033_selected_supports": [
+      "S1",
+      "S2"
+    ],
+    "n033_selected_supports_same_node_table_row_and_contiguous": true,
+    "n033_source_group_recovery": "REENTERS_SAME_STRUCTURE_VALIDATOR_AND_REJECTS_AGAIN",
+    "observability_patch": "DEPLOYED_ONCE_TO_8289_AND_BASELINE_RESTORED",
+    "contract_probe_regression": "PASSED_REAL_FUNCTION_SAME_ROW_COUNTEREXAMPLE",
+    "targeted_pytest": "PASSED_5",
+    "expanded_relevant_pytest": "PASSED_220",
+    "prior_observability_pytest": [
+      "PASSED_151",
+      "PASSED_64"
+    ],
     "expanded_pytest": "98_PASSED_1_BASELINE_FAILURE_DENSE_QUERY_PUNCTUATION",
     "expanded_product_runtime_pytest": "25_PASSED_6_IDENTICAL_BASELINE_FAILURES",
     "ruff": "PASSED",
     "script_syntax": "PASSED",
+    "json_validation": "PASSED",
     "git_diff_check": "PASSED",
-    "mypy": "FAILED_161_ERRORS_IN_12_FILES_MATCHES_AUDIT_BASELINE_NO_PRIVATE_REPLAY_ERRORS",
+    "mypy": "FAILED_161_ERRORS_IN_12_FILES_MATCHES_AUDIT_BASELINE_NO_OBSERVABILITY_ERRORS",
     "private_text_leak_scan": "PASSED_24_UNIQUE_STRINGS_ZERO_MATCHES",
-    "candidate_deployment": false,
+    "candidate_deployment": {
+      "count": 1,
+      "image": "rag-test-wanshitong:wb08r03g-p0-65214b9",
+      "image_id": "sha256:772ad96f0918112e8accf49593e63582de525cafde2cebf4b12dba2976b5695a",
+      "request_count": 4,
+      "retry_count": 0,
+      "baseline_restored": true
+    },
     "production_deploy": false,
+    "production_8288_unchanged_and_healthy": true,
+    "candidate_8289_restored_and_healthy": true,
+    "cleanup": "PRECISE_TEMP_AND_PRIVATE_SERVER_ARTIFACTS_REMOVED_OBSERVATION_IMAGE_RETAINED_PER_P0",
     "missing_inputs": [
       "01_AUDIT_REPORT",
       "90_contract_probes.py"
     ],
-    "runtime_access": "BLOCKED_NO_AUTHORIZED_CREDENTIAL",
+    "runtime_access": "AUTHORIZED_AND_USED_FOR_READ_ONLY_EVIDENCE_AND_SINGLE_8289_OBSERVATION",
+    "phase_status": "PAUSED",
     "merge_allowed": false
   }
 }

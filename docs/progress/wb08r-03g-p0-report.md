@@ -2,361 +2,374 @@
 
 ## 1. P0 结论
 
-本微阶段结论为 **BLOCKED**。N031 已定位到“Gold 支持在固定索引中存在，
-但三条 Gold Chunk 均未进入 `rerank.input`”这一最早可观察断点；N033 已定位到
-“同意图来源 Chunk 进入 rerank 后被 `assemble_evidence` 以
-`INCOMPLETE_EVIDENCE_GROUP` 拒绝，最终一条模型 Claim 又被映射为
-`CLAIM_SUPPORT_NOT_OWNED`”这一双层断点。N033 的原始 Claim、Quote、所选
-Support ID、Atom 允许集合、原始拒绝码和 fallback 失败分支均未被历史 Trace
-保存，因此不能把任何猜测码写成线上根因。新增的受控私有草稿记录器只能在未来
-一次 8289 候选重放中取得这些字段，不能倒推或改写这次历史结论。
+本微阶段状态为 **PASS_WITH_DECLARED_PACKAGE_INPUT_GAPS**：
 
-P0 没有修语义召回、Gold、业务同义词、引用规则、校验阈值、生成 Prompt 或
-预算，也没有运行 04、部署候选、请求生产服务或清理镜像。WB08R-03 保持
-`PAUSED`，`merge_allowed=false`。
+- N031 已用历史 Trace 和一次受控 8289 重放重复确认，三条冻结 Gold Chunk 均未进入
+  `rerank.input`。这是当前**第一可观察断点**。各召回通道和融合阶段没有保存完整
+  Chunk 身份，所以更早的准确断点仍为 `NOT_OBSERVED`，不猜具体通道。
+- N033 已取得模型实际 NaturalClaim、Quote、所选 Support、Atom 允许集合及
+  SourceSpan 的私有记录。终止发布的原始错误为 `CLAIM_SOURCE_MISMATCH`，validator
+  是 `_validate_natural_support_structure`；公开 Trace 将它映射成
+  `CLAIM_SUPPORT_NOT_OWNED`。所选 S1/S2 实际属于同一节点、同一表行且首尾连续，
+  但没有非空 `evidence_group_id`，稳定表行身份没有被结构 validator 采用。
+- N033 `accepted=0`，因此局部 repair 条件没有进入；随后安全摘录 fallback 以
+  `NO_SAFE_EXCERPT` 失败，最终 `NO_ANSWER`。
+- 本轮只增加兼容观测字段、私有草稿记录和受控 replay；没有改检索排名、证据准入、
+  校验阈值、生成 Prompt、预算或回答语义。
 
-阻断 P0 完整验收的输入和环境如下：
+仍有两个包输入缺口：附件和仓库中均没有 01 审计报告及
+`90_contract_probes.py`。当前 03G-P0 Goal 正文作为 02 阶段计划；旧附件已读取，
+但其 03F 执行循环已被当前 Goal 替换。因此本报告完成了 N031/N033 的运行时取证和
+仓库真实函数反例，不能声称已逐项复核缺失的 01/90 内容。
 
-1. 工作区、`C:\Users\jerry\.codex\attachments`、Downloads、Desktop、
-   Documents 和 `/home/jerry` 均未找到本包 01 审计报告或
-   `90_contract_probes.py`。当前 Goal 正文可作为 02 阶段计划，但不能替代缺失
-   的 01 审计事实和 90 固定反例。
-2. 当前获授权配置和环境没有可用服务器认证。对现有服务器地址的批处理 SSH
-   只读连接返回 `Permission denied (publickey,password)`；未搜索、复制或恢复
-   其它凭据。
-3. 因而本轮没有对候选库先执行 Schema 检查，随后查询 `query_history` 和
-   `query_trace_events`。历史 SAFE 摘录可以用于冻结已观察事实，但不能冒充本轮
-   直接数据库取证。
+WB08R-03 继续保持 `PAUSED`，`merge_allowed=false`。本轮不进入 P1、不运行 04、
+不推送、不合并，也不清理镜像。
 
-安全机器清单见
-`docs/progress/wb08r-03g-p0-manifest.json`。
+安全机器清单见 `docs/progress/wb08r-03g-p0-manifest.json`。
 
-## 2. 证据等级和来源
+## 2. 证据等级与包输入
 
-- **事实**：当前仓库命令、冻结数据文件、状态文件、历史运行的 SAFE 输出或
-  私有结果中直接存在的值。
-- **推断**：由两个以上事实得到，但历史 Trace 没有直接记录中间对象或因果关系。
-- **NOT_OBSERVED**：历史运行没有保存，或本轮不能从对应候选数据库重新读取。
+- **事实**：本轮 Git、Docker inspect、SQLite Schema/固定只读查询、历史 SAFE
+  Trace、受控 replay 或真实函数测试直接给出的值。
+- **推断**：由多个事实连接得到，但没有对应中间对象的直接记录。
+- **NOT_OBSERVED**：运行没有保存该对象，或缺失的包文件无法提供该项。
 
-本报告没有用当前 HEAD 的实现反推旧镜像行为。旧运行行为只取自
-`bd00c56f15aa86cfbe875b1700c72b7a23d9d5da` 的候选身份、历史结果与 SAFE
-Trace 摘录；当前代码只用于复核通用合同和增加后续可观测性。
+旧镜像行为没有用当前 HEAD 倒推。历史链只使用
+`bd00c56f15aa86cfbe875b1700c72b7a23d9d5da` 的候选、同库历史 Trace 和冻结结果；
+当前代码 `65214b9a186008b7b27919483dc389b06f22855f` 只用于一次观测候选。
+
+包输入核对：
+
+| 输入 | 结果 |
+| --- | --- |
+| 当前 03G-P0 Goal | 已读取，作为本微阶段计划 |
+| 旧 `goal-objective.md` | 已读取；其中 03F 循环被当前 Goal 明确替换 |
+| 01 审计报告 | `NOT_FOUND` |
+| `90_contract_probes.py` | `NOT_FOUND`；未伪造执行结果 |
+| 仓库 `AGENTS.md`、`wb08r-state.json`、`wb08r-03-issues.md` | 已读取并按当前范围执行 |
 
 ## 3. 冻结身份
 
 ### 3.1 Git 与工作区
 
-| 项目 | 冻结值 | 证据等级 |
+| 项目 | 冻结值 |
+| --- | --- |
+| 仓库 / 分支 | `taoyifei/RAG_TEST` / `codex/wb-08r-adaptive-rag` |
+| 审计基线 / P0 开始 HEAD | `661498176a2c885f7a109c0af0024ae2ad59b88f` |
+| 历史运行代码 | `bd00c56f15aa86cfbe875b1700c72b7a23d9d5da` |
+| 观测候选代码 | `65214b9a186008b7b27919483dc389b06f22855f` |
+| `bd00c56..6614981` | 仅 `wb08r-03-issues.md`、`wb08r-state.json` |
+| 原有未跟踪评测文件 | 10 个，全部保留且未纳入提交 |
+
+`bd00c56` 与审计基线的 `grounded.py` SHA-256 都是
+`14617067898ec8cd7e3cc44d81c759616fbe13732678bc6c4268de602975be1f`。
+
+### 3.2 生产与候选
+
+| 项目 | 生产只读基线 | 8289 候选基线 |
 | --- | --- | --- |
-| 仓库 / 分支 | `taoyifei/RAG_TEST` / `codex/wb-08r-adaptive-rag` | 事实 |
-| 本轮开始 HEAD | `661498176a2c885f7a109c0af0024ae2ad59b88f` | 事实 |
-| 审计基线 | `661498176a2c885f7a109c0af0024ae2ad59b88f` | 事实 |
-| 历史运行代码 | `bd00c56f15aa86cfbe875b1700c72b7a23d9d5da` | 事实 |
-| `bd00c56..6614981` | 仅 `wb08r-03-issues.md`、`wb08r-state.json` | 事实 |
-| 原有未跟踪评测文件 | 10 个，均保留且未纳入本轮修改 | 事实 |
+| 容器 | `wanshitong-app` | `wanshitong-wb08r01-app` |
+| 容器 ID | `7f46e6d98eff...` | 恢复后 `065c4b45296f...` |
+| 镜像 | `rag-test-wanshitong:604ef63` | `rag-test-wanshitong:wb08r03f-bd00c56` |
+| 镜像 ID | `sha256:97826be...` | `sha256:621acc79...` |
+| 源修订 | `604ef63be84742efdb340fcc763266e7f457c179` | `bd00c56f15aa86cfbe875b1700c72b7a23d9d5da` |
+| Docker 映射 | `0.0.0.0:8288->8088` | `127.0.0.1:8289->8088` |
+| 本轮结束健康 | HTTP 200、healthy | HTTP 200、healthy |
 
-`bd00c56` 与审计 HEAD 的 `grounded.py` SHA-256 均为
-`14617067898ec8cd7e3cc44d81c759616fbe13732678bc6c4268de602975be1f`；
-因此本轮对旧回答合同的代码复核没有使用后来改变的 `grounded.py`。
+生产挂载来源为 `/data/tyf/wanshitong/{data,secrets,logs}`，候选挂载来源为
+`/data/tyf/wanshitong-wb08r01/{data,secrets,logs}`；两者 secrets 均只读。
+生产容器 ID、镜像、端口、挂载及健康在观测部署前后没有变化。
 
-### 3.2 候选、配置和数据
+候选 Compose SHA-256 为
+`538e42987b9a00e4858e41be3052e6acbeaf783212c8b060a611bd189c4533d5`，
+环境配置文件 SHA-256 为
+`ce51dd27f970266cb144ad9f892652e1d477631aed38d88efd6398bd70715f01`。
+秘密值没有写入报告、日志、源码或镜像。
 
-| 项目 | 冻结值 | 证据等级 |
-| --- | --- | --- |
-| 候选镜像 | `rag-test-wanshitong:wb08r03f-bd00c56` | 事实 |
-| 镜像 ID | `sha256:621acc792c12169d347fde03a8cfb06dff4ca033bf4867171d35bc46f284b75c` | 事实 |
-| 历史容器 / 端口 | `wanshitong-wb08r01-app` / 8289 | 事实 |
-| 镜像源码修订 | `bd00c56f15aa86cfbe875b1700c72b7a23d9d5da` | 事实 |
-| 产品资产 Manifest | `927660b0864b710719c8af4d6911e22087c63baef1587f783d3c895482b09f72`，37 文件，1,107,812 字节 | 事实 |
-| Compose 摘要 | `3257dfd81ee5b1364f21f9f74638b9103bab449f3e0850b76285d91298bbbf5d` | 事实 |
-| Pipeline 摘要 | `037e2960634c2314df47cc53f6212224035cd4b1e9c48e189a8df5d595bf5570` | 事实 |
-| Product/Profile | `RAG_PRODUCT_MODE=wanshitong`，内网模型组合 | 事实 |
-| Provider / 模型 | OpenAI-compatible；`Qwen/Qwen3-8B-AWQ` | 事实 |
-| 结构化输出 | `response_format`，显式关闭 thinking | 历史记录事实 |
-| Dataset | `wanshitong-v2-20260917` | 事实 |
-| Runner SHA-256 | `beb4e0fe5a70bba18225fa7926101c3d274ec4ee41a5b423e4a33a897babc1d9` | 事实 |
-| Dataset Schema SHA-256 | `67ea379f12a15a8cd56a63b254ba90448a85a6297d95c7c4c558757c9f4ea0d6` | 事实 |
-| Active index | `irev_0329a35ca9ea700133f7b309160118f0` | 冻结真值事实 |
-| Active snapshot | `9fba9aac42c3482c36e266e1bf2a04557962c11a5073f38a95d1e1407b5bae06` | 冻结真值事实 |
-| KB | `kb_328756522df5f70ad9a852fdb5fea3b5` | 冻结真值事实 |
-| 候选实际挂载 | `NOT_OBSERVED` | 未观测 |
+### 3.3 Active index、Provider/Profile 与数据
 
-生产容器为 `wanshitong-app`，已有直接 Docker 映射记录是 **8288 → 8088**。
-本轮没有把 18288 当宿主回环端口，也没有修改生产容器。当前服务器不可访问，
-所以本轮无法重新执行 `docker inspect`；生产挂载和当前镜像身份标记为
-`NOT_OBSERVED`，保留历史状态文件中的只读基线。
+| 项目 | 冻结值 |
+| --- | --- |
+| Project | `prj_b01e6904546c5000f8a0065a2d713436d` |
+| KB | `kb_328756522df5f70ad9a852fdb5fea3b5` |
+| Profile | `product-runtime` / `pfr_43e020ad153008e3e67c364f0f3b1d75` |
+| Active index | `irev_0329a35ca9ea700133f7b309160118f0`；46 documents / 2880 chunks |
+| Index fingerprint | `sha256:37ef53011feccfaf0bb01624c0127f026e028e64af0f89517eaa5e36dabc8714` |
+| 历史 Trace serving fingerprint | `sha256:d76e13c9af14ca10cb86361ec476a5966aa16872444877af4e4c6706c55dd884` |
+| 当前 Profile serving fingerprint | `sha256:189907352eec14c09849a0bc05f3beaf8d2352a642c07c2b7fe322f502fe728a8` |
+| Embedding | `Qwen3-Embedding-0.6B`，1024 维 |
+| Reranker | `Qwen3-Reranker-0.6B` |
+| Generation | OpenAI-compatible / `Qwen/Qwen3-8B-AWQ` |
+| 结构化输出 | `response_format`，thinking disabled |
+| Dataset | `wanshitong-v2-20260917` |
+| Runner SHA-256 | `beb4e0fe5a70bba18225fa7926101c3d274ec4ee41a5b423e4a33a897babc1d9` |
+| Dataset Schema SHA-256 | `67ea379f12a15a8cd56a63b254ba90448a85a6297d95c7c4c558757c9f4ea0d6` |
 
-## 4. 数据库取证边界
+## 4. 同库只读取证
 
-对应历史数据库路径记录为 `/data/universal-rag.sqlite3`。本轮没有可用服务器认证，
-因此没有机会按“先看 `sqlite_master` / `PRAGMA table_info`，再执行固定 SELECT”的
-顺序直接读取同库。以下两点必须分开：
+数据库实际路径为 `/data/universal-rag.sqlite3`，大小 1,202,089,984 字节。本轮先查
+`sqlite_master` / `PRAGMA table_info`，再执行固定参数化 SELECT，没有业务更新语句。
 
-- **事实**：历史运行工具曾从名为 `query_history` 和 `query_trace_events` 的对象
-  得到 SAFE 摘录；N031 留下了
-  `trace_6c780ebd91b5b419110e8a72c993abff`。
-- **NOT_OBSERVED**：本轮未重新确认候选库实际表和列；N033 的 trace ID 没有进入
-  保留下来的安全结果，不能从当前材料恢复。
+实际表结构：
 
-新增的 `scripts/wb08r03g_private_replay.py` 固定使用 SQLite `mode=ro`，先检查两张
-表及必需列，再按参数化 `trace_id` 读取；没有任意 SQL 输入或更新路径。它只允许
-`127.0.0.1:8289`，固定 N031、N033、F015、F013 四题，每题一次、零重试，私有
-结果必须写到仓库外目录。
+- `query_history`：`trace_id, project_id, knowledge_base_id, owner_id, instance_id,
+  process_id, created_at, finished_at, expires_at, status, question_sha256,
+  body_saved, ciphertext, nonce, duration_ms, metadata_json`
+- `query_trace_events`：`sequence, trace_id, occurred_at, event_name, payload_json`
 
-## 5. N031 原始证据链
+恢复的历史 Trace：
 
-### 5.1 Gold 支持身份
+- N031：`trace_6c780ebd91b5b419110e8a72c993abff`
+- N033：`trace_19c87593a5df45fa15b369c2bdbd3bcb`
 
-N031 冻结数据指向 `WB08R-F-015`，意图身份为
-`legacy/DOCX-043-Q2/4c52a4f4674d`。配对冻结真值来自文档版本
-`dver_73e6ecf5f4678f09da2b2284e6099db5`，同一表第 2 行：
+数据库读取使用 SQLite `mode=ro`。实际 replay 为允许 SQLite 创建共享内存而挂载候选
+data 目录，但脚本仍没有 SQL 写入路径；Schema 检查和固定查询均为只读。
+
+## 5. 一次 8289 观测部署与受控 replay
+
+完整 Dockerfile 构建在拉取固定 Node 基础镜像时遇到 Docker Hub DNS 失败，失败发生在
+容器替换前。随后从现有 8289 候选镜像构建离线观测 overlay，只替换当前 Git 的
+`src/rag_app`、源码 revision 和产品资产 manifest：
+
+| 项目 | 值 |
+| --- | --- |
+| 观测镜像 | `rag-test-wanshitong:wb08r03g-p0-65214b9` |
+| 镜像 ID | `sha256:772ad96f0918112e8accf49593e63582de525cafde2cebf4b12dba2976b5695a` |
+| 观测容器 ID | `23b16ae3812a...` |
+| 源修订 | `65214b9a186008b7b27919483dc389b06f22855f` |
+| 基础修订 | `bd00c56f15aa86cfbe875b1700c72b7a23d9d5da` |
+| Product asset manifest | `8c854ce5bf038c77864df2e303bf334273669fee9223879d980238f0a36ee4bd8`；37 文件 / 1,107,812 字节 |
+| Python tree SHA-256 | `b3f809da28c9f0c285f1cb9e54dde40e4eb9721c0adc60feab3255358b8de9db`；与 Git archive 一致 |
+| Gold / 私有 replay 路径命中 | 0 |
+
+私有目录以 0700 挂载，文件为 0600。两次 preflight 因 UID 权限和 SQLite WAL 打开失败
+而在 HTTP 请求前退出，capture 大小保持 0，不计业务请求。修正临时挂载后只执行一批：
+
+- N031、N033、F015、F013 各一次；`request_count=4`，`retry_count=0`。
+- 捕获 3 份草稿：F013、N031、N033；F015 走直接摘录，没有模型草稿。
+- F013 为 `ANSWERED`，1 个生成、接受和发布 Claim。
+- F015 为 `ANSWERED`，`generation_calls=0`，走 `EXTRACTIVE_FALLBACK`，发布 11 个支持。
+
+完成后立即停止观测容器并恢复原 `bd00c56` 候选；8288 生产始终未替换。
+
+## 6. N031 证据链与第一断点
+
+### 6.1 冻结 Gold 支持
+
+N031 配对冻结真值为 `WB08R-F-015`，三条支持来自文档版本
+`dver_73e6ecf5f4678f09da2b2284e6099db5` 的同一表第 2 行：
 
 | Gold | Chunk | Node / 表坐标 | Quote SHA-256 |
 | --- | --- | --- | --- |
-| G01 行名 | `chunk_5d476cdffac74dc3d578f87d851fdb75` | `node_e97185257088b1bb899332012a01fa8e`；`body/tbl:2/tr:2/tc:0/p:1` | `2b8357b4cef4362574eee1bf1b594a5fb7840af7be0f4128092720ce5aebcc6c` |
-| G02 输入 | `chunk_39b41e0c274e2873812c8da6c0a37189` | `body/tbl:2/tr:2/tc:2/p:1` | `54dc6932a131875dc5709ded1a2a5addec5c7579ea1ecb1165f366a1df39b7bb` |
-| G03 启动条件 | `chunk_a8e60e79651e4ab437adf67ebabe2e37` | `body/tbl:2/tr:2/tc:4/p:1` | `9b41bbcd6f14edf0e863ee5ff801f66a0a7adc12a48e468c9514129bb6cba81c` |
+| G01 行名 | `chunk_5d476cdffac74dc3d578f87d851fdb75` | `node_e97185257088b1bb899332012a01fa8e`；`tbl:2/tr:2/tc:0` | `2b8357b4cef4362574eee1bf1b594a5fb7840af7be0f4128092720ce5aebcc6c` |
+| G02 输入 | `chunk_39b41e0c274e2873812c8da6c0a37189` | `node_32a284316300e6b50192060821b2e72b`；`tbl:2/tr:2/tc:2` | `54dc6932a131875dc5709ded1a2a5addec5c7579ea1ecb1165f366a1df39b7bb` |
+| G03 启动条件 | `chunk_a8e60e79651e4ab437adf67ebabe2e37` | `node_f1f17c4fe3d4a6b3f3714545e3d21e16`；`tbl:2/tr:2/tc:4` | `9b41bbcd6f14edf0e863ee5ff801f66a0a7adc12a48e468c9514129bb6cba81c` |
 
-这些身份来自固定 active snapshot 的人工真值。它们证明索引快照中存在可引用节点，
-不证明旧候选运行的任一召回通道实际返回了这些节点。
+这些身份证明固定索引中有对应原文节点，不证明任何召回通道返回了它们。
 
-### 5.2 阶段链
+### 6.2 历史与 live 阶段链
 
-| 阶段 | 历史观察 | 判定 |
+| 阶段 | 历史 `bd00c56` | 本次观测 | 结论 |
+| --- | --- | --- | --- |
+| 解析 / 索引 | Gold 有 Document/Node/Chunk/表坐标 | Active index 身份一致 | 支持确实在固定索引 |
+| Root / Atom 召回 | structural 24、lexical 48、dense 24；只有计数 | 通道完整 Chunk 身份仍未 Trace | 各通道首个缺失为 `NOT_OBSERVED` |
+| Fuse | 35 候选；只留 rank contributions | 35 候选；仍无完整 ID | Gold 是否进入 fuse 为 `NOT_OBSERVED` |
+| Rerank input | 24 个 Chunk；三条 Gold 全部缺失 | 24 个 Chunk；三条 Gold 全部缺失 | **第一可观察断点** |
+| Pre-pack / assemble | retrieval 39、model evidence 16、answer support 0 | 不能恢复缺失 Gold | 下游无法恢复冻结来源 |
+| Source-node closure | 新增 0 | 结果不变 | 未恢复 Gold |
+| Corrective | `NO_GROUP_NEIGHBOR`，新增 0，post `PARTIAL` | 结果不变 | 未恢复 Gold |
+| Sent-pack | `NOT_OBSERVED` | 私有记录捕获，仓库不含正文 | live 仅用于身份核对 |
+| 模型 / 发布 | 生成 1、接受 2、发布 2；S1/S2/S3/S4/S8 | 完全相同 | 本地 Claim 门通过，冻结来源门失败 |
+
+**第一断点**固定为 `GOLD_SUPPORTS_ABSENT_AT_RERANK_INPUT`。更准确的位置只能收窄到
+“召回通道输出、融合或 rerank 输入裁剪之间”；没有通道 ID 集合就不能继续归因。
+
+### 6.3 实际替代引文的适用性
+
+本次 live 生成证据包含 9 个 Support，来自 5 个替代 Chunk：
+
+`chunk_164ee...`、`chunk_74c463...`、`chunk_acd577...`、`chunk_7737de...`、
+`chunk_687114...`。
+
+发布的 5 个 Quote SHA-256 与历史运行完全一致：
+
+`67d182...`、`2c50f3...`、`082257...`、`8ad95e...`、`2169ac...`。
+
+它们都来自同一替代文件，均不等于三条 Gold Quote。原文核对只能支持替代文件自身的
+要求，不能证明冻结模式行的输入与启动条件。因此事实适用性为“主题相关”，冻结来源
+Gate 继续失败；本报告没有放宽该 Gate。
+
+## 7. N033 原始证据链与终止原因
+
+### 7.1 召回到生成前
+
+历史和 live 都观察到同意图比较 Chunk
+`chunk_2ef52e5f6a5bf335c23f85d7bd8d5e42` 位于 rerank 第 9 位，随后在 assemble
+被记为 `INCOMPLETE_EVIDENCE_GROUP`。Source-node closure 增加
+`chunk_eff310e5b592ec8cf0c3905039193bea`；corrective 为
+`CORRECTION_NOT_TRIGGERED`、新增 0、post `MISSING`。
+
+这是 N033 的第一处可观察检索合同降级。它与终止发布原因分开记录，不能用
+`INCOMPLETE_EVIDENCE_GROUP` 代替模型 Claim 的 validator 错误。
+
+live sent-pack 有 17 个 Support；实际 NaturalClaim 和 Quote 正文留在仓库外私有记录。
+仓库只保留以下摘要：
+
+- Claim：56 字符，SHA-256
+  `13ae9a056310f770dba04db1cc4c16c4a66750611ee6838e23d79289e7cdd1a5`。
+- 所选 Support：S1、S2；A1 允许集合为 S1～S17，因此不是 Atom 越界。
+- Quote：41 字符和 11 字符；SHA-256 分别为
+  `e64325fe297346aa91ed62b156ee4115839c3def08cf29f80d8ccb55d0b682f0`、
+  `6395d7e87fdc4dd8adc095cacd34d39beebe5144d93d0ebf58bb944baa83bf89`；
+  两者都是各自 Evidence 的完整逐字子串。
+
+### 7.2 S1/S2 来源映射
+
+| 字段 | S1 | S2 |
 | --- | --- | --- |
-| 解析 / 索引 | 三条 Gold 在固定 snapshot 有 Document/Node/Chunk/表坐标 | 事实；旧请求的解析动作本身未重跑 |
-| Root / Atom 召回 | structural 24、lexical 48、dense 24 | 只有计数；各通道 Chunk 身份 `NOT_OBSERVED` |
-| Fuse | 35 个候选 | Gold 是否曾进入 fuse `NOT_OBSERVED` |
-| Rerank input | 24 个 Chunk，三条 Gold 全部不在集合中 | **最早可观察缺失** |
-| Pre-pack / assemble | retrieval 39、model evidence 16、answer support 0 | Gold 已无法在此链中恢复 |
-| Source-node closure | 新增 0 | 没有恢复 Gold |
-| Corrective retrieval | `NO_GROUP_NEIGHBOR`，新增 0，post `PARTIAL` | 没有恢复 Gold |
-| Sent-pack | `NOT_OBSERVED` | 历史 Trace 未保留最终包 |
-| 模型选择 | 1 次生成；历史最终接受 S1/S2/S3/S4/S8 | 均来自替代文档 |
-| 校验 / 发布 | 1 个生成 Claim 被恢复为 2 个已接受/已发布 Claim；5 个引用 | 本地 Claim 门通过，但冻结来源门失败 |
+| Chunk | `chunk_f3708e3cc8fea193f40fab195567c0c3` | `chunk_7962011586d949b58d927e9c0349e8b5` |
+| Document version | `dver_620e4260044303b449b6e37ae145deca` | 同左 |
+| Section | `section_90b969653f1524008343ec530c53e26d` | 同左 |
+| Node | `node_e61c0e0e7bcb0037962ef2e40c778711` | 同左 |
+| Table logical node | `node_de2b97c928deaf8aadcdbc96962fb97e` | 同左 |
+| Table group / row | `group_47e8...` / 1 | 同左 |
+| Structural path | `tbl:13/tr:1/tc:1` | 同左 |
+| Source offset | 0..41 | 41..52 |
+| `evidence_group_id` | `null` | `null` |
+| Span | `original_text`、citable、非 repeated | 同左 |
 
-**第一断点结论**：N031 的第一可观察断点是
-`GOLD_SUPPORTS_ABSENT_AT_RERANK_INPUT`。准确断点只能收窄为“各召回通道、融合或
-rerank 输入裁剪之一”；因为历史 Trace 只有通道计数，没有通道 Chunk 身份，不能
-继续猜是哪一个通道先丢失。
+因此 S1/S2 同节点、同表行、首尾连续，也没有跨角色或跨阶段拼接。两项
+`answer_support` 均为 `UNSUPPORTED / REQUESTED_RELATION_NOT_SUPPORTED`，没有
+supporting span；A1 matrix 为 `MISSING`，缺少 `GROUP_COMPLETE` 与
+`GROUP_ANCHORED`。
 
-### 5.3 实际替代引用与事实适用性
+### 7.3 原始 validator 错误与来源组恢复
 
-5 条引用都来自同一替代文件（私有相对路径 SHA-256
-`c74d5370983d61adb42d5ac8aacac4ccc2fe948edd4b5ff026cf66a9e030bf25`），
-不是冻结 Gold 文件（私有相对路径 SHA-256
-`273af4d763a524c9cf1ade71f8cd95ec3f7d6da84aac0a70e3da26c1ecae9353`）：
+原始错误链已经直接观察：
 
-| Quote SHA-256 | 私有 Locator SHA-256 | 事实适用性 |
-| --- | --- | --- |
-| `67d182aaa71f42c676ee17662a1c044989f647550521e7f4b8009611f73a60a5` | `c1a73d9112c5a9611018bc057f2cc7259e98abeea26eda87505a445994027e63` | 主题相关；不能证明冻结模式行中的输入与启动条件 |
-| `2c50f319178f0a3827e3bf4ca485e89cfb34933bc6674db2b1e0cac835ed5759` | `f214fcde8d56381ef8f0817d7cbb5e5e616363c1cada87688b4eeff0966870bf` | 可支持替代文件自身的要求；不能替代冻结模式行 |
-| `082257c3edd8670d0a7fd89b83955bb1adff7e476258dc4f2130e3b62d15f13b` | `f214fcde8d56381ef8f0817d7cbb5e5e616363c1cada87688b4eeff0966870bf` | 同上 |
-| `8ad95e3b4cf6cb5b7ed593ba2ef7ac68dac9055ec6aea9954ad97bf59e87fc6a` | `f214fcde8d56381ef8f0817d7cbb5e5e616363c1cada87688b4eeff0966870bf` | 同上 |
-| `2169acb329529788475b983370700501cfac9fe722fdbccbf9d800a725ca39ba` | `f214fcde8d56381ef8f0817d7cbb5e5e616363c1cada87688b4eeff0966870bf` | 同上 |
+```text
+raw_reason_code: CLAIM_SOURCE_MISMATCH
+validator_stage: answer.validate
+validator: _validate_natural_support_structure
+public_reason_code: CLAIM_SUPPORT_NOT_OWNED
+```
 
-5 个替代引文哈希均不等于任一 Gold Quote 哈希。字符交集只说明主题邻近，不能证明
-事实蕴含；因此本报告保留“主题相关”的推断，同时保持冻结来源 Gate 为失败。
+`_validate_natural_support_structure` 对多个支持只接受同一非空
+`evidence_group_id`，或相同的 `TABLE_INTERSECTION` 证书。S1/S2 的稳定表行身份相同，
+`_source_groups(S1) == _source_groups(S2)`，但两者 `evidence_group_id=null`，所以前置
+结构门拒绝。`_validated_source_group_claims` 能把它们放回同一派生来源组，却会再次
+调用同一个结构 validator，仍得到 `CLAIM_SOURCE_MISMATCH`。这解释了为什么“来源组
+恢复”没有挽救该 Claim。
 
-## 6. N033 原始证据链
+### 7.4 repair 与 fallback
 
-### 6.1 真值边界
+N033 生成 1 个 Claim、接受 0、发布 0。局部 repair 的条件是
+`omitted and accepted`，所以 `accepted=0` 时 `repair_calls=0`；没有发生 repair 失败。
 
-N033 的冻结数据指向 `WB08R-F-013`，意图身份为
-`legacy/DOCX-041-Q2/2f2dbf114c12`，预期文件的私有相对路径 SHA-256 为
-`183d4b48104f7890d73a17a2348661f6fd1d829b0f8acdd6f95b7c23c285a64f`。
-但 `wb08r03f-truth-v1` 没有 N033 或 F013 的直接逐字 Gold；历史 runner
-也把 N033 记为 `NEEDS_TRUTH_REVIEW`。因此不能把 N050/N058 的逐字真值直接改名为
-N033 Gold。
+随后 `_safe_extractive_fallback` 返回 `NO_SAFE_EXCERPT`，最终路径为 `NO_ANSWER`。
+这次 live 结果补齐了历史 Trace 中 fallback 原因不可见的缺口。
 
-可用于定位的同意图比较身份如下：
+## 8. 通用合同缺陷与最小反例
 
-- `chunk_2ef52e5f6a5bf335c23f85d7bd8d5e42`：同一文档版本，
-  `body/tbl:13/tr:1/tc:1/p:2`，Node
-  `node_107f296265bcc9289d4938a6a6694b11`。
-- `chunk_eff310e5b592ec8cf0c3905039193bea`：同一文档版本，
-  `body/tbl:22/tr:1/tc:1/p:8`，Node
-  `node_429328e0a4f1cff7410a65b72ed2f16c`。
-
-二者同文档版本，但不是同一 Node、同一表或同一表行。表 13 的准备阶段与表 22 的
-责任终点/角色转换存在跨阶段、跨角色边界；来源恢复不能把它们自动拼成一条 Claim。
-
-### 6.2 阶段链与第一断点
-
-| 阶段 | 历史观察 | 判定 |
-| --- | --- | --- |
-| Root / Atom 召回 | structural 24、lexical 48、dense 24、fuse 48 | 通道身份 `NOT_OBSERVED` |
-| Rerank input | `chunk_2ef...` 位于 24 个输入中的第 9 位 | 同意图来源已到达 rerank |
-| Pre-pack / assemble | retrieval 61、model evidence 16、answer support 0；`chunk_2ef...` 被标为 `INCOMPLETE_EVIDENCE_GROUP` | 第一处可观察合同降级 |
-| Source-node closure | 新增 `chunk_eff...` | 新增项不是 `chunk_2ef...` 的同 Node/同表行连续片段 |
-| Corrective retrieval | `CORRECTION_NOT_TRIGGERED`，新增 0，post `MISSING` | 未形成 Answer Support |
-| Sent-pack | `NOT_OBSERVED` | 无法确认最终 S-ID、来源组与 span |
-| 模型 | 1 次生成，1 个 NaturalClaim | Claim 正文、Quote、所选 S-ID 均 `NOT_OBSERVED` |
-| 校验 | 接受 0；公开分布 `CLAIM_SUPPORT_NOT_OWNED: 1` | 原始码与具体 validator `NOT_OBSERVED` |
-| 发布 | `NO_ANSWER`，发布 0 | 终态拒答 |
-
-N033 有两个需要分别记录的断点：
-
-1. **第一可观察合同降级**：同意图来源进入 rerank 后，在 assemble 阶段被当成不完整
-   来源组，`answer_support_count=0`。
-2. **终止发布的断点**：模型确实返回 1 个 Claim，但 Claim 校验只留下公开映射码
-   `CLAIM_SUPPORT_NOT_OWNED`。历史 Trace 没保存原始码，不能确认它来自
-   `CLAIM_SUPPORT_OUTSIDE_ATOM`、`CLAIM_SOURCE_MISMATCH` 或其它路径，也不能证明
-   assemble 降级必然导致最终拒绝。
-
-### 6.3 Repair 与 fallback
-
-**事实**：`GroundedAnsweringService._answer_with_plan` 只在
-`omitted and accepted` 为真时调用局部 repair。N033 `accepted=0`，所以
-`repair_calls=0`；这不是“repair 尝试失败”，而是条件没有进入。
-
-**事实**：接受列表为空后，代码调用 `_safe_extractive_fallback`。历史 Trace 只记录
-`extractive_fallback_used=false`，没有记录哪个 `return None` 分支触发。
-
-**NOT_OBSERVED**：N033 是因无安全摘录、问题锚点缺失、来源等级不匹配，还是其它
-fallback 分支失败，历史材料不能回答。
-
-## 7. 通用合同缺陷与最小反例
-
-### 7.1 原始拒绝原因被公开映射合并
+### 8.1 raw reason 被公开映射合并
 
 函数：`_natural_rejection_code`。
 
-`CLAIM_SOURCE_MISMATCH` 和 `CLAIM_SUPPORT_OUTSIDE_ATOM` 都映射为
-`CLAIM_SUPPORT_NOT_OWNED`。历史 `consume` 只累加映射后的计数，导致两个不同合同
-失败无法区分。N033 的原始原因因此是 `NOT_OBSERVED`，不能补猜。
+`CLAIM_SOURCE_MISMATCH` 与 `CLAIM_SUPPORT_OUTSIDE_ATOM` 都公开映射为
+`CLAIM_SUPPORT_NOT_OWNED`。N033 证明只看公开码会丢失真实 validator 原因。
+兼容 SAFE 诊断现在同时保留 raw/public code、validator、Atom、所选与允许 Support ID，
+正文只保留 SHA-256。
 
-真实应用链最小反例：A1 只允许 S1，模型却为 A1 选择分配给 A2 的 S2。改动前定向
-测试因 `GroundedOutcome` 没有原始诊断字段而失败；改动后得到：
+### 8.2 同表行稳定身份没有进入结构 validator
 
-- raw：`CLAIM_SUPPORT_OUTSIDE_ATOM`
-- public：`CLAIM_SUPPORT_NOT_OWNED`
-- validator：`_validate_natural_atom_support_scope`
-- selected：S2；allowed：S1
-- Claim 与 Quote 只存 SHA-256，不存正文
+函数：`_validate_natural_support_structure`、`_source_groups`。
 
-对应回归：
-`test_rejection_diagnostic_preserves_raw_atom_scope_reason`。
+新增真实函数反例构造两个可引用、同节点、同表行、首尾连续且派生来源组相同的
+`EvidenceItem`。`_source_groups` 确认相同来源组，结构 validator 仍抛出
+`CLAIM_SOURCE_MISMATCH`。这与 N033 的实际 S1/S2 形状一致。
 
-### 7.2 accepted=0 不进入局部 repair
+回归：
+`tests/evaluation/test_wb08r03g_contract_probe.py::test_same_row_identity_is_lost_before_source_group_recovery`。
+
+### 8.3 accepted=0 跳过局部 repair
 
 函数：`GroundedAnsweringService._answer_with_plan`。
 
-同一真实应用链反例确认 accepted=0、`repair_calls=0`。本 P0 只观测该条件，没有改变
-repair 语义或预算。
+真实应用链和 N033 live 均确认 `accepted=0`、`repair_calls=0`。P0 只记录该条件，不改
+repair 预算或触发语义。
 
-### 7.3 fallback 的 `None` 没有历史原因
+### 8.4 fallback 历史原因不可见
 
 函数：`_safe_extractive_fallback`。
 
-合成证据与问题没有安全相关摘录时，函数返回 `None`。改动前没有诊断出口；改动后
-同一真实函数返回行为不变，并记录 `NO_SAFE_EXCERPT`。其它稳定分支包括
-`NO_LINKED_SUPPORTS`、`NAMED_ROW_REQUIRED`、`SOURCE_LEVEL_MISMATCH`、
-`NO_CITABLE_COMPLETE_EXCERPT` 和 `QUESTION_ANCHOR_MISSING`。
+历史 `None` 没有稳定原因；兼容观测字段补齐原因，N033 live 为
+`NO_SAFE_EXCERPT`。fallback 行为没有改变。
 
-对应回归：`test_failed_fallback_records_safe_failure_reason`。
+### 8.5 N031 通道身份未 Trace
 
-### 7.4 来源组、连续 Node 与表格行不是同一合同
+历史与 live 只有各通道计数和融合 rank contributions，无法比较每个阶段的稳定支持
+身份。这是确认的观测合同缺口，也是 N031 暂时不能进行确定性召回修复的原因。
 
-真实函数回归分别证明：
+### 8.6 缺失的 90 探针
 
-- 同一 Claim 选择多个来源组时，`_validated_source_group_claims` 逐组恢复并重新校验；
-- 恢复后的另一明确主体仍会被丢弃；
-- 同一 Node 连续片段可以重新拼回完整原句；
-- 命名且完整的表格行可作为 fallback，不能用任意同文档片段替代。
+`90_contract_probes.py` 未在附件或仓库出现，故未执行。本轮新增的是仓库真实函数回归，
+没有把隔离行为冒充缺失的 90 脚本或端到端测试。
 
-这些反例不能证明 N033 实际选择了哪些支持；N033 的 selected S-ID 和 source span
-仍为 `NOT_OBSERVED`。
+## 9. 观测改动与私有产物
 
-### 7.5 缺失的 90 合同探针
+观测改动包括：
 
-`90_contract_probes.py` 不在附件、仓库或本轮允许搜索的常见目录中，所以没有执行，
-也没有伪造它的输出。本轮另外执行的是仓库真实函数/应用链回归，不把它冒充 90
-脚本或端到端线上测试。
+- `GroundedOutcome` / SAFE Trace 增加
+  `claim_rejection_diagnostics` 与 `extractive_fallback_reason`；
+- 默认关闭的 `PrivateReplayDraftRecorder`，只在显式目录、确认值和上限同时配置时启用；
+- `scripts/wb08r03g_private_replay.py` 固定 8289 与四个 case，先检查 Schema，零重试，
+  私有输出 0600；
+- replay 在公共响应后有限等待 History 终态以及
+  `retrieval.claim_publication`、`retrieval.complete`，避免异步 Trace 尚未落库时生成空
+  manifest。首次 live manifest 暴露了这个 race；权威结果来自 post-settle SAFE 摘录。
 
-## 8. 仅观测改动
+对外 REST path、请求/响应、History Schema 均未改变；排名、准入、阈值、Prompt、
+Provider、repair 次数和预算行为未改变。
 
-本轮在内部 `GroundedOutcome` 和 SAFE Trace 增加：
+私有目录：
 
-- `claim_rejection_diagnostics`：Atom、raw/public code、validator stage/name、所选与
-  允许 Support ID、Claim/Quote SHA-256；
-- `extractive_fallback_reason`：fallback 成功或最后一个稳定失败分支。
+`C:\Users\jerry\AppData\Local\Codex\diagnostics\wb08r03g-p0-20260919`
 
-这些字段不含问题、Claim、Quote 或证据正文。已有公开 REST path、请求/响应和
-History Schema 未变；SAFE Trace 只兼容追加上述可选字段，已有字段语义未变。
-排名、准入、阈值、Prompt、Provider 选择、repair 次数和预算行为未变。
+ACL 仅当前用户与 SYSTEM。仓库不含正文。主要文件：
 
-历史记录没有保存 N033 的实际 NaturalClaim 和 Quote，因此在提交
-`f9599dd4a1c42ee1c2cc9e7743826ccfe8599b5e` 中增加了默认关闭的
-`PrivateReplayDraftRecorder`：
+| 文件 | 类型 | SHA-256 / 字节 |
+| --- | --- | --- |
+| `historical-private-replay.json` | 历史私有证据 | `ec37da2f...` / 45,152 |
+| `historical-safe-trace-live.json` | 历史 SAFE Trace | `6f56042f...` / 99,879 |
+| `wb08r03g-p0-raw-generation-drafts-65214b9.ndjson` | live 原始模型草稿，私有 | `2caf6cae...` / 175,497 |
+| `wb08r03g-p0-private-replay-65214b9.ndjson` | live 私有 replay | `596dacaf...` / 200,362 |
+| `wb08r03g-p0-safe-manifest-65214b9.json` | 首次 SAFE manifest；Trace 未 settle | `194a6175...` / 5,178 |
+| `wb08r03g-p0-post-settle-safe-65214b9.json` | 权威 SAFE Trace 摘录 | `907102a8...` / 67,088 |
+| `wb08r03g-p0-private-summary-safe-65214b9.json` | N033 SAFE 身份摘要 | `bd8be47f...` / 6,033 |
 
-- 只有目录、确认值和捕获上限三个显式环境变量同时存在时才启用；普通启动返回
-  `None`，沿用原来的 `ProductGroundedModel` 构造路径；
-- 目录必须是绝对路径、已存在、不是符号链接、属于进程 UID，且组与其他用户均无
-  权限；输出固定为 0600 的 `raw-generation-drafts.ndjson`，旧文件非空时拒绝启动；
-- 每次记录有显式 1～32 条上限，单条上限 2 MiB；超限失败，不静默覆盖；
-- 同步与流式生成都在 Provider 返回结构化 `AnswerDraft` 后、业务 Claim 校验前记录
-  实际 `GenerationRequest` 和 `AnswerDraft`。因此私有记录包含 sent-pack 对应的
-  Evidence、SourceSpan、Atom 允许集合、NaturalClaim、Quote 与所选 Support ID；
-- 原始内容只写到仓库外的受控文件。SAFE Trace 和 SAFE manifest 仍只保存 ID、摘要、
-  原因、条数和 SHA-256。
+完整哈希和分类在仓库 SAFE manifest 中。
 
-重放脚本新增必需参数 `--raw-drafts`，按每题请求前后的字节偏移关联新增草稿；
-N031/N033 没有捕获草稿时立即失败，每题超过两条时也失败。四题仍各发一次、零重试，
-且每题完成后立即将私有结果 `fsync`，中途失败不会丢失已取得的诊断。该工具已在本地
-离线验证，未部署到 8289，故 N033 的历史原始 Claim 继续标记 `NOT_OBSERVED`。
+## 10. 已执行验证
 
-受控 replay 源码会在读 Trace 前核验实际 Schema，只运行固定四题并将 raw 结果写到
-仓库外。历史私有包位于：
-
-`C:\Users\jerry\AppData\Local\Codex\diagnostics\wb08r03g-p0-20260919\historical-private-replay.json`
-
-文件 SHA-256 为
-`ec37da2f79990736ba2678d03b99ef990f5082463299df339ba9fd6a72bad4ac`，
-45,152 字节；ACL 仅当前用户与 SYSTEM 完全控制。仓库 Manifest 不含正文。
-
-## 9. 已执行验证
-
-先失败证据：
+观测字段与私有 recorder 的先失败证据、随后通过结果已在前序提交冻结。本次收尾实际
+执行：
 
 ```text
-pytest ... -k "rejection_diagnostic... or failed_fallback..."
-2 failed
-- GroundedOutcome 尚无 claim_rejection_diagnostics
-- _safe_extractive_fallback 尚无 diagnostic_reasons
+pytest tests/evaluation/test_wb08r03g_private_replay.py \
+       tests/evaluation/test_wb08r03g_contract_probe.py
+5 passed
 
-pytest tests/product/test_private_replay_capture.py
-collection error: ModuleNotFoundError: rag_app.product.private_replay
+pytest tests/application/test_grounded_claim_validation.py \
+       tests/application/answering/test_grounded_claim_v5_quotes.py \
+       tests/application/answering/test_natural_grounded_answer.py \
+       tests/evaluation/test_wb08r03g_private_replay.py \
+       tests/evaluation/test_wb08r03g_contract_probe.py
+220 passed
 
-python scripts/wb08r03g_private_replay.py --help
-ModuleNotFoundError: evaluation
-```
-
-改动后执行：
-
-```text
-pytest 六个真实函数/应用链合同反例
-6 passed
-
-pytest 两个新增回答观测用例
-2 passed
-
-pytest tests/evaluation/test_wb08r03g_private_replay.py
-4 passed
-
-pytest 回答、Trace、runner 与离线 P07 相关范围
-151 passed
-
-pytest 私有草稿、受控 replay、Claim 与离线 P07 相关范围
-64 passed
-
-ruff check 本轮四个实现/脚本文件和两个新增/修改测试文件
+ruff check 本轮 replay/探针源码与测试
 All checks passed
 
-python -m py_compile 本轮四个实现/脚本文件和两个新增/修改测试文件
-passed
-
-python scripts/wb08r03g_private_replay.py --help
+python -m py_compile 本轮 replay/探针源码与测试
 passed
 
 JSON 解析：wb08r-state.json、wb08r-03g-p0-manifest.json
@@ -366,47 +379,44 @@ git diff --check
 passed
 ```
 
-一次包含 `test_atom_channels_merge_before_one_rerank` 的扩大范围为
-`98 passed, 1 failed`。失败是该既有测试期待中文逗号/问号原样进入 dense batch，
-实际为 ASCII 标点。相同用例在未改动的审计基线 `6614981` 快照同样失败，故本 P0
-没有修改检索行为或测试断言来制造通过。
+前序 P0 已运行的相关范围为 151 passed 和 64 passed。一次扩大检索范围为
+98 passed / 1 个审计基线同样存在的标点失败；产品运行时扩大范围为 25 passed /
+6 个前序快照同样存在的预算与测试替身失败。没有修改这些断言制造通过。
 
-另一次产品运行时与资源退休扩大范围为 `25 passed, 6 failed`。同样两组测试在
-未加入私有草稿记录器的 `a7498ea` 独立快照上也是相同的 25/6：一个既有输入预算
-断言期待 16384 而实际为 6144，另外五个既有测试替身缺少
-`profile_reindex_required`。因此没有把它们记成本补丁回归，也没有在 P0 顺手修改。
+全仓 mypy 实际结果为 `161 errors in 12 files (checked 381 source files)`，与审计基线
+相同，新增观测模块没有 mypy 错误；因此不报告 mypy 通过。
 
-仓库既有 mypy 全范围实际运行结果为
-`161 errors in 12 files (checked 381 source files)`；错误数和文件数与审计基线的
-161/12 相同，新增 `private_replay.py` 没有 mypy 错误。因此不能报告 mypy 通过，
-也不在 P0 顺手修复既有类型债务。
+真实 Provider 证据仅限上述一次四题受控 replay。没有全量跑题，没有重复同一失败，
+也没有生产部署。
 
-私有正文泄漏扫描对 24 条去重后的问题、回答、引用和真值原文检查报告、SAFE Manifest 与
-replay 源码，`exact_raw_matches=[]`。
+## 11. 清理与保护结果
 
-没有运行真实 Provider、线上集成或生产验证。没有创建 8289 新镜像或发出四题重放。
+- 8288 生产容器始终未动，结束时 HTTP 200、healthy。
+- 8289 已恢复 `rag-test-wanshitong:wb08r03f-bd00c56`，结束时 HTTP 200、healthy，
+  没有 capture mount 或 capture 环境变量。
+- 60 上的私有 capture、build/replay 临时目录，54 中转临时文件和本机 WSL 临时目录均
+  按精确路径删除。
+- 私有原文只保留在受控本地诊断目录。
+- 观测镜像 `rag-test-wanshitong:wb08r03g-p0-65214b9` 保留；当前 Goal 明确禁止 P0
+  清理镜像。
 
-## 10. P1 确定性入口
+## 12. P1 确定性入口
 
-进入任何修复前，需要完成以下 P0 缺口：
+### N031
 
-1. 补入并读取 01 审计报告和 `90_contract_probes.py`，执行原脚本并把其中每个反例
-   对应到真实函数回归。
-2. 取得现有授权服务器访问后，先冻结 `docker inspect` 的镜像、端口和挂载，再对
-   `/data/universal-rag.sqlite3` 运行只读 Schema 检查；随后按 trace ID 查询历史行。
-3. 如历史行仍无新增字段，最多部署一次仅观测候选到 8289。先记录生产 8288→8088
-   只读基线；为候选挂载仓库外 0700 私有目录，以三个显式环境变量启用记录器并将
-   捕获上限设为 8，再通过 `--raw-drafts` 指向该目录下的固定输出。随后只发 N031、
-   N033、F015、F013 一批请求，每题一次、零重试。
-4. N031 以
-   `(document_version_id, node_id, table_node_id, row, cell, chunk_id, quote_sha256)`
-   作为稳定支持身份，从通道输出开始逐级比较，首次不在集合处即为准确断点。
-5. N033 以
-   `(claim_sha256, quote_sha256s, selected_support_ids, allowed_support_ids)`
-   连接 `generation_evidence.admitted_sources` 的 Chunk/Node/表坐标。只有 replay 的
-   `raw_reason_code` 和 `validator` 可以写入最终根因；公开映射码不能替代。
-6. 用 `extractive_fallback_reason` 证明 accepted=0 后具体失败分支，再决定 P1 是否有
-   独立、确定性的修复入口。
+目前不能独立确定性修复具体召回层。下一实验应让 Trace 按稳定支持身份记录 structural、
+lexical、dense、fusion 与 rerank 输入集合，并以
+`(document_version_id, node_id, table_node_id, row, cell, chunk_id, quote_sha256)`
+逐级比较。首次缺失处才是可修复层；在此之前不得猜修语义召回或增加业务同义词。
 
-当前可以独立修复的是“观测合同缺失”；N031 的具体召回层修复和 N033 的 Claim
-所有权/来源组修复都缺少精确历史输入，不能在 P0 继续猜修。
+### N033
+
+已有独立、确定性的 P1 入口：让结构 validator 与来源组恢复共用同一个稳定表行身份，
+同时保留角色、阶段、原文连续、可引用和 Atom 边界。候选保护必须重放本报告中的
+S1/S2 失败基线，并确保跨节点、跨表行、跨角色和无逐字 Quote 的反例继续拒绝。
+
+`accepted=0` 的 repair 条件和 `NO_SAFE_EXCERPT` fallback 是另外两个合同决定，不应与
+表行身份修复混成一次改动。
+
+缺失的 01 审计报告和 90 探针仍需补入后做包级交叉复核；它们不改变本次 live 已直接
+观察的 N033 raw reason，但会影响是否还有未纳入的通用合同缺陷。P0 到此停止。
