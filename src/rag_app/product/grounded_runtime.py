@@ -74,6 +74,10 @@ from rag_app.core.models import (
 )
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query_plan import QUERY_PLAN_SCHEMA_REVISION
+from rag_app.core.models.relation_review import (
+    RelationReviewRequest,
+    RelationReviewResponse,
+)
 from rag_app.core.ports import CancellationPort, GenerationRequest
 from rag_app.core.ports.query_interpret import InterpretOutcome
 from rag_app.core.ports.query_rewrite import RewriteOutcome
@@ -282,6 +286,34 @@ class ProductGroundedModel:
         """
         return self._rotation_candidates()[0].health(network=network)
 
+    @property
+    def supplement_timeout_seconds(self) -> float:
+        """补充沿用已配置 HTTP 时限，取最紧限制防止模型选择扩大时限。"""
+        return min(
+            adapter.supplement_timeout_seconds for adapter in self.adapters
+        )
+
+    def review_relations(
+        self, request: RelationReviewRequest
+    ) -> RelationReviewResponse:
+        """复核重新核验来源并沿用同一持久授权，不轮换模型或重置预算。"""
+        candidates = tuple(
+            adapter
+            for adapter in self.adapters
+            if request.generation_model == adapter.config.model
+            or (request.generation_model is None and len(self.adapters) == 1)
+        )
+        if len(candidates) != 1:
+            raise PolicyDenied(
+                "关系复核不能变更首次生成使用的模型。",
+                stage="generation.relation_review",
+                code="RELATION_REVIEW_MODEL_IDENTITY_REQUIRED",
+            )
+        hashes = self._source_hashes(request)
+        # _scope只恢复既有campaign和资料身份，全部调用仍在同一持久账本扣账。
+        with self._scope("generation", hashes):
+            return candidates[0].review_relations(request)
+
     @contextmanager
     def _scope(
         self, operation: str, source_hashes: tuple[str, ...] = ()
@@ -459,7 +491,9 @@ class ProductGroundedModel:
             self._private_replay_recorder.record(request, result)
         return result
 
-    def _source_hashes(self, request: GenerationRequest) -> tuple[str, ...]:
+    def _source_hashes(
+        self, request: GenerationRequest | RelationReviewRequest
+    ) -> tuple[str, ...]:
         """重新核对本次证据仍属于当前活动知识库版本。"""
         hashes: set[str] = set()
         with self.connections.transaction() as connection:

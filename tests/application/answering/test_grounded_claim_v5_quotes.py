@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from rag_app.application.answering.atom_semantics import current_atom_analysis
 from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     GroundedOutcome,
@@ -16,6 +17,10 @@ from rag_app.application.answering.grounded import (
     _safe_extractive_fallback,
     _terms,
     _validate_short_question_source_anchor,
+)
+from rag_app.application.answering.request_relation import (
+    RequestRelationStatus,
+    decide_request_relation,
 )
 from rag_app.application.retrieval.generation_evidence import (
     EvidenceAdmissionReason,
@@ -36,6 +41,9 @@ from rag_app.core.models.query_plan import (
     AtomStatus,
     QueryAtom,
     QueryPlan,
+)
+from tests.application.answering.relation_review_fixtures import (
+    fixed_review_generator,
 )
 from tests.application.answering.source_contract_fixtures import (
     contiguous_node_fragments,
@@ -358,8 +366,7 @@ def test_pack_preserves_validated_paraphrase_without_source_rewrite() -> None:
     source = "对于员工跨年领到证书的情况，请在证书领取年份进行报销。"
     evidence = _evidence(source)
     plan = _plan("费用跨年还能报吗？")
-    generator = Mock()
-    generator.generate.return_value = _draft(
+    draft = _draft(
         (
             _claim(
                 "C1",
@@ -370,6 +377,12 @@ def test_pack_preserves_validated_paraphrase_without_source_rewrite() -> None:
             ),
         ),
         plan,
+    )
+    generator = fixed_review_generator(
+        draft,
+        subject="员工",
+        relation="报销",
+        conditions=("跨年领到证书", "证书领取年份"),
     )
 
     outcome = _answer_with_pack(
@@ -403,8 +416,7 @@ def test_pack_revalidates_full_source_when_model_rewrites_the_fact() -> None:
     source = "员工在证书领取年份完成费用报销。"
     evidence = _evidence(source)
     plan = _plan("钱能放明年报不？")
-    generator = Mock()
-    generator.generate.return_value = _draft(
+    draft = _draft(
         (
             _claim(
                 "C1",
@@ -415,6 +427,12 @@ def test_pack_revalidates_full_source_when_model_rewrites_the_fact() -> None:
             ),
         ),
         plan,
+    )
+    generator = fixed_review_generator(
+        draft,
+        subject="员工",
+        relation="费用报销",
+        conditions=("证书领取年份",),
     )
 
     outcome = _answer_with_pack(
@@ -581,8 +599,12 @@ def test_yes_no_answer_uses_source_about_asked_action() -> None:
     )
     by_text = {item.citation_text: item.support_id for item in evidence}
     plan = _plan("转正式交付要重启吗？")
-    generator = Mock()
-    generator.generate.return_value = _draft(
+    decision = decide_request_relation(
+        current_atom_analysis(plan.atoms[0], None),
+        "任务转为正式交付模式时，需另行满足准入要求，重新启动流程。",
+    )
+    assert decision.status is RequestRelationStatus.UNDETERMINED
+    draft = _draft(
         (
             _claim(
                 "C1",
@@ -601,6 +623,12 @@ def test_yes_no_answer_uses_source_about_asked_action() -> None:
         ),
         plan,
     )
+    generator = fixed_review_generator(
+        draft,
+        subject="任务",
+        relation="重新启动",
+        conditions=("任务转为正式交付模式时", "另行满足准入要求"),
+    )
 
     outcome = _answer_with_pack(
         generator,
@@ -613,6 +641,8 @@ def test_yes_no_answer_uses_source_about_asked_action() -> None:
     assert outcome.answer is not None
     assert "重新启动流程" in outcome.answer
     assert "提交验收材料" not in outcome.answer
+    assert outcome.relation_review_calls == 1
+    assert outcome.repair_calls == 0
 
 
 def test_yes_no_fallback_prefers_same_source_action_sentence() -> None:

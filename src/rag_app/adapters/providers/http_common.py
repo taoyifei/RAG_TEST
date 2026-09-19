@@ -201,6 +201,16 @@ class ProviderHttpClient:
         self._response_error_code = response_error_code
         self._closed = False
 
+    @property
+    def request_timeout_seconds(self) -> float:
+        """读取现有 HTTP 时限，补充调用不得扩展首次调用的时限。"""
+        configured = self._client.timeout.read
+        return (
+            min(_MAX_REQUEST_TIMEOUT_SECONDS, configured)
+            if configured is not None
+            else _MAX_REQUEST_TIMEOUT_SECONDS
+        )
+
     def request_json(  # noqa: PLR0912, PLR0913, PLR0915
         self,
         method: str,

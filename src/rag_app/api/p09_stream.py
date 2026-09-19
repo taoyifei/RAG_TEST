@@ -117,6 +117,7 @@ class P09AnswerStream:
             只产生有限 SSE 字节帧的同步迭代器。
 
         """
+        self.cancellation.deadline_monotonic = self.started + self.total_seconds
         remaining = max(
             0.001,
             self.total_seconds - (time.monotonic() - self.started),

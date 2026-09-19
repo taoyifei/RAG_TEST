@@ -107,6 +107,24 @@ _UNQUOTED_SOURCE_SCOPE = re.compile(
     + _DOCUMENT_SOURCE_CARRIER
     + r")(?:中|里|内)\s*[，,：:\s]*(?P<body>.+)$"
 )
+_PREPOSITION_DOCUMENT_SCOPE = re.compile(
+    r"^(?:根据|依据|依照|按照|参照)\s*"
+    rf"(?P<source>[^，,；;。\r\n《》]{{1,160}}?{_DOCUMENT_SOURCE_CARRIER})"
+    r"(?:中|里|内)?\s*[，,]\s*(?P<body>.+)$"
+)
+_POLAR_MODAL = (
+    r"是否|能否|可否|要不要|需不需要|能不能|可不可以|"
+    r"不需要|不应该|不应当|不可以|不能|无需|不必|不要|"
+    r"可以|需要|应当|应该|必须|要|能|可"
+)
+_POLAR_SUBJECT_ACTION = re.compile(
+    rf"^(?P<target>[^，,。；;！？?\r\n]{{1,160}}?)(?P<modal>{_POLAR_MODAL})"
+    r"(?P<action>[^，,。；;！？?\r\n]{1,160})$"
+)
+_POLAR_WITHOUT_SUBJECT = re.compile(rf"^(?:{_POLAR_MODAL})")
+_OPEN_QUESTION_WORD = re.compile(
+    r"谁|什么|啥|哪些|多少|如何|怎么|怎样|何时|哪几"
+)
 _PURPOSE_QUESTION = re.compile(
     r"^(?P<target>.+?)(?:的)?(?P<relation>目的|目标|作用)"
     r"(?:(?:是|为)?(?:什么|啥)|如何)?$"
@@ -677,6 +695,42 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 reason_codes=("GENERIC_ENUMERATION_QUESTION_SYNTAX",),
             )
 
+    polar = _POLAR_SUBJECT_ACTION.fullmatch(core)
+    if (
+        polar is not None
+        and _POLAR_WITHOUT_SUBJECT.match(core) is None
+        and _OPEN_QUESTION_WORD.search(core) is None
+        and (
+            re.search(r"[吗么？?]\s*$", normalized)
+            or polar["modal"]
+            in {
+                "是否",
+                "能否",
+                "可否",
+                "要不要",
+                "需不需要",
+                "能不能",
+                "可不可以",
+            }
+        )
+    ):
+        target, source = _target_and_source(polar["target"])
+        action = polar["action"].strip()
+        # “是否可以”只表达询问许可；否定留在关系原词中，不能反转为肯定事实。
+        if polar["modal"] in {"是否", "能否", "可否"}:
+            action = re.sub(r"^(?:可以|能够|需要|应当|应该)", "", action)
+        elif polar["modal"].startswith(("不", "无")):
+            action = polar["modal"] + action
+        if target and action:
+            return QuerySemantics(
+                target=target,
+                relation=action,
+                source_qualifier=source or explicit_source,
+                answer_type=RequestedAnswerType.FACT,
+                source="RULE",
+                reason_codes=("POLAR_SUBJECT_ACTION_QUESTION_SYNTAX",),
+            )
+
     relation_match = _RELATION.search(normalized)
     if relation_match is None:
         return _fallback_semantics(
@@ -776,7 +830,7 @@ def _fallback_semantics(
 
 
 def split_explicit_source_scope(value: str) -> tuple[str | None, str, int]:
-    """从书名号边界提取显式来源，并仅解析其后的实际问题。
+    """从书名号或明确文档介词边界提取来源，只解析后面的实际问题。
 
     Args:
         value: 已完成 NFKC 规范化的完整问题。
@@ -788,6 +842,8 @@ def split_explicit_source_scope(value: str) -> tuple[str | None, str, int]:
     """
     candidate = _LEADING_REQUEST.sub("", value.strip()).strip()
     match = _EXPLICIT_SOURCE_SCOPE.fullmatch(candidate)
+    if match is None:
+        match = _PREPOSITION_DOCUMENT_SCOPE.fullmatch(candidate)
     if match is None:
         match = _UNQUOTED_SOURCE_SCOPE.fullmatch(candidate)
     if match is None:

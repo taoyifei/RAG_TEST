@@ -462,7 +462,7 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": "wb08r-evidence-first-v5",
+                "answer_pipeline_revision": "wb08r-unified-request-relation-v9",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -1714,6 +1714,9 @@ class RetrievalService:
                 "complete_group_ids": (
                     generation_evidence_pack.complete_group_ids
                 ),
+                "reading_unit_reason_codes": (
+                    generation_evidence_pack.reading_unit_reason_codes
+                ),
                 "partial_group_ids": (
                     generation_evidence_pack.partial_group_ids
                 ),
@@ -1825,7 +1828,19 @@ class RetrievalService:
                     {
                         "atom_count": len(query_plan.atoms),
                         "atom_coverage": generated.atom_coverage,
+                        "target_member_coverage": (
+                            generated.target_member_coverage
+                        ),
                         "repair_calls": generated.repair_calls,
+                        "relation_review_calls": (
+                            generated.relation_review_calls
+                        ),
+                        "relation_review_elapsed_ms": (
+                            generated.relation_review_elapsed_ms
+                        ),
+                        "relation_review_skip_reason": (
+                            generated.relation_review_skip_reason
+                        ),
                         "claim_rejection_codes": (
                             generated.claim_rejection_codes
                         ),
@@ -2759,7 +2774,7 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": "wb08r-evidence-first-v5",
+                "answer_pipeline_revision": "wb08r-unified-request-relation-v9",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }

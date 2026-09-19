@@ -71,6 +71,7 @@ class StreamCancellation:
         self._lock = threading.Lock()
         self._next_registration = 0
         self._closers: dict[int, Callable[[], None]] = {}
+        self.deadline_monotonic: float | None = None
 
     def cancel(self) -> None:
         """标记取消并同步关闭当前所有上游响应。
@@ -216,11 +217,14 @@ class ResiliencePolicy:
 
     def __post_init__(self) -> None:
         """拒绝无界、零值或负值策略。"""
-        if min(
-            self.max_attempts,
-            self.failure_threshold,
-            self.max_concurrency,
-        ) <= 0:
+        if (
+            min(
+                self.max_attempts,
+                self.failure_threshold,
+                self.max_concurrency,
+            )
+            <= 0
+        ):
             raise ValueError("尝试、失败阈值和并发上限必须为正数。")
         if self.cooldown_seconds <= 0:
             raise ValueError("cooldown_seconds 必须为正数。")
@@ -359,8 +363,7 @@ class ResilientHttpPool:
                         self._clock() - attempt_started,
                     )
                     raise ExternalRequestRejectedError(
-                        "外部请求返回不可用内容："
-                        "INVALID_CONTENT_TYPE。"
+                        "外部请求返回不可用内容：INVALID_CONTENT_TYPE。"
                     )
                 try:
                     response_payload = response.json()
@@ -380,15 +383,11 @@ class ResilientHttpPool:
                         "外部请求返回不可用内容：INVALID_JSON。"
                     ) from None
                 active_validator = (
-                    validator
-                    if validator is not None
-                    else self._validator
+                    validator if validator is not None else self._validator
                 )
                 if active_validator is not None:
                     try:
-                        response_payload = active_validator(
-                            response_payload
-                        )
+                        response_payload = active_validator(response_payload)
                     except (OverflowError, TypeError, ValueError) as error:
                         last_reason = "INVALID_RESPONSE_SCHEMA"
                         if failover_on_invalid_response:
@@ -402,8 +401,7 @@ class ResilientHttpPool:
                             self._clock() - attempt_started,
                         )
                         raise ExternalRequestRejectedError(
-                            "外部请求返回不可用内容："
-                            "INVALID_RESPONSE_SCHEMA。"
+                            "外部请求返回不可用内容：INVALID_RESPONSE_SCHEMA。"
                         ) from error
                 self._record_success(
                     state,
@@ -553,9 +551,7 @@ class ResilientHttpPool:
                     cancellation.unregister(registration)
         except httpx.HTTPError as error:
             if cancellation.is_cancelled():
-                raise StreamCancelledError(
-                    "LLM_STREAM_CANCELLED"
-                ) from error
+                raise StreamCancelledError("LLM_STREAM_CANCELLED") from error
             if (
                 stream_attempt is not None
                 and stream_attempt.content_delta_received
@@ -586,17 +582,14 @@ class ResilientHttpPool:
             ]
             if not candidates:
                 return None
-            minimum_in_flight = min(
-                state.in_flight for _, state in candidates
-            )
+            minimum_in_flight = min(state.in_flight for _, state in candidates)
             least_busy = [
                 (index, state)
                 for index, state in candidates
                 if state.in_flight == minimum_in_flight
             ]
             minimum_latency = min(
-                state.ewma_latency_seconds or 0.0
-                for _, state in least_busy
+                state.ewma_latency_seconds or 0.0 for _, state in least_busy
             )
             fastest = [
                 (index, state)
@@ -606,8 +599,8 @@ class ResilientHttpPool:
             index, state = min(
                 fastest,
                 key=lambda item: (
-                    item[0] - self._next_index
-                ) % len(self._states),
+                    (item[0] - self._next_index) % len(self._states)
+                ),
             )
             state.in_flight += 1
             self._next_index = (index + 1) % len(self._states)
@@ -622,10 +615,7 @@ class ResilientHttpPool:
         with self._lock:
             self._finish_attempt(state, elapsed_seconds)
             state.consecutive_failures += 1
-            if (
-                state.consecutive_failures
-                >= self._policy.failure_threshold
-            ):
+            if state.consecutive_failures >= self._policy.failure_threshold:
                 state.circuit_open_until = (
                     self._clock() + self._policy.cooldown_seconds
                 )

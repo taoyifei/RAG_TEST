@@ -53,6 +53,10 @@ from rag_app.core.models.generation_packet import (
     stable_support_key,
 )
 from rag_app.core.models.query_plan import GROUNDED_CLAIM_SCHEMA_REVISION
+from rag_app.core.models.relation_review import (
+    RelationReviewRequest,
+    RelationReviewResponse,
+)
 from rag_app.core.models.retrieval import (
     AnswerClaim,
     AnswerDraft,
@@ -1806,9 +1810,24 @@ class AliyunChatAdapter:
         """
         return self.descriptor.capabilities
 
+    @property
+    def supplement_timeout_seconds(self) -> float:
+        """首次生成和补充调用共享原 HTTP 时限，不另建宽限期。"""
+        return self._http.request_timeout_seconds
+
     def _generation_stage(self) -> str:
         """返回生成合同失败所归属的 Provider 阶段。"""
         return "provider.aliyun.generation"
+
+    def review_relations(
+        self, request: RelationReviewRequest
+    ) -> RelationReviewResponse:
+        """复用当前模型、HTTP 与预算执行一次有界批量关系复核。"""
+        from rag_app.adapters.providers.relation_review import (  # noqa: PLC0415
+            review_relations,
+        )
+
+        return review_relations(self, request)
 
     def complete(
         self,
