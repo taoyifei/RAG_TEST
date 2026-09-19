@@ -8,7 +8,8 @@
 `INCOMPLETE_EVIDENCE_GROUP` 拒绝，最终一条模型 Claim 又被映射为
 `CLAIM_SUPPORT_NOT_OWNED`”这一双层断点。N033 的原始 Claim、Quote、所选
 Support ID、Atom 允许集合、原始拒绝码和 fallback 失败分支均未被历史 Trace
-保存，因此不能把任何猜测码写成线上根因。
+保存，因此不能把任何猜测码写成线上根因。新增的受控私有草稿记录器只能在未来
+一次 8289 候选重放中取得这些字段，不能倒推或改写这次历史结论。
 
 P0 没有修语义召回、Gold、业务同义词、引用规则、校验阈值、生成 Prompt 或
 预算，也没有运行 04、部署候选、请求生产服务或清理镜像。WB08R-03 保持
@@ -285,6 +286,26 @@ repair 语义或预算。
 History Schema 未变；SAFE Trace 只兼容追加上述可选字段，已有字段语义未变。
 排名、准入、阈值、Prompt、Provider 选择、repair 次数和预算行为未变。
 
+历史记录没有保存 N033 的实际 NaturalClaim 和 Quote，因此在提交
+`f9599dd4a1c42ee1c2cc9e7743826ccfe8599b5e` 中增加了默认关闭的
+`PrivateReplayDraftRecorder`：
+
+- 只有目录、确认值和捕获上限三个显式环境变量同时存在时才启用；普通启动返回
+  `None`，沿用原来的 `ProductGroundedModel` 构造路径；
+- 目录必须是绝对路径、已存在、不是符号链接、属于进程 UID，且组与其他用户均无
+  权限；输出固定为 0600 的 `raw-generation-drafts.ndjson`，旧文件非空时拒绝启动；
+- 每次记录有显式 1～32 条上限，单条上限 2 MiB；超限失败，不静默覆盖；
+- 同步与流式生成都在 Provider 返回结构化 `AnswerDraft` 后、业务 Claim 校验前记录
+  实际 `GenerationRequest` 和 `AnswerDraft`。因此私有记录包含 sent-pack 对应的
+  Evidence、SourceSpan、Atom 允许集合、NaturalClaim、Quote 与所选 Support ID；
+- 原始内容只写到仓库外的受控文件。SAFE Trace 和 SAFE manifest 仍只保存 ID、摘要、
+  原因、条数和 SHA-256。
+
+重放脚本新增必需参数 `--raw-drafts`，按每题请求前后的字节偏移关联新增草稿；
+N031/N033 没有捕获草稿时立即失败，每题超过两条时也失败。四题仍各发一次、零重试，
+且每题完成后立即将私有结果 `fsync`，中途失败不会丢失已取得的诊断。该工具已在本地
+离线验证，未部署到 8289，故 N033 的历史原始 Claim 继续标记 `NOT_OBSERVED`。
+
 受控 replay 源码会在读 Trace 前核验实际 Schema，只运行固定四题并将 raw 结果写到
 仓库外。历史私有包位于：
 
@@ -303,6 +324,12 @@ pytest ... -k "rejection_diagnostic... or failed_fallback..."
 2 failed
 - GroundedOutcome 尚无 claim_rejection_diagnostics
 - _safe_extractive_fallback 尚无 diagnostic_reasons
+
+pytest tests/product/test_private_replay_capture.py
+collection error: ModuleNotFoundError: rag_app.product.private_replay
+
+python scripts/wb08r03g_private_replay.py --help
+ModuleNotFoundError: evaluation
 ```
 
 改动后执行：
@@ -315,15 +342,21 @@ pytest 两个新增回答观测用例
 2 passed
 
 pytest tests/evaluation/test_wb08r03g_private_replay.py
-3 passed
+4 passed
 
 pytest 回答、Trace、runner 与离线 P07 相关范围
 151 passed
 
-ruff check 本轮两个源码文件、脚本和三个测试文件
+pytest 私有草稿、受控 replay、Claim 与离线 P07 相关范围
+64 passed
+
+ruff check 本轮四个实现/脚本文件和两个新增/修改测试文件
 All checks passed
 
-python -m py_compile scripts/wb08r03g_private_replay.py
+python -m py_compile 本轮四个实现/脚本文件和两个新增/修改测试文件
+passed
+
+python scripts/wb08r03g_private_replay.py --help
 passed
 
 JSON 解析：wb08r-state.json、wb08r-03g-p0-manifest.json
@@ -338,10 +371,15 @@ passed
 实际为 ASCII 标点。相同用例在未改动的审计基线 `6614981` 快照同样失败，故本 P0
 没有修改检索行为或测试断言来制造通过。
 
+另一次产品运行时与资源退休扩大范围为 `25 passed, 6 failed`。同样两组测试在
+未加入私有草稿记录器的 `a7498ea` 独立快照上也是相同的 25/6：一个既有输入预算
+断言期待 16384 而实际为 6144，另外五个既有测试替身缺少
+`profile_reindex_required`。因此没有把它们记成本补丁回归，也没有在 P0 顺手修改。
+
 仓库既有 mypy 全范围实际运行结果为
-`161 errors in 12 files (checked 380 source files)`；同一命令在审计基线快照也是完全
-相同的 161/12/380，且本轮新增诊断字段或 fallback 观测没有新增 mypy 报错。因此
-不能报告 mypy 通过，也不在 P0 顺手修复既有类型债务。
+`161 errors in 12 files (checked 381 source files)`；错误数和文件数与审计基线的
+161/12 相同，新增 `private_replay.py` 没有 mypy 错误。因此不能报告 mypy 通过，
+也不在 P0 顺手修复既有类型债务。
 
 私有正文泄漏扫描对 24 条去重后的问题、回答、引用和真值原文检查报告、SAFE Manifest 与
 replay 源码，`exact_raw_matches=[]`。
@@ -357,7 +395,9 @@ replay 源码，`exact_raw_matches=[]`。
 2. 取得现有授权服务器访问后，先冻结 `docker inspect` 的镜像、端口和挂载，再对
    `/data/universal-rag.sqlite3` 运行只读 Schema 检查；随后按 trace ID 查询历史行。
 3. 如历史行仍无新增字段，最多部署一次仅观测候选到 8289。先记录生产 8288→8088
-   只读基线，再只发 N031、N033、F015、F013 一批请求，每题一次、零重试。
+   只读基线；为候选挂载仓库外 0700 私有目录，以三个显式环境变量启用记录器并将
+   捕获上限设为 8，再通过 `--raw-drafts` 指向该目录下的固定输出。随后只发 N031、
+   N033、F015、F013 一批请求，每题一次、零重试。
 4. N031 以
    `(document_version_id, node_id, table_node_id, row, cell, chunk_id, quote_sha256)`
    作为稳定支持身份，从通道输出开始逐级比较，首次不在集合处即为准确断点。

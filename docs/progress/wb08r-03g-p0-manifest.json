@@ -381,6 +381,23 @@
       "claim_rejection_diagnostics",
       "extractive_fallback_reason"
     ],
+    "observation_commit_sha": "f9599dd4a1c42ee1c2cc9e7743826ccfe8599b5e",
+    "private_draft_capture": {
+      "activation": "THREE_EXPLICIT_ENVIRONMENT_VARIABLES",
+      "candidate_observation": "NOT_RUN",
+      "capture_limit": "EXPLICIT_1_TO_32",
+      "default_enabled": false,
+      "private_schema": "private-grounded-draft-v1",
+      "raw_fields": [
+        "generation_request",
+        "answer_draft"
+      ],
+      "safe_manifest_fields": [
+        "private_draft_capture_count",
+        "private_draft_capture_sha256"
+      ],
+      "storage": "OWNER_ONLY_OUTSIDE_REPOSITORY_AND_IMAGE"
+    },
     "prompt_changed": false,
     "ranking_changed": false,
     "raw_text_in_safe_trace": false,
