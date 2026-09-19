@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from unittest.mock import Mock
 
@@ -250,6 +251,80 @@ def _answer_with_pack(
         atom_support_matrix=_matrix(plan, matrix_statuses),
         generation_evidence_pack=pack or _pack(plan, evidence),
     )
+
+
+def test_rejection_diagnostic_preserves_raw_atom_scope_reason() -> None:
+    """公开归类相同时，Trace 仍能区分真实的 Atom 越界错误。"""
+    evidence = _evidence("甲部门保存记录 14 天。", "乙部门审核记录 3 天。")
+    plan = _plan("甲部门", "乙部门")
+    by_text = {item.citation_text: item for item in evidence}
+    first = by_text["甲部门保存记录 14 天。"]
+    second = by_text["乙部门审核记录 3 天。"]
+    pack = _pack(
+        plan,
+        evidence,
+        atom_ids_by_support={
+            first.support_id: ("A1",),
+            second.support_id: ("A2",),
+        },
+    )
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                second.citation_text,
+                "A1",
+                second.support_id,
+            ),
+        ),
+        plan,
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        (
+            (AtomStatus.MISSING, ()),
+            (AtomStatus.MISSING, ()),
+        ),
+        pack=pack,
+    )
+
+    assert outcome.claim_rejection_codes == (("CLAIM_SUPPORT_NOT_OWNED", 1),)
+    assert len(outcome.claim_rejection_diagnostics) == 1
+    diagnostic = outcome.claim_rejection_diagnostics[0]
+    assert diagnostic.atom_id == "A1"
+    assert diagnostic.raw_reason_code == "CLAIM_SUPPORT_OUTSIDE_ATOM"
+    assert diagnostic.public_reason_code == "CLAIM_SUPPORT_NOT_OWNED"
+    assert diagnostic.validator == "_validate_natural_atom_support_scope"
+    assert diagnostic.selected_support_ids == (second.support_id,)
+    assert diagnostic.allowed_support_ids == (first.support_id,)
+    assert outcome.repair_calls == 0
+    assert diagnostic.claim_sha256 == hashlib.sha256(
+        second.citation_text.encode("utf-8")
+    ).hexdigest()
+    assert diagnostic.quote_sha256s == (
+        hashlib.sha256(second.citation_text.encode("utf-8")).hexdigest(),
+    )
+
+
+def test_failed_fallback_records_safe_failure_reason() -> None:
+    """未发布原句时记录决策分支，不把证据正文写入诊断。"""
+    evidence = _evidence("甲部门保存记录 14 天。")
+    plan = _plan("完全无关对象")
+    diagnostic_reasons: list[str] = []
+
+    result = _safe_extractive_fallback(
+        plan,
+        evidence,
+        {"A1": (evidence[0].support_id,)},
+        diagnostic_reasons=diagnostic_reasons,
+    )
+
+    assert result is None
+    assert diagnostic_reasons == ["NO_SAFE_EXCERPT"]
 
 
 def test_soft_atom_mismatch_still_reaches_generation_and_publishes_quote() -> (

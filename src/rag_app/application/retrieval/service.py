@@ -1825,6 +1825,25 @@ class RetrievalService:
                         "claim_rejection_codes": (
                             generated.claim_rejection_codes
                         ),
+                        "claim_rejection_diagnostics": tuple(
+                            {
+                                "atom_id": item.atom_id,
+                                "raw_reason_code": item.raw_reason_code,
+                                "public_reason_code": item.public_reason_code,
+                                "validator_stage": item.validator_stage,
+                                "validator": item.validator,
+                                "selected_support_ids": (
+                                    item.selected_support_ids
+                                ),
+                                "allowed_support_ids": item.allowed_support_ids,
+                                "claim_sha256": item.claim_sha256,
+                                "quote_sha256s": item.quote_sha256s,
+                            }
+                            for item in generated.claim_rejection_diagnostics
+                        ),
+                        "extractive_fallback_reason": (
+                            generated.extractive_fallback_reason
+                        ),
                         "generation_calls": sum(
                             call.call_count
                             for call in generated.calls
@@ -2003,6 +2022,25 @@ class RetrievalService:
                 )
                 if generated
                 else {},
+                "claim_rejection_diagnostics": tuple(
+                    {
+                        "atom_id": item.atom_id,
+                        "raw_reason_code": item.raw_reason_code,
+                        "public_reason_code": item.public_reason_code,
+                        "validator_stage": item.validator_stage,
+                        "validator": item.validator,
+                        "selected_support_ids": item.selected_support_ids,
+                        "allowed_support_ids": item.allowed_support_ids,
+                        "claim_sha256": item.claim_sha256,
+                        "quote_sha256s": item.quote_sha256s,
+                    }
+                    for item in generated.claim_rejection_diagnostics
+                )
+                if generated
+                else (),
+                "extractive_fallback_reason": (
+                    generated.extractive_fallback_reason if generated else None
+                ),
                 "generation_gap_count": generated.generation_gap_count
                 if generated
                 else 0,
@@ -4169,6 +4207,8 @@ class RetrievalService:
                     for item in result.evidence
                 ),
                 "claim_rejection_code_distribution": {},
+                "claim_rejection_diagnostics": (),
+                "extractive_fallback_reason": None,
                 "generation_gap_count": 0,
                 "final_atom_coverage": (),
                 "false_limited_detected": False,

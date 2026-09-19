@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from collections import Counter
@@ -313,6 +314,21 @@ _NEGATION_CLASSES = {
 _MIN_MULTI_PART_CLAUSES = 2
 
 
+@dataclass(frozen=True, slots=True)
+class ClaimRejectionDiagnostic:
+    """不含正文的逐 Claim 原始拒绝诊断。"""
+
+    atom_id: str
+    raw_reason_code: str
+    public_reason_code: str
+    validator_stage: str
+    validator: str
+    selected_support_ids: tuple[str, ...]
+    allowed_support_ids: tuple[str, ...]
+    claim_sha256: str
+    quote_sha256s: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class GroundedOutcome:
     """供检索与历史真实记录的生成结果。"""
@@ -333,6 +349,8 @@ class GroundedOutcome:
     missing_atom_reasons: tuple[tuple[str, str], ...] = ()
     false_limited_detected: bool = False
     accepted_support_ids: tuple[str, ...] = ()
+    claim_rejection_diagnostics: tuple[ClaimRejectionDiagnostic, ...] = ()
+    extractive_fallback_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1317,6 +1335,7 @@ def _claim_source_groups(
                 "一个引用跨越不同来源结构。",
                 stage="answer.validate",
                 code="CLAIM_SOURCE_MISMATCH",
+                details=(("validator", "_claim_source_groups"),),
             )
         group = next(iter(groups))
         grouped.setdefault(group, []).append(support.quote)
@@ -1653,6 +1672,7 @@ def validate_grounded_draft(
                     "单个分句只能通过拼接不同来源结构才成立。",
                     stage="answer.validate",
                     code="CLAIM_SOURCE_MISMATCH",
+                    details=(("validator", "validate_grounded_draft"),),
                 )
     if complete:
         _validate_structured_list_coverage(draft, evidence, analysis)
@@ -2178,11 +2198,13 @@ class GroundedAnsweringService:
         calls: list[ProviderCall] = []
         accepted: list[ValidatedNaturalClaim] = []
         claim_rejections: Counter[str] = Counter()
+        claim_rejection_diagnostics: list[ClaimRejectionDiagnostic] = []
         rejected_atoms: Counter[str] = Counter()
         generated_claim_count = 0
         generation_returned = False
         reason: str | None = None
         repair_calls = 0
+        extractive_fallback_reason: str | None = None
 
         def generate(
             repair_atom_ids: tuple[str, ...] = (),
@@ -2323,7 +2345,25 @@ class GroundedAnsweringService:
                 try:
                     validated_claims = validate_natural(natural)
                 except (ValidationFailed, ValueError) as error:
-                    claim_rejections[_natural_rejection_code(error)] += 1
+                    public_reason = _natural_rejection_code(error)
+                    claim_rejections[public_reason] += 1
+                    allowed_support_ids = linked_ids.get(
+                        natural.atom_id,
+                        atom_support_matrix.for_atom(
+                            natural.atom_id
+                        ).supporting_support_ids
+                        if natural.atom_id
+                        in {atom.atom_id for atom in query_plan.atoms}
+                        else (),
+                    )
+                    claim_rejection_diagnostics.append(
+                        _claim_rejection_diagnostic(
+                            natural,
+                            error,
+                            public_reason=public_reason,
+                            allowed_support_ids=allowed_support_ids,
+                        )
+                    )
                     rejected_atoms[natural.atom_id] += 1
                     reason = "CLAIM_NOT_SUPPORTED"
                     continue
@@ -2460,11 +2500,18 @@ class GroundedAnsweringService:
             and generation_returned
             and not accepted
         ):
+            fallback_diagnostics: list[str] = []
             fallback = _safe_extractive_fallback(
                 query_plan,
                 evidence,
                 linked_ids,
                 generation_evidence_pack.complete_group_ids,
+                diagnostic_reasons=fallback_diagnostics,
+            )
+            extractive_fallback_reason = (
+                fallback_diagnostics[-1]
+                if fallback_diagnostics
+                else "EXTRACTIVE_FALLBACK_SELECTED"
             )
             if fallback is not None:
                 fallback_answer, fallback_ids, fallback_atoms = fallback
@@ -2497,6 +2544,10 @@ class GroundedAnsweringService:
                         for atom in query_plan.atoms
                         if atom.atom_id not in fallback_atoms
                     ),
+                    claim_rejection_diagnostics=tuple(
+                        claim_rejection_diagnostics
+                    ),
+                    extractive_fallback_reason=extractive_fallback_reason,
                 )
 
         covered = {atom_id for item in accepted for atom_id in item.atom_ids}
@@ -2597,6 +2648,10 @@ class GroundedAnsweringService:
                 ),
                 false_limited_detected=false_limited_detected,
                 accepted_support_ids=accepted_support_ids,
+                claim_rejection_diagnostics=tuple(
+                    claim_rejection_diagnostics
+                ),
+                extractive_fallback_reason=extractive_fallback_reason,
             )
         published = list(accepted_support_ids)
         for atom in atom_support_matrix.atoms:
@@ -2643,26 +2698,30 @@ class GroundedAnsweringService:
             for item in atom_support_matrix.atoms
         )
         return GroundedOutcome(
-            answer,
-            "llm" if eligible else "none",
-            tuple(calls),
-            "CONTRADICTORY_EVIDENCE"
+            answer=answer,
+            mode="llm" if eligible else "none",
+            calls=tuple(calls),
+            reason_code="CONTRADICTORY_EVIDENCE"
             if has_conflict
             else "LIMITED_ANSWER"
             if missing
             else "CLAIMS_VALIDATED",
-            published_ids,
-            verification_states,
-            tuple(coverage),
-            repair_calls,
-            tuple(sorted(claim_rejections.items())),
-            generated_claim_count,
-            len(accepted),
-            published_claim_count,
-            generation_gap_count,
-            tuple((atom_id, value.value) for atom_id, value in missing.items()),
-            false_limited_detected,
-            accepted_support_ids,
+            published_support_ids=published_ids,
+            ocr_verification_states=verification_states,
+            atom_coverage=tuple(coverage),
+            repair_calls=repair_calls,
+            claim_rejection_codes=tuple(sorted(claim_rejections.items())),
+            generated_claim_count=generated_claim_count,
+            accepted_claim_count=len(accepted),
+            published_claim_count=published_claim_count,
+            generation_gap_count=generation_gap_count,
+            missing_atom_reasons=tuple(
+                (atom_id, value.value) for atom_id, value in missing.items()
+            ),
+            false_limited_detected=false_limited_detected,
+            accepted_support_ids=accepted_support_ids,
+            claim_rejection_diagnostics=tuple(claim_rejection_diagnostics),
+            extractive_fallback_reason=extractive_fallback_reason,
         )
 
 
@@ -3177,16 +3236,37 @@ def _fallback_complete_selected_nodes(
     return completed
 
 
-def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0915
+def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
     linked_ids: dict[str, tuple[str, ...]],
     complete_group_ids: tuple[str, ...] = (),
     *,
     require_named_row: bool = False,
+    diagnostic_reasons: list[str] | None = None,
 ) -> tuple[str, tuple[str, ...], frozenset[str]] | None:
-    """模型未形成可发布事实时，仅展示相关且可引用的来源原句。"""
+    """模型未形成可发布事实时，仅展示相关且可引用的来源原句。
+
+    Args:
+        plan: 当前查询计划。
+        evidence: 已准入的模型证据。
+        linked_ids: 每个 Atom 允许使用的 Support ID。
+        complete_group_ids: 已确认完整的来源组。
+        require_named_row: 是否只允许带明确行名的完整表格行。
+        diagnostic_reasons: 可选的 SAFE 失败原因接收列表，不含正文。
+
+    Returns:
+        可发布原句、Support ID 与覆盖 Atom；无安全结果时返回 ``None``。
+
+    """
+
+    def reject(reason: str) -> None:
+        """记录最后一个稳定失败分支，同时保持原返回合同。"""
+        if diagnostic_reasons is not None:
+            diagnostic_reasons.append(reason)
+
     if not linked_ids:
+        reject("NO_LINKED_SUPPORTS")
         return None
     scoped_versions = _contextual_source_versions(plan, evidence)
     related = {
@@ -3343,6 +3423,7 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0915
         selected = _fallback_table_row(plan, grouped)
         named_row_selected = bool(selected)
     if require_named_row and not named_row_selected:
+        reject("NAMED_ROW_REQUIRED")
         return None
     if not selected and multi_part:
         selected = _fallback_partial_table_row(
@@ -3491,6 +3572,7 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0915
     if not selected:
         selected = ordinary_selection
     if not selected:
+        reject("NO_SAFE_EXCERPT")
         return None
     requested_levels = {
         unicodedata.normalize("NFKC", match.group()).casefold()
@@ -3502,6 +3584,7 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0915
         for match in _EXPLICIT_LEVEL.finditer(sentence)
     }
     if requested_levels and selected_levels - requested_levels:
+        reject("SOURCE_LEVEL_MISMATCH")
         return None
     selected = _fallback_complete_selected_nodes(selected, evidence)
     if (
@@ -3683,11 +3766,13 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0915
             support_id for support_id in ids if support_id not in pending_ids
         ]
     if not ids:
+        reject("NO_CITABLE_COMPLETE_EXCERPT")
         return None
     if (
         not (named_row_selected or partial_table_selected)
         and not _fallback_has_question_anchor(plan.original_query, selected)
     ):
+        reject("QUESTION_ANCHOR_MISSING")
         return None
     covered_atoms = frozenset(
         atom_id
@@ -3897,6 +3982,7 @@ def _validate_natural_support_structure(
             "单条事实不能拼接互不相属的证据。",
             stage="answer.validate",
             code="CLAIM_SOURCE_MISMATCH",
+            details=(("validator", "_validate_natural_support_structure"),),
         )
 
 
@@ -3947,6 +4033,9 @@ def _validate_natural_atom_support_scope(
             "自然事实引用了未分配给当前 Atom 的来源。",
             stage="answer.validate",
             code="CLAIM_SUPPORT_OUTSIDE_ATOM",
+            details=(
+                ("validator", "_validate_natural_atom_support_scope"),
+            ),
         )
 
 
@@ -4356,6 +4445,43 @@ def _natural_rejection_code(error: ValidationFailed | ValueError) -> str:
         "CLAIM_SUPPORT_OUTSIDE_ATOM": "CLAIM_SUPPORT_NOT_OWNED",
     }
     return mapping.get(error.code, error.code)
+
+
+def _claim_rejection_diagnostic(
+    natural: NaturalClaim,
+    error: ValidationFailed | ValueError,
+    *,
+    public_reason: str,
+    allowed_support_ids: tuple[str, ...],
+) -> ClaimRejectionDiagnostic:
+    """保留可重放身份，不把 Claim 或 Quote 正文写入 SAFE Trace。"""
+    if isinstance(error, ValidationFailed):
+        raw_reason = error.code
+        validator_stage = error.stage
+        details = dict(error.details)
+        validator = details.get("validator")
+    else:
+        raw_reason = "VALUE_ERROR"
+        validator_stage = "answer.validate"
+        validator = None
+    if not isinstance(validator, str):
+        validator = "_validated_natural_claim"
+    return ClaimRejectionDiagnostic(
+        atom_id=natural.atom_id,
+        raw_reason_code=raw_reason,
+        public_reason_code=public_reason,
+        validator_stage=validator_stage,
+        validator=validator,
+        selected_support_ids=tuple(
+            support.support_id for support in natural.supports
+        ),
+        allowed_support_ids=allowed_support_ids,
+        claim_sha256=hashlib.sha256(natural.text.encode("utf-8")).hexdigest(),
+        quote_sha256s=tuple(
+            hashlib.sha256(support.quote.encode("utf-8")).hexdigest()
+            for support in natural.supports
+        ),
+    )
 
 
 def _natural_atom_analysis(

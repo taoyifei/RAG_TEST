@@ -120,6 +120,8 @@ def _assert_f7_trace_fields(trace_events: tuple[TraceEvent, ...]) -> None:
     claim_trace = trace_by_name["retrieval.claim_publication"]
     assert claim_trace["generation_called"] is False
     assert claim_trace["final_coverage_by_atom"]
+    assert not claim_trace["claim_rejection_diagnostics"]
+    assert claim_trace["extractive_fallback_reason"] is None
 
 
 def test_p07_offline_reopen_retrieves_but_requires_answer_model(
