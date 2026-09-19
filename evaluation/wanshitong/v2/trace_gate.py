@@ -8,7 +8,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 _TRACE_ID = re.compile(r"^trace_[0-9a-f]{32}$")
 _SUPPORT_ID = re.compile(r"\[S\d+\]")
@@ -54,14 +54,12 @@ def _read_events(
     return events
 
 
-def _last(
-    events: dict[str, list[dict[str, Any]]], name: str
-) -> dict[str, Any]:
+def _last(events: dict[str, list[dict[str, Any]]], name: str) -> dict[str, Any]:
     items = events.get(name, ())
     return items[-1] if items else {}
 
 
-def _nonnegative_int(value: object) -> bool:
+def _nonnegative_int(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
@@ -83,14 +81,10 @@ def _require_fields(
     )
 
 
-def _check_embedding(
-    errors: list[str], embedding: dict[str, Any]
-) -> object:
+def _check_embedding(errors: list[str], embedding: dict[str, Any]) -> object:
     """区分真实 0/1 次和带原因的未观测。"""
     call_count = embedding.get("query_embedding_provider_call_count")
-    if call_count not in (0, 1, "NOT_OBSERVED") or isinstance(
-        call_count, bool
-    ):
+    if call_count not in (0, 1, "NOT_OBSERVED") or isinstance(call_count, bool):
         errors.append("EMBEDDING_CALL_COUNT_INVALID")
     if call_count == "NOT_OBSERVED" and not embedding.get(
         "query_embedding_not_observed_reason"
@@ -154,8 +148,10 @@ def _check_final_references(
     final_support_ids = {value[1:-1] for value in _SUPPORT_ID.findall(answer)}
     if final_support_ids - set(support_ids):
         errors.append("FINAL_SUPPORT_NOT_PUBLISHED")
-    if _nonnegative_int(accepted_count) and accepted_count > 0 and (
-        not final_support_ids or not citations
+    if (
+        _nonnegative_int(accepted_count)
+        and accepted_count > 0
+        and (not final_support_ids or not citations)
     ):
         errors.append("ACCEPTED_CLAIM_MISSING_FINAL_CITATION")
 
@@ -169,8 +165,7 @@ def _check_final_references(
     final_hashes = {
         _sha256(citation["quote"])
         for citation in citations
-        if isinstance(citation, dict)
-        and isinstance(citation.get("quote"), str)
+        if isinstance(citation, dict) and isinstance(citation.get("quote"), str)
     }
     if quote_hashes and set(quote_hashes) != final_hashes:
         errors.append("FINAL_CITATION_QUOTE_MISMATCH")
@@ -307,15 +302,9 @@ def audit_trace(
         ),
         "root_source_hit": ownership.get("root_source_hit"),
         "per_atom_source_hit": ownership.get("per_atom_source_hit"),
-        "retrieval_relevant_count": ownership.get(
-            "retrieval_relevant_count"
-        ),
-        "ownership_qualified_count": ownership.get(
-            "ownership_qualified_count"
-        ),
-        "publishable_support_count": ownership.get(
-            "publishable_support_count"
-        ),
+        "retrieval_relevant_count": ownership.get("retrieval_relevant_count"),
+        "ownership_qualified_count": ownership.get("ownership_qualified_count"),
+        "publishable_support_count": ownership.get("publishable_support_count"),
         "evidence_present_but_rejected": ownership.get(
             "evidence_present_but_rejected"
         ),

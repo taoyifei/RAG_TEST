@@ -123,20 +123,22 @@ def run(path: Path) -> int:
                 "fragment_coverage": (
                     1.0 if outcome.atoms and outcome.attempted else None
                 ),
-                "latency_ms": round(
-                    (time.perf_counter() - started) * 1000, 2
-                ),
+                "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             }
             records.append(record)
             print(json.dumps(record, ensure_ascii=False), flush=True)
     finally:
         adapter.close()
     called = [row for row in records if row["planner_called"]]
-    latencies = [float(row["latency_ms"]) for row in called]
-    fallbacks = sum(
-        row["reason_code"] == "ADAPTIVE_PLAN_SCHEMA_FALLBACK"
+    latencies = [
+        float(value)
         for row in called
+        if isinstance(value := row["latency_ms"], (int, float))
+    ]
+    fallbacks = sum(
+        row["reason_code"] == "ADAPTIVE_PLAN_SCHEMA_FALLBACK" for row in called
     )
+    p95_ms = _percentile(latencies, 0.95)
     summary = {
         "count": len(records),
         "planner_calls": len(called),
@@ -145,14 +147,18 @@ def run(path: Path) -> int:
         "schema_fallbacks": fallbacks,
         "fallback_rate": fallbacks / len(called) if called else 0.0,
         "p50_ms": statistics.median(latencies) if latencies else None,
-        "p95_ms": _percentile(latencies, 0.95),
+        "p95_ms": p95_ms,
     }
     print(json.dumps({"summary": summary}, ensure_ascii=False), flush=True)
-    return 0 if (
-        len(records) == _CASE_COUNT
-        and fallbacks == 0
-        and (summary["p95_ms"] or 0) <= _PLANNER_P95_BUDGET_MS
-    ) else 1
+    return (
+        0
+        if (
+            len(records) == _CASE_COUNT
+            and fallbacks == 0
+            and (p95_ms or 0) <= _PLANNER_P95_BUDGET_MS
+        )
+        else 1
+    )
 
 
 def main() -> None:

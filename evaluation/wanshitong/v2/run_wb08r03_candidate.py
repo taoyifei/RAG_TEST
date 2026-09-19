@@ -20,9 +20,13 @@ from typing import Any
 
 from evaluation.wanshitong.v2.run_wb08r01_candidate import (
     _normalized,
-    _session,
+)
+from evaluation.wanshitong.v2.run_wb08r01_candidate import (
+    _session as _session_impl,
 )
 from evaluation.wanshitong.v2.trace_gate import audit_trace
+
+_session = _session_impl
 
 _ROOT = Path(__file__).resolve().parent
 _RESULTS = _ROOT / "results"
@@ -169,6 +173,15 @@ def _chat(
             None,
         ),
         "claim_event_count": sum(name == "claim" for name, _, _ in events),
+        "first_answer_event_ms": next(
+            (
+                round(elapsed * 1000, 2)
+                for name, payload, elapsed in events
+                if name == "claim"
+                or (name == "final" and payload.get("answer"))
+            ),
+            None,
+        ),
         "answer": answer,
         "citations": citations,
     }

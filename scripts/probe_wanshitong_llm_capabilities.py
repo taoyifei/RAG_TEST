@@ -48,11 +48,12 @@ def _content(payload: object) -> str:
     if not isinstance(first, dict):
         raise ValueError("INVALID_RESPONSE")
     message = first.get("message")
-    if not isinstance(message, dict) or not isinstance(
-        message.get("content"), str
-    ):
+    if not isinstance(message, dict):
         raise ValueError("INVALID_RESPONSE")
-    return message["content"]
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise ValueError("INVALID_RESPONSE")
+    return content
 
 
 def _mode_payload(mode: str) -> dict[str, object]:

@@ -16,17 +16,20 @@ import time
 import unicodedata
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from evaluation.wanshitong.v2.run_wb08r03_candidate import (
     _append_private,
     _cases,
-    _chat,
     _failed_observation,
     _session,
     _transport_retryable,
 )
+from evaluation.wanshitong.v2.run_wb08r03_candidate import (
+    _chat as _chat_impl,
+)
 
+_chat = _chat_impl
 _ROOT = Path(__file__).resolve().parent
 _TRUTH = _ROOT.parent / "wb08r03f-truth-v1"
 _RESULTS = _ROOT / "results"
@@ -370,7 +373,7 @@ def _trace_rows_from_container(
         check=True,
         timeout=10,
     )
-    return json.loads(result.stdout)
+    return cast(list[list[str]], json.loads(result.stdout))
 
 
 def read_trace(
@@ -585,6 +588,10 @@ def score_observation(  # noqa: PLR0912, PLR0915
         "terminal_event_count": observed.get("terminal_event_count"),
         "final_count": observed.get("final_count"),
         "request_total_ms": observed.get("request_total_ms"),
+        "first_protocol_event_ms": observed.get("first_protocol_event_ms"),
+        "stage_status_first_ms": observed.get("stage_status_first_ms"),
+        "first_answer_event_ms": observed.get("first_answer_event_ms"),
+        "model_ttft_ms": "NOT_OBSERVED",
         "citation_count": len(citation_rows),
         "answer_chars": len(observed.get("answer") or ""),
         "answer_sha256": hashlib.sha256(
@@ -639,7 +646,7 @@ def score_observation(  # noqa: PLR0912, PLR0915
     if case["truth_status"] == "NEEDS_TRUTH_REVIEW":
         return result
     admitted = pack.get("admitted_sources") if pack else None
-    if isinstance(admitted, list):
+    if pack is not None and isinstance(admitted, list):
         expected_versions = set(case["expected_document_version_ids"])
         result["expected_source_in_pack"] = any(
             isinstance(source, dict)
