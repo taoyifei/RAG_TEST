@@ -1,0 +1,429 @@
+{
+  "candidate": {
+    "compose_sha256": "3257dfd81ee5b1364f21f9f74638b9103bab449f3e0850b76285d91298bbbf5d",
+    "container": "wanshitong-wb08r01-app",
+    "health_at_historical_run": "PASSED",
+    "image_id": "sha256:621acc792c12169d347fde03a8cfb06dff4ca033bf4867171d35bc46f284b75c",
+    "image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
+    "mounts": "NOT_OBSERVED_CURRENTLY_SERVER_UNAVAILABLE",
+    "pipeline_sha256": "037e2960634c2314df47cc53f6212224035cd4b1e9c48e189a8df5d595bf5570",
+    "port": 8289,
+    "product_asset_bytes": 1107812,
+    "product_asset_files": 37,
+    "product_asset_manifest_sha256": "927660b0864b710719c8af4d6911e22087c63baef1587f783d3c895482b09f72",
+    "source_revision": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da"
+  },
+  "cases": {
+    "WB08R-N-031": {
+      "exact_first_missing_stage": "NOT_OBSERVED_CHANNEL_HIT_IDENTITIES_AND_PRE_RERANK_PRUNING_NOT_RETAINED",
+      "first_observed_breakpoint": "GOLD_SUPPORTS_ABSENT_AT_RERANK_INPUT",
+      "generation_and_publication": {
+        "accepted_claim_count": 2,
+        "accepted_support_ids": [
+          "S1",
+          "S2",
+          "S3",
+          "S4",
+          "S8"
+        ],
+        "answer_path": "LLM_CLAIM_VALIDATED",
+        "generated_claim_count": 1,
+        "generation_call_count": 1,
+        "model": "Qwen/Qwen3-8B-AWQ",
+        "published_claim_count": 2,
+        "repair_calls": 0
+      },
+      "gold_supports_from_paired_frozen_case": [
+        {
+          "case_id": "WB08R-F-015",
+          "chunk_id": "chunk_5d476cdffac74dc3d578f87d851fdb75",
+          "document_id": "doc_7967da3090bc5389a0d2126f26288bdf",
+          "document_version_id": "dver_73e6ecf5f4678f09da2b2284e6099db5",
+          "fact_ids": [
+            "F1",
+            "F2"
+          ],
+          "is_citable": true,
+          "locator": "body/tbl:2/tr:2/tc:0/p:1",
+          "node_id": "node_e97185257088b1bb899332012a01fa8e",
+          "quote_sha256": "sha256:2b8357b4cef4362574eee1bf1b594a5fb7840af7be0f4128092720ce5aebcc6c",
+          "source_relative_path_sha256": "273af4d763a524c9cf1ade71f8cd95ec3f7d6da84aac0a70e3da26c1ecae9353",
+          "span_type": "original_text",
+          "support_id": "WB08R-F-015-G01",
+          "table_cell": "tc:0",
+          "table_node_id": "node_6e4dbc801b5a66c444cdf04a586224ca",
+          "table_row_index": 2
+        },
+        {
+          "case_id": "WB08R-F-015",
+          "chunk_id": "chunk_39b41e0c274e2873812c8da6c0a37189",
+          "document_id": "doc_7967da3090bc5389a0d2126f26288bdf",
+          "document_version_id": "dver_73e6ecf5f4678f09da2b2284e6099db5",
+          "fact_ids": [
+            "F1"
+          ],
+          "is_citable": true,
+          "locator": "body/tbl:2/tr:2/tc:2/p:1",
+          "node_id": "node_32a284316300e6b50192060821b2e72b",
+          "quote_sha256": "sha256:54dc6932a131875dc5709ded1a2a5addec5c7579ea1ecb1165f366a1df39b7bb",
+          "source_relative_path_sha256": "273af4d763a524c9cf1ade71f8cd95ec3f7d6da84aac0a70e3da26c1ecae9353",
+          "span_type": "original_text",
+          "support_id": "WB08R-F-015-G02",
+          "table_cell": "tc:2",
+          "table_node_id": "node_6e4dbc801b5a66c444cdf04a586224ca",
+          "table_row_index": 2
+        },
+        {
+          "case_id": "WB08R-F-015",
+          "chunk_id": "chunk_a8e60e79651e4ab437adf67ebabe2e37",
+          "document_id": "doc_7967da3090bc5389a0d2126f26288bdf",
+          "document_version_id": "dver_73e6ecf5f4678f09da2b2284e6099db5",
+          "fact_ids": [
+            "F2"
+          ],
+          "is_citable": true,
+          "locator": "body/tbl:2/tr:2/tc:4/p:1",
+          "node_id": "node_f1f17c4fe3d4a6b3f3714545e3d21e16",
+          "quote_sha256": "sha256:9b41bbcd6f14edf0e863ee5ff801f66a0a7adc12a48e468c9514129bb6cba81c",
+          "source_relative_path_sha256": "273af4d763a524c9cf1ade71f8cd95ec3f7d6da84aac0a70e3da26c1ecae9353",
+          "span_type": "original_text",
+          "support_id": "WB08R-F-015-G03",
+          "table_cell": "tc:4",
+          "table_node_id": "node_6e4dbc801b5a66c444cdf04a586224ca",
+          "table_row_index": 2
+        }
+      ],
+      "question_sha256": "073e40860ed7f569b31dabf1d211cabed827e2989faf7267fa16e8b3832f1498",
+      "reason_code": "ANSWERABLE",
+      "retrieval": {
+        "assemble_answer_support_count": 0,
+        "assemble_model_evidence_count": 16,
+        "assemble_retrieval_candidate_count": 39,
+        "corrective_added_chunk_count": 0,
+        "corrective_post_status": "PARTIAL",
+        "corrective_retrieval_reason": "NO_GROUP_NEIGHBOR",
+        "dense_hit_count": 24,
+        "expand_variant_count": 2,
+        "fused_candidate_count": 35,
+        "gold_chunks_present_in_rerank": [],
+        "lexical_hit_count": 48,
+        "rerank_candidate_chunk_ids": [
+          "chunk_164ee9b0026bf78007bcec4ad154c6c4",
+          "chunk_74c4635bbc7bd4b14e20b5f15ffcb447",
+          "chunk_687114c685cbda695d2242ecece247d8",
+          "chunk_acd5777ab82200b83b2d907a043a4ca2",
+          "chunk_7737de890f57b5c5335c6ffd898f7e25",
+          "chunk_29012ede952c5b420b3327e6f4495f7f",
+          "chunk_fb6976c9870402b7e8ffda70b0809fe0",
+          "chunk_e4d242f7360b9eb27efd0b9e86977251",
+          "chunk_7e0f27b70c1620a0302b34bb14a0d25f",
+          "chunk_124cfe475a652b4f17be62c49649fcf3",
+          "chunk_45e7eeca3d5edb677272b748766a66c7",
+          "chunk_94cfa3d5944c894905e8d269493b0885",
+          "chunk_49eb4e3a409c63c386a25ce24a1506ed",
+          "chunk_fc07fea41ce868b31f39d1bfabb2f951",
+          "chunk_2d4e68480f186abb4c87b80556ddfbd6",
+          "chunk_07dfbcd809410f1a509b6980d783e6bc",
+          "chunk_f59ae30e18992353211893f53dd72acb",
+          "chunk_0f43c23907729f49fcbbc6e2a4383747",
+          "chunk_60bf6828721c8d07fd47f3dcb078d8eb",
+          "chunk_c6d38cb441afbab6b659264bb0775bd3",
+          "chunk_6230296d7d356532559e9ce5a0f7225d",
+          "chunk_ce1d48e23d6b4a2147e72f26ecf9ee19",
+          "chunk_c8cebe7ff8712b99d408cfd2ea9bfb43",
+          "chunk_3c268ff04940451a35639fefbdf75e8b"
+        ],
+        "source_node_closure_added_chunk_ids": [],
+        "structural_hit_count": 24
+      },
+      "seed_case_id": "WB08R-F-015",
+      "sent_pack": "NOT_OBSERVED",
+      "status": "ANSWERABLE",
+      "substitute_citations": [
+        {
+          "document_name_sha256": "614873486dcec5e3000bb8af35d12e90fe70e4522f6d3ab51b68ccc9db277ff4",
+          "factual_applicability": "TOPIC_RELATED_BUT_DOES_NOT_ESTABLISH_FROZEN_MODE_INPUT_AND_START_CONDITION",
+          "frozen_source_match": false,
+          "locator_sha256": "c1a73d9112c5a9611018bc057f2cc7259e98abeea26eda87505a445994027e63",
+          "quote_sha256": "67d182aaa71f42c676ee17662a1c044989f647550521e7f4b8009611f73a60a5",
+          "source_relative_path_sha256": "c74d5370983d61adb42d5ac8aacac4ccc2fe948edd4b5ff026cf66a9e030bf25"
+        },
+        {
+          "document_name_sha256": "614873486dcec5e3000bb8af35d12e90fe70e4522f6d3ab51b68ccc9db277ff4",
+          "factual_applicability": "TOPIC_RELATED_BUT_DOES_NOT_ESTABLISH_FROZEN_MODE_INPUT_AND_START_CONDITION",
+          "frozen_source_match": false,
+          "locator_sha256": "f214fcde8d56381ef8f0817d7cbb5e5e616363c1cada87688b4eeff0966870bf",
+          "quote_sha256": "2c50f319178f0a3827e3bf4ca485e89cfb34933bc6674db2b1e0cac835ed5759",
+          "source_relative_path_sha256": "c74d5370983d61adb42d5ac8aacac4ccc2fe948edd4b5ff026cf66a9e030bf25"
+        },
+        {
+          "document_name_sha256": "614873486dcec5e3000bb8af35d12e90fe70e4522f6d3ab51b68ccc9db277ff4",
+          "factual_applicability": "TOPIC_RELATED_BUT_DOES_NOT_ESTABLISH_FROZEN_MODE_INPUT_AND_START_CONDITION",
+          "frozen_source_match": false,
+          "locator_sha256": "f214fcde8d56381ef8f0817d7cbb5e5e616363c1cada87688b4eeff0966870bf",
+          "quote_sha256": "082257c3edd8670d0a7fd89b83955bb1adff7e476258dc4f2130e3b62d15f13b",
+          "source_relative_path_sha256": "c74d5370983d61adb42d5ac8aacac4ccc2fe948edd4b5ff026cf66a9e030bf25"
+        },
+        {
+          "document_name_sha256": "614873486dcec5e3000bb8af35d12e90fe70e4522f6d3ab51b68ccc9db277ff4",
+          "factual_applicability": "TOPIC_RELATED_BUT_DOES_NOT_ESTABLISH_FROZEN_MODE_INPUT_AND_START_CONDITION",
+          "frozen_source_match": false,
+          "locator_sha256": "f214fcde8d56381ef8f0817d7cbb5e5e616363c1cada87688b4eeff0966870bf",
+          "quote_sha256": "8ad95e3b4cf6cb5b7ed593ba2ef7ac68dac9055ec6aea9954ad97bf59e87fc6a",
+          "source_relative_path_sha256": "c74d5370983d61adb42d5ac8aacac4ccc2fe948edd4b5ff026cf66a9e030bf25"
+        },
+        {
+          "document_name_sha256": "614873486dcec5e3000bb8af35d12e90fe70e4522f6d3ab51b68ccc9db277ff4",
+          "factual_applicability": "TOPIC_RELATED_BUT_DOES_NOT_ESTABLISH_FROZEN_MODE_INPUT_AND_START_CONDITION",
+          "frozen_source_match": false,
+          "locator_sha256": "f214fcde8d56381ef8f0817d7cbb5e5e616363c1cada87688b4eeff0966870bf",
+          "quote_sha256": "2169acb329529788475b983370700501cfac9fe722fdbccbf9d800a725ca39ba",
+          "source_relative_path_sha256": "c74d5370983d61adb42d5ac8aacac4ccc2fe948edd4b5ff026cf66a9e030bf25"
+        }
+      ],
+      "trace_id": "trace_6c780ebd91b5b419110e8a72c993abff"
+    },
+    "WB08R-N-033": {
+      "exact_raw_terminal_breakpoint": "NOT_OBSERVED",
+      "first_observed_degradation": "ASSEMBLE_REJECTED_SAME_INTENT_SOURCE_AS_INCOMPLETE_GROUP",
+      "generation_and_publication": {
+        "accepted_claim_count": 0,
+        "atom_allowed_support_ids": "NOT_OBSERVED",
+        "generated_claim_count": 1,
+        "generation_call_count": 1,
+        "model": "Qwen/Qwen3-8B-AWQ",
+        "model_quotes": "NOT_OBSERVED",
+        "natural_claim": "NOT_OBSERVED",
+        "public_rejection_code": "CLAIM_SUPPORT_NOT_OWNED",
+        "published_claim_count": 0,
+        "raw_rejection_code": "NOT_OBSERVED",
+        "repair_calls": 0,
+        "safe_fallback_failure_reason": "NOT_OBSERVED",
+        "selected_source_spans": "NOT_OBSERVED",
+        "selected_support_ids": "NOT_OBSERVED",
+        "validator": "NOT_OBSERVED"
+      },
+      "question_sha256": "163680c74b59b50d668e366273fde44c11c0f5f6d07c2f07637ecfc3fb6bfe71",
+      "reason_code": "INSUFFICIENT_EVIDENCE",
+      "retrieval": {
+        "assemble_answer_support_count": 0,
+        "assemble_model_evidence_count": 16,
+        "assemble_retrieval_candidate_count": 61,
+        "corrective_added_chunk_count": 0,
+        "corrective_post_status": "MISSING",
+        "corrective_retrieval_reason": "CORRECTION_NOT_TRIGGERED",
+        "dense_hit_count": 24,
+        "expand_variant_count": 2,
+        "fused_candidate_count": 48,
+        "lexical_hit_count": 48,
+        "rerank_candidate_chunk_ids": [
+          "chunk_f3708e3cc8fea193f40fab195567c0c3",
+          "chunk_7962011586d949b58d927e9c0349e8b5",
+          "chunk_a5f6c674d3bfc9a409f8cdd7784d7ffe",
+          "chunk_1667cb1d6b16ee9cb8c46df16c9c7388",
+          "chunk_da5aa5b77c8112298993351a98107c3f",
+          "chunk_16e04cb8428949cadd8523c70de51a97",
+          "chunk_e06822850c5e1eefba8ceb61a4c7beed",
+          "chunk_3d90fe163e889981cc947c06bf2c64c1",
+          "chunk_2ef52e5f6a5bf335c23f85d7bd8d5e42",
+          "chunk_0c4fd822aea3d41476f94208cf847dbf",
+          "chunk_5daf0be53de632c4efd3fd69baff8743",
+          "chunk_9f711fcd1ff4082fc2720d55425a83e5",
+          "chunk_e9f213bac38207120f894e797b488eb4",
+          "chunk_9eed654f6caa78b7be2bf913ece4db8a",
+          "chunk_70613773868894bc2384fdd65395e0b6",
+          "chunk_9d332074527f138d8e7941712c1bb106",
+          "chunk_011424c1658361018da9b256d97e6379",
+          "chunk_3c268ff04940451a35639fefbdf75e8b",
+          "chunk_5670e2157d4964b94f36071c1ebda2ae",
+          "chunk_c8cebe7ff8712b99d408cfd2ea9bfb43",
+          "chunk_ade334f8dc61839c20b69e578ee50866",
+          "chunk_3e0130548e1887a412c91a436503c6a4",
+          "chunk_5f028e93cfd9e34ac312fab7b6779b00",
+          "chunk_ea48f9abb5a02848d880d8d0aae629a5"
+        ],
+        "same_intent_source_chunk_assemble_rejection": "INCOMPLETE_EVIDENCE_GROUP",
+        "same_intent_source_chunk_rerank_position": 9,
+        "source_node_closure_added_chunk_ids": [
+          "chunk_eff310e5b592ec8cf0c3905039193bea"
+        ],
+        "structural_hit_count": 24
+      },
+      "same_intent_truth_comparators_not_n033_gold": [
+        {
+          "case_id": "WB08R-N-050",
+          "chunk_id": "chunk_2ef52e5f6a5bf335c23f85d7bd8d5e42",
+          "document_id": "doc_197286a3e8a43736a7d174a29af7be3d",
+          "document_version_id": "dver_620e4260044303b449b6e37ae145deca",
+          "fact_ids": [
+            "F1"
+          ],
+          "is_citable": true,
+          "locator": "body/tbl:13/tr:1/tc:1/p:2",
+          "node_id": "node_107f296265bcc9289d4938a6a6694b11",
+          "quote_sha256": "sha256:d0fff1260599f73278c9fa9010822f9ea3408da12137bb6ea22f7e9b552f84f3",
+          "source_relative_path_sha256": "183d4b48104f7890d73a17a2348661f6fd1d829b0f8acdd6f95b7c23c285a64f",
+          "span_type": "original_text",
+          "support_id": "WB08R-N-050-G01",
+          "table_cell": "tc:1",
+          "table_node_id": "node_de2b97c928deaf8aadcdbc96962fb97e",
+          "table_row_index": 1
+        },
+        {
+          "case_id": "WB08R-N-058",
+          "chunk_id": "chunk_2ef52e5f6a5bf335c23f85d7bd8d5e42",
+          "document_id": "doc_197286a3e8a43736a7d174a29af7be3d",
+          "document_version_id": "dver_620e4260044303b449b6e37ae145deca",
+          "fact_ids": [
+            "F1"
+          ],
+          "is_citable": true,
+          "locator": "body/tbl:13/tr:1/tc:1/p:2",
+          "node_id": "node_107f296265bcc9289d4938a6a6694b11",
+          "quote_sha256": "sha256:d0fff1260599f73278c9fa9010822f9ea3408da12137bb6ea22f7e9b552f84f3",
+          "source_relative_path_sha256": "183d4b48104f7890d73a17a2348661f6fd1d829b0f8acdd6f95b7c23c285a64f",
+          "span_type": "original_text",
+          "support_id": "WB08R-N-058-G01",
+          "table_cell": "tc:1",
+          "table_node_id": "node_de2b97c928deaf8aadcdbc96962fb97e",
+          "table_row_index": 1
+        },
+        {
+          "case_id": "WB08R-N-058",
+          "chunk_id": "chunk_eff310e5b592ec8cf0c3905039193bea",
+          "document_id": "doc_197286a3e8a43736a7d174a29af7be3d",
+          "document_version_id": "dver_620e4260044303b449b6e37ae145deca",
+          "fact_ids": [
+            "F6"
+          ],
+          "is_citable": true,
+          "locator": "body/tbl:22/tr:1/tc:1/p:8",
+          "node_id": "node_429328e0a4f1cff7410a65b72ed2f16c",
+          "quote_sha256": "sha256:eef7dbac9e99343cfd730586d72b36ada4be42a10ebd7dfc2e4e51dd30e29f0b",
+          "source_relative_path_sha256": "183d4b48104f7890d73a17a2348661f6fd1d829b0f8acdd6f95b7c23c285a64f",
+          "span_type": "original_text",
+          "support_id": "WB08R-N-058-G11",
+          "table_cell": "tc:1",
+          "table_node_id": "node_3334737e950bd33439ef0e5a907f853f",
+          "table_row_index": 1
+        }
+      ],
+      "seed_case_id": "WB08R-F-013",
+      "sent_pack": "NOT_OBSERVED",
+      "source_boundary_check": {
+        "causal_to_final_rejection": "NOT_OBSERVED_WITHOUT_SELECTED_SUPPORT_IDS_AND_RAW_REASON",
+        "cross_stage_or_role_risk": true,
+        "same_document_version": true,
+        "same_node": false,
+        "same_table": false,
+        "same_table_row": false
+      },
+      "status": "INSUFFICIENT_EVIDENCE",
+      "terminal_breakpoint": "CLAIM_VALIDATION_MAPPED_TO_CLAIM_SUPPORT_NOT_OWNED",
+      "trace_id": "NOT_OBSERVED"
+    }
+  },
+  "confirmed_contract_defects": [
+    {
+      "fact": "CLAIM_SOURCE_MISMATCH and CLAIM_SUPPORT_OUTSIDE_ATOM both map to CLAIM_SUPPORT_NOT_OWNED",
+      "function": "_natural_rejection_code",
+      "id": "RAW_REJECTION_COLLISION",
+      "n033_assignment": "NOT_OBSERVED"
+    },
+    {
+      "fact": "repair runs only when omitted and accepted; accepted=0 skips repair",
+      "function": "GroundedAnsweringService._answer_with_plan",
+      "id": "ZERO_ACCEPTED_SKIPS_LOCAL_REPAIR"
+    },
+    {
+      "fact": "historical None return had no stable reason code",
+      "function": "_safe_extractive_fallback",
+      "id": "FALLBACK_FAILURE_BRANCH_NOT_TRACED"
+    },
+    {
+      "fact": "historical counts do not identify whether each Gold chunk was returned per channel",
+      "function": "retrieval channel tracing",
+      "id": "CHANNEL_SUPPORT_IDENTITIES_NOT_TRACED"
+    }
+  ],
+  "data_identity": {
+    "active_index_revision_id": "irev_0329a35ca9ea700133f7b309160118f0",
+    "active_snapshot_sha256": "9fba9aac42c3482c36e266e1bf2a04557962c11a5073f38a95d1e1407b5bae06",
+    "dataset_manifest_sha256": "4b76d9f6da30dde3f67926f69b9bf2024276a5285076d95a95d2273548db46f9",
+    "dataset_revision": "wanshitong-v2-20260917",
+    "dataset_schema_sha256": "67ea379f12a15a8cd56a63b254ba90448a85a6297d95c7c4c558757c9f4ea0d6",
+    "knowledge_base_id": "kb_328756522df5f70ad9a852fdb5fea3b5",
+    "runner_sha256": "beb4e0fe5a70bba18225fa7926101c3d274ec4ee41a5b423e4a33a897babc1d9",
+    "truth_manifest_sha256": "2c0f1f1488232068e731be20eb869ce728f08ac78825e60b190c6e6fc22329ee",
+    "truth_revision": "wb08r03f-truth-v1"
+  },
+  "git": {
+    "audit_baseline_sha": "661498176a2c885f7a109c0af0024ae2ad59b88f",
+    "branch": "codex/wb-08r-adaptive-rag",
+    "historical_runtime_baseline_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
+    "observed_head_before_p0_changes": "661498176a2c885f7a109c0af0024ae2ad59b88f",
+    "original_untracked_evaluation_file_count": 10,
+    "repository": "taoyifei/RAG_TEST",
+    "runtime_relevant_diff_after_candidate_before_p0": false,
+    "runtime_relevant_diff_after_p0": true,
+    "runtime_to_audit_diff_names": [
+      "docs/progress/wb08r-03-issues.md",
+      "docs/progress/wb08r-state.json"
+    ]
+  },
+  "microphase": "WB08R-03G-P0",
+  "p0_observability_patch": {
+    "admission_changed": false,
+    "behavior_change": false,
+    "budget_changed": false,
+    "candidate_deployment": "NOT_RUN_NO_CURRENT_SERVER_AUTHORIZATION_AND_MISSING_AUDIT_PACKAGE",
+    "new_safe_fields": [
+      "claim_rejection_diagnostics",
+      "extractive_fallback_reason"
+    ],
+    "prompt_changed": false,
+    "ranking_changed": false,
+    "raw_text_in_safe_trace": false,
+    "threshold_changed": false
+  },
+  "private_replay": {
+    "access": "OWNER_AND_SYSTEM_ONLY",
+    "bytes": 45152,
+    "classification": "PRIVATE_DO_NOT_COMMIT",
+    "directory": "C:/Users/jerry/AppData/Local/Codex/diagnostics/wb08r03g-p0-20260919",
+    "file": "historical-private-replay.json",
+    "sha256": "ec37da2f79990736ba2678d03b99ef990f5082463299df339ba9fd6a72bad4ac"
+  },
+  "production_readonly_baseline": {
+    "container": "wanshitong-app",
+    "current_inspect": "NOT_OBSERVED_CURRENTLY_SERVER_UNAVAILABLE",
+    "historical_image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306",
+    "modified_by_p0": false,
+    "published_mapping": "8288:8088"
+  },
+  "runtime_contract": {
+    "embedding_model": "Qwen3-Embedding-0.6B",
+    "exact_runtime_environment_and_secret_values": "NOT_RECORDED",
+    "generation_model": "Qwen/Qwen3-8B-AWQ",
+    "generation_provider_id": "openai-compatible",
+    "product_mode": "wanshitong",
+    "provider_profile": "WANSHITONG_INTERNAL_MODELS",
+    "reranker_model": "Qwen3-Reranker-0.6B",
+    "structured_output_mode": "response_format",
+    "thinking_disabled": true
+  },
+  "schema_version": "wb08r03g-p0-safe-manifest-v1",
+  "status": "BLOCKED",
+  "status_reasons": [
+    "PACKAGE_01_AUDIT_REPORT_NOT_FOUND",
+    "PACKAGE_90_CONTRACT_PROBES_NOT_FOUND",
+    "CANDIDATE_TRACE_DATABASE_UNAVAILABLE_WITH_CURRENT_AUTHORIZATION"
+  ],
+  "trace_database": {
+    "historical_path": "/data/universal-rag.sqlite3",
+    "query_history_read": "NOT_OBSERVED_CURRENTLY_SERVER_UNAVAILABLE",
+    "query_trace_events_read": "HISTORICAL_SAFE_EXCERPTS_ONLY_SCHEMA_NOT_REVALIDATED",
+    "schema_inspection": "NOT_OBSERVED_CURRENTLY_SERVER_UNAVAILABLE",
+    "write_statements_executed": false
+  }
+}

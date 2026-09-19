@@ -5,7 +5,7 @@
   "completed_phases": ["WB08R-00", "WB08R-01", "WB08R-02"],
   "current_phase": "WB08R-03",
   "phase_status": "PAUSED",
-  "implementation_status": "wb08r03f_stopped_gate_d_wrong_source_and_claim_ownership_failure",
+  "implementation_status": "wb08r03g_p0_blocked_missing_audit_inputs_and_runtime_access",
   "wb08r03r2_phase_start_sha": "399cf2184c4b3f47f6f4b274c4333913f610f1d2",
   "candidate_code_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
@@ -14,14 +14,15 @@
   "candidate_runtime_tree_hash": null,
   "candidate_product_asset_manifest_sha256": "927660b0864b710719c8af4d6911e22087c63baef1587f783d3c895482b09f72",
   "phase_report_sha": null,
-  "runtime_relevant_diff_after_candidate": false,
+  "runtime_relevant_diff_after_candidate": true,
   "implementation_microphases": {
     "R0_stream_terminal": "IMPLEMENTED",
     "R1_structured_output": "IMPLEMENTED",
     "R2_minimal_planner": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
     "R3_root_atom_retrieval": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
     "R4_group_alignment": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
-    "R5_natural_claims": "IMPLEMENTED_NEEDS_REAL_VERIFICATION"
+    "R5_natural_claims": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
+    "03G_P0_evidence_freeze": "BLOCKED"
   },
   "verification_gates": {
     "candidate_identity": "PASSED_BD00C56",
@@ -162,5 +163,33 @@
       "gate": "failed"
     },
     "remaining_gates": ["R2", "R3", "R4", "R5", "R6", "Planner-24", "Ownership-16", "Claims-16", "Full-96"]
+  },
+  "wb08r03g_p0_verification": {
+    "phase_start_sha": "661498176a2c885f7a109c0af0024ae2ad59b88f",
+    "historical_runtime_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
+    "status": "BLOCKED",
+    "report": "docs/progress/wb08r-03g-p0-report.md",
+    "safe_manifest": "docs/progress/wb08r-03g-p0-manifest.json",
+    "safe_manifest_sha256": "857b488938c312ed14ecd8990218d969dbe6ffedfe8ca74790a343ca083f6e8c",
+    "private_replay": "EXTERNAL_OWNER_ONLY_ACL",
+    "historical_n031_trace_id": "trace_6c780ebd91b5b419110e8a72c993abff",
+    "historical_n033_trace_id": "NOT_OBSERVED",
+    "observability_patch": "LOCAL_ONLY_NOT_DEPLOYED",
+    "contract_probe_regression": "PASSED_6",
+    "targeted_pytest": "PASSED_151",
+    "expanded_pytest": "98_PASSED_1_BASELINE_FAILURE_DENSE_QUERY_PUNCTUATION",
+    "ruff": "PASSED",
+    "script_syntax": "PASSED",
+    "git_diff_check": "PASSED",
+    "mypy": "FAILED_161_ERRORS_MATCHES_AUDIT_BASELINE",
+    "private_text_leak_scan": "PASSED_24_UNIQUE_STRINGS_ZERO_MATCHES",
+    "candidate_deployment": false,
+    "production_deploy": false,
+    "missing_inputs": [
+      "01_AUDIT_REPORT",
+      "90_contract_probes.py"
+    ],
+    "runtime_access": "BLOCKED_NO_AUTHORIZED_CREDENTIAL",
+    "merge_allowed": false
   }
 }
