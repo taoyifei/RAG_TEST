@@ -1657,6 +1657,13 @@ class RetrievalService:
                 "generation_evidence_count": len(
                     generation_evidence_pack.entries
                 ),
+                "bounded_reading_candidate_chunk_ids": tuple(
+                    candidate.hydrated.chunk.chunk_id
+                    for candidate in generation_ranked_candidates
+                ),
+                "priority_source_units": (
+                    generation_evidence_pack.priority_source_units
+                ),
                 **generation_evidence_pack.structural_sibling_observation(
                     generation_groups
                 ),

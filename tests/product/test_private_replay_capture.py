@@ -14,6 +14,7 @@ from rag_app.core.models import (
     ClaimSupport,
     EvidenceItem,
 )
+from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomStatus,
@@ -77,6 +78,7 @@ def _request_and_draft() -> tuple[GenerationRequest, AnswerDraft]:
         query_plan=plan,
         atom_support_matrix=matrix,
         per_atom_candidate_support_ids=(("A1", ("S1",)),),
+        priority_source_units=(("A1", (stable_support_key(evidence),)),),
     )
     draft = AnswerDraft(
         text="合成模型草稿",
@@ -118,10 +120,12 @@ def test_private_replay_capture_preserves_raw_draft_and_source_spans(
     output = private_dir / "raw-generation-drafts.ndjson"
     row = json.loads(output.read_text(encoding="utf-8"))
     assert row["request"]["query"] == "合成问题"
-    assert row["request"]["per_atom_candidate_support_ids"] == [
-        ["A1", ["S1"]]
-    ]
+    assert row["request"]["per_atom_candidate_support_ids"] == [["A1", ["S1"]]]
     assert row["request"]["evidence"][0]["source_spans"]
+    assert row["request"]["priority_source_units"] == [
+        ["A1", [stable_support_key(request.evidence[0])]]
+    ]
+    assert "priority_source_units" not in request.model_dump(mode="json")
     claim = row["draft"]["natural_claims"][0]
     assert claim["text"] == "合成模型事实。"
     assert claim["supports"] == [

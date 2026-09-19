@@ -39,8 +39,12 @@ from rag_app.core.models.query_plan import (
     QueryPlan,
 )
 from rag_app.core.query_text import named_table_label_in_query
+from rag_app.core.source_compatibility import (
+    source_compatibility,
+    table_cell_coordinate,
+)
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v7"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v8"
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
 _STRUCTURED_GROUP_TYPES = frozenset(
     {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
@@ -50,6 +54,10 @@ _TABLE_NODE_ID = re.compile(r"^node_[0-9a-f]{32}$")
 _MIN_TABLE_SUBJECT_CHARS = 3
 _MIN_TABLE_ACTION_CHARS = 12
 _MIN_QUESTION_SOURCE_RUN = 4
+_MIN_READING_LABEL_CHARS = 2
+_MAX_READING_LABEL_CHARS = 64
+_MIN_READING_LABEL_COVERAGE = 0.5
+_MIN_READING_RELATION_CELLS = 2
 _TEMPLATE_BODY = re.compile(
     r"正文|具体内容|具体字段|怎么填|如何填写|填写方法|占位|示例|正式要求"
 )
@@ -121,6 +129,7 @@ class GenerationEvidencePack:
     pack_revision: str = GENERATION_EVIDENCE_PACK_REVISION
     trusted_source_groups: tuple[EvidenceGroup, ...] = ()
     per_atom_source_certificates: tuple[tuple[str, str, JsonObject], ...] = ()
+    priority_source_units: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @property
     def evidence(self) -> tuple[EvidenceItem, ...]:
@@ -520,6 +529,254 @@ def _group_items(group: GroupCandidate) -> tuple[EvidenceItem, ...]:
     return tuple(items)
 
 
+def _physical_source(item: EvidenceItem) -> bool:
+    """仅将有完整字符位置的独立原文用作阅读单元锚点。
+
+    Args:
+        item: 保留真实 SourceSpan 的阅读候选。
+
+    Returns:
+        是否能核对一个明确的原文区间；不表示支持任何事实。
+
+    """
+    if len(item.source_spans) != 1:
+        return False
+    span = item.source_spans[0]
+    start, end = span.source_start_char, span.source_end_char
+    return (
+        type(start) is int
+        and type(end) is int
+        and start >= 0
+        and end - start == len(item.citation_text)
+        and bool(item.citation_text)
+        and source_compatibility((item,)).compatible
+    )
+
+
+def _reading_label_score(query: str, label: str) -> tuple[float, int]:
+    """仅给真实行标签的原问字面重合排序，不建立名称等价关系。
+
+    Args:
+        query: 原问或 Atom 的合法检索文本。
+        label: 已由原表第一列证明的行标签。
+
+    Returns:
+        最长连续重合占标签比例和长度；短零散重合返回零。
+
+    """
+    query, label = _normalized(query), _normalized(label)
+    if not _MIN_READING_LABEL_CHARS <= len(label) <= _MAX_READING_LABEL_CHARS:
+        return (0.0, 0)
+    longest = max(
+        (
+            end - start
+            for start in range(len(label))
+            for end in range(start + _MIN_READING_LABEL_CHARS, len(label) + 1)
+            if label[start:end] in query
+        ),
+        default=0,
+    )
+    score = longest / len(label)
+    return (
+        (score, longest) if score >= _MIN_READING_LABEL_COVERAGE else (0.0, 0)
+    )
+
+
+def _reading_table_identity(
+    item: EvidenceItem,
+) -> tuple[tuple[object, ...], int, int] | None:
+    """联合规范节点映射与统一坐标合同认证逻辑表和真实单元格。
+
+    Args:
+        item: 由 canonical Chunk 的 SourceSpan 物化的证据。
+
+    Returns:
+        含授权范围、版本、part/story 和表节点的身份及行列。
+
+    """
+    cell = table_cell_coordinate(item)
+    metadata = dict(item.metadata)
+    node = metadata.get("table_logical_node_id")
+    row = metadata.get("table_logical_row_index")
+    if (
+        cell is None
+        or not isinstance(node, str)
+        or not _TABLE_NODE_ID.fullmatch(node)
+        or type(row) is not int
+        or row != cell[1]
+        or not _physical_source(item)
+    ):
+        return None
+    table = cell[0]
+    return (
+        (*item.source_identity_scope, *table[:4], node, table[-1]),
+        row,
+        cell[2],
+    )
+
+
+def _reading_header(item: EvidenceItem, candidate: RankedChunk) -> bool:
+    """只使用解析器明确认证且实际映射到该节点的表头。
+
+    Args:
+        item: 表头候选原文。
+        candidate: 保留 canonical atom 映射的合法候选。
+
+    Returns:
+        是否具备源表头标记，不把任意第一行当作表头。
+
+    """
+    atoms = dict(candidate.hydrated.chunk.metadata).get("atoms")
+    if not isinstance(atoms, (list, tuple)):
+        return False
+    nodes = {span.node_id for span in item.source_spans}
+    for atom in atoms:
+        metadata = atom.get("metadata") if isinstance(atom, dict) else None
+        if not isinstance(metadata, dict):
+            continue
+        mapping = metadata.get("cell_source_node_ids")
+        if metadata.get("header_strategy") != "tblHeader" or not isinstance(
+            mapping, dict
+        ):
+            continue
+        mapped = {
+            node
+            for values in mapping.values()
+            if isinstance(values, (list, tuple))
+            for node in values
+            if isinstance(node, str)
+        }
+        if nodes <= mapped:
+            return True
+    return False
+
+
+def _priority_reading_units(  # noqa: PLR0912, PLR0913
+    *,
+    query_plan: QueryPlan,
+    items: tuple[EvidenceItem, ...],
+    candidate_by_id: dict[str, RankedChunk],
+    root_evidence: tuple[EvidenceItem, ...],
+    atom_candidates_by_atom: tuple[tuple[str, tuple[EvidenceItem, ...]], ...],
+    policy: RetrievalPolicy,
+) -> tuple[tuple[str, tuple[tuple[object, ...], ...]], ...]:
+    """在应用层选每个 Atom 的一个有界阅读单元，不认证回答语义。
+
+    Args:
+        query_plan: 当前请求的 Root 与 Atom。
+        items: 全部通过硬边界的有限来源。
+        candidate_by_id: 当前合法池内的原始 Chunk 映射。
+        root_evidence: 原检索器选中的 Root 阅读来源。
+        atom_candidates_by_atom: 保留各 Atom 自身关系上下文的来源。
+        policy: 已冻结的数量与预算约束。
+
+    Returns:
+        owner 与必须一起阅读的稳定来源身份；表头保持独立引用。
+
+    """
+    rows: dict[tuple[tuple[object, ...], int], list[EvidenceItem]] = (
+        defaultdict(list)
+    )
+    headers: dict[tuple[object, ...], list[EvidenceItem]] = defaultdict(list)
+    for item in items:
+        cell = _reading_table_identity(item)
+        if cell is None:
+            continue
+        table, row, _column = cell
+        candidate = candidate_by_id[item.chunk_id]
+        if _reading_header(item, candidate):
+            headers[table].append(item)
+        else:
+            rows[(table, row)].append(item)
+    units: list[tuple[str, tuple[tuple[object, ...], ...]]] = []
+    members_by_atom = dict(atom_candidates_by_atom)
+    readable = {_identity(item): item for item in items}
+    for atom in query_plan.atoms:
+        focused: list[
+            tuple[tuple[float, int, int], tuple[EvidenceItem, ...]]
+        ] = []
+        query = f"{query_plan.original_query} {atom.search_text}"
+        for (table, _row), members in rows.items():
+            labels = [
+                item
+                for item in members
+                if (cell := _reading_table_identity(item)) is not None
+                and cell[2] == 0
+                and _source_matches(atom, item)
+                and item.rerank_rank is not None
+            ]
+            for label in labels:
+                score = _reading_label_score(query, label.citation_text)
+                if not score[0]:
+                    continue
+                # 有精确列名时只保留所问列；口语关系未消歧时保留这一
+                # 目标行的有限阅读上下文，不宣称整行等于所问事实。
+                column_headers = headers.get(table, [])
+                requested_columns = {
+                    cell[2]
+                    for item in column_headers
+                    if (cell := _reading_table_identity(item)) is not None
+                    and _normalized(item.citation_text) in _normalized(query)
+                }
+                columns = (
+                    requested_columns | {0} if requested_columns else set()
+                )
+                related = tuple(
+                    item
+                    for item in (*members, *column_headers)
+                    if not columns
+                    or (_reading_table_identity(item) or ((), -1, -1))[2]
+                    in columns
+                )
+                if (
+                    len({item.chunk_id for item in related})
+                    > policy.group_member_chunk_limit
+                ):
+                    continue
+                focused.append(
+                    ((*score, -(label.rerank_rank or 2**31)), related)
+                )
+        if focused:
+            selected = max(focused, key=lambda value: value[0])[1]
+        else:
+            anchors = members_by_atom.get(atom.atom_id) or root_evidence
+            anchor = next(
+                (
+                    readable[_identity(item)]
+                    for item in anchors
+                    if _identity(item) in readable
+                    and _physical_source(item)
+                    and _source_matches(atom, item)
+                ),
+                None,
+            )
+            if anchor is None:
+                continue
+            selected = (anchor,)
+            for item in sorted(
+                items,
+                key=lambda value: (
+                    _source_order(value) or 0,
+                    value.source_spans[0].source_start_char or 0,
+                ),
+            ):
+                if item == anchor or not _physical_source(item):
+                    continue
+                if len(selected) >= policy.group_member_chunk_limit:
+                    break
+                if {span.node_id for span in item.source_spans} == {
+                    span.node_id for span in anchor.source_spans
+                } and source_compatibility((*selected, item)).compatible:
+                    selected = (*selected, item)
+        units.append(
+            (
+                atom.atom_id,
+                tuple(dict.fromkeys(_identity(item) for item in selected)),
+            )
+        )
+    return tuple(units)
+
+
 def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     *,
     query_plan: QueryPlan,
@@ -911,7 +1168,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     # 最终有界池中的真实 SourceSpan 具有阅读资格；旧证书缺失只影响
     # 证明与完整性。后面的 ACL、活动版本、显式来源和结构冲突仍硬过滤。
     for candidate in ranked_candidates:
-        if candidate.rerank_rank is None:
+        if candidate.rerank_rank is None and candidate.expansion_reason is None:
             continue
         chunk = candidate.hydrated.chunk
         for span in chunk.source_spans:
@@ -958,21 +1215,80 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     chosen: list[tuple[object, ...]] = []
     ordinary_counts: Counter[str] = Counter()
     ordinary_tokens = 0
+    priority_keys: list[tuple[object, ...]] = []
+    priority_tokens = 0
+    selected_priority_units: list[
+        tuple[str, tuple[tuple[object, ...], ...]]
+    ] = []
 
     def add_ordinary(key: tuple[object, ...]) -> None:
         nonlocal ordinary_tokens
-        if key in chosen or len(chosen) >= policy.generation_max_ordinary_items:
+        if (
+            key in chosen
+            or key in priority_keys
+            or len(chosen) >= policy.generation_max_ordinary_items
+        ):
             return
         item = candidates[key]
         document_id = item.document_id or ""
         if ordinary_counts[document_id] >= policy.generation_per_document_cap:
             return
         cost = max(1, (len(item.citation_text) + 3) // 4)
-        if ordinary_tokens + cost > policy.generation_evidence_token_budget:
+        if (
+            ordinary_tokens + priority_tokens + cost
+            > policy.generation_evidence_token_budget
+        ):
             return
         chosen.append(key)
         ordinary_counts[document_id] += 1
         ordinary_tokens += cost
+
+    for owner, unit in _priority_reading_units(
+        query_plan=query_plan,
+        items=tuple(candidates[key] for key in admitted),
+        candidate_by_id=candidate_by_id,
+        root_evidence=root_evidence,
+        atom_candidates_by_atom=atom_candidates_by_atom,
+        policy=policy,
+    ):
+        cells = {
+            cell
+            for key in unit
+            if (cell := _reading_table_identity(candidates[key])) is not None
+        }
+        if len(cells) < _MIN_READING_RELATION_CELLS or not any(
+            cell[2] == 0 for cell in cells
+        ):
+            # 普通正文和同节点续片沿用既有配额顺序；这里只固定最终
+            # 全部入选时的发送保护，不抢占已认证列表组的保留名额。
+            selected_priority_units.append((owner, unit))
+            continue
+        new_keys = tuple(
+            key
+            for key in unit
+            if key not in chosen and key not in priority_keys
+        )
+        cost = sum(
+            max(1, (len(candidates[key].citation_text) + 3) // 4)
+            for key in new_keys
+        )
+        if (
+            len(priority_keys) + max(0, len(new_keys) - 1)
+            > policy.generation_max_group_items
+            or ordinary_tokens + priority_tokens + cost
+            > policy.generation_evidence_token_budget
+        ):
+            continue
+        if new_keys:
+            add_ordinary(new_keys[0])
+            if new_keys[0] not in chosen:
+                continue
+            for key in new_keys[1:]:
+                priority_keys.append(key)
+                priority_tokens += max(
+                    1, (len(candidates[key].citation_text) + 3) // 4
+                )
+        selected_priority_units.append((owner, unit))
 
     for key in dict.fromkeys(exact_table_keys):
         if key in admitted:
@@ -1070,8 +1386,8 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
 
     # 已选中的完整结构组按 SourceSpan 补齐；组预算与总预算保持有界。
     selected_chunk_ids = {candidates[key].chunk_id for key in chosen}
-    group_keys: list[tuple[object, ...]] = []
-    group_tokens = 0
+    group_keys: list[tuple[object, ...]] = list(priority_keys)
+    group_tokens = priority_tokens
     complete_group_ids: list[str] = []
     for group in groups:
         if not group.complete or not selected_chunk_ids.intersection(
@@ -1289,6 +1605,11 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             and isinstance(
                 certificate := dict(item.metadata).get("answer_support"), dict
             )
+        ),
+        priority_source_units=tuple(
+            (owner, tuple(stable_support_key(candidates[key]) for key in unit))
+            for owner, unit in selected_priority_units
+            if set(unit) <= set(selected)
         ),
     )
 

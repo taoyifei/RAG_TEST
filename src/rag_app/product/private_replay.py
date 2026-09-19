@@ -142,6 +142,7 @@ def _private_request_payload(request: GenerationRequest) -> dict[str, object]:
             "attempt_id": request.attempt_id,
             "repair_raw_failures": request.repair_raw_failures,
             "repair_allowed_support_keys": request.repair_allowed_support_keys,
+            "priority_source_units": request.priority_source_units,
             "trusted_source_groups": [
                 group.model_dump(mode="json")
                 for group in request.trusted_source_groups

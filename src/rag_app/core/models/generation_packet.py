@@ -13,8 +13,8 @@ if TYPE_CHECKING:
     from rag_app.core.models.retrieval import EvidenceItem
 
 EVIDENCE_IDENTITY_REVISION = "wb08r-source-key-v1"
-PREPARED_PACKET_REVISION = "wb08r-prepared-packet-v1"
-GENERATION_BUDGET_REVISION = "wb08r-generation-budget-v1"
+PREPARED_PACKET_REVISION = "wb08r-prepared-packet-v2"
+GENERATION_BUDGET_REVISION = "wb08r-generation-budget-v2"
 
 
 def safe_support_source(item: EvidenceItem) -> dict[str, object]:
@@ -105,11 +105,15 @@ class PreparedGenerationPacket(FrozenModel):
     evidence_identity_revision: str = EVIDENCE_IDENTITY_REVISION
     budget_revision: str = GENERATION_BUDGET_REVISION
     schema_revision: str
-    evidence_level: Literal["TRANSPORT_PREPARED", "TRANSPORT_SENT"]
+    evidence_level: Literal[
+        "PREPARATION_REJECTED", "TRANSPORT_PREPARED", "TRANSPORT_SENT"
+    ]
     alias_to_support_key: tuple[tuple[str, str], ...]
     support_sources: tuple[dict[str, object], ...] = ()
     per_atom_support_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     protected_support_keys: tuple[str, ...] = ()
+    retained_source_units: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    preparation_failure: str | None = None
     original_support_keys: tuple[str, ...]
     removed_support_keys: tuple[tuple[str, str], ...] = ()
     complete_group_ids: tuple[str, ...] = ()
@@ -165,4 +169,15 @@ class PreparedGenerationPacket(FrozenModel):
             raise ValueError("PREPARED_PACKET_ALLOWANCE_OUTSIDE_SENT")
         if not set(self.protected_support_keys) <= set(keys):
             raise ValueError("PREPARED_PACKET_PROTECTED_SUPPORT_MISSING")
+        if any(
+            not set(members) <= set(self.protected_support_keys)
+            for _, members in self.retained_source_units
+        ):
+            raise ValueError("PREPARED_PACKET_PRIORITY_UNIT_NOT_PROTECTED")
+        if self.evidence_level == "PREPARATION_REJECTED" and (
+            not self.preparation_failure
+            or self.transport_body_sha256 is not None
+            or self.observed_prompt_tokens is not None
+        ):
+            raise ValueError("REJECTED_PREPARATION_CANNOT_CLAIM_TRANSPORT")
         return self

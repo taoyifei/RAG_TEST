@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
+from rag_app.adapters.providers.http_common import ProviderHttpClient
+from rag_app.adapters.providers.openai_compatible import (
+    OpenAICompatibleChatAdapter,
+    OpenAICompatibleChatConfig,
+)
 from rag_app.application.answering.grounded import GroundedAnsweringService
 from rag_app.core.models import (
     AnswerClaim,
@@ -62,6 +69,61 @@ def _packet(
         reserved_output_tokens=300,
         safety_margin_tokens=100,
     )
+
+
+def test_service_keeps_rejected_preparation_and_forwards_reading_units() -> (
+    None
+):
+    """输入预算失败保留 SAFE 准备身份，不发 HTTP、不修复，也不伪造 sent。"""
+    evidence = _evidence("甲组负责交付。")
+    plan = _plan("甲组")
+    priority = (("A1", (stable_support_key(evidence[0]),)),)
+    pack = replace(_pack(plan, evidence), priority_source_units=priority)
+    sent: list[httpx.Request] = []
+    requests: list[GenerationRequest] = []
+
+    def unexpected_send(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        raise AssertionError("准备阶段拒绝预算时不能发送 HTTP。")
+
+    adapter = OpenAICompatibleChatAdapter(
+        OpenAICompatibleChatConfig(
+            model="synthetic",
+            egress_allowed=True,
+            max_input_tokens=1,
+            max_output_tokens=1536,
+        ),
+        http_client=ProviderHttpClient(
+            "https://provider.example/v1",
+            client=httpx.Client(transport=httpx.MockTransport(unexpected_send)),
+            max_attempts=1,
+        ),
+        api_key_resolver=lambda: "",
+    )
+
+    def generate(request: GenerationRequest) -> AnswerDraft:
+        requests.append(request)
+        return adapter.generate(request)
+
+    generator = Mock()
+    generator.generate.side_effect = generate
+    outcome = _answer_with_pack(
+        generator, plan, evidence, ((AtomStatus.MISSING, ()),), pack=pack
+    )
+
+    assert outcome.answer is None
+    assert outcome.reason_code == "GENERATION_INPUT_BUDGET_EXCEEDED"
+    assert outcome.calls == ()
+    assert outcome.repair_calls == 0
+    assert sent == []
+    assert len(requests) == 1
+    assert requests[0].priority_source_units == priority
+    assert len(outcome.prepared_packets) == 1
+    packet = outcome.prepared_packets[0]
+    assert packet.evidence_level == "PREPARATION_REJECTED"
+    assert packet.preparation_failure == "GENERATION_INPUT_BUDGET_EXCEEDED"
+    assert packet.transport_body_sha256 is None
+    assert packet.observed_prompt_tokens is None
 
 
 def test_service_rejects_an_alias_omitted_from_transport_packet() -> None:

@@ -16,6 +16,7 @@ from rag_app.core.models import (
 )
 from rag_app.core.models.common import FrozenModel, JsonObject
 from rag_app.core.models.evidence_group import EvidenceGroup
+from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import AtomSupportMatrix, QueryPlan
 
 
@@ -47,6 +48,9 @@ class GenerationRequest(FrozenModel):
     )
     per_atom_source_certificates: tuple[tuple[str, str, JsonObject], ...] = (
         Field(default=(), exclude=True, repr=False)
+    )
+    priority_source_units: tuple[tuple[str, tuple[str, ...]], ...] = Field(
+        default=(), exclude=True, repr=False
     )
 
     @model_validator(mode="after")
@@ -90,8 +94,25 @@ class GenerationRequest(FrozenModel):
             self.repair_atom_ids
             or self.accepted_claim_ids
             or self.per_atom_candidate_support_ids
+            or self.priority_source_units
         ):
             raise ValueError("无计划请求不能执行逐原子修复。")
+        owners = [owner for owner, _ in self.priority_source_units]
+        allowed_owners = {"ROOT"} | (
+            {atom.atom_id for atom in self.query_plan.atoms}
+            if self.query_plan is not None
+            else set()
+        )
+        source_keys = {stable_support_key(item) for item in self.evidence}
+        if len(owners) != len(set(owners)) or not set(owners) <= allowed_owners:
+            raise ValueError("优先阅读单元每个 Root 或 Atom 最多一个。")
+        if any(
+            not keys
+            or len(keys) != len(set(keys))
+            or not set(keys) <= source_keys
+            for _, keys in self.priority_source_units
+        ):
+            raise ValueError("优先阅读单元必须完整引用本次真实来源身份。")
         return self
 
 

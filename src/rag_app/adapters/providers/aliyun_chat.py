@@ -694,6 +694,8 @@ class _PreparedMessages:
     evidence: tuple[EvidenceItem, ...]
     protected_ids: frozenset[str]
     pre_budget_support_keys: frozenset[str]
+    retained_source_units: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    input_budget_exceeded: bool = False
 
 
 def _natural_messages(
@@ -793,10 +795,109 @@ def _table_proof_units(
     return tuple(dict.fromkeys(result))
 
 
+def _continuous_source_unit(
+    item: EvidenceItem, candidates: Iterable[EvidenceItem]
+) -> set[str]:
+    """只闭合可证实连续的片段，缺位置的同节点编号不得污染该集合。"""
+    node_ids = _item_node_ids(item)
+    if len(node_ids) != 1:
+        return {item.support_id}
+
+    def positioned(candidate: EvidenceItem) -> bool:
+        return bool(candidate.source_spans) and all(
+            type(span.source_start_char) is int
+            and type(span.source_end_char) is int
+            and span.source_end_char > span.source_start_char
+            for span in candidate.source_spans
+        )
+
+    if not positioned(item):
+        return {item.support_id}
+    remaining = [
+        candidate
+        for candidate in candidates
+        if candidate.support_id != item.support_id
+        and candidate.document_version_id == item.document_version_id
+        and _item_node_ids(candidate) == node_ids
+        and positioned(candidate)
+    ]
+    units = [item]
+    # 顺序不代表来源邻接；每次只增加已经由统一合同认证的无缝片段。
+    while remaining:
+        additions = [
+            candidate
+            for candidate in remaining
+            if source_compatibility((*units, candidate)).compatible
+        ]
+        if not additions:
+            break
+        for candidate in additions:
+            if source_compatibility((*units, candidate)).compatible:
+                units.append(candidate)
+                remaining.remove(candidate)
+    return {candidate.support_id for candidate in units}
+
+
+def _priority_reading_units(
+    request: GenerationRequest,
+    candidates: tuple[EvidenceItem, ...],
+    linked_ids: dict[str, tuple[str, ...]],
+    table_proof_units: tuple[tuple[frozenset[str], str], ...],
+) -> list[tuple[str, set[str]]]:
+    """按应用锚点保留有限阅读单元，不用组完整性代替查询来源优先级。
+
+    Args:
+        request: 携带稳定来源单元与本次修复范围的请求。
+        candidates: 已按本次可读许可筛选的实际来源。
+        linked_ids: 每个 Atom 在当前尝试可读的展示别名。
+        table_proof_units: 已由统一来源合同认证的表格最小关系单元。
+
+    Returns:
+        完整落在本次许可内的 Root 或 Atom 阅读单元。
+
+    """
+    if request.query_plan is None:
+        return []
+    requested_ids = set(request.repair_atom_ids) or {
+        atom.atom_id for atom in request.query_plan.atoms
+    }
+    by_key = {stable_support_key(item): item for item in candidates}
+    admitted_ids = {item.support_id for item in candidates}
+    units: list[tuple[str, set[str]]] = []
+    for owner, keys in request.priority_source_units:
+        if (owner == "ROOT" and request.repair_atom_ids) or (
+            owner != "ROOT" and owner not in requested_ids
+        ):
+            continue
+        owner_allowed = (
+            admitted_ids
+            if owner == "ROOT"
+            else set(linked_ids.get(owner, admitted_ids))
+        )
+        # 局部修复可缩小读取权限，但不能把原最小单元裁成半组再保护。
+        if not set(keys) <= by_key.keys() or any(
+            by_key[key].support_id not in owner_allowed for key in keys
+        ):
+            continue
+        unit_ids = set().union(
+            *(_continuous_source_unit(by_key[key], candidates) for key in keys)
+        )
+        unit_ids.update(
+            support_id
+            for table_ids, _reason in table_proof_units
+            if table_ids & unit_ids
+            for support_id in table_ids
+        )
+        if unit_ids <= owner_allowed:
+            units.append((owner, unit_ids))
+    return units
+
+
 def _prepare_natural_messages(  # noqa: PLR0915
     request: GenerationRequest,
     *,
     max_input_tokens: int | None = None,
+    retain_budget_rejection: bool = False,
 ) -> _PreparedMessages:
     """为首次自然回答或局部修复构造单次有界证据请求。"""
     plan = request.query_plan
@@ -843,6 +944,11 @@ def _prepare_natural_messages(  # noqa: PLR0915
         if group_id := complete_group_id(item):
             complete_groups.setdefault(group_id, set()).add(item.support_id)
 
+    priority_units = _priority_reading_units(
+        request, tuple(candidates), linked_ids, table_proof_units
+    )
+    priority_ids = set().union(*(ids for _, ids in priority_units))
+
     def proof_unit_ids(item: EvidenceItem) -> set[str]:
         """有认证交点时仅保留交点链，否则保留真实组或连续节点跨度。
 
@@ -853,6 +959,14 @@ def _prepare_natural_messages(  # noqa: PLR0915
             不可拆开裁剪的实际支持别名集合；不表示语义已支持。
 
         """
+        priority_members = {
+            support_id
+            for _owner, unit_ids in priority_units
+            if item.support_id in unit_ids
+            for support_id in unit_ids
+        }
+        if priority_members:
+            return priority_members
         table_ids = {
             support_id
             for unit_ids, _reason in table_proof_units
@@ -863,17 +977,8 @@ def _prepare_natural_messages(  # noqa: PLR0915
             return table_ids
         group_id = complete_group_id(item)
         if group_id is not None:
-            return complete_groups[group_id]
-        node_ids = _item_node_ids(item)
-        units = tuple(
-            candidate
-            for candidate in candidates
-            if candidate.document_version_id == item.document_version_id
-            and _item_node_ids(candidate) == node_ids
-        )
-        if len(node_ids) == 1 and source_compatibility(units).compatible:
-            return {candidate.support_id for candidate in units}
-        return {item.support_id}
+            return complete_groups[group_id] - priority_ids
+        return _continuous_source_unit(item, candidates)
 
     focus = " ".join(
         (
@@ -917,7 +1022,8 @@ def _prepare_natural_messages(  # noqa: PLR0915
         )
         return (int(row_match), overlap + 2 * title_overlap)
 
-    protected_ids: set[str] = set()
+    protected_ids: set[str] = set(priority_ids)
+    retained_units = list(priority_units)
     for atom in atoms:
         atom_allowed = set(linked_ids.get(atom.atom_id, admitted_ids))
         atom_candidates = [
@@ -928,6 +1034,11 @@ def _prepare_natural_messages(  # noqa: PLR0915
         preferred_keys = set(
             matrix.for_atom(atom.atom_id).supporting_support_keys
         )
+        if any(owner == atom.atom_id for owner, _ids in priority_units) or (
+            not preferred_keys
+            and any(ids <= atom_allowed for _owner, ids in priority_units)
+        ):
+            continue
         chosen = max(
             atom_candidates,
             key=lambda item: (
@@ -937,11 +1048,15 @@ def _prepare_natural_messages(  # noqa: PLR0915
                 -atom_candidates.index(item),
             ),
         )
-        protected_ids.update(proof_unit_ids(chosen))
+        chosen_ids = proof_unit_ids(chosen)
+        protected_ids.update(chosen_ids)
+        retained_units.append((atom.atom_id, chosen_ids))
 
     def build_messages(items: list[EvidenceItem]) -> tuple[ChatMessage, ...]:
         """只传实际请求的 Atom 与对应证据。"""
         evidence_payloads: list[dict[str, object]] = []
+        table_aliases: dict[str, str] = {}
+        group_aliases: dict[tuple[str | None, str | None, str], str] = {}
         certificate_keys = {
             key for _, key, _ in request.per_atom_source_certificates
         }
@@ -969,8 +1084,14 @@ def _prepare_natural_messages(  # noqa: PLR0915
                     )
                 }
                 if cell := table_cell_coordinate(item):
+                    table_key = canonical_sha256(cell[0])
+                    table_alias = table_aliases.setdefault(
+                        table_key, f"T{len(table_aliases) + 1}"
+                    )
+                    # 同次消息中短别名保留真实表身份；不重复渲染内部摘要。
+                    structure_projection.pop("table_locator", None)
                     structure_projection["table_cell"] = {
-                        "table_key": canonical_sha256(cell[0]),
+                        "table_key": table_alias,
                         "row": cell[1],
                         "column": cell[2],
                     }
@@ -981,8 +1102,17 @@ def _prepare_natural_messages(  # noqa: PLR0915
                 group_covered = source_group_covered(
                     tuple(items), certified_groups[verified_group_id]
                 )
+            raw_group_id = metadata.get("evidence_group_id")
+            group_alias = (
+                group_aliases.setdefault(
+                    (item.document_id, item.document_version_id, raw_group_id),
+                    f"G{len(group_aliases) + 1}",
+                )
+                if isinstance(raw_group_id, str)
+                else None
+            )
             projection["evidence_group"] = {
-                "group_id": metadata.get("evidence_group_id"),
+                "group_id": group_alias,
                 "kind": metadata.get("evidence_group_type"),
                 "member_index": metadata.get("group_member_index"),
                 "member_count": metadata.get("group_member_count"),
@@ -1069,14 +1199,30 @@ def _prepare_natural_messages(  # noqa: PLR0915
             item for item in candidates if item.support_id not in removable_ids
         ]
         messages = build_messages(candidates)
-    if message_token_estimate(messages) > budget:
+    budget_exceeded = message_token_estimate(messages) > budget
+    if budget_exceeded and not retain_budget_rejection:
         raise ProviderInputTooLarge(
             "最小可证明证据包超过生成输入预算。",
             stage="generation.prepare",
             code="GENERATION_INPUT_BUDGET_EXCEEDED",
         )
     return _PreparedMessages(
-        messages, tuple(candidates), frozenset(protected_ids), pre_budget_keys
+        messages,
+        tuple(candidates),
+        frozenset(protected_ids),
+        pre_budget_keys,
+        tuple(
+            (
+                owner,
+                tuple(
+                    stable_support_key(item)
+                    for item in candidates
+                    if item.support_id in ids
+                ),
+            )
+            for owner, ids in retained_units
+        ),
+        budget_exceeded,
     )
 
 
@@ -1168,7 +1314,11 @@ def _prepared_packet(
             (request.request_id, request.attempt_id, messages_hash)
         ),
         schema_revision=GROUNDED_CLAIM_SCHEMA_REVISION,
-        evidence_level="TRANSPORT_PREPARED",
+        evidence_level=(
+            "PREPARATION_REJECTED"
+            if prepared.input_budget_exceeded
+            else "TRANSPORT_PREPARED"
+        ),
         alias_to_support_key=tuple(source_keys.items()),
         support_sources=tuple(
             safe_support_source(item) for item in prepared.evidence
@@ -1178,6 +1328,12 @@ def _prepared_packet(
             source_keys[alias]
             for alias in source_keys
             if alias in prepared.protected_ids
+        ),
+        retained_source_units=prepared.retained_source_units,
+        preparation_failure=(
+            "GENERATION_INPUT_BUDGET_EXCEEDED"
+            if prepared.input_budget_exceeded
+            else None
         ),
         original_support_keys=input_keys,
         removed_support_keys=tuple(
@@ -1728,15 +1884,11 @@ class AliyunChatAdapter:
             - schema_tokens
             - _GENERATION_SAFETY_TOKENS
         )
-        if budget <= 0:
-            raise ProviderInputTooLarge(
-                "生成 Schema 与安全预留超过输入预算。",
-                stage="generation.prepare",
-                code="GENERATION_INPUT_BUDGET_EXCEEDED",
-            )
         if request.query_plan is not None:
             prepared = _prepare_natural_messages(
-                request, max_input_tokens=budget
+                request,
+                max_input_tokens=max(1, budget),
+                retain_budget_rejection=True,
             )
         else:
             messages = _grounded_messages(request, max_input_tokens=budget)
@@ -1757,13 +1909,8 @@ class AliyunChatAdapter:
                     for item in request.model_evidence_candidates
                     or request.evidence
                 ),
+                input_budget_exceeded=message_token_estimate(messages) > budget,
             )
-            if message_token_estimate(messages) > budget:
-                raise ProviderInputTooLarge(
-                    "最小可证明证据包超过生成输入预算。",
-                    stage="generation.prepare",
-                    code="GENERATION_INPUT_BUDGET_EXCEEDED",
-                )
         narrowed, packet = _prepared_packet(
             request,
             prepared,
@@ -1771,6 +1918,15 @@ class AliyunChatAdapter:
             max_output_tokens=self.config.max_output_tokens,
             schema_tokens=schema_tokens,
         )
+        if prepared.input_budget_exceeded:
+            raise packet_failure(
+                ProviderInputTooLarge(
+                    "最小可证明证据包超过生成输入预算。",
+                    stage="generation.prepare",
+                    code="GENERATION_INPUT_BUDGET_EXCEEDED",
+                ),
+                packet,
+            )
         return prepared.messages, narrowed, packet
 
     def generate(self, request: GenerationRequest) -> AnswerDraft:

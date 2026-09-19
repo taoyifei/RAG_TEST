@@ -38,6 +38,7 @@ from rag_app.core.models import (
     OcrVerificationState,
     ProviderCall,
     QueryAnalysis,
+    QuerySemantics,
     RequestedAnswerType,
     SourceSpanKind,
 )
@@ -577,9 +578,9 @@ def _clauses_with_subject(text: str) -> list[tuple[str, str | None]]:
     """同一句逗号后的省略主体沿用前项，跨句重新识别。"""
     clauses: list[tuple[str, str | None]] = []
     for sentence in re.split(r"[。；;！!？?\n]", text):
-        normalized_sentence = _LEADING_ACTION_CONTEXT.sub("", sentence)
         subject: str | None = None
-        for segment in _split_enumeration_lead_in(normalized_sentence):
+        # 阶段与条件也是事实正文；只在 _subject 中跳过主语前缀。
+        for segment in _split_enumeration_lead_in(sentence):
             for clause in re.split(r"[，,]", segment):
                 if clause.strip():
                     subject = _subject(clause) or subject
@@ -2329,6 +2330,11 @@ class GroundedAnsweringService:
                 trusted_source_groups=trusted_groups,
                 per_atom_source_certificates=(
                     generation_evidence_pack.per_atom_source_certificates
+                    if generation_evidence_pack is not None
+                    else ()
+                ),
+                priority_source_units=(
+                    generation_evidence_pack.priority_source_units
                     if generation_evidence_pack is not None
                     else ()
                 ),
@@ -4662,7 +4668,144 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
         complete=False,
         trusted_groups=trusted_groups,
     )
+    _validate_natural_request_support(
+        atom,
+        claim,
+        units,
+        atom_analysis,
+        relation_proved=_matrix_proves_source_relation(matrix, atom, units),
+        contextual_source_proved=(
+            atom.answer_shape is AtomAnswerShape.DURATION
+            and _contextual_source_versions(plan, evidence) is not None
+        ),
+        trusted_groups=trusted_groups,
+    )
     return claim
+
+
+def _request_phrase_in_source(phrase: str, source: str) -> bool:
+    """允许原文在对象词之间插入谓语，但每个对象字符都须有相邻原词证明。"""
+    phrase = _STOP.sub("", unicodedata.normalize("NFKC", phrase).casefold())
+    source = _STOP.sub("", unicodedata.normalize("NFKC", source).casefold())
+    if not phrase:
+        return False
+    if phrase in source:
+        return True
+    covered: set[int] = set()
+    for index in range(len(phrase) - 1):
+        if phrase[index : index + 2] in source:
+            covered.update((index, index + 1))
+    return covered == set(range(len(phrase)))
+
+
+def _validate_natural_request_support(  # noqa: PLR0913
+    atom: QueryAtom,
+    claim: AnswerClaim,
+    units: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+    *,
+    relation_proved: bool = False,
+    contextual_source_proved: bool = False,
+    trusted_groups: tuple[EvidenceGroup, ...] = (),
+) -> None:
+    """逐字事实还须回答当前 Atom，来源分区与集合完整都不能替代此门。"""
+    from rag_app.application.retrieval.answer_support import (  # noqa: PLC0415
+        SupportStatus,
+        evaluate_span_support,
+    )
+    from rag_app.application.retrieval.semantics import (  # noqa: PLC0415
+        parse_query_semantics,
+    )
+
+    source = _claim_source_text(claim, units)
+    if relation_proved:
+        return
+    source_groups = _claim_source_groups(
+        claim, list(units), analysis, trusted_groups=trusted_groups
+    )
+    contexts = "\n".join(
+        context
+        for group in source_groups
+        for context in (*group.trusted_subjects, *group.trusted_contexts)
+    )
+    scoped_source = "\n".join((source, contexts))
+    question_target = re.search(
+        r"[?？]|谁|何时|哪些|什么|怎么|如何", atom.target
+    )
+    semantics = (
+        parse_query_semantics(atom.target)
+        if question_target is not None
+        else QuerySemantics(
+            target=atom.target,
+            relation=atom.relation,
+            answer_type=RequestedAnswerType.__members__.get(
+                atom.answer_shape.value, RequestedAnswerType.UNKNOWN
+            ),
+            source="SPAN_REFERENCED",
+        )
+    )
+    atom_analysis = analysis or QueryAnalysis(
+        original_query=atom.target,
+        normalized_query=atom.target,
+        semantics=semantics,
+        conversation_fingerprint="sha256:" + "0" * 64,
+    )
+    proof = evaluate_span_support(atom_analysis, source)
+    if proof.status is SupportStatus.SUPPORTED:
+        return
+    action = _YES_NO_ACTION_FOCUS.search(atom.target.strip())
+    if (
+        question_target is not None
+        and action is not None
+        and _query_focus_in_source(action["focus"], source)
+    ):
+        return
+    if contextual_source_proved and _FALLBACK_DURATION.search(source):
+        return
+    generic_relation = normalize_semantic_text(atom.relation) in {
+        "规定",
+        "事实",
+        "事实关系",
+        "原文内容",
+        "字面查找",
+        "内容",
+        "信息",
+    }
+    if _request_phrase_in_source(atom.target, scoped_source) and (
+        generic_relation
+        or _request_phrase_in_source(atom.relation, scoped_source)
+        or (
+            atom.answer_shape is AtomAnswerShape.DUTIES
+            and bool(contexts)
+            and bool(re.search(_DUTY_ACTION_VERB, source))
+        )
+    ):
+        return
+    raise ValidationFailed(
+        "所引原文未证明本次问题的对象与关系。",
+        stage="answer.validate",
+        code="CLAIM_QUERY_RELATION_UNSUPPORTED",
+        details=(("validator", "_validate_natural_request_support"),),
+    )
+
+
+def _matrix_proves_source_relation(
+    matrix: AtomSupportMatrix,
+    atom: QueryAtom,
+    units: tuple[EvidenceItem, ...],
+) -> bool:
+    """仅复用当前 Atom 的独立支持证明，稳定来源键优先于旧展示编号。"""
+    support = matrix.for_atom(atom.atom_id)
+    if support.status is not AtomStatus.SUPPORTED or not units:
+        return False
+    if support.supporting_support_keys:
+        return all(
+            stable_support_key(item) in support.supporting_support_keys
+            for item in units
+        )
+    return all(
+        item.support_id in support.supporting_support_ids for item in units
+    )
 
 
 def _validate_table_claim_certificate(units: tuple[EvidenceItem, ...]) -> None:
@@ -5054,6 +5197,28 @@ def _natural_atom_complete(  # noqa: PLR0911, PLR0913
     )
     if not atom_claims:
         return False
+    by_id = {item.support_id: item for item in evidence}
+    for claim in atom_claims:
+        try:
+            units = tuple(
+                by_id[support.support_id] for support in claim.supports
+            )
+            _validate_natural_request_support(
+                atom,
+                claim,
+                units,
+                _natural_atom_analysis(atom, analysis),
+                relation_proved=_matrix_proves_source_relation(
+                    matrix, atom, units
+                ),
+                trusted_groups=(
+                    generation_evidence_pack.trusted_source_groups
+                    if generation_evidence_pack is not None
+                    else ()
+                ),
+            )
+        except (ValidationFailed, KeyError):
+            return False
     if atom.answer_shape not in {
         AtomAnswerShape.ENUMERATION,
         AtomAnswerShape.PROCEDURE,
