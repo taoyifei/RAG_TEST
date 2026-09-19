@@ -1,0 +1,27 @@
+{
+  "version": "V9",
+  "status": "FAILED",
+  "phase_status": "PAUSED",
+  "merge_allowed": false,
+  "independent_verification_ready": false,
+  "actual_source_sha": "2661ecf8e8b5aa4b7b78a7c4c625a49a0f09f22d",
+  "tested_candidate_sha": "2661ecf8e8b5aa4b7b78a7c4c625a49a0f09f22d",
+  "report_sha": "15d21efd58fb07b2cffeb7c94084551532d19522",
+  "candidate_limit": 2,
+  "functional_candidates_built": 2,
+  "functional_deployments": 2,
+  "rollback_attempts": 2,
+  "quality_business_requests": 32,
+  "preflight": {
+    "c1": "FAILED 1/16",
+    "c2": "FAILED 2/16"
+  },
+  "A_to_F": "NOT_RUN",
+  "performance": "FAILED",
+  "final_8289": "ROLLED_BACK_BD00C56_HEALTHY",
+  "production_modified": false,
+  "report": "docs/progress/wb08r-03g-v9-report.md",
+  "manifest": "docs/progress/wb08r-03g-v9-manifest.json",
+  "p0_issues": "docs/progress/wb08r-03g-v9-p0-issues.md",
+  "stop_reason": "TWO_CANDIDATES_FAILED_NO_THIRD_ATTEMPT"
+}

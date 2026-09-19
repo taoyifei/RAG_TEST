@@ -356,5 +356,14 @@
     "gate_d_natural_36": "FAILED_TARGETED_N031_WRONG_SOURCE_N033_INSUFFICIENT_EVIDENCE",
     "gate_e_full_96": "NOT_RUN_BLOCKED_BY_GATE_D",
     "gate_f_concurrency_4": "NOT_RUN_BLOCKED_BY_GATE_D"
+  },
+  "wb08r03g_v9": {
+    "status": "FAILED",
+    "phase_status": "PAUSED",
+    "merge_allowed": false,
+    "state": "docs/progress/wb08r-03g-v9-state.json",
+    "report": "docs/progress/wb08r-03g-v9-report.md",
+    "p0_issues": "docs/progress/wb08r-03g-v9-p0-issues.md",
+    "tested_candidate_sha": "2661ecf8e8b5aa4b7b78a7c4c625a49a0f09f22d"
   }
 }
