@@ -46,6 +46,7 @@ from rag_app.core.models import (
     ChunkingReport,
     DocumentIR,
     DocumentRef,
+    DocumentVersionRef,
     EmbeddingCoverage,
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
@@ -1931,6 +1932,55 @@ class SqliteControlStore:
                 ),
             ).fetchall()
         return tuple(str(item["chunk_id"]) for item in rows)
+
+    def table_context_chunk_ids(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        document_version: DocumentVersionRef,
+        table_node_id: str,
+        row_indices: tuple[int, ...],
+        limit: int,
+    ) -> tuple[str, ...] | None:
+        """按 canonical atom 映射读取同表表头与目标行，不扫描章节正文。"""
+        if not 0 < limit <= _MAX_HYDRATION_CHUNKS:
+            raise ValueError("table context limit 必须在 1..200。")
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT c.chunk_id FROM chunks c "
+                "JOIN index_revisions r ON r.index_revision_id=c.revision_id "
+                "JOIN documents d ON d.document_id=c.document_id "
+                "WHERE c.revision_id=? AND c.document_id=? "
+                "AND c.document_version_id=? "
+                "AND r.project_id=? AND r.knowledge_base_id=? "
+                "AND d.deleted_at IS NULL AND d.status='active' "
+                "AND d.lifecycle_status='active' AND EXISTS ("
+                "SELECT 1 FROM json_each(c.chunk_json, '$.source_spans') s "
+                "WHERE json_extract(s.value, '$.is_citable')=1 "
+                "AND json_extract(s.value, '$.is_repeated')=0) AND EXISTS ("
+                "SELECT 1 FROM json_each(c.chunk_json, '$.metadata') m, "
+                "json_each(m.value, '$[1]') a "
+                "WHERE json_extract(m.value, '$[0]')='atoms' "
+                "AND json_extract(a.value, '$.metadata.table_node_id')=? "
+                "AND (json_extract(a.value, '$.metadata.header_strategy')"
+                "='tblHeader' OR json_extract(a.value, '$.metadata.row_index') "
+                "IN (SELECT value FROM json_each(?)))) "
+                "ORDER BY c.row_id LIMIT ?",
+                (
+                    revision.index_revision_id,
+                    document_version.document_id,
+                    document_version.document_version_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    table_node_id,
+                    canonical_json(row_indices),
+                    limit + 1,
+                ),
+            ).fetchall()
+        if len(rows) > limit:
+            return None
+        return tuple(str(row["chunk_id"]) for row in rows)
 
     def knowledge_base_scope(self, knowledge_base_id: str) -> tuple[str, str]:
         """读取知识库的 project 与 Profile 身份。

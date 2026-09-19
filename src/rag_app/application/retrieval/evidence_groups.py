@@ -619,10 +619,50 @@ def _group_candidate(
             {
                 "department_name": department,
                 "category_path": category,
+                "canonical_header_node_ids": _canonical_header_node_ids(
+                    members
+                ),
             }
         ),
     )
     return GroupCandidate(group, members, rerank_text)
+
+
+def _canonical_header_node_ids(
+    members: tuple[RankedChunk, ...],
+) -> list[str]:
+    """保留真实表头原节点映射，供目标成员选择而非正文首行猜测。"""
+    result: list[str] = []
+    for member in members:
+        chunk = member.hydrated.chunk
+        atoms = dict(chunk.metadata).get("atoms")
+        if not isinstance(atoms, (list, tuple)):
+            continue
+        for atom in atoms:
+            metadata = atom.get("metadata") if isinstance(atom, dict) else None
+            if not isinstance(metadata, dict):
+                continue
+            mapping = metadata.get("cell_source_node_ids")
+            if (
+                metadata.get("header_strategy") != "tblHeader"
+                or not isinstance(metadata.get("table_node_id"), str)
+                or type(metadata.get("row_index")) is not int
+                or not isinstance(mapping, dict)
+            ):
+                continue
+            for span in chunk.source_spans:
+                coordinate = _span_coordinate(span)
+                if (
+                    coordinate is None
+                    or span.is_repeated
+                    or coordinate[0] != metadata["row_index"]
+                    or span.node_id is None
+                ):
+                    continue
+                nodes = mapping.get(str(coordinate[1]))
+                if isinstance(nodes, (list, tuple)) and span.node_id in nodes:
+                    result.append(span.node_id)
+    return list(dict.fromkeys(result))
 
 
 def _chain_reasons(members: tuple[RankedChunk, ...]) -> tuple[str, ...]:

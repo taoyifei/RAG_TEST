@@ -44,7 +44,7 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v8"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v9"
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
 _STRUCTURED_GROUP_TYPES = frozenset(
     {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
@@ -130,6 +130,7 @@ class GenerationEvidencePack:
     trusted_source_groups: tuple[EvidenceGroup, ...] = ()
     per_atom_source_certificates: tuple[tuple[str, str, JsonObject], ...] = ()
     priority_source_units: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    reading_unit_reason_codes: tuple[str, ...] = ()
 
     @property
     def evidence(self) -> tuple[EvidenceItem, ...]:
@@ -651,6 +652,59 @@ def _reading_header(item: EvidenceItem, candidate: RankedChunk) -> bool:
     return False
 
 
+def _reading_seed_rank(
+    item: EvidenceItem, candidates: dict[str, RankedChunk]
+) -> int | None:
+    """同一规范行的命中值可选出行名，不给闭合来源伪造 rerank 分数。"""
+    if item.rerank_rank is not None:
+        return item.rerank_rank
+    candidate = candidates[item.chunk_id]
+    if candidate.expansion_reason != "TABLE_CANONICAL_RELATION_UNIT":
+        return None
+    cell = _reading_table_identity(item)
+    if cell is None:
+        return None
+    node = dict(item.metadata).get("table_logical_node_id")
+    ranks = [
+        seed.rerank_rank
+        for key in candidate.expansion_seed_ids
+        if (seed := candidates.get(key)) is not None
+        and seed.rerank_rank is not None
+        and _table_node_id(seed, cell[1]) == node
+        and seed.hydrated.chunk.version.document_version_id
+        == item.document_version_id
+    ]
+    return min(ranks, default=None)
+
+
+def _reading_header_columns(
+    item: EvidenceItem, candidate: RankedChunk
+) -> frozenset[int]:
+    """按规范单元格 grid span 展开祖先列头，不靠相邻列猜合并关系。"""
+    cell = _reading_table_identity(item)
+    if cell is None or not _reading_header(item, candidate):
+        return frozenset()
+    _table, row, column = cell
+    columns = {column}
+    atoms = dict(candidate.hydrated.chunk.metadata).get("atoms", [])
+    if not isinstance(atoms, (list, tuple)):
+        return frozenset(columns)
+    for atom in atoms:
+        metadata = atom.get("metadata") if isinstance(atom, dict) else None
+        if not isinstance(metadata, dict) or metadata.get("row_index") != row:
+            continue
+        coordinates = metadata.get("cell_coordinates", [])
+        if not isinstance(coordinates, (list, tuple)):
+            continue
+        for coordinate in coordinates:
+            match = re.fullmatch(
+                r"r(\d+):c(\d+):rs(\d+):cs(\d+)", str(coordinate)
+            )
+            if match and (int(match[1]), int(match[2])) == (row, column):
+                columns.update(range(column, column + int(match[4])))
+    return frozenset(columns)
+
+
 def _priority_reading_units(  # noqa: PLR0912, PLR0913
     *,
     query_plan: QueryPlan,
@@ -659,6 +713,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
     root_evidence: tuple[EvidenceItem, ...],
     atom_candidates_by_atom: tuple[tuple[str, tuple[EvidenceItem, ...]], ...],
     policy: RetrievalPolicy,
+    diagnostics: list[str] | None = None,
 ) -> tuple[tuple[str, tuple[tuple[object, ...], ...]], ...]:
     """在应用层选每个 Atom 的一个有界阅读单元，不认证回答语义。
 
@@ -669,6 +724,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
         root_evidence: 原检索器选中的 Root 阅读来源。
         atom_candidates_by_atom: 保留各 Atom 自身关系上下文的来源。
         policy: 已冻结的数量与预算约束。
+        diagnostics: 可选的缺失表头等结构诊断，仅供内部 SAFE Trace。
 
     Returns:
         owner 与必须一起阅读的稳定来源身份；表头保持独立引用。
@@ -703,7 +759,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
                 if (cell := _reading_table_identity(item)) is not None
                 and cell[2] == 0
                 and _source_matches(atom, item)
-                and item.rerank_rank is not None
+                and _reading_seed_rank(item, candidate_by_id) is not None
             ]
             for label in labels:
                 score = _reading_label_score(query, label.citation_text)
@@ -713,20 +769,46 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
                 # 目标行的有限阅读上下文，不宣称整行等于所问事实。
                 column_headers = headers.get(table, [])
                 requested_columns = {
-                    cell[2]
+                    column
                     for item in column_headers
-                    if (cell := _reading_table_identity(item)) is not None
-                    and _normalized(item.citation_text) in _normalized(query)
+                    if _normalized(item.citation_text) in _normalized(query)
+                    for column in _reading_header_columns(
+                        item, candidate_by_id[item.chunk_id]
+                    )
                 }
                 columns = (
                     requested_columns | {0} if requested_columns else set()
                 )
+                value_columns = {
+                    cell[2]
+                    for item in members
+                    if (cell := _reading_table_identity(item)) is not None
+                    and cell[2] > 0
+                    and (not columns or cell[2] in columns)
+                }
+                header_columns = {
+                    column
+                    for item in column_headers
+                    for column in _reading_header_columns(
+                        item, candidate_by_id[item.chunk_id]
+                    )
+                }
+                if not value_columns or not value_columns <= header_columns:
+                    if diagnostics is not None:
+                        diagnostics.append("TABLE_HEADER_MISSING")
+                    continue
                 related = tuple(
                     item
                     for item in (*members, *column_headers)
                     if not columns
                     or (_reading_table_identity(item) or ((), -1, -1))[2]
                     in columns
+                    or bool(
+                        columns
+                        & _reading_header_columns(
+                            item, candidate_by_id[item.chunk_id]
+                        )
+                    )
                 )
                 if (
                     len({item.chunk_id for item in related})
@@ -734,7 +816,16 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
                 ):
                     continue
                 focused.append(
-                    ((*score, -(label.rerank_rank or 2**31)), related)
+                    (
+                        (
+                            *score,
+                            -(
+                                _reading_seed_rank(label, candidate_by_id)
+                                or 2**31
+                            ),
+                        ),
+                        related,
+                    )
                 )
         if focused:
             selected = max(focused, key=lambda value: value[0])[1]
@@ -1217,6 +1308,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     ordinary_tokens = 0
     priority_keys: list[tuple[object, ...]] = []
     priority_tokens = 0
+    reading_unit_reasons: list[str] = []
     selected_priority_units: list[
         tuple[str, tuple[tuple[object, ...], ...]]
     ] = []
@@ -1250,6 +1342,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         root_evidence=root_evidence,
         atom_candidates_by_atom=atom_candidates_by_atom,
         policy=policy,
+        diagnostics=reading_unit_reasons,
     ):
         cells = {
             cell
@@ -1278,6 +1371,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             or ordinary_tokens + priority_tokens + cost
             > policy.generation_evidence_token_budget
         ):
+            reading_unit_reasons.append("TABLE_RELATION_UNIT_BUDGET_EXCEEDED")
             continue
         if new_keys:
             add_ordinary(new_keys[0])
@@ -1611,6 +1705,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             for owner, unit in selected_priority_units
             if set(unit) <= set(selected)
         ),
+        reading_unit_reason_codes=tuple(dict.fromkeys(reading_unit_reasons)),
     )
 
 

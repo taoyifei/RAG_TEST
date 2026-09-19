@@ -7,6 +7,7 @@ from typing import Protocol
 
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
+    DocumentVersionRef,
     HydratedChunk,
     KnowledgeBaseScope,
     RetrievalPolicy,
@@ -93,6 +94,22 @@ class EvidenceSourcePort(Protocol):
         Returns:
             稳定排序的 Chunk ID。
 
+        """
+        ...
+
+    def table_context_chunk_ids(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        document_version: DocumentVersionRef,
+        table_node_id: str,
+        row_indices: tuple[int, ...],
+        limit: int,
+    ) -> tuple[str, ...] | None:
+        """精确读取目标表的规范表头和指定完整行；超限返回 None。
+
+        调用方仍需校验每个返回原文节点的 part/story 与目标表身份。
+        不以章节首块或重复展示表头替代 canonical 原始来源。
         """
         ...
 
