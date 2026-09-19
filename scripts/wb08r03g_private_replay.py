@@ -9,6 +9,7 @@ import os
 import sqlite3
 import stat
 import sys
+import time
 import urllib.parse
 from collections.abc import Iterable
 from pathlib import Path
@@ -32,6 +33,12 @@ _CASE_IDS = (
 )
 _CANDIDATE_PORT = 8289
 _MAX_DRAFTS_PER_CASE = 2
+_TRACE_SETTLE_ATTEMPTS = 15
+_TRACE_SETTLE_INTERVAL_SECONDS = 0.2
+_TRACE_NONTERMINAL_STATUSES = frozenset({"PENDING", "STARTED", "RUNNING"})
+_TRACE_REQUIRED_TERMINAL_EVENTS = frozenset(
+    {"retrieval.claim_publication", "retrieval.complete"}
+)
 _TRACE_TABLES = ("query_history", "query_trace_events")
 _TRACE_COLUMNS = {
     "query_history": frozenset({"trace_id", "question_sha256", "status"}),
@@ -164,10 +171,20 @@ def read_trace_events(
             "WHERE trace_id=? ORDER BY sequence",
             (trace_id,),
         ).fetchall()
-    return tuple(
-        (str(event_name), json.loads(str(payload_json)))
-        for event_name, payload_json in rows
-    )
+    events: list[tuple[str, dict[str, Any]]] = []
+    for event_name, payload_json in rows:
+        payload = json.loads(str(payload_json))
+        if not isinstance(payload, dict):
+            raise ValueError("TRACE_PAYLOAD_INVALID")
+        raw_attributes = payload.get("attributes", payload)
+        try:
+            attributes = dict(raw_attributes)
+        except (TypeError, ValueError) as error:
+            raise ValueError("TRACE_ATTRIBUTES_INVALID") from error
+        if not all(isinstance(key, str) for key in attributes):
+            raise ValueError("TRACE_ATTRIBUTES_INVALID")
+        events.append((str(event_name), attributes))
+    return tuple(events)
 
 
 def read_history_identity(path: Path, trace_id: str) -> dict[str, str] | None:
@@ -185,6 +202,40 @@ def read_history_identity(path: Path, trace_id: str) -> dict[str, str] | None:
         "question_sha256": str(row[1]),
         "status": str(row[2]),
     }
+
+
+def read_settled_trace(
+    path: Path, trace_id: str
+) -> tuple[
+    tuple[tuple[str, dict[str, Any]], ...],
+    dict[str, str],
+]:
+    """等待 History 和必要终态事件落库后再返回 SAFE Trace 输入。
+
+    Args:
+        path: 已完成 Schema 检查的 Trace 数据库。
+        trace_id: 公共响应返回的 Trace ID。
+
+    Returns:
+        已解包的事件及完成态 History 身份。
+
+    Raises:
+        ValueError: 有限等待后仍未观察到完整终态。
+
+    """
+    for attempt in range(_TRACE_SETTLE_ATTEMPTS):
+        events = read_trace_events(path, trace_id)
+        history = read_history_identity(path, trace_id)
+        event_names = {name for name, _payload in events}
+        if (
+            history is not None
+            and history["status"] not in _TRACE_NONTERMINAL_STATUSES
+            and event_names >= _TRACE_REQUIRED_TERMINAL_EVENTS
+        ):
+            return events, history
+        if attempt + 1 < _TRACE_SETTLE_ATTEMPTS:
+            time.sleep(_TRACE_SETTLE_INTERVAL_SECONDS)
+    raise ValueError("TRACE_NOT_SETTLED")
 
 
 def _sha256_text(value: str) -> str:
@@ -355,16 +406,10 @@ def run(
             ):
                 raise ValueError("EXPECTED_PRIVATE_DRAFT_NOT_CAPTURED")
             trace_id = observed.get("trace_id")
-            events = (
-                read_trace_events(trace_db, trace_id)
-                if isinstance(trace_id, str)
-                else ()
-            )
-            history = (
-                read_history_identity(trace_db, trace_id)
-                if isinstance(trace_id, str)
-                else None
-            )
+            if isinstance(trace_id, str):
+                events, history = read_settled_trace(trace_db, trace_id)
+            else:
+                events, history = (), None
             private_stream.write(
                 json.dumps(
                     {
@@ -412,6 +457,7 @@ def run(
         + "\n",
         encoding="utf-8",
     )
+    safe_manifest.chmod(0o600)
     return manifest
 
 

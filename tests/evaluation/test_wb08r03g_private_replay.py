@@ -12,6 +12,7 @@ from scripts.wb08r03g_private_replay import (
     inspect_trace_schema,
     read_history_identity,
     read_private_drafts_since,
+    read_settled_trace,
     read_trace_events,
     safe_observation,
 )
@@ -32,16 +33,31 @@ def _trace_database(path: Path) -> None:
             "INSERT INTO query_history VALUES (?, ?, ?)",
             ("trace_1", "question-hash", "COMPLETED"),
         )
-        database.execute(
+        database.executemany(
             "INSERT INTO query_trace_events VALUES (?, ?, ?, ?)",
             (
-                "trace_1",
-                1,
-                "retrieval.atom_grounding",
-                '{"claim_rejection_diagnostics":[{'
-                '"raw_reason_code":"CLAIM_SUPPORT_OUTSIDE_ATOM",'
-                '"claim_sha256":"claim-hash"}],'
-                '"private_text":"不得进入 SAFE manifest"}',
+                (
+                    "trace_1",
+                    1,
+                    "retrieval.atom_grounding",
+                    '{"attributes": [['
+                    '"claim_rejection_diagnostics", [{'
+                    '"raw_reason_code":"CLAIM_SUPPORT_OUTSIDE_ATOM",'
+                    '"claim_sha256":"claim-hash"}]], ['
+                    '"private_text", "不得进入 SAFE manifest"]]}',
+                ),
+                (
+                    "trace_1",
+                    2,
+                    "retrieval.claim_publication",
+                    '{"attributes": []}',
+                ),
+                (
+                    "trace_1",
+                    3,
+                    "retrieval.complete",
+                    '{"attributes": []}',
+                ),
             ),
         )
 
@@ -55,14 +71,22 @@ def test_private_replay_inspects_schema_before_fixed_read(
     schema = inspect_trace_schema(database_path)
     events = read_trace_events(database_path, "trace_1")
     history = read_history_identity(database_path, "trace_1")
+    settled_events, settled_history = read_settled_trace(
+        database_path, "trace_1"
+    )
 
     assert set(schema) == {"query_history", "query_trace_events"}
     assert events[0][0] == "retrieval.atom_grounding"
+    assert events[0][1]["claim_rejection_diagnostics"][0][
+        "raw_reason_code"
+    ] == "CLAIM_SUPPORT_OUTSIDE_ATOM"
     assert history == {
         "trace_id": "trace_1",
         "question_sha256": "question-hash",
         "status": "COMPLETED",
     }
+    assert settled_events == events
+    assert settled_history == history
 
 
 def test_private_replay_rejects_wrong_trace_schema(tmp_path: Path) -> None:
