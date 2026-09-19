@@ -118,6 +118,35 @@ def test_untrusted_context_lines_cannot_supply_previous_target() -> None:
     assert root.mode == "CLARIFY"
 
 
+def test_local_topic_before_demonstrative_keeps_complete_question() -> None:
+    for question in (
+        "项目立项那堆材料先弄啥？",
+        "首单那会儿开发组要管哪些活？",
+    ):
+        request = _request(question)
+        root = resolve_root_query(request, build_input_spans(request))
+        assert root.mode == "ORIGINAL"
+        assert root.resolved_query == QueryAnalyzer().analyze(
+            request
+        ).resolved_query
+
+
+def test_demonstrative_without_local_topic_requires_clarification() -> None:
+    request = _request("那堆材料先弄啥？")
+    root = resolve_root_query(request, build_input_spans(request))
+    assert root.mode == "CLARIFY"
+
+
+def test_response_directive_is_excluded_from_root_and_spans() -> None:
+    request = _request("别引用，直接说采购金额门槛。")
+    spans = build_input_spans(request)
+    root = resolve_root_query(request, spans)
+
+    assert root.original_query == request.text
+    assert root.resolved_query == "直接说采购金额门槛。"
+    assert all("别引用" not in span.text for span in spans)
+
+
 def test_stage_modifier_keeps_shared_target_and_short_current_relations() -> (
     None
 ):

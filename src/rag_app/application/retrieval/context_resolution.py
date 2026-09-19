@@ -20,7 +20,7 @@ from rag_app.core.models.query_plan import (
     make_query_plan,
 )
 
-CONTEXT_RESOLUTION_REVISION = "wb08r-context-resolution-v2"
+CONTEXT_RESOLUTION_REVISION = "wb08r-context-resolution-v3"
 _CLAUSES = re.compile(r"[^，,；;。！？?!]+")
 _REFERENCES = re.compile(r"这个|那个|上述|前者|后者|其中|它|其|这些|那些|那")
 _SHORT_RELATION = re.compile(
@@ -51,7 +51,10 @@ _TIME_MODIFIER = re.compile(
     r"^(提前|之后|之前|以后|以前|还|再|又|那|这|同时|同时在)$"
 )
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
-_NEGATION = re.compile(r"不得|无需|不必|禁止|严禁|没有|未|不")
+_HAN = re.compile(r"[\u4e00-\u9fff]")
+_NEGATION = re.compile(
+    r"不得|无需|不必|禁止|严禁|没有|未|不(?![呢吗呀啊]?$)"
+)
 _SEQUENCE = re.compile(r"先|再|然后|随后")
 _MIN_SEQUENCE_PARTS = 2
 _MAX_ATOMS = 4
@@ -105,7 +108,7 @@ def trusted_user_questions(context: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(questions)
 
 
-def build_input_spans(  # noqa: PLR0912
+def build_input_spans(  # noqa: PLR0912, PLR0915
     request: SearchRequest,
 ) -> tuple[QueryInputSpan, ...]:
     """从当前问题和最多两轮用户问句构造稳定 ID。"""
@@ -117,18 +120,18 @@ def build_input_spans(  # noqa: PLR0912
     for turn_index, question in enumerate(questions):
         prefix = "Q" if turn_index == 0 else f"P{turn_index}"
         turn = "CURRENT" if turn_index == 0 else f"PREVIOUS_{turn_index}"
-        normalized = unicodedata.normalize("NFKC", question).strip()
+        whole_analysis = QueryAnalyzer().analyze(
+            request.model_copy(
+                update={"text": question, "conversation_context": ()}
+            )
+        )
+        normalized = whole_analysis.resolved_query.strip()
         clauses = tuple(
             match[0].strip()
             for match in _CLAUSES.finditer(normalized)
             if match[0].strip()
         )
         _append(spans, prefix, turn, SpanKind.CLAUSE, clauses or (normalized,))
-        whole_analysis = QueryAnalyzer().analyze(
-            request.model_copy(
-                update={"text": normalized, "conversation_context": ()}
-            )
-        )
         if whole_analysis.semantics.source_qualifier:
             _append(
                 spans,
@@ -137,7 +140,7 @@ def build_input_spans(  # noqa: PLR0912
                 SpanKind.SOURCE,
                 (whole_analysis.semantics.source_qualifier,),
             )
-        for clause in clauses or (normalized,):
+        for clause_index, clause in enumerate(clauses or (normalized,)):
             analyzed = QueryAnalyzer().analyze(
                 request.model_copy(
                     update={"text": clause, "conversation_context": ()}
@@ -190,13 +193,18 @@ def build_input_spans(  # noqa: PLR0912
                     for part in before_relation.split("、")
                     if part.strip()
                 )
+            current_targets = tuple(
+                span
+                for span in spans
+                if span.turn == turn and span.kind is SpanKind.TARGET
+            )
+            only_fallback_targets = bool(current_targets) and all(
+                span.text in clauses[:clause_index] for span in current_targets
+            )
             if (
                 not targets
                 and turn_index == 0
-                and not any(
-                    span.turn == turn and span.kind is SpanKind.TARGET
-                    for span in spans
-                )
+                and (not current_targets or only_fallback_targets)
                 and not _PRONOUN_TARGET.match(_clean_target(clause))
             ):
                 # 没有可可靠切分的对象时保留原 Clause，供 Planner 选择；
@@ -269,7 +277,9 @@ def resolve_root_query(
     request: SearchRequest, spans: tuple[QueryInputSpan, ...]
 ) -> ResolvedRootQuery:
     """仅在先行对象唯一时组合短追问；歧义交给服务端澄清。"""
-    original = unicodedata.normalize("NFKC", request.text).strip()
+    original = unicodedata.normalize(
+        "NFKC", QueryAnalyzer().analyze(request).resolved_query
+    ).strip()
     digest = canonical_sha256(
         trusted_user_questions(request.conversation_context)
     )
@@ -311,14 +321,26 @@ def resolve_root_query(
             for other in current_antecedent_candidates
         )
     )
+    reference = _REFERENCES.search(original)
+    local_topic_before_reference = (
+        reference is not None
+        and len(_HAN.findall(original[: reference.start()]))
+        >= _MIN_TARGET_CHARS
+        and len({span.text for span in current_antecedents}) == 1
+    )
     if (
         not previous_targets
-        and len(current_clauses) > 1
-        and len({span.text for span in current_antecedents}) == 1
+        and (
+            local_topic_before_reference
+            or (
+                len(current_clauses) > 1
+                and len({span.text for span in current_antecedents}) == 1
+            )
+        )
     ):
         return ResolvedRootQuery(
             original_query=request.text,
-            resolved_query=request.text.strip()[:512],
+            resolved_query=original[:512],
             mode="ORIGINAL",
             confidence="HIGH",
             context_digest=digest,
@@ -341,7 +363,7 @@ def resolve_root_query(
     if not needs_context:
         return ResolvedRootQuery(
             original_query=request.text,
-            resolved_query=request.text.strip()[:512],
+            resolved_query=original[:512],
             mode="ORIGINAL",
             confidence="HIGH",
             context_digest=digest,
@@ -350,7 +372,7 @@ def resolve_root_query(
     if len(unique_targets) != 1 or not current_relation:
         return ResolvedRootQuery(
             original_query=request.text,
-            resolved_query=request.text.strip()[:512],
+            resolved_query=original[:512],
             mode="CLARIFY",
             confidence="LOW",
             context_digest=digest,
@@ -376,7 +398,7 @@ def resolve_root_query(
     ):
         return ResolvedRootQuery(
             original_query=request.text,
-            resolved_query=request.text.strip()[:512],
+            resolved_query=original[:512],
             mode="CLARIFY",
             confidence="LOW",
             context_digest=digest,

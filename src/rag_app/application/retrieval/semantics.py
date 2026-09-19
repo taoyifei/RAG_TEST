@@ -20,7 +20,7 @@ _DUTY_ACTION = (
     r"(?:(?:都|主要)?(?:要|需要|得)?)(?:是)?干"
     r"(?:什么|啥|嘛|些(?:什么|啥)?)(?:的)?|"
     r"(?:(?:都|主要)?(?:要|需要|得)?)(?:是)?(?:做|管)"
-    r"(?:什么|啥|些(?:什么|啥)?|哪些)(?:事|工作|事项|内容)?(?:的)?)"
+    r"(?:什么|啥|些(?:什么|啥)?|哪些)(?:事|活|工作|事项|内容)?(?:的)?)"
 )
 _DUTY_CONNECTOR = (
     r"(?:\s+|[，,、/；;]\s*|(?:以及|并且|还有|和|及)\s*|"
@@ -63,8 +63,14 @@ _PROCEDURE_QUESTION = re.compile(
 )
 _LEADING_REQUEST = re.compile(
     r"^(?:请查一下|帮我查一下|查一下|请问|请告诉我|告诉我|我想知道|"
-    r"请帮我|请介绍|请说明|"
+    r"请帮我|请介绍|请说明|直接说|"
     r"请解释|请列举|请列出|请)"
+)
+_LEADING_RESPONSE_DIRECTIVE = re.compile(
+    r"^\s*(?:别|不要|无需)\s*"
+    r"(?:引用|标注|附上|给出|提供)"
+    r"(?:资料|原文|文档|证据|出处|来源|引用)?"
+    r"(?:编号|标识|ID|id)?\s*[，,：:]\s*"
 )
 _TRAILING_TARGET_SYNTAX = re.compile(
     rf"(?:的)?(?:第{_NUMERAL}(?:种|类|项|步|条)|"
@@ -114,9 +120,15 @@ _NATURAL_PURPOSE_QUESTION = re.compile(
 _RESPONSIBLE_SUFFIX = re.compile(
     r"^(?P<target>.+?)(?:这(?:件)?事)?(?:到底|究竟)?"
     r"(?:(?:应该|应当|应|要|该|需要)?(?:找|由|归)?谁(?:来)?"
-    r"(?:负责|牵头|管理|受理)?|"
+    r"(?:负责|牵头|管理|受理|管)?|"
     r"(?:的)?(?:责任角色|责任人|负责人|牵头人|主责角色)"
     r"(?:是|为)?(?:谁|哪位))$"
+)
+_PREREQUISITE_ENUMERATION = re.compile(
+    r"^(?:做|办|搞|弄|进行)?(?P<target>.+?)(?:前|之前)"
+    r"(?:到底)?(?:得|要|需要|应当|应该|应)?"
+    r"(?P<relation>备齐|备好|准备|提供|提交)"
+    r"(?:什么|啥|哪些)(?:材料|东西|内容)?$"
 )
 _RESPONSIBLE_PREFIX = re.compile(
     r"^(?:由)?谁(?:来)?(?:负责|牵头|管理|受理)(?P<target>.+)$"
@@ -204,7 +216,7 @@ _FACT_ATTRIBUTE_SUFFIX = re.compile(
     r"允许偏差|偏差|比例|百分比|保管期限|保存期限|借阅期限|期限|"
     r"维护周期|校准周期|检验周期|检查周期|保养周期|复核周期|更新周期|"
     r"轮换周期|当前有效版本|现行版本|当前版本|有效版本|版本|"
-    r"日期|时间|数据库品牌|品牌|型号|单位|数值)$"
+    r"日期|时间|数据库品牌|品牌|型号|单位|数值|金额门槛|门槛|阈值)$"
 )
 _GENERIC_ENUMERATION = re.compile(
     r"^(?P<target>.+?)(?:都)?(?:有|包含)?"
@@ -249,6 +261,10 @@ _LEADING_PROJECT_CONTEXT = re.compile(
     r"^(?:在|做|进行|处理)?(?P<context>[^，,]{1,40}?)"
     r"项目(?:时|的时候)[，,]"
 )
+_TRAILING_ROLE_MODAL = re.compile(r"(?:要|得|需要|应该|应当|应)$")
+_TEMPORAL_ROLE_CONTEXT = re.compile(
+    r"^.+?(?:时|那会儿|期间)(?P<target>[^，,]{1,40})$"
+)
 
 
 def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
@@ -268,7 +284,39 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         normalized
     )
     normalized = strip_trailing_response_directive(normalized)
+    request_style = _LEADING_REQUEST.match(normalized) is not None
     core = _question_core(normalized)
+
+    prerequisite = _PREREQUISITE_ENUMERATION.fullmatch(core)
+    if prerequisite is not None:
+        target, source = _target_and_source(prerequisite["target"])
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source or explicit_source,
+                relation=prerequisite["relation"],
+                answer_type=RequestedAnswerType.ENUMERATION,
+                source="RULE",
+                reason_codes=("PREREQUISITE_ENUMERATION_QUESTION_SYNTAX",),
+            )
+
+    bare_attribute = _FACT_ATTRIBUTE_SUFFIX.search(core)
+    if (
+        request_style
+        and bare_attribute is not None
+        and bare_attribute.end() == len(core)
+    ):
+        raw_target = core[: bare_attribute.start()].removesuffix("的")
+        target, source = _target_and_source(raw_target or core)
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source or explicit_source,
+                relation=bare_attribute.group(0),
+                answer_type=RequestedAnswerType.FACT,
+                source="RULE",
+                reason_codes=("FACT_ATTRIBUTE_REQUEST_SYNTAX",),
+            )
 
     fill_blank = _QUOTED_FILL_BLANK.fullmatch(core)
     if fill_blank is not None:
@@ -770,6 +818,10 @@ def _clean_target(value: str, *, duty: bool) -> str:
         target = _TRAILING_TARGET_SYNTAX.sub("", target).strip()
         target = _TRAILING_PARTICLES.sub("", target).strip(" \t\r\n，,：:；;")
     if duty:
+        target = _TRAILING_ROLE_MODAL.sub("", target).strip()
+        temporal = _TEMPORAL_ROLE_CONTEXT.fullmatch(target)
+        if temporal is not None:
+            target = temporal["target"].strip()
         target = re.split(r"(?:规范|文档|制度|手册)(?:里|中)", target)[-1]
         target = _LEADING_CONTEXT_CLAUSE.sub("", target).strip()
         target = re.sub(r"(?:的)?(?:主要|核心|具体)$", "", target).strip()
@@ -791,8 +843,9 @@ def _fill_blank_anchor(template: str) -> str:
 
 
 def strip_trailing_response_directive(value: str) -> str:
-    """排除问号后的纯回答方式指令，保留新增业务条件。"""
+    """排除前后纯回答方式指令，保留新增业务条件。"""
     core = value.strip()
+    core = _LEADING_RESPONSE_DIRECTIVE.sub("", core)
     for marker in re.finditer(r"[?？]", core):
         if _TRAILING_RESPONSE_DIRECTIVE.fullmatch(core[marker.end() :]):
             return core[: marker.end()].rstrip()

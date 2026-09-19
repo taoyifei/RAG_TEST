@@ -22,11 +22,17 @@ from rag_app.core.models.query_plan import (
 _VERSION = re.compile(r"(?i)(?<![a-z0-9])v\d+(?:\.\d+)*(?![a-z0-9])")
 _DATE = re.compile(r"\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
-_NEGATION = re.compile(r"不得|无需|不必|禁止|严禁|没有|未|不")
+_NEGATION = re.compile(
+    r"不得|无需|不必|禁止|严禁|没有|未|不(?![呢吗呀啊]?$)"
+)
 _UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年|万元|元|%|％|千克|公斤|米)")
 _DURATION_UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年)")
 _CONTEXT_MODIFIER = re.compile(
     r"^(?:(?:根据|依据|按照)《[^》]+》|.+从.+到.+(?:后|前|期间))$"
+)
+_INTERROGATIVE_CLAUSE = re.compile(
+    r"谁|什么|啥|哪些|哪(?:个|些|里|一)|多少|多久|怎么|如何|怎样|"
+    r"何时|什么时候|是否|能否|可否|[吗呢]$|不$"
 )
 
 
@@ -108,10 +114,18 @@ def build_query_atoms(
         for span in spans
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
     )
+    has_interrogative_clause = any(
+        _INTERROGATIVE_CLAUSE.search(span.text) for span in current_clauses
+    )
     modifier_clauses = tuple(
         span
-        for span in current_clauses
+        for index, span in enumerate(current_clauses)
         if _CONTEXT_MODIFIER.fullmatch(span.text)
+        or (
+            has_interrogative_clause
+            and index < len(current_clauses) - 1
+            and _INTERROGATIVE_CLAUSE.search(span.text) is None
+        )
     )
     required_clauses = tuple(
         span for span in current_clauses if span not in modifier_clauses

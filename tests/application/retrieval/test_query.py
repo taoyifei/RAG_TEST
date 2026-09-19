@@ -742,6 +742,54 @@ def test_pure_response_directive_is_not_an_answer_constraint() -> None:
     assert "RESPONSE_DIRECTIVE_EXCLUDED" in analysis.reason_codes
 
 
+def test_leading_no_citation_directive_is_not_a_business_clause() -> None:
+    analysis = _analyze("别引用，直接说采购金额门槛。")
+
+    assert analysis.resolved_query == "直接说采购金额门槛。"
+    assert analysis.semantics.target == "采购"
+    assert analysis.semantics.relation == "金额门槛"
+    assert analysis.semantics.answer_type is RequestedAnswerType.FACT
+    assert all(
+        constraint.raw_text != "别"
+        for constraint in analysis.semantics.constraints
+    )
+    assert "RESPONSE_DIRECTIVE_EXCLUDED" in analysis.reason_codes
+
+
+def test_colloquial_terminal_bu_is_a_question_particle() -> None:
+    analysis = _analyze("钱能放明年报不？")
+
+    assert analysis.negation_signals == ()
+    assert all(
+        constraint.kind.value != "NEGATION"
+        for constraint in analysis.semantics.constraints
+    )
+
+
+def test_colloquial_prerequisite_question_has_typed_semantics() -> None:
+    analysis = _analyze("做快验前到底得备齐啥？")
+
+    assert analysis.semantics.target == "快验"
+    assert analysis.semantics.relation == "备齐"
+    assert analysis.semantics.answer_type is RequestedAnswerType.ENUMERATION
+
+
+def test_temporal_duty_question_keeps_role_as_target() -> None:
+    analysis = _analyze("首单那会儿开发组要管哪些活？")
+
+    assert analysis.semantics.target == "开发组"
+    assert analysis.semantics.answer_type is RequestedAnswerType.DUTIES
+
+
+def test_colloquial_responsible_party_uses_the_managed_object() -> None:
+    analysis = _analyze("办公室用品归谁管？")
+
+    assert analysis.semantics.target == "办公室用品"
+    assert (
+        analysis.semantics.answer_type is RequestedAnswerType.RESPONSIBLE_PARTY
+    )
+
+
 def test_response_directive_free_variant_reaches_retrieval() -> None:
     """原问保留供审计，纯作答方式不污染补充检索变体。"""
     analysis = _analyze("“一般”对应的内容是什么？请仅依据原文完整作答。")

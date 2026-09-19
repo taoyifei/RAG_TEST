@@ -662,6 +662,10 @@ def _validate_claim_target(
         analysis is None
         or analysis.semantics.answer_type is not RequestedAnswerType.DUTIES
         or not analysis.semantics.target
+        or _STANDALONE_SUBJECT.fullmatch(
+            analysis.semantics.target.strip()
+        )
+        is None
     ):
         return
     clauses = _clauses_with_subject(claim.text)
