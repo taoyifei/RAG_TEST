@@ -7,18 +7,23 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
+import sys
 import urllib.parse
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from evaluation.wanshitong.v2.run_wb08r03_candidate import (
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from evaluation.wanshitong.v2.run_wb08r03_candidate import (  # noqa: E402
     _cases,
     _chat,
     _session,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
 _CASE_IDS = (
     "WB08R-N-031",
     "WB08R-N-033",
@@ -26,6 +31,7 @@ _CASE_IDS = (
     "WB08R-F-013",
 )
 _CANDIDATE_PORT = 8289
+_MAX_DRAFTS_PER_CASE = 2
 _TRACE_TABLES = ("query_history", "query_trace_events")
 _TRACE_COLUMNS = {
     "query_history": frozenset({"trace_id", "question_sha256", "status"}),
@@ -198,12 +204,14 @@ def _safe_trace_value(key: str, value: object) -> object:
     ]
 
 
-def safe_observation(
+def safe_observation(  # noqa: PLR0913
     case_id: str,
     question: str,
     observed: dict[str, Any],
     events: Iterable[tuple[str, dict[str, Any]]],
     history: dict[str, str] | None,
+    *,
+    private_draft_count: int = 0,
 ) -> dict[str, Any]:
     """从私有响应生成只含身份、摘要和原因的 SAFE 记录。"""
     answer = str(observed.get("answer") or "")
@@ -236,15 +244,53 @@ def safe_observation(
             if isinstance(item, dict)
         ],
         "history_identity": history or "NOT_OBSERVED",
+        "private_draft_count": private_draft_count,
         "trace_events": safe_events,
     }
 
 
-def _write_private_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        for row in rows:
-            stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+def read_private_drafts_since(
+    path: Path, offset: int
+) -> tuple[tuple[dict[str, Any], ...], int]:
+    """从已落盘偏移读取本题新增的私有模型草稿。
+
+    Args:
+        path: 候选进程写入的所有者专用 NDJSON 文件。
+        offset: 发出本题请求前的已读字节偏移。
+
+    Returns:
+        新增草稿记录与新的文件末尾偏移。
+
+    Raises:
+        ValueError: 文件权限、长度、换行或记录 Schema 不满足合同。
+
+    """
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("PRIVATE_DRAFT_CAPTURE_NOT_FOUND")
+    metadata = path.stat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+    ):
+        raise ValueError("PRIVATE_DRAFT_CAPTURE_PERMISSIONS")
+    if metadata.st_size < offset:
+        raise ValueError("PRIVATE_DRAFT_CAPTURE_TRUNCATED")
+    with path.open("rb") as stream:
+        stream.seek(offset)
+        encoded = stream.read()
+        new_offset = stream.tell()
+    if encoded and not encoded.endswith(b"\n"):
+        raise ValueError("PRIVATE_DRAFT_CAPTURE_PARTIAL_RECORD")
+    rows: list[dict[str, Any]] = []
+    for line in encoded.splitlines():
+        value = json.loads(line)
+        if (
+            not isinstance(value, dict)
+            or value.get("schema_version") != "private-grounded-draft-v1"
+        ):
+            raise ValueError("PRIVATE_DRAFT_CAPTURE_SCHEMA_MISMATCH")
+        rows.append(value)
+    return tuple(rows), new_offset
 
 
 def _validate_private_path(private_dir: Path) -> None:
@@ -257,6 +303,7 @@ def run(
     *,
     base_url: str,
     trace_db: Path,
+    raw_drafts: Path,
     private_dir: Path,
     safe_manifest: Path,
 ) -> dict[str, Any]:
@@ -270,6 +317,9 @@ def run(
         raise ValueError("ONLY_8289_LOOPBACK_CANDIDATE_ALLOWED")
     _validate_private_path(private_dir)
     schema = inspect_trace_schema(trace_db)
+    private_drafts, raw_offset = read_private_drafts_since(raw_drafts, 0)
+    if private_drafts or raw_offset:
+        raise ValueError("PRIVATE_DRAFT_CAPTURE_NOT_EMPTY")
     selected = _cases(frozenset(_CASE_IDS))
     selected_ids = tuple(row["case_id"] for _group, row in selected)
     if set(selected_ids) != set(_CASE_IDS) or len(selected_ids) != len(
@@ -278,52 +328,79 @@ def run(
         raise ValueError("FROZEN_CASE_SET_MISMATCH")
     private_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
     private_dir.chmod(0o700)
-    private_rows: list[dict[str, Any]] = []
-    safe_rows: list[dict[str, Any]] = []
-    for _group, case in selected:
-        opener, csrf = _session(base_url)
-        observed = _chat(
-            opener,
-            csrf,
-            base_url,
-            f"wb08r03g-{case['case_id'].lower()}",
-            str(case["question"]),
-        )
-        trace_id = observed.get("trace_id")
-        events = (
-            read_trace_events(trace_db, trace_id)
-            if isinstance(trace_id, str)
-            else ()
-        )
-        history = (
-            read_history_identity(trace_db, trace_id)
-            if isinstance(trace_id, str)
-            else None
-        )
-        private_rows.append(
-            {
-                "case": case,
-                "observed": observed,
-                "trace_events": events,
-            }
-        )
-        safe_rows.append(
-            safe_observation(
-                str(case["case_id"]),
-                str(case["question"]),
-                observed,
-                events,
-                history,
-            )
-        )
     private_output = private_dir / "private-replay.ndjson"
-    _write_private_jsonl(private_output, private_rows)
+    descriptor = os.open(
+        private_output,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    safe_rows: list[dict[str, Any]] = []
+    with os.fdopen(descriptor, "w", encoding="utf-8") as private_stream:
+        for _group, case in selected:
+            opener, csrf = _session(base_url)
+            observed = _chat(
+                opener,
+                csrf,
+                base_url,
+                f"wb08r03g-{case['case_id'].lower()}",
+                str(case["question"]),
+            )
+            captured_drafts, raw_offset = read_private_drafts_since(
+                raw_drafts, raw_offset
+            )
+            if len(captured_drafts) > _MAX_DRAFTS_PER_CASE:
+                raise ValueError("UNEXPECTED_PRIVATE_DRAFT_COUNT")
+            if case["case_id"] in {"WB08R-N-031", "WB08R-N-033"} and not (
+                captured_drafts
+            ):
+                raise ValueError("EXPECTED_PRIVATE_DRAFT_NOT_CAPTURED")
+            trace_id = observed.get("trace_id")
+            events = (
+                read_trace_events(trace_db, trace_id)
+                if isinstance(trace_id, str)
+                else ()
+            )
+            history = (
+                read_history_identity(trace_db, trace_id)
+                if isinstance(trace_id, str)
+                else None
+            )
+            private_stream.write(
+                json.dumps(
+                    {
+                        "case": case,
+                        "observed": observed,
+                        "raw_generation_drafts": captured_drafts,
+                        "trace_events": events,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            private_stream.flush()
+            os.fsync(private_stream.fileno())
+            safe_rows.append(
+                safe_observation(
+                    str(case["case_id"]),
+                    str(case["question"]),
+                    observed,
+                    events,
+                    history,
+                    private_draft_count=len(captured_drafts),
+                )
+            )
     manifest = {
         "schema_version": "wb08r03g-safe-replay-v1",
         "case_ids": list(_CASE_IDS),
-        "request_count": len(private_rows),
+        "request_count": len(safe_rows),
         "retry_count": 0,
         "trace_schema": schema,
+        "private_draft_capture_count": sum(
+            int(row["private_draft_count"]) for row in safe_rows
+        ),
+        "private_draft_capture_sha256": hashlib.sha256(
+            raw_drafts.read_bytes()
+        ).hexdigest(),
         "private_output_sha256": hashlib.sha256(
             private_output.read_bytes()
         ).hexdigest(),
@@ -343,12 +420,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8289")
     parser.add_argument("--trace-db", type=Path, required=True)
+    parser.add_argument("--raw-drafts", type=Path, required=True)
     parser.add_argument("--private-dir", type=Path, required=True)
     parser.add_argument("--safe-manifest", type=Path, required=True)
     args = parser.parse_args()
     manifest = run(
         base_url=args.base_url.rstrip("/"),
         trace_db=args.trace_db,
+        raw_drafts=args.raw_drafts,
         private_dir=args.private_dir,
         safe_manifest=args.safe_manifest,
     )

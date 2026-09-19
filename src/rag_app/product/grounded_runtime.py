@@ -78,6 +78,7 @@ from rag_app.core.ports import CancellationPort, GenerationRequest
 from rag_app.core.ports.query_interpret import InterpretOutcome
 from rag_app.core.ports.query_rewrite import RewriteOutcome
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
+from rag_app.product.private_replay import PrivateReplayDraftRecorder
 from rag_app.product.provider_runtime import ProviderRuntimeRegistry
 from rag_app.product.structured_json import extract_json_object
 
@@ -181,11 +182,27 @@ class ProductGroundedModel:
         knowledge_base_id: str,
         connections: SqliteConnectionFactory,
         providers: ProviderRuntimeRegistry,
+        *,
+        private_replay_recorder: PrivateReplayDraftRecorder | None = None,
     ) -> None:
+        """绑定模型、知识库授权与可选的受控私有草稿记录器。
+
+        Args:
+            settings: 当前知识库的回答模型设置。
+            knowledge_base_id: 当前知识库身份。
+            connections: 产品 SQLite 连接工厂。
+            providers: 已配置 Provider 运行时注册表。
+            private_replay_recorder: 默认关闭的受控私有草稿记录器。
+
+        Returns:
+            无返回值。
+
+        """
         self.settings = settings
         self.knowledge_base_id = knowledge_base_id
         self.connections = connections
         self.providers = providers
+        self._private_replay_recorder = private_replay_recorder
         with connections.transaction() as connection:
             row = connection.execute(
                 "SELECT project_id FROM knowledge_bases "
@@ -375,11 +392,14 @@ class ProductGroundedModel:
                 lambda adapter: adapter.generate(request),
                 can_rotate=lambda: request.query_plan is None,
             )
-        return draft.model_copy(
+        result = draft.model_copy(
             update={
                 "provider_calls": (*failed_calls, *draft.provider_calls),
             }
         )
+        if self._private_replay_recorder is not None:
+            self._private_replay_recorder.record(request, result)
+        return result
 
     def generate_stream(
         self,
@@ -418,11 +438,14 @@ class ProductGroundedModel:
                     request.query_plan is None and emitted_count == 0
                 ),
             )
-        return draft.model_copy(
+        result = draft.model_copy(
             update={
                 "provider_calls": (*failed_calls, *draft.provider_calls),
             }
         )
+        if self._private_replay_recorder is not None:
+            self._private_replay_recorder.record(request, result)
+        return result
 
     def _source_hashes(self, request: GenerationRequest) -> tuple[str, ...]:
         """重新核对本次证据仍属于当前活动知识库版本。"""

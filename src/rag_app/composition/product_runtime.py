@@ -116,6 +116,7 @@ from rag_app.product.ocr_adapters import (
 )
 from rag_app.product.ocr_enrichment import ProductOcrEnrichment
 from rag_app.product.pdf_parsing import ProductPdfParsing
+from rag_app.product.private_replay import PrivateReplayDraftRecorder
 from rag_app.product.provider_runtime import (
     ProviderRuntimeRegistry,
     TransportFactory,
@@ -630,6 +631,7 @@ class ProductProfileResolver:
             [RetrievalProfileRevision, EgressPolicy], EgressPolicy
         ]
         | None = None,
+        private_replay_recorder: PrivateReplayDraftRecorder | None = None,
         evidence_group_mode: Literal["off", "shadow", "active"] = "off",
         contextual_rerank_mode: Literal["off", "active"] = "off",
     ) -> None:
@@ -646,6 +648,7 @@ class ProductProfileResolver:
             content_identity: PDF、图片 OCR 与图关系的统一内容身份。
             circuit_factory: 仅测试可注入的 Circuit 工厂。
             acceptance_egress_resolver: 受信任验收入口的有效累计授权解析器。
+            private_replay_recorder: 默认关闭的受控私有模型草稿记录器。
             evidence_group_mode: 当前实例的结构组 off/shadow/active 开关。
             contextual_rerank_mode: 当前实例的确定性重排上下文开关。
 
@@ -669,6 +672,7 @@ class ProductProfileResolver:
         ] = {}
         self._circuit_factory = circuit_factory
         self._acceptance_egress_resolver = acceptance_egress_resolver
+        self._private_replay_recorder = private_replay_recorder
         self._evidence_group_mode = evidence_group_mode
         self._contextual_rerank_mode = contextual_rerank_mode
         self._controlled_scope: ContextVar[_ControlledPilotScope | None] = (
@@ -1437,12 +1441,21 @@ class ProductProfileResolver:
         existing = self._grounded_models.get(key)
         if existing is not None:
             return existing
-        model = ProductGroundedModel(
-            settings,
-            knowledge_base_id,
-            self._models.connections,
-            self._providers,
-        )
+        if self._private_replay_recorder is None:
+            model = ProductGroundedModel(
+                settings,
+                knowledge_base_id,
+                self._models.connections,
+                self._providers,
+            )
+        else:
+            model = ProductGroundedModel(
+                settings,
+                knowledge_base_id,
+                self._models.connections,
+                self._providers,
+                private_replay_recorder=self._private_replay_recorder,
+            )
         generation = _ResourceGeneration(
             knowledge_base_id=knowledge_base_id,
             resource=model,
@@ -2199,6 +2212,9 @@ def build_product_runtime(  # noqa: PLR0915
         content_identity=_content_identity,
         circuit_factory=circuit_factory,
         acceptance_egress_resolver=acceptance_egress_resolver,
+        private_replay_recorder=(
+            PrivateReplayDraftRecorder.from_environment()
+        ),
         evidence_group_mode=settings.evidence_group_mode,
         contextual_rerank_mode=settings.contextual_rerank_mode,
     )

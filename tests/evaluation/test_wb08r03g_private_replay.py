@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from scripts.wb08r03g_private_replay import (
     inspect_trace_schema,
     read_history_identity,
+    read_private_drafts_since,
     read_trace_events,
     safe_observation,
 )
@@ -110,3 +112,34 @@ def test_safe_observation_keeps_hashes_and_drops_raw_text() -> None:
     assert "不得进入 SAFE manifest 的 Claim" not in serialized
     assert "CLAIM_SUPPORT_OUTSIDE_ATOM" in serialized
     assert observation["history_identity"] == "NOT_OBSERVED"
+
+
+def test_private_draft_reader_returns_only_appended_complete_records(
+    tmp_path: Path,
+) -> None:
+    """逐题请求可按字节边界关联候选进程刚写入的原始草稿。"""
+    capture = tmp_path / "raw-generation-drafts.ndjson"
+    first = {
+        "schema_version": "private-grounded-draft-v1",
+        "sequence": 1,
+        "draft": {"natural_claims": [{"text": "合成事实一"}]},
+    }
+    second = {
+        "schema_version": "private-grounded-draft-v1",
+        "sequence": 2,
+        "draft": {"natural_claims": [{"text": "合成事实二"}]},
+    }
+    capture.write_text(
+        json.dumps(first, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    capture.chmod(0o600)
+
+    first_rows, offset = read_private_drafts_since(capture, 0)
+    with capture.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(second, ensure_ascii=False) + "\n")
+    second_rows, final_offset = read_private_drafts_since(capture, offset)
+
+    assert [row["sequence"] for row in first_rows] == [1]
+    assert [row["sequence"] for row in second_rows] == [2]
+    assert final_offset == capture.stat().st_size
