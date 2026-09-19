@@ -124,17 +124,46 @@ class _HttpHarness:
             }
         else:
             assert "candidates" in data
+            source_quotes = {
+                item["source_id"]: item["quotes"][0]
+                for item in data["evidence"]
+            }
             payload = {
                 "results": [
                     {
                         "claim_id": candidate["claim_id"],
                         "status": "supported",
-                        "supports": candidate["supports"],
-                        "covered_scope": {
-                            "subject": "员工",
-                            "relation": "报销",
-                            "stage": "",
-                            "conditions": ["证书领取年份"],
+                        "fact_source_ids": candidate["fact_source_ids"],
+                        "source_scope": {
+                            "relation_label": "报销",
+                            "subject_anchors": [
+                                {
+                                    "source_id": source_id,
+                                    "quote": source_quotes[source_id],
+                                }
+                                for source_id in candidate[
+                                    "fact_source_ids"
+                                ]
+                            ],
+                            "relation_anchors": [
+                                {
+                                    "source_id": source_id,
+                                    "quote": source_quotes[source_id],
+                                }
+                                for source_id in candidate[
+                                    "fact_source_ids"
+                                ]
+                            ],
+                            "stage_anchors": [],
+                            "condition_anchors": [
+                                {
+                                    "source_id": source_id,
+                                    "quote": source_quotes[source_id],
+                                }
+                                for source_id in candidate[
+                                    "fact_source_ids"
+                                ]
+                            ],
                         },
                     }
                     for candidate in data["candidates"]
@@ -271,6 +300,25 @@ def test_failed_review_records_attempt_but_never_publishes(
     assert outcome.repair_calls == 0
     assert len(harness.sent) == len(outcome.prepared_packets) == 2
     assert sum(call.call_count for call in outcome.calls) == 2
+
+
+@pytest.mark.parametrize("failure", ["json", "contract", "transport"])
+def test_failed_optional_review_keeps_already_valid_fact(
+    failure: str,
+) -> None:
+    """补充复核失败只丢弃待定事实，不反向清空已通过的独立事实。"""
+    fixture = _fixture(direct_first=True)
+    harness = _HttpHarness(fixture[2], failure=failure)
+
+    outcome = _run(harness.adapter, fixture)
+
+    assert outcome.answer is not None
+    assert _DIRECT in outcome.answer
+    assert _SECOND not in outcome.answer
+    assert outcome.accepted_claim_count == outcome.published_claim_count == 1
+    assert outcome.relation_review_calls == 1
+    assert outcome.repair_calls == 0
+    assert len(harness.sent) == len(outcome.prepared_packets) == 2
 
 
 @pytest.mark.parametrize("cancel_on_send", [1, 2])

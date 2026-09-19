@@ -23,6 +23,7 @@ from rag_app.core.models.relation_review import (
     RelationReviewPayload,
     RelationReviewRequest,
     RelationReviewResponse,
+    review_source_quotes,
     validate_review_payload,
 )
 
@@ -36,9 +37,10 @@ _SYSTEM = (
     "逐条返回supported/irrelevant/contradicted/undetermined。字面不同不等于无关。"
     "仅来源限定情形成立时必须保留全部限定，不能推广到全部情形或所有阶段。"
     "明确跨角色、跨阶段或条件冲突必须contradicted，不确定返回undetermined。"
-    "supported必须原样返回该claim全部support_key和quote；不可借其他claim的引用。"
-    "context_support_keys仅解释本claim原引用的行列语境，不是可新增的事实引用。"
-    "covered_scope写明来源支持的主体、关系、阶段和条件。只输出严格JSON，"
+    "supported必须返回该claim全部fact_source_ids，不可借其他claim的来源。"
+    "context_source_ids只解释原事实的行列语境，不是可新增的事实引用。"
+    "source_scope中的每个事实字段必须回指短来源编号及其中的逐字短片段；"
+    "relation_label是语义类别，不要求逐字抄写来源。只输出严格JSON，"
     "不输出解释、推理、新事实或改写的claim，结果必须完整对应输入claim_id。"
 )
 _SAFETY_TOKENS = 128
@@ -71,70 +73,40 @@ def review_relations(
         _structured_schema_fields,
     )
 
-    by_id = {item.support_id: item for item in request.evidence}
-    context_ids = {
-        support_id
-        for candidate in request.candidates
-        for support_id in candidate.context_support_ids
+    source_ids = {
+        item.support_id: f"E{index}"
+        for index, item in enumerate(request.evidence, start=1)
     }
-    source_quotes = {
-        item.support_id: (
-            (item.citation_text,)
-            if item.support_id in context_ids
-            else tuple(
-                dict.fromkeys(
-                    support.quote
-                    for candidate in request.candidates
-                    for support in candidate.claim.supports
-                    if support.support_id == item.support_id
-                )
-            )
-        )
-        for item in request.evidence
-    }
+    source_quotes = review_source_quotes(request)
     body = {
         "original_query": request.original_query,
         "candidates": [
             {
                 "claim_id": candidate.claim_id,
                 "claim": candidate.claim.text,
-                "atom": candidate.atom.model_dump(mode="json"),
+                "question": candidate.analysis.resolved_query,
                 "semantics": candidate.analysis.semantics.model_dump(
                     mode="json", exclude_none=True
                 ),
-                "trusted_signals": {
-                    field: getattr(candidate.analysis, field)
-                    for field in (
-                        "quoted_phrases",
-                        "identifiers",
-                        "numbers",
-                        "units",
-                        "date_version_signals",
-                        "negation_signals",
-                        "structural_table_signals",
-                    )
-                    if getattr(candidate.analysis, field)
-                },
-                "resolved_query": candidate.analysis.resolved_query,
-                "context_support_keys": [
-                    stable_support_key(by_id[support_id])
+                "atom_constraints": [
+                    constraint.model_dump(mode="json")
+                    for constraint in candidate.atom.constraints
+                ],
+                "context_source_ids": [
+                    source_ids[support_id]
                     for support_id in candidate.context_support_ids
                 ],
-                "supports": [
-                    {
-                        "support_key": stable_support_key(by_id[s.support_id]),
-                        "quote": s.quote,
-                    }
-                    for s in candidate.claim.supports
+                "fact_source_ids": [
+                    source_ids[support.support_id]
+                    for support in candidate.claim.supports
                 ],
             }
             for candidate in request.candidates
         ],
         "evidence": [
             {
-                "support_key": stable_support_key(item),
+                "source_id": source_ids[item.support_id],
                 "quotes": source_quotes[item.support_id],
-                "source_spans": safe_support_source(item)["spans"],
                 "source_label": item.source_label,
                 "heading_path": item.heading_path,
             }
@@ -169,7 +141,7 @@ def review_relations(
     )
     estimate = message_token_estimate(messages) + schema_tokens + _SAFETY_TOKENS
     maximum = min(adapter.config.max_input_tokens, 6144)
-    output = min(adapter.config.max_output_tokens, 1536)
+    output = min(adapter.config.max_output_tokens, 1024)
     registry = tuple(
         (item.support_id, stable_support_key(item)) for item in request.evidence
     )

@@ -140,18 +140,21 @@ def decide_request_relation(
         "字面查找",
         "内容",
         "信息",
+        "职责",
     }
+    owner = _SUBJECT.match(target)
+    saw_different_subject = False
+    saw_requested_subject = False
     for sentence in re.split(r"[。；;！？!?\n，,]", source):
         normalized = normalize_semantic_text(sentence)
         if not target or not normalized:
             continue
-        owner = _SUBJECT.match(target)
         source_owner = _SUBJECT.match(normalized)
-        if owner and source_owner and owner[1] != source_owner[1]:
-            return RequestRelationDecision(
-                RequestRelationStatus.CONTRADICTED_OR_IRRELEVANT,
-                "EXPLICIT_DIFFERENT_SUBJECT",
-            )
+        if owner and source_owner:
+            if owner[1] != source_owner[1]:
+                saw_different_subject = True
+                continue
+            saw_requested_subject = True
         # 完整对象在同一句内且句中实际有谓词，不能跨主体拼词或只命中标题。
         if (
             generic
@@ -185,6 +188,11 @@ def decide_request_relation(
                 return RequestRelationDecision(
                     supported, "SAME_SUBJECT_REQUESTED_ACTION"
                 )
+    if owner and saw_different_subject and not saw_requested_subject:
+        return RequestRelationDecision(
+            RequestRelationStatus.CONTRADICTED_OR_IRRELEVANT,
+            "EXPLICIT_DIFFERENT_SUBJECT",
+        )
     return RequestRelationDecision(
         RequestRelationStatus.UNDETERMINED, "LEXICAL_RELATION_NOT_PROVED"
     )

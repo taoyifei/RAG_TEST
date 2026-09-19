@@ -182,17 +182,34 @@ def test_mixed_review_removes_only_the_accepted_claim_diagnostic() -> None:
             ]
         }
         if calls == 2:
+            source_quotes = {
+                source["source_id"]: source["quotes"][0]
+                for source in data["evidence"]
+            }
             payload = {
                 "results": [
                     {
                         "claim_id": item["claim_id"],
                         "status": "supported" if index == 1 else "undetermined",
-                        "supports": item["supports"],
-                        "covered_scope": {
-                            "subject": "管理员",
-                            "relation": "负责",
-                            "stage": "",
-                            "conditions": [],
+                        "fact_source_ids": item["fact_source_ids"],
+                        "source_scope": {
+                            "relation_label": "负责",
+                            "subject_anchors": [
+                                {
+                                    "source_id": source_id,
+                                    "quote": source_quotes[source_id],
+                                }
+                                for source_id in item["fact_source_ids"]
+                            ],
+                            "relation_anchors": [
+                                {
+                                    "source_id": source_id,
+                                    "quote": source_quotes[source_id],
+                                }
+                                for source_id in item["fact_source_ids"]
+                            ],
+                            "stage_anchors": [],
+                            "condition_anchors": [],
                         },
                     }
                     for index, item in enumerate(data["candidates"])

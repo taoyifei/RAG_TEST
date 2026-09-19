@@ -37,29 +37,34 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
             assert len(data["candidates"]) == 1
             candidate = data["candidates"][0]
             assert candidate["claim"] == "设备 MX-41 的维护周期为 14 天。"
-            assert [support["quote"] for support in candidate["supports"]] == [
-                "设备 MX-41 的维护周期为 14 天。"
+            assert candidate["fact_source_ids"] == [
+                evidence["source_id"] for evidence in data["evidence"]
             ]
-            assert candidate["supports"] == [
-                {
-                    "support_key": evidence["support_key"],
-                    "quote": quote,
-                }
-                for evidence in data["evidence"]
-                for quote in evidence["quotes"]
-            ]
-            assert candidate["context_support_keys"] == []
+            assert candidate["context_source_ids"] == []
             content = {
                 "results": [
                     {
                         "claim_id": candidate["claim_id"],
                         "status": "supported",
-                        "supports": candidate["supports"],
-                        "covered_scope": {
-                            "subject": "MX-41",
-                            "relation": "维护周期",
-                            "stage": "",
-                            "conditions": [],
+                        "fact_source_ids": candidate["fact_source_ids"],
+                        "source_scope": {
+                            "relation_label": "维护周期",
+                            "subject_anchors": [
+                                {
+                                    "source_id": evidence["source_id"],
+                                    "quote": evidence["quotes"][0],
+                                }
+                                for evidence in data["evidence"]
+                            ],
+                            "relation_anchors": [
+                                {
+                                    "source_id": evidence["source_id"],
+                                    "quote": evidence["quotes"][0],
+                                }
+                                for evidence in data["evidence"]
+                            ],
+                            "stage_anchors": [],
+                            "condition_anchors": [],
                         },
                     }
                 ],

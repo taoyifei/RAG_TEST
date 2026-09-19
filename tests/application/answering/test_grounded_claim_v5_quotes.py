@@ -633,6 +633,7 @@ def test_yes_no_answer_uses_source_about_asked_action() -> None:
         subject="任务",
         relation="重新启动",
         conditions=("任务转为正式交付模式时", "另行满足准入要求"),
+        statuses=("irrelevant", "supported"),
     )
 
     outcome = _answer_with_pack(

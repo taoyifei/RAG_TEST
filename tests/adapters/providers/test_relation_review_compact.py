@@ -7,6 +7,7 @@ import json
 import httpx
 import pytest
 
+from rag_app.core.errors import ProviderInvalidResponse
 from rag_app.core.models.generation_packet import stable_support_key
 from tests.adapters.providers.test_relation_review import (
     _adapter,
@@ -86,7 +87,6 @@ def test_review_omits_unquoted_text_and_repeated_root_analysis() -> None:
         }
     )
     payload = _payload(request)
-    payload["results"][0]["supports"][0]["quote"] = original.citation_text
     sent: list[httpx.Request] = []
     result = _adapter(payload, sent).review_relations(request)
     assert len(sent) == 1
@@ -98,20 +98,27 @@ def test_review_omits_unquoted_text_and_repeated_root_analysis() -> None:
     assert data["evidence"][0]["quotes"] == [original.citation_text]
     assert all("analysis" not in candidate for candidate in data["candidates"])
     assert all(
-        "semantics" in candidate and "atom" in candidate
+        "semantics" in candidate
+        and "question" in candidate
+        and "atom_constraints" in candidate
         for candidate in data["candidates"]
     )
     for candidate in data["candidates"]:
-        assert candidate["trusted_signals"] == {
-            key: list(value) for key, value in signals.items()
-        }
-        assert candidate["resolved_query"] == "甲手册中甲部门的归档限制"
+        assert "trusted_signals" not in candidate
+        assert candidate["question"] == "甲手册中甲部门的归档限制"
     assert result.prepared_packet.estimated_input_tokens <= 6144
-    assert result.prepared_packet.reserved_output_tokens == 1536
+    assert result.prepared_packet.reserved_output_tokens == 1024
     assert all(
         item["sent_quote_sha256s"]
         for item in result.prepared_packet.support_sources
     )
+
+    invalid = _payload(request)
+    invalid["results"][0]["source_scope"]["relation_anchors"] = [
+        {"source_id": "E1", "quote": "附加背景"}
+    ]
+    with pytest.raises(ProviderInvalidResponse):
+        _adapter(invalid, []).review_relations(request)
 
 
 @pytest.mark.parametrize("context", [("S2",), ("S99",), ("S1", "S1")])

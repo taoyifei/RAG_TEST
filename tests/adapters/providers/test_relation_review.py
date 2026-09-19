@@ -89,27 +89,40 @@ def _request() -> RelationReviewRequest:
 
 
 def _payload(request: RelationReviewRequest) -> dict[str, object]:
+    aliases = {
+        item.support_id: f"E{index}"
+        for index, item in enumerate(request.evidence, start=1)
+    }
     return {
         "results": [
             {
                 "claim_id": candidate.claim_id,
                 "status": "supported",
-                "supports": [
-                    {
-                        "support_key": stable_support_key(item),
-                        "quote": item.citation_text,
-                    }
+                "fact_source_ids": [
+                    aliases[support.support_id]
+                    for support in candidate.claim.supports
                 ],
-                "covered_scope": {
-                    "subject": "甲部门",
-                    "relation": "职责",
-                    "stage": "",
-                    "conditions": [],
+                "source_scope": {
+                    "relation_label": "职责",
+                    "subject_anchors": [
+                        {
+                            "source_id": aliases[support.support_id],
+                            "quote": support.quote,
+                        }
+                        for support in candidate.claim.supports[:1]
+                    ],
+                    "relation_anchors": [
+                        {
+                            "source_id": aliases[support.support_id],
+                            "quote": support.quote,
+                        }
+                        for support in candidate.claim.supports
+                    ],
+                    "stage_anchors": [],
+                    "condition_anchors": [],
                 },
             }
-            for candidate, item in zip(
-                request.candidates, request.evidence, strict=True
-            )
+            for candidate in request.candidates
         ]
     }
 
@@ -173,7 +186,7 @@ def test_batch_uses_one_http_and_records_schema_identity_usage() -> None:
     assert packet.transport_body_sha256 is not None
     assert packet.schema_tokens > 0
     body = json.loads(sent[0].content)
-    assert body["max_tokens"] <= 1536
+    assert body["max_tokens"] <= 1024
     assert (
         body["response_format"]["json_schema"]["schema"]["additionalProperties"]
         is False
@@ -188,8 +201,8 @@ def test_batch_uses_one_http_and_records_schema_identity_usage() -> None:
     [
         "unknown_id",
         "duplicate_id",
-        "unknown_key",
-        "changed_quote",
+        "unknown_source",
+        "unknown_scope_source",
         "rewritten_claim",
         "missing_claim",
         "missing_support",
@@ -208,16 +221,18 @@ def test_strict_response_cannot_rewrite_or_expand_sources(
         first["claim_id"] = "C999"
     elif mutation == "duplicate_id":
         results[1]["claim_id"] = first["claim_id"]
-    elif mutation == "unknown_key":
-        first["supports"][0]["support_key"] = "sha256:" + "f" * 64
-    elif mutation == "changed_quote":
-        first["supports"][0]["quote"] = "不存在的原文"
+    elif mutation == "unknown_source":
+        first["fact_source_ids"][0] = "E999"
+    elif mutation == "unknown_scope_source":
+        first["source_scope"]["relation_anchors"] = [
+            {"source_id": "E999", "quote": "不存在的原文"}
+        ]
     elif mutation == "rewritten_claim":
         first["claim"] = "模型擅自新增事实"
     elif mutation == "missing_claim":
         results.pop()
     elif mutation == "missing_support":
-        first["supports"] = []
+        first["fact_source_ids"] = []
     else:
         first["status"] = "probably_supported"
     sent: list[httpx.Request] = []

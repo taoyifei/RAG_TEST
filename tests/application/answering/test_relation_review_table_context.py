@@ -49,7 +49,7 @@ from tests.application.answering.test_natural_grounded_answer import (
         "context_as_support",
     ],
 )
-def test_service_review_retains_only_sent_row_label_and_column_header(
+def test_service_review_retains_only_sent_row_label_and_column_header(  # noqa: PLR0915
     mutation: str,
 ) -> None:
     """首包发送整行，复核只取当前值格所需的两个上下文格。"""
@@ -182,31 +182,53 @@ def test_service_review_retains_only_sent_row_label_and_column_header(
             payload = {"claims": [claim.model_dump(mode="json")]}
         else:
             assert len(bodies) == 2
+            source_quotes = {
+                item["source_id"]: item["quotes"][0]
+                for item in content["evidence"]
+            }
             payload = {
                 "results": [
                     {
                         "claim_id": candidate["claim_id"],
                         "status": "supported",
-                        "supports": candidate["supports"],
-                        "covered_scope": {
-                            "subject": "其他事项"
-                            if mutation == "borrow_other_column"
-                            else "甲部门",
-                            "relation": "归档",
-                            "stage": "",
-                            "conditions": [],
+                        "fact_source_ids": candidate["fact_source_ids"],
+                        "source_scope": {
+                            "relation_label": "归档",
+                            "subject_anchors": [
+                                {
+                                    "source_id": source_id,
+                                    "quote": source_quotes[source_id],
+                                }
+                                for source_id in (
+                                    candidate["context_source_ids"][:1]
+                                    or candidate["fact_source_ids"]
+                                )
+                            ],
+                            "relation_anchors": [
+                                {
+                                    "source_id": source_id,
+                                    "quote": source_quotes[source_id],
+                                }
+                                for source_id in (
+                                    candidate["context_source_ids"][1:]
+                                    or candidate["fact_source_ids"]
+                                )
+                            ],
+                            "stage_anchors": [],
+                            "condition_anchors": [],
                         },
                     }
                     for candidate in content["candidates"]
                 ]
             }
             if mutation == "context_as_support":
-                payload["results"][0]["supports"] = [
-                    {
-                        "support_key": stable_support_key(evidence[0]),
-                        "quote": evidence[0].citation_text,
-                    }
-                ]
+                payload["results"][0]["fact_source_ids"] = content[
+                    "candidates"
+                ][0]["context_source_ids"][:1]
+            if mutation == "borrow_other_column":
+                payload["results"][0]["source_scope"][
+                    "relation_anchors"
+                ] = [{"source_id": "E999", "quote": "其他事项"}]
         return httpx.Response(
             200,
             json={
@@ -256,14 +278,18 @@ def test_service_review_retains_only_sent_row_label_and_column_header(
         "nonzero_header",
         "borrow_other_column",
         "context_as_support",
+        "other_subject",
     }
     accepted = mutation in {"none", "nonzero_header"}
     expected = evidence[:3] if valid_context else (value,)
-    assert {item["support_key"] for item in bodies[1]["evidence"]} == {
-        stable_support_key(item) for item in expected
+    assert {tuple(item["quotes"]) for item in bodies[1]["evidence"]} == {
+        (item.citation_text,) for item in expected
     }
-    assert bodies[1]["candidates"][0]["context_support_keys"] == [
-        stable_support_key(item)
+    aliases = {
+        item["quotes"][0]: item["source_id"] for item in bodies[1]["evidence"]
+    }
+    assert bodies[1]["candidates"][0]["context_source_ids"] == [
+        aliases[item.citation_text]
         for item in (evidence[:2] if valid_context else ())
     ]
     assert (
@@ -283,15 +309,15 @@ def test_service_review_retains_only_sent_row_label_and_column_header(
         packet.evidence_level == "TRANSPORT_SENT"
         for packet in outcome.prepared_packets
     )
-    expected_status = (
-        "NOT_OBSERVED" if mutation == "context_as_support" else "supported"
+    expected_status = "supported" if mutation == "other_subject" else (
+        "supported" if accepted else "NOT_OBSERVED"
     )
     expected_reason = (
         "RELATION_REVIEW_RESPONSE_INVALID"
-        if mutation == "context_as_support"
+        if mutation not in {"none", "nonzero_header", "other_subject"}
         else "RELATION_REVIEW_VALIDATED"
         if accepted
-        else "SCOPE_NOT_IN_BOUND_SOURCE"
+        else "HARD_SCOPE_CONTRADICTION"
     )
     assert outcome.relation_review_results == (
         (

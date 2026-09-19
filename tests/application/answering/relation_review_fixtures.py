@@ -14,12 +14,14 @@ from rag_app.adapters.providers.openai_compatible import (
 from rag_app.core.models import AnswerDraft
 
 
-def fixed_review_generator(
+def fixed_review_generator(  # noqa: PLR0913
     draft: AnswerDraft,
     *,
     subject: str,
     relation: str,
     conditions: tuple[str, ...],
+    relation_anchor: str | None = None,
+    statuses: tuple[str, ...] | None = None,
 ) -> OpenAICompatibleChatAdapter:
     """首调用返回原草稿，第二调用只回固定范围和实际发送的引用。
 
@@ -28,6 +30,8 @@ def fixed_review_generator(
         subject: 测试允许的来源主体。
         relation: 测试允许的来源关系。
         conditions: 保持原文限定的条件集合。
+        relation_anchor: 可选的逐字关系锚点；默认使用 relation。
+        statuses: 可选的逐候选复核状态；默认全部 supported。
 
     Returns:
         使用 Fake HTTP 的真实兼容模型适配器。
@@ -50,20 +54,78 @@ def fixed_review_generator(
             }
         else:
             assert "candidates" in data
+            source_quotes = {
+                item["source_id"]: item["quotes"][0]
+                for item in data["evidence"]
+            }
+
+            def anchor(
+                candidate: dict[str, object], value: str
+            ) -> dict[str, str]:
+                """把测试语义字段绑定到候选实际可用来源。"""
+                source_ids = (
+                    candidate["context_source_ids"]
+                    or candidate["fact_source_ids"]
+                )
+                assert isinstance(source_ids, list)
+                source_id = next(
+                    (
+                        item
+                        for item in source_ids
+                        if value in source_quotes[item]
+                    ),
+                    source_ids[0],
+                )
+                return {"source_id": source_id, "quote": value}
+
             payload = {
                 "results": [
                     {
                         "claim_id": candidate["claim_id"],
-                        "status": "supported",
-                        "supports": candidate["supports"],
-                        "covered_scope": {
-                            "subject": subject,
-                            "relation": relation,
-                            "stage": "",
-                            "conditions": list(conditions),
+                        "status": (
+                            statuses[index]
+                            if statuses is not None
+                            else "supported"
+                        ),
+                        "fact_source_ids": (
+                            candidate["fact_source_ids"]
+                            if statuses is None
+                            or statuses[index] == "supported"
+                            else []
+                        ),
+                        "source_scope": {
+                            "relation_label": (
+                                relation
+                                if statuses is None
+                                or statuses[index] == "supported"
+                                else ""
+                            ),
+                            "subject_anchors": (
+                                [anchor(candidate, subject)]
+                                if subject
+                                and (
+                                    statuses is None
+                                    or statuses[index] == "supported"
+                                )
+                                else []
+                            ),
+                            "relation_anchors": (
+                                [anchor(candidate, relation_anchor or relation)]
+                                if statuses is None
+                                or statuses[index] == "supported"
+                                else []
+                            ),
+                            "stage_anchors": [],
+                            "condition_anchors": [
+                                anchor(candidate, condition)
+                                for condition in conditions
+                            ]
+                            if statuses is None
+                            or statuses[index] == "supported"
+                            else [],
                         },
                     }
-                    for candidate in data["candidates"]
+                    for index, candidate in enumerate(data["candidates"])
                 ]
             }
         return httpx.Response(

@@ -7,6 +7,11 @@ from unittest.mock import Mock
 
 import pytest
 
+from rag_app.application.answering.atom_semantics import current_atom_analysis
+from rag_app.application.answering.request_relation import (
+    RequestRelationStatus,
+    decide_request_relation,
+)
 from rag_app.core.models.query_plan import AtomAnswerShape, AtomStatus
 from rag_app.core.models.retrieval import ClaimSupport, NaturalClaim
 from tests.application.answering.source_contract_fixtures import (
@@ -127,3 +132,17 @@ def test_source_partition_keeps_a_supported_formal_answer() -> None:
     assert outcome.accepted_claim_count == 2
     assert outcome.atom_coverage == (("A1", "SUPPORTED"),)
     assert outcome.repair_calls == 0
+
+
+def test_later_requested_subject_is_not_vetoed_by_earlier_other_subject() -> (
+    None
+):
+    """同一来源先出现别的主体时，仍须继续寻找当前主体的独立句。"""
+    plan = _plan("甲部门")
+
+    decision = decide_request_relation(
+        current_atom_analysis(plan.atoms[0], None),
+        "乙部门负责审批。甲部门负责保存记录。",
+    )
+
+    assert decision.status is RequestRelationStatus.SUPPORTED

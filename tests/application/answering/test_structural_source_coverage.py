@@ -119,7 +119,9 @@ def test_group_certificate_requires_lead_in_in_claim_citations() -> None:
             None,
         )
 
-    assert failure.value.code == "CLAIM_QUERY_RELATION_UNSUPPORTED"
+    # 没有受信组时，矩阵里的组 ID 不能替代缺失导语；本层先按事实文本
+    # 不受来源支持拒绝，服务层才可恢复原句或进入有界语义复核。
+    assert failure.value.code == "CLAIM_TEXT_UNSUPPORTED"
 
     lead = next(
         item for item in grouped if item.citation_text == "甲类文具包括："

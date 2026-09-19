@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -16,13 +16,13 @@ from rag_app.core.models.provider import ProviderCall
 from rag_app.core.models.query import QueryAnalysis
 from rag_app.core.models.query_plan import QueryAtom
 from rag_app.core.models.retrieval import EvidenceItem, NaturalClaim
-from rag_app.core.query_text import normalize_semantic_text
 from rag_app.core.source_compatibility import (
     source_group_contains,
     table_cell_coordinate,
 )
 
-RELATION_REVIEW_REVISION = "wb08r-relation-review-v2"
+RELATION_REVIEW_REVISION = "wb08r-relation-review-v3"
+ReviewSourceId = Annotated[str, Field(pattern=r"^E[1-9][0-9]*$")]
 
 
 class RelationReviewCandidate(FrozenModel):
@@ -63,9 +63,6 @@ def review_context_support_ids(
     )
     by_id = {item.support_id: item for item in sent}
     selected = {support.support_id for support in candidate.claim.supports}
-    target = normalize_semantic_text(
-        candidate.analysis.semantics.target or candidate.atom.target
-    )
     contexts: set[str] = set()
     for support_id in selected:
         value = by_id.get(support_id)
@@ -109,8 +106,6 @@ def review_context_support_ids(
                     not is_header
                     and cell[1] == coordinate[1]
                     and cell[2] == 0
-                    and target
-                    and normalize_semantic_text(item.citation_text) == target
                 ):
                     labels.append(item.support_id)
                 if (
@@ -185,20 +180,80 @@ class RelationReviewRequest(FrozenModel):
         return self
 
 
-class RelationReviewSupport(FrozenModel):
-    """复核器必须回指实际发送的稳定身份与逐字引文。"""
+def review_source_quotes(
+    request: RelationReviewRequest,
+) -> dict[str, tuple[str, ...]]:
+    """返回复核 HTTP 实际允许发送的逐来源引文。
 
-    support_key: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    quote: str = Field(min_length=1, max_length=6000, repr=False)
+    事实来源只发送原 Claim 已选的逐字引文；已认证结构语境才发送完整
+    ``citation_text``。响应锚点必须受同一集合约束，不能借稳定来源身份读取
+    首次请求没有发送的同节点正文。
+
+    Args:
+        request: 已通过首次发送身份校验的复核请求。
+
+    Returns:
+        以真实 Support ID 为键的去重逐字引文。
+
+    """
+    context_ids = {
+        support_id
+        for candidate in request.candidates
+        for support_id in candidate.context_support_ids
+    }
+    return {
+        item.support_id: (
+            (item.citation_text,)
+            if item.support_id in context_ids
+            else tuple(
+                dict.fromkeys(
+                    support.quote
+                    for candidate in request.candidates
+                    for support in candidate.claim.supports
+                    if support.support_id == item.support_id
+                )
+            )
+        )
+        for item in request.evidence
+    }
+
+
+class RelationReviewAnchor(FrozenModel):
+    """把一个事实字段绑定到本次已发送来源内的逐字短片段。"""
+
+    source_id: ReviewSourceId
+    quote: str = Field(min_length=1, max_length=600, repr=False)
 
 
 class RelationReviewScope(FrozenModel):
-    """模型声称覆盖的关系范围，仍须应用层重核硬约束。"""
+    """语义标签与事实来源分离；事实字段只回指本请求的短来源编号。"""
 
-    subject: str = Field(max_length=300)
-    relation: str = Field(max_length=300)
-    stage: str = Field(max_length=300)
-    conditions: tuple[str, ...] = Field(max_length=16)
+    relation_label: str = Field(default="", max_length=300)
+    subject_anchors: tuple[RelationReviewAnchor, ...] = Field(
+        default=(), max_length=8
+    )
+    relation_anchors: tuple[RelationReviewAnchor, ...] = Field(
+        default=(), max_length=8
+    )
+    stage_anchors: tuple[RelationReviewAnchor, ...] = Field(
+        default=(), max_length=8
+    )
+    condition_anchors: tuple[RelationReviewAnchor, ...] = Field(
+        default=(), max_length=8
+    )
+
+    @model_validator(mode="after")
+    def _reject_duplicate_sources(self) -> Self:
+        for values in (
+            self.subject_anchors,
+            self.relation_anchors,
+            self.stage_anchors,
+            self.condition_anchors,
+        ):
+            keys = tuple((value.source_id, value.quote) for value in values)
+            if len(keys) != len(set(keys)):
+                raise ValueError("RELATION_REVIEW_DUPLICATE_SCOPE_SOURCE")
+        return self
 
 
 class RelationReviewResult(FrozenModel):
@@ -206,13 +261,19 @@ class RelationReviewResult(FrozenModel):
 
     claim_id: str = Field(min_length=1, max_length=80)
     status: Literal["supported", "irrelevant", "contradicted", "undetermined"]
-    supports: tuple[RelationReviewSupport, ...] = Field(max_length=8)
-    covered_scope: RelationReviewScope
+    fact_source_ids: tuple[ReviewSourceId, ...] = Field(max_length=8)
+    source_scope: RelationReviewScope
 
     @model_validator(mode="after")
     def _require_support(self) -> Self:
-        if self.status == "supported" and not self.supports:
-            raise ValueError("RELATION_REVIEW_SUPPORTED_WITHOUT_QUOTES")
+        if len(self.fact_source_ids) != len(set(self.fact_source_ids)):
+            raise ValueError("RELATION_REVIEW_DUPLICATE_FACT_SOURCE")
+        if self.status == "supported" and (
+            not self.fact_source_ids
+            or not self.source_scope.relation_label
+            or not self.source_scope.relation_anchors
+        ):
+            raise ValueError("RELATION_REVIEW_SUPPORTED_WITHOUT_SOURCE_ANCHOR")
         return self
 
 
@@ -241,15 +302,51 @@ def validate_review_payload(
     ids = [item.claim_id for item in payload.results]
     if len(ids) != len(set(ids)) or set(ids) != set(candidates):
         raise ValueError("RELATION_REVIEW_CLAIM_SET_CHANGED")
-    by_id = {item.support_id: item for item in request.evidence}
+    source_aliases = {
+        item.support_id: f"E{index}"
+        for index, item in enumerate(request.evidence, start=1)
+    }
+    evidence_by_id = {item.support_id: item for item in request.evidence}
+    sent_quotes_by_alias = {
+        source_aliases[support_id]: quotes
+        for support_id, quotes in review_source_quotes(request).items()
+    }
     for result in payload.results:
         candidate = candidates[result.claim_id]
         original = {
-            (stable_support_key(by_id[s.support_id]), s.quote)
-            for s in candidate.claim.supports
+            source_aliases[support.support_id]
+            for support in candidate.claim.supports
         }
-        returned = {(s.support_key, s.quote) for s in result.supports}
-        if len(returned) != len(result.supports) or not returned <= original:
-            raise ValueError("RELATION_REVIEW_QUOTE_CHANGED")
+        returned = set(result.fact_source_ids)
+        if not returned <= original:
+            raise ValueError("RELATION_REVIEW_FACT_SOURCE_CHANGED")
         if result.status == "supported" and returned != original:
             raise ValueError("RELATION_REVIEW_SUPPORT_SET_INCOMPLETE")
+        context = {
+            source_aliases[support_id]
+            for support_id in candidate.context_support_ids
+        }
+        if result.status == "supported" and any(
+            (coordinate := table_cell_coordinate(
+                evidence_by_id[support.support_id]
+            ))
+            is not None
+            and coordinate[2] > 0
+            for support in candidate.claim.supports
+        ) and not context:
+            raise ValueError("RELATION_REVIEW_TABLE_CONTEXT_REQUIRED")
+        anchors = (
+            *result.source_scope.subject_anchors,
+            *result.source_scope.relation_anchors,
+            *result.source_scope.stage_anchors,
+            *result.source_scope.condition_anchors,
+        )
+        if any(
+            anchor.source_id not in original | context
+            or not any(
+                anchor.quote in sent_quote
+                for sent_quote in sent_quotes_by_alias[anchor.source_id]
+            )
+            for anchor in anchors
+        ):
+            raise ValueError("RELATION_REVIEW_SCOPE_SOURCE_CHANGED")

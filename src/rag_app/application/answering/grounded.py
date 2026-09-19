@@ -2635,6 +2635,7 @@ class GroundedAnsweringService:
             """对已发送且只差语义判断的事实使用唯一补充名额。"""
             nonlocal relation_review_calls, relation_review_elapsed_ms
             nonlocal relation_review_skip_reason
+            nonlocal reason
             if not pending_relations:
                 return
             unique = tuple(dict.fromkeys(pending_relations))
@@ -2741,7 +2742,7 @@ class GroundedAnsweringService:
             try:
                 response = review_method(self.generator, request)
             except (RagError, ValueError) as error:
-                reason = (
+                review_reason = (
                     "RELATION_REVIEW_RESPONSE_INVALID"
                     if isinstance(error, ProviderInvalidResponse)
                     else error.code
@@ -2754,9 +2755,21 @@ class GroundedAnsweringService:
                     }
                     else "RELATION_REVIEW_PROVIDER_ERROR"
                 )
+                relation_review_skip_reason = review_reason
+                reason = review_reason
+                if isinstance(error, RagError):
+                    prepared_packets.extend(_failed_generation_packets(error))
+                    calls.extend(
+                        error.provider_calls
+                        or (
+                            ()
+                            if error.provider_call is None
+                            else (error.provider_call,)
+                        )
+                    )
                 for candidate in request.candidates:
-                    observed(candidate.claim, "NOT_OBSERVED", reason)
-                raise
+                    observed(candidate.claim, "NOT_OBSERVED", review_reason)
+                return
             finally:
                 relation_review_elapsed_ms = (monotonic() - started) * 1000
             if not isinstance(response, RelationReviewResponse):
@@ -2786,34 +2799,33 @@ class GroundedAnsweringService:
                 units = tuple(
                     by_id[s.support_id] for s in candidate.claim.supports
                 )
-                scope = result.covered_scope
-                source_scope = "\n".join(
-                    [s.quote for s in candidate.claim.supports]
-                    + [
-                        by_id[support_id].citation_text
-                        for support_id in candidate.context_support_ids
-                    ]
-                    + [
-                        heading
-                        for item in units
-                        for heading in item.heading_path
-                    ]
+                context_units = tuple(
+                    by_id[support_id]
+                    for support_id in candidate.context_support_ids
                 )
-                if not scope.relation or any(
-                    value
-                    and normalize_semantic_text(value)
-                    not in normalize_semantic_text(source_scope)
-                    for value in (
-                        scope.subject,
-                        scope.relation,
-                        scope.stage,
-                        *scope.conditions,
-                    )
+                review_decision = decide_request_relation(
+                    candidate.analysis,
+                    "\n".join(
+                        (
+                            _claim_source_text(
+                                AnswerClaim(
+                                    text=candidate.claim.text,
+                                    supports=candidate.claim.supports,
+                                ),
+                                units,
+                            ),
+                            *(item.citation_text for item in context_units),
+                        )
+                    ),
+                )
+                if (
+                    review_decision.status
+                    is RequestRelationStatus.CONTRADICTED_OR_IRRELEVANT
                 ):
                     observed(
                         candidate.claim,
                         result.status,
-                        "SCOPE_NOT_IN_BOUND_SOURCE",
+                        "HARD_SCOPE_CONTRADICTION",
                     )
                     continue
                 plain = AnswerClaim(
@@ -5008,8 +5020,6 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
     support = matrix.for_atom(natural.atom_id)
     units = tuple(by_id[support_id] for support_id in support_ids)
     _validate_contextual_source_scope(plan, evidence, units)
-    _validate_yes_no_source_focus(plan, evidence, units)
-    _validate_short_question_source_anchor(plan, evidence, units)
     _validate_natural_support_structure(units, trusted_groups=trusted_groups)
     claim = AnswerClaim(
         text=natural.text,
@@ -5079,9 +5089,11 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
             stage="answer.validate",
             code="CLAIM_RELATION_UNSUPPORTED",
         )
-    _validate_natural_entailment(
+    semantic_review_reasons: list[str] = []
+    if _validate_natural_entailment(
         claim, source_text=_claim_source_text(claim, units)
-    )
+    ):
+        semantic_review_reasons.append("ACTION_LEXEME_NOT_PROOF")
     source_labels = "\n".join(
         " ".join(
             (
@@ -5168,23 +5180,13 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
             and _contextual_source_versions(plan, evidence) is not None
         ),
         trusted_groups=trusted_groups,
+        semantic_review_reason=(
+            "+".join(semantic_review_reasons)
+            if semantic_review_reasons
+            else None
+        ),
     )
     return claim
-
-
-def _request_phrase_in_source(phrase: str, source: str) -> bool:
-    """允许原文在对象词之间插入谓语，但每个对象字符都须有相邻原词证明。"""
-    phrase = _STOP.sub("", unicodedata.normalize("NFKC", phrase).casefold())
-    source = _STOP.sub("", unicodedata.normalize("NFKC", source).casefold())
-    if not phrase:
-        return False
-    if phrase in source:
-        return True
-    covered: set[int] = set()
-    for index in range(len(phrase) - 1):
-        if phrase[index : index + 2] in source:
-            covered.update((index, index + 1))
-    return covered == set(range(len(phrase)))
 
 
 def _validate_natural_request_support(  # noqa: PLR0913
@@ -5196,6 +5198,7 @@ def _validate_natural_request_support(  # noqa: PLR0913
     relation_proved: bool = False,
     contextual_source_proved: bool = False,
     trusted_groups: tuple[EvidenceGroup, ...] = (),
+    semantic_review_reason: str | None = None,
 ) -> None:
     """逐字事实还须回答当前 Atom，来源分区与集合完整都不能替代此门。"""
     atom_analysis = _natural_atom_analysis(atom, analysis)
@@ -5258,6 +5261,9 @@ def _validate_natural_request_support(  # noqa: PLR0913
                 "reason": decision.reason,
             },
         )
+    review_key = relation_review_key(atom, claim, units)
+    if semantic_review_reason and not has_relation_review(review_key):
+        raise RequestRelationUndetermined(claim, semantic_review_reason)
     if relation_proved:
         return
     if source_compatibility(units).reason == "TABLE_INTERSECTION" and all(
@@ -5276,11 +5282,9 @@ def _validate_natural_request_support(  # noqa: PLR0913
     ):
         _validate_table_claim_certificate(units)
         return
-    if decision.status is RequestRelationStatus.SUPPORTED:
-        return
     if contextual_source_proved and _FALLBACK_DURATION.search(source):
         return
-    if has_relation_review(relation_review_key(atom, claim, units)):
+    if has_relation_review(review_key):
         return
     # 结构上下文只用于所属来源组；不能把两组的对象词拼成关系。
     for group in _claim_source_groups(
@@ -5296,6 +5300,8 @@ def _validate_natural_request_support(  # noqa: PLR0913
             and re.search(_DUTY_ACTION_VERB, group.support_text)
         ):
             return
+    if decision.status is RequestRelationStatus.SUPPORTED:
+        return
     raise RequestRelationUndetermined(claim, decision.reason)
 
 
@@ -5508,8 +5514,16 @@ def _validate_natural_entailment(
     claim: AnswerClaim,
     *,
     source_text: str | None = None,
-) -> None:
-    """核对 Claim 的动作、条件与逻辑算子是否由所选引文支持。"""
+) -> bool:
+    """核对确定性边界，并返回是否需要统一语义复核。
+
+    动作词集合仅是诊断特征。同义改写或表格列头承载关系时，动作词不相同
+    不能证明事实错误；明确跨主体借用同一个来源动作仍然直接拒绝。
+
+    Returns:
+        动作词面不足以证明 Claim 与来源关系时为 True。
+
+    """
     text = claim.text
     source = source_text or "\n".join(item.quote for item in claim.supports)
     _validate_bound_scope(text, source)
@@ -5549,12 +5563,7 @@ def _validate_natural_entailment(
             )
     claim_actions = set(re.findall(_ACTION_VERB, _predicate(text)))
     supported_actions = set(re.findall(_ACTION_VERB, source))
-    if claim_actions - supported_actions:
-        raise ValidationFailed(
-            "事实中的动作关系没有被引用直接表达。",
-            stage="answer.validate",
-            code="CLAIM_RELATION_UNSUPPORTED",
-        )
+    semantic_review_required = bool(claim_actions - supported_actions)
     source_subjects = {
         subject for _clause, subject in source_with_subjects if subject
     }
@@ -5565,15 +5574,17 @@ def _validate_natural_entailment(
             if subject and _same_subject(subject, claim_subject)
             for action in re.findall(_ACTION_VERB, _predicate(clause))
         }
-        if claim_actions - owned_actions:
+        shared_actions = claim_actions & supported_actions
+        if shared_actions - owned_actions:
             raise ValidationFailed(
                 "事实借用了另一个主体的动作关系。",
                 stage="answer.validate",
                 code="CLAIM_RELATION_UNSUPPORTED",
             )
-        _validate_owned_action_content(
-            text, claim_subject, source_with_subjects
-        )
+        if shared_actions:
+            _validate_owned_action_content(
+                text, claim_subject, source_with_subjects
+            )
     matched = _best_negation_sources(text, source_clauses) or source_clauses
     claim_modality = _modality_class(text)
     if claim_modality is not None and not any(
@@ -5600,6 +5611,7 @@ def _validate_natural_entailment(
             stage="answer.validate",
             code="CLAIM_MODALITY_MISMATCH",
         )
+    return semantic_review_required
 
 
 def _natural_rejection_code(error: ValidationFailed | ValueError) -> str:
