@@ -95,7 +95,9 @@ def test_review_omits_unquoted_text_and_repeated_root_analysis() -> None:
     assert data["original_query"] == request.original_query
     assert "附加背景" not in json.dumps(data, ensure_ascii=False)
     assert "其余说明" not in json.dumps(data, ensure_ascii=False)
-    assert data["evidence"][0]["quotes"] == [original.citation_text]
+    assert data["evidence"][0]["quote_anchors"] == [
+        {"anchor_id": "E1Q1", "quote": original.citation_text}
+    ]
     assert all("analysis" not in candidate for candidate in data["candidates"])
     assert all(
         "semantics" in candidate
@@ -114,8 +116,8 @@ def test_review_omits_unquoted_text_and_repeated_root_analysis() -> None:
     )
 
     invalid = _payload(request)
-    invalid["results"][0]["source_scope"]["relation_anchors"] = [
-        {"source_id": "E1", "quote": "附加背景"}
+    invalid["results"][0]["source_scope"]["relation_anchor_ids"] = [
+        "E1Q999"
     ]
     with pytest.raises(ProviderInvalidResponse):
         _adapter(invalid, []).review_relations(request)

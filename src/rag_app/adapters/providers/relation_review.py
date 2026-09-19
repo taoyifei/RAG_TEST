@@ -39,7 +39,7 @@ _SYSTEM = (
     "明确跨角色、跨阶段或条件冲突必须contradicted，不确定返回undetermined。"
     "supported必须返回该claim全部fact_source_ids，不可借其他claim的来源。"
     "context_source_ids只解释原事实的行列语境，不是可新增的事实引用。"
-    "source_scope中的每个事实字段必须回指短来源编号及其中的逐字短片段；"
+    "source_scope中的每个事实字段只回传证据中给出的anchor_id；"
     "relation_label是语义类别，不要求逐字抄写来源。只输出严格JSON，"
     "不输出解释、推理、新事实或改写的claim，结果必须完整对应输入claim_id。"
 )
@@ -78,6 +78,16 @@ def review_relations(
         for index, item in enumerate(request.evidence, start=1)
     }
     source_quotes = review_source_quotes(request)
+    quote_anchors = {
+        support_id: tuple(
+            {
+                "anchor_id": f"{source_ids[support_id]}Q{index}",
+                "quote": quote,
+            }
+            for index, quote in enumerate(quotes, start=1)
+        )
+        for support_id, quotes in source_quotes.items()
+    }
     body = {
         "original_query": request.original_query,
         "candidates": [
@@ -106,7 +116,7 @@ def review_relations(
         "evidence": [
             {
                 "source_id": source_ids[item.support_id],
-                "quotes": source_quotes[item.support_id],
+                "quote_anchors": quote_anchors[item.support_id],
                 "source_label": item.source_label,
                 "heading_path": item.heading_path,
             }

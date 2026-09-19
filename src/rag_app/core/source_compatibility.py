@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from rag_app.core.models import EvidenceItem, SourceSpan, SourceSpanKind
 from rag_app.core.models.evidence_group import EvidenceGroup, EvidenceGroupKind
 
-_TABLE_INTERSECTION_MEMBERS = 3
+_TABLE_INTERSECTION_MIN_MEMBERS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +226,8 @@ def _table_relation(  # noqa: PLR0911
         return SourceCompatibility(False, "TABLE_CERTIFICATE_MEMBER_MISMATCH")
     reason = first["support_reason"]
     if reason == "TABLE_INTERSECTION" and (
-        len(required) != _TABLE_INTERSECTION_MEMBERS
+        len(required) < _TABLE_INTERSECTION_MIN_MEMBERS
+        or len(required) != len(set(required))
         or set(required) != selected
     ):
         return SourceCompatibility(False, "TABLE_INTERSECTION_INCOMPLETE")
@@ -253,7 +254,6 @@ def _table_relation(  # noqa: PLR0911
             row > target_row or (row < target_row and column == label_column)
             for _table, row, column in cells
         )
-        or len({row for _table, row, _column in cells if row < target_row}) != 1
     ):
         return SourceCompatibility(False, "TABLE_HEADER_VALUE_NOT_PROVED")
     if reason == "TABLE_INTERSECTION" and len(values) != 1:

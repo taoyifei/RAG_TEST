@@ -158,7 +158,9 @@ _NATURAL_GROUNDED_SYSTEM = (
     "每条事实只绑定能直接证明它的Atom和support_id。"
     "对每个support_id逐字复制覆盖该事实的完整相关原句或结构成员作为quote；"
     "若原句分散在多个ID中，分别引用这些ID，不把半句拼成未经证明的新事实。"
-    "若提供joint_support_sets，表格交点事实必须同时引用该组全部support_id。"
+    "若提供table_fact_units，对应Atom只选择fact_support_id作为事实引用；"
+    "context_support_ids只是已认证的行名或表头语境，不得单独作为事实引用，"
+    "服务端会在模型选中事实值后补齐这些结构依赖。"
     "source_structure.table_cell是真实表格坐标；仅用来关联同表的行列，"
     "不能从坐标推测未提供的表头、主体或值。"
     "列表和流程须按来源顺序逐项表达，不把未给出的成员补齐。"
@@ -746,25 +748,40 @@ def _natural_allowance(
     return linked
 
 
+@dataclass(frozen=True, slots=True)
+class _TableProofUnit:
+    """一个按 Atom 认证、可由服务端闭合的表格事实单元。"""
+
+    atom_id: str | None
+    support_ids: frozenset[str]
+    reason: str
+    fact_support_id: str | None = None
+    context_support_ids: tuple[str, ...] = ()
+
+
 def _table_proof_units(
     candidates: tuple[EvidenceItem, ...], request: GenerationRequest
-) -> tuple[tuple[frozenset[str], str], ...]:
+) -> tuple[_TableProofUnit, ...]:
     """复用统一来源合同认证最小行列单元，不以组字符串认证表格。"""
     scoped_certificates = {
         (atom_id, key): dict(certificate)
         for atom_id, key, certificate in request.per_atom_source_certificates
     }
-    scopes: tuple[str | None, ...] = (
-        tuple(dict.fromkeys(atom_id for atom_id, _key in scoped_certificates))
-        if scoped_certificates
-        else (None,)
-    )
+    scopes: tuple[str | None, ...]
+    if scoped_certificates:
+        scopes = tuple(
+            dict.fromkeys(atom_id for atom_id, _key in scoped_certificates)
+        )
+    elif request.query_plan is not None and len(request.query_plan.atoms) == 1:
+        scopes = (request.query_plan.atoms[0].atom_id,)
+    else:
+        scopes = (None,)
     units_by_certificate: dict[tuple[str | None, str], list[EvidenceItem]] = {}
     for atom_id in scopes:
         for item in candidates:
             certificate = (
                 scoped_certificates.get((atom_id, stable_support_key(item)))
-                if atom_id is not None
+                if scoped_certificates and atom_id is not None
                 else dict(item.metadata).get("answer_support")
             )
             if (
@@ -786,15 +803,55 @@ def _table_proof_units(
                 }
             )
             units_by_certificate.setdefault(key, []).append(scoped)
-    result: list[tuple[frozenset[str], str]] = []
-    for units in units_by_certificate.values():
+    result: list[_TableProofUnit] = []
+    for (atom_id, _certificate_hash), units in units_by_certificate.items():
         decision = source_compatibility(tuple(units))
         if decision.compatible and decision.reason in {
             "TABLE_INTERSECTION",
             "TABLE_ROW_CONTENT",
         }:
+            fact_support_id: str | None = None
+            context_support_ids: tuple[str, ...] = ()
+            if decision.reason == "TABLE_INTERSECTION":
+                certificate = dict(units[0].metadata).get("answer_support")
+                if not isinstance(certificate, dict):
+                    continue
+                target = str(certificate.get("query_target") or "").strip()
+                located = tuple(
+                    (item, cell)
+                    for item in units
+                    if (cell := table_cell_coordinate(item)) is not None
+                )
+                labels = tuple(
+                    (item, cell)
+                    for item, cell in located
+                    if item.citation_text.strip() == target
+                )
+                if len(labels) == 1:
+                    _label, label_cell = labels[0]
+                    values = tuple(
+                        item
+                        for item, cell in located
+                        if cell[1] == label_cell[1]
+                        and cell[2] != label_cell[2]
+                    )
+                    if len(values) == 1:
+                        fact_support_id = values[0].support_id
+                        context_support_ids = tuple(
+                            item.support_id
+                            for item in units
+                            if item.support_id != fact_support_id
+                        )
             result.append(
-                (frozenset(item.support_id for item in units), decision.reason)
+                _TableProofUnit(
+                    atom_id=atom_id,
+                    support_ids=frozenset(
+                        item.support_id for item in units
+                    ),
+                    reason=decision.reason,
+                    fact_support_id=fact_support_id,
+                    context_support_ids=context_support_ids,
+                )
             )
     return tuple(dict.fromkeys(result))
 
@@ -846,7 +903,7 @@ def _priority_reading_units(
     request: GenerationRequest,
     candidates: tuple[EvidenceItem, ...],
     linked_ids: dict[str, tuple[str, ...]],
-    table_proof_units: tuple[tuple[frozenset[str], str], ...],
+    table_proof_units: tuple[_TableProofUnit, ...],
 ) -> list[tuple[str, set[str]]]:
     """按应用锚点保留有限阅读单元，不用组完整性代替查询来源优先级。
 
@@ -888,9 +945,9 @@ def _priority_reading_units(
         )
         unit_ids.update(
             support_id
-            for table_ids, _reason in table_proof_units
-            if table_ids & unit_ids
-            for support_id in table_ids
+            for table_unit in table_proof_units
+            if table_unit.support_ids & unit_ids
+            for support_id in table_unit.support_ids
         )
         if unit_ids <= owner_allowed:
             units.append((owner, unit_ids))
@@ -973,9 +1030,9 @@ def _prepare_natural_messages(  # noqa: PLR0915
             return priority_members
         table_ids = {
             support_id
-            for unit_ids, _reason in table_proof_units
-            if item.support_id in unit_ids
-            for support_id in unit_ids
+            for table_unit in table_proof_units
+            if item.support_id in table_unit.support_ids
+            for support_id in table_unit.support_ids
         }
         if table_ids:
             return table_ids
@@ -1099,6 +1156,22 @@ def _prepare_natural_messages(  # noqa: PLR0915
                         "row": cell[1],
                         "column": cell[2],
                     }
+                    table_roles = tuple(
+                        {
+                            "atom_id": unit.atom_id,
+                            "role": (
+                                "fact_value"
+                                if unit.fact_support_id == item.support_id
+                                else "context_only"
+                            ),
+                        }
+                        for unit in table_proof_units
+                        if unit.atom_id is not None
+                        and unit.reason == "TABLE_INTERSECTION"
+                        and item.support_id in unit.support_ids
+                    )
+                    if table_roles:
+                        structure_projection["table_roles"] = table_roles
                 projection["source_structure"] = structure_projection
             verified_group_id = complete_group_id(item)
             group_covered = False
@@ -1153,15 +1226,20 @@ def _prepare_natural_messages(  # noqa: PLR0915
             payload["original_query"] = plan.original_query
             payload["resolved_root_query"] = plan.resolved_root_query
         current_ids = {item.support_id for item in items}
-        joint_support_sets = {
-            tuple(
-                item.support_id for item in items if item.support_id in unit_ids
-            )
-            for unit_ids, reason in table_proof_units
-            if reason == "TABLE_INTERSECTION" and unit_ids <= current_ids
-        }
-        if joint_support_sets:
-            payload["joint_support_sets"] = sorted(joint_support_sets)
+        table_fact_units = tuple(
+            {
+                "atom_id": unit.atom_id,
+                "fact_support_id": unit.fact_support_id,
+                "context_support_ids": unit.context_support_ids,
+            }
+            for unit in table_proof_units
+            if unit.atom_id is not None
+            and unit.reason == "TABLE_INTERSECTION"
+            and unit.fact_support_id is not None
+            and unit.support_ids <= current_ids
+        )
+        if table_fact_units:
+            payload["table_fact_units"] = table_fact_units
         if request.repair_atom_ids:
             payload["repair_only"] = True
             payload["accepted_claim_ids"] = request.accepted_claim_ids
@@ -1528,6 +1606,8 @@ class _TableCertificate:
     section_id: str | None
     table_locator: str
     target: str
+    relation: str
+    reason: str
     supporting_node_ids: tuple[str, ...]
 
 
@@ -1541,30 +1621,62 @@ def _table_cell(item: EvidenceItem) -> _TableCell | None:
     )
 
 
-def _table_certificate(
-    item: EvidenceItem, request: GenerationRequest
+def _table_certificate(  # noqa: PLR0911
+    item: EvidenceItem,
+    request: GenerationRequest,
+    *,
+    atom_id: str | None = None,
 ) -> _TableCertificate | None:
-    """读取与本次查询目标完全一致的表格支持认证。"""
-    target = _verified_table_row_label(item)
+    """读取当前 Atom 的表格认证，禁止复用另一子问的关系。"""
+    support: Mapping[str, object] | None = None
+    if atom_id is not None:
+        support = next(
+            (
+                dict(certificate)
+                for candidate_atom, key, certificate in (
+                    request.per_atom_source_certificates
+                )
+                if candidate_atom == atom_id
+                and key == stable_support_key(item)
+            ),
+            None,
+        )
+        if request.per_atom_source_certificates and support is None:
+            return None
+    if support is None:
+        raw_support = dict(item.metadata).get("answer_support")
+        support = raw_support if isinstance(raw_support, dict) else None
+    if support is None or support.get("status") != "SUPPORTED":
+        return None
+    reason = support.get("support_reason")
+    target = support.get("query_target")
+    relation = support.get("requested_relation_or_attribute")
+    if (
+        reason not in {"TABLE_INTERSECTION", "TABLE_ROW_CONTENT"}
+        or not isinstance(target, str)
+        or not target.strip()
+        or not isinstance(relation, str)
+        or not relation.strip()
+    ):
+        return None
     semantics = request.typed_semantics
     semantics_target = None if semantics is None else semantics.target
     if (
-        target is None
-        or (
+        reason == "TABLE_ROW_CONTENT"
+        and (
             semantics is not None
             and (
                 semantics.answer_type is not RequestedAnswerType.SECTION_SUMMARY
                 or semantics.relation != "对应内容"
             )
         )
-        or (
+    ) or (
+        reason == "TABLE_ROW_CONTENT"
+        and (
             semantics_target is not None
             and target.strip() != semantics_target.strip()
         )
     ):
-        return None
-    support = dict(item.metadata).get("answer_support")
-    if not isinstance(support, dict):
         return None
     raw_ids = support.get("supporting_span_ids")
     if not isinstance(raw_ids, list):
@@ -1572,13 +1684,19 @@ def _table_certificate(
     node_ids = tuple(
         sorted({value for value in raw_ids if isinstance(value, str)})
     )
-    if not node_ids or item.table_locator is None:
+    if (
+        not node_ids
+        or item.table_locator is None
+        or not _item_node_ids(item).intersection(node_ids)
+    ):
         return None
     return _TableCertificate(
         document_version_id=item.document_version_id,
         section_id=item.section_id,
         table_locator=item.table_locator,
         target=target,
+        relation=relation,
+        reason=reason,
         supporting_node_ids=node_ids,
     )
 
@@ -1606,7 +1724,10 @@ def _deduplicate_table_items(
 
 
 def _close_verified_table_supports(
-    claim: AnswerClaim, request: GenerationRequest
+    claim: AnswerClaim,
+    request: GenerationRequest,
+    *,
+    atom_id: str | None = None,
 ) -> AnswerClaim:
     """只为模型已选表格值补齐认证行名及其同列表头引用。"""
     evidence = {item.support_id: item for item in request.evidence}
@@ -1615,13 +1736,23 @@ def _close_verified_table_supports(
     located_pool = tuple(
         (item, certificate, cell)
         for item in pool
-        if (certificate := _table_certificate(item, request)) is not None
+        if (
+            certificate := _table_certificate(
+                item, request, atom_id=atom_id
+            )
+        )
+        is not None
         and (cell := _table_cell(item)) is not None
     )
     selected_locations = tuple(
         (item, certificate, cell)
         for item in selected
-        if (certificate := _table_certificate(item, request)) is not None
+        if (
+            certificate := _table_certificate(
+                item, request, atom_id=atom_id
+            )
+        )
+        is not None
         and (cell := _table_cell(item)) is not None
     )
     additions: list[EvidenceItem] = []
@@ -1693,7 +1824,10 @@ def _close_verified_table_supports(
 
 
 def _closed_verified_table_target(
-    claim: AnswerClaim, request: GenerationRequest
+    claim: AnswerClaim,
+    request: GenerationRequest,
+    *,
+    atom_id: str | None = None,
 ) -> str | None:
     """确认 claim 已同时引用唯一目标行、所用值及其同列表头。"""
     evidence = {item.support_id: item for item in request.evidence}
@@ -1701,7 +1835,12 @@ def _closed_verified_table_target(
         (item, certificate, cell)
         for support in claim.supports
         if (item := evidence[support.support_id])
-        and (certificate := _table_certificate(item, request)) is not None
+        and (
+            certificate := _table_certificate(
+                item, request, atom_id=atom_id
+            )
+        )
+        is not None
         and (cell := _table_cell(item)) is not None
     )
     groups = {
@@ -1744,10 +1883,13 @@ def _closed_verified_table_target(
 
 
 def _normalize_verified_table_claim(
-    claim: AnswerClaim, request: GenerationRequest
+    claim: AnswerClaim,
+    request: GenerationRequest,
+    *,
+    atom_id: str | None = None,
 ) -> AnswerClaim:
     """将已闭合表格事实的解释性前缀收束成认证行名展示。"""
-    target = _closed_verified_table_target(claim, request)
+    target = _closed_verified_table_target(claim, request, atom_id=atom_id)
     if target is None:
         return claim
     escaped = re.escape(target.strip())
@@ -2350,7 +2492,24 @@ def _natural_answer_draft(
     payload = _NaturalDraftPayload.model_validate(
         extract_json_object(completion.content)
     )
-    claims = payload.claims
+    closed_claims: list[NaturalClaim] = []
+    for claim in payload.claims:
+        closed = _close_verified_table_supports(
+            AnswerClaim(text=claim.text, supports=claim.supports),
+            request,
+            atom_id=claim.atom_id,
+        )
+        normalized = _normalize_verified_table_claim(
+            closed, request, atom_id=claim.atom_id
+        )
+        closed_claims.append(
+            NaturalClaim(
+                atom_id=claim.atom_id,
+                text=normalized.text,
+                supports=normalized.supports,
+            )
+        )
+    claims = tuple(closed_claims)
     ids = tuple(
         dict.fromkeys(
             support.support_id for claim in claims for support in claim.supports

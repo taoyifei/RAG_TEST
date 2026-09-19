@@ -6,7 +6,12 @@ import json
 
 import pytest
 
-from rag_app.adapters.providers.aliyun_chat import _natural_messages
+from rag_app.adapters.providers.aliyun_chat import (
+    ChatCompletion,
+    ChatUsage,
+    _natural_answer_draft,
+    _natural_messages,
+)
 from rag_app.application.answering.grounded import _validated_natural_claim
 from rag_app.application.retrieval import QueryAnalyzer
 from rag_app.application.retrieval.atom_group_alignment import (
@@ -19,6 +24,7 @@ from rag_app.core.models import (
     ClaimSupport,
     EvidenceSelectionContext,
     KnowledgeBaseScope,
+    ProviderCall,
     QueryKind,
     RankedChunk,
     RequestedAnswerType,
@@ -28,6 +34,7 @@ from rag_app.core.models import (
     SourceSpanKind,
 )
 from rag_app.core.models.common import freeze_json_object
+from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomCandidateLink,
@@ -305,7 +312,7 @@ def test_atom_table_intersection_requires_citable_row_header_and_value() -> (
             supports,
             context.analysis,
         )
-    assert failure.value.code == "CLAIM_QUERY_RELATION_UNSUPPORTED"
+    assert failure.value.code == "CLAIM_TABLE_DEPENDENCY_INCOMPLETE"
     accepted = _validated_natural_claim(
         NaturalClaim(
             atom_id="A1",
@@ -330,12 +337,85 @@ def test_atom_table_intersection_requires_citable_row_header_and_value() -> (
         citation_protocol="support-id-v2-natural-claims",
         query_plan=plan,
         atom_support_matrix=matrix,
+        per_atom_source_certificates=tuple(
+            (
+                "A1",
+                stable_support_key(item),
+                freeze_json_object(dict(item.metadata)["answer_support"]),
+            )
+            for item in supports
+        ),
     )
     payload = json.loads(_natural_messages(request)[1].content)
-    assert len(payload["joint_support_sets"]) == 1
-    assert set(payload["joint_support_sets"][0]) == {
+    assert payload["table_fact_units"] == [
+        {
+            "atom_id": "A1",
+            "fact_support_id": supports[2].support_id,
+            "context_support_ids": [
+                supports[0].support_id,
+                supports[1].support_id,
+            ],
+        }
+    ]
+    completion = ChatCompletion(
+        content=json.dumps(
+            {
+                "claims": [
+                    {
+                        "atom_id": "A1",
+                        "text": "白桦泵的上限温度为 82 ℃。",
+                        "supports": [
+                            {
+                                "support_id": value.support_id,
+                                "quote": value.citation_text,
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        model="synthetic",
+        usage=ChatUsage(),
+        call=ProviderCall(
+            provider_id="synthetic",
+            operation="generation",
+            call_count=1,
+            retry_count=0,
+            elapsed_ms=1,
+        ),
+    )
+    closed = _natural_answer_draft(completion, request).natural_claims[0]
+    assert {support.support_id for support in closed.supports} == {
         item.support_id for item in supports
     }
+
+    header = supports[1]
+    header_only = completion.model_copy(
+        update={
+            "content": json.dumps(
+                {
+                    "claims": [
+                        {
+                            "atom_id": "A1",
+                            "text": header.citation_text,
+                            "supports": [
+                                {
+                                    "support_id": header.support_id,
+                                    "quote": header.citation_text,
+                                }
+                            ],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    unchanged = _natural_answer_draft(header_only, request).natural_claims[0]
+    assert tuple(support.support_id for support in unchanged.supports) == (
+        header.support_id,
+    )
 
 
 def test_atom_table_intersection_does_not_publish_when_cap_breaks_proof() -> (

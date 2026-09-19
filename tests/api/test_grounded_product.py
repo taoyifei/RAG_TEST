@@ -49,22 +49,16 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
                         "fact_source_ids": candidate["fact_source_ids"],
                         "source_scope": {
                             "relation_label": "维护周期",
-                            "subject_anchors": [
-                                {
-                                    "source_id": evidence["source_id"],
-                                    "quote": evidence["quotes"][0],
-                                }
+                            "subject_anchor_ids": [
+                                evidence["quote_anchors"][0]["anchor_id"]
                                 for evidence in data["evidence"]
                             ],
-                            "relation_anchors": [
-                                {
-                                    "source_id": evidence["source_id"],
-                                    "quote": evidence["quotes"][0],
-                                }
+                            "relation_anchor_ids": [
+                                evidence["quote_anchors"][0]["anchor_id"]
                                 for evidence in data["evidence"]
                             ],
-                            "stage_anchors": [],
-                            "condition_anchors": [],
+                            "stage_anchor_ids": [],
+                            "condition_anchor_ids": [],
                         },
                     }
                 ],

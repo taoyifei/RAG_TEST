@@ -21,8 +21,11 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-RELATION_REVIEW_REVISION = "wb08r-relation-review-v3"
+RELATION_REVIEW_REVISION = "wb08r-relation-review-v4"
 ReviewSourceId = Annotated[str, Field(pattern=r"^E[1-9][0-9]*$")]
+ReviewAnchorId = Annotated[
+    str, Field(pattern=r"^E[1-9][0-9]*Q[1-9][0-9]*$")
+]
 
 
 class RelationReviewCandidate(FrozenModel):
@@ -218,40 +221,32 @@ def review_source_quotes(
     }
 
 
-class RelationReviewAnchor(FrozenModel):
-    """把一个事实字段绑定到本次已发送来源内的逐字短片段。"""
-
-    source_id: ReviewSourceId
-    quote: str = Field(min_length=1, max_length=600, repr=False)
-
-
 class RelationReviewScope(FrozenModel):
-    """语义标签与事实来源分离；事实字段只回指本请求的短来源编号。"""
+    """语义标签与原文分离；模型只回传服务端签发的短锚点。"""
 
     relation_label: str = Field(default="", max_length=300)
-    subject_anchors: tuple[RelationReviewAnchor, ...] = Field(
+    subject_anchor_ids: tuple[ReviewAnchorId, ...] = Field(
         default=(), max_length=8
     )
-    relation_anchors: tuple[RelationReviewAnchor, ...] = Field(
+    relation_anchor_ids: tuple[ReviewAnchorId, ...] = Field(
         default=(), max_length=8
     )
-    stage_anchors: tuple[RelationReviewAnchor, ...] = Field(
+    stage_anchor_ids: tuple[ReviewAnchorId, ...] = Field(
         default=(), max_length=8
     )
-    condition_anchors: tuple[RelationReviewAnchor, ...] = Field(
+    condition_anchor_ids: tuple[ReviewAnchorId, ...] = Field(
         default=(), max_length=8
     )
 
     @model_validator(mode="after")
-    def _reject_duplicate_sources(self) -> Self:
+    def _reject_duplicate_anchors(self) -> Self:
         for values in (
-            self.subject_anchors,
-            self.relation_anchors,
-            self.stage_anchors,
-            self.condition_anchors,
+            self.subject_anchor_ids,
+            self.relation_anchor_ids,
+            self.stage_anchor_ids,
+            self.condition_anchor_ids,
         ):
-            keys = tuple((value.source_id, value.quote) for value in values)
-            if len(keys) != len(set(keys)):
+            if len(values) != len(set(values)):
                 raise ValueError("RELATION_REVIEW_DUPLICATE_SCOPE_SOURCE")
         return self
 
@@ -271,7 +266,7 @@ class RelationReviewResult(FrozenModel):
         if self.status == "supported" and (
             not self.fact_source_ids
             or not self.source_scope.relation_label
-            or not self.source_scope.relation_anchors
+            or not self.source_scope.relation_anchor_ids
         ):
             raise ValueError("RELATION_REVIEW_SUPPORTED_WITHOUT_SOURCE_ANCHOR")
         return self
@@ -307,9 +302,10 @@ def validate_review_payload(
         for index, item in enumerate(request.evidence, start=1)
     }
     evidence_by_id = {item.support_id: item for item in request.evidence}
-    sent_quotes_by_alias = {
-        source_aliases[support_id]: quotes
+    anchor_sources = {
+        f"{source_aliases[support_id]}Q{index}": source_aliases[support_id]
         for support_id, quotes in review_source_quotes(request).items()
+        for index, _quote in enumerate(quotes, start=1)
     }
     for result in payload.results:
         candidate = candidates[result.claim_id]
@@ -336,17 +332,13 @@ def validate_review_payload(
         ) and not context:
             raise ValueError("RELATION_REVIEW_TABLE_CONTEXT_REQUIRED")
         anchors = (
-            *result.source_scope.subject_anchors,
-            *result.source_scope.relation_anchors,
-            *result.source_scope.stage_anchors,
-            *result.source_scope.condition_anchors,
+            *result.source_scope.subject_anchor_ids,
+            *result.source_scope.relation_anchor_ids,
+            *result.source_scope.stage_anchor_ids,
+            *result.source_scope.condition_anchor_ids,
         )
         if any(
-            anchor.source_id not in original | context
-            or not any(
-                anchor.quote in sent_quote
-                for sent_quote in sent_quotes_by_alias[anchor.source_id]
-            )
-            for anchor in anchors
+            anchor_sources.get(anchor_id) not in original | context
+            for anchor_id in anchors
         ):
             raise ValueError("RELATION_REVIEW_SCOPE_SOURCE_CHANGED")

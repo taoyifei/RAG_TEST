@@ -182,8 +182,8 @@ def test_service_review_retains_only_sent_row_label_and_column_header(  # noqa: 
             payload = {"claims": [claim.model_dump(mode="json")]}
         else:
             assert len(bodies) == 2
-            source_quotes = {
-                item["source_id"]: item["quotes"][0]
+            source_anchors = {
+                item["source_id"]: item["quote_anchors"][0]["anchor_id"]
                 for item in content["evidence"]
             }
             payload = {
@@ -194,28 +194,22 @@ def test_service_review_retains_only_sent_row_label_and_column_header(  # noqa: 
                         "fact_source_ids": candidate["fact_source_ids"],
                         "source_scope": {
                             "relation_label": "归档",
-                            "subject_anchors": [
-                                {
-                                    "source_id": source_id,
-                                    "quote": source_quotes[source_id],
-                                }
+                            "subject_anchor_ids": [
+                                source_anchors[source_id]
                                 for source_id in (
                                     candidate["context_source_ids"][:1]
                                     or candidate["fact_source_ids"]
                                 )
                             ],
-                            "relation_anchors": [
-                                {
-                                    "source_id": source_id,
-                                    "quote": source_quotes[source_id],
-                                }
+                            "relation_anchor_ids": [
+                                source_anchors[source_id]
                                 for source_id in (
                                     candidate["context_source_ids"][1:]
                                     or candidate["fact_source_ids"]
                                 )
                             ],
-                            "stage_anchors": [],
-                            "condition_anchors": [],
+                            "stage_anchor_ids": [],
+                            "condition_anchor_ids": [],
                         },
                     }
                     for candidate in content["candidates"]
@@ -227,8 +221,8 @@ def test_service_review_retains_only_sent_row_label_and_column_header(  # noqa: 
                 ][0]["context_source_ids"][:1]
             if mutation == "borrow_other_column":
                 payload["results"][0]["source_scope"][
-                    "relation_anchors"
-                ] = [{"source_id": "E999", "quote": "其他事项"}]
+                    "relation_anchor_ids"
+                ] = ["E999Q1"]
         return httpx.Response(
             200,
             json={
@@ -282,11 +276,15 @@ def test_service_review_retains_only_sent_row_label_and_column_header(  # noqa: 
     }
     accepted = mutation in {"none", "nonzero_header"}
     expected = evidence[:3] if valid_context else (value,)
-    assert {tuple(item["quotes"]) for item in bodies[1]["evidence"]} == {
+    assert {
+        tuple(anchor["quote"] for anchor in item["quote_anchors"])
+        for item in bodies[1]["evidence"]
+    } == {
         (item.citation_text,) for item in expected
     }
     aliases = {
-        item["quotes"][0]: item["source_id"] for item in bodies[1]["evidence"]
+        item["quote_anchors"][0]["quote"]: item["source_id"]
+        for item in bodies[1]["evidence"]
     }
     assert bodies[1]["candidates"][0]["context_source_ids"] == [
         aliases[item.citation_text]

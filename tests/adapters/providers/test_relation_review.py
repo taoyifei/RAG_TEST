@@ -104,22 +104,16 @@ def _payload(request: RelationReviewRequest) -> dict[str, object]:
                 ],
                 "source_scope": {
                     "relation_label": "职责",
-                    "subject_anchors": [
-                        {
-                            "source_id": aliases[support.support_id],
-                            "quote": support.quote,
-                        }
+                    "subject_anchor_ids": [
+                        f"{aliases[support.support_id]}Q1"
                         for support in candidate.claim.supports[:1]
                     ],
-                    "relation_anchors": [
-                        {
-                            "source_id": aliases[support.support_id],
-                            "quote": support.quote,
-                        }
+                    "relation_anchor_ids": [
+                        f"{aliases[support.support_id]}Q1"
                         for support in candidate.claim.supports
                     ],
-                    "stage_anchors": [],
-                    "condition_anchors": [],
+                    "stage_anchor_ids": [],
+                    "condition_anchor_ids": [],
                 },
             }
             for candidate in request.candidates
@@ -224,9 +218,7 @@ def test_strict_response_cannot_rewrite_or_expand_sources(
     elif mutation == "unknown_source":
         first["fact_source_ids"][0] = "E999"
     elif mutation == "unknown_scope_source":
-        first["source_scope"]["relation_anchors"] = [
-            {"source_id": "E999", "quote": "不存在的原文"}
-        ]
+        first["source_scope"]["relation_anchor_ids"] = ["E999Q1"]
     elif mutation == "rewritten_claim":
         first["claim"] = "模型擅自新增事实"
     elif mutation == "missing_claim":

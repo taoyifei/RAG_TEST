@@ -54,29 +54,38 @@ def fixed_review_generator(  # noqa: PLR0913
             }
         else:
             assert "candidates" in data
-            source_quotes = {
-                item["source_id"]: item["quotes"][0]
+            source_anchors = {
+                item["source_id"]: item["quote_anchors"]
                 for item in data["evidence"]
             }
 
             def anchor(
                 candidate: dict[str, object], value: str
-            ) -> dict[str, str]:
+            ) -> str:
                 """把测试语义字段绑定到候选实际可用来源。"""
                 source_ids = (
                     candidate["context_source_ids"]
                     or candidate["fact_source_ids"]
                 )
                 assert isinstance(source_ids, list)
-                source_id = next(
+                anchors = tuple(
+                    anchor
+                    for source_id in source_ids
+                    for anchor in source_anchors[source_id]
+                )
+                selected = next(
                     (
                         item
-                        for item in source_ids
-                        if value in source_quotes[item]
+                        for item in anchors
+                        if value in item["quote"]
                     ),
-                    source_ids[0],
+                    None,
                 )
-                return {"source_id": source_id, "quote": value}
+                return (
+                    str(selected["anchor_id"])
+                    if selected is not None
+                    else f"{source_ids[0]}Q999"
+                )
 
             payload = {
                 "results": [
@@ -100,7 +109,7 @@ def fixed_review_generator(  # noqa: PLR0913
                                 or statuses[index] == "supported"
                                 else ""
                             ),
-                            "subject_anchors": (
+                            "subject_anchor_ids": (
                                 [anchor(candidate, subject)]
                                 if subject
                                 and (
@@ -109,17 +118,19 @@ def fixed_review_generator(  # noqa: PLR0913
                                 )
                                 else []
                             ),
-                            "relation_anchors": (
+                            "relation_anchor_ids": (
                                 [anchor(candidate, relation_anchor or relation)]
                                 if statuses is None
                                 or statuses[index] == "supported"
                                 else []
                             ),
-                            "stage_anchors": [],
-                            "condition_anchors": [
-                                anchor(candidate, condition)
-                                for condition in conditions
-                            ]
+                            "stage_anchor_ids": [],
+                            "condition_anchor_ids": list(
+                                dict.fromkeys(
+                                    anchor(candidate, condition)
+                                    for condition in conditions
+                                )
+                            )
                             if statuses is None
                             or statuses[index] == "supported"
                             else [],

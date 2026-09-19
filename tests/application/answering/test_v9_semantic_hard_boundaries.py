@@ -182,8 +182,10 @@ def test_mixed_review_removes_only_the_accepted_claim_diagnostic() -> None:
             ]
         }
         if calls == 2:
-            source_quotes = {
-                source["source_id"]: source["quotes"][0]
+            source_anchors = {
+                source["source_id"]: source["quote_anchors"][0][
+                    "anchor_id"
+                ]
                 for source in data["evidence"]
             }
             payload = {
@@ -194,22 +196,16 @@ def test_mixed_review_removes_only_the_accepted_claim_diagnostic() -> None:
                         "fact_source_ids": item["fact_source_ids"],
                         "source_scope": {
                             "relation_label": "负责",
-                            "subject_anchors": [
-                                {
-                                    "source_id": source_id,
-                                    "quote": source_quotes[source_id],
-                                }
+                            "subject_anchor_ids": [
+                                source_anchors[source_id]
                                 for source_id in item["fact_source_ids"]
                             ],
-                            "relation_anchors": [
-                                {
-                                    "source_id": source_id,
-                                    "quote": source_quotes[source_id],
-                                }
+                            "relation_anchor_ids": [
+                                source_anchors[source_id]
                                 for source_id in item["fact_source_ids"]
                             ],
-                            "stage_anchors": [],
-                            "condition_anchors": [],
+                            "stage_anchor_ids": [],
+                            "condition_anchor_ids": [],
                         },
                     }
                     for index, item in enumerate(data["candidates"])

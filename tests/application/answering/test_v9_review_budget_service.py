@@ -124,8 +124,8 @@ class _HttpHarness:
             }
         else:
             assert "candidates" in data
-            source_quotes = {
-                item["source_id"]: item["quotes"][0]
+            source_anchors = {
+                item["source_id"]: item["quote_anchors"][0]["anchor_id"]
                 for item in data["evidence"]
             }
             payload = {
@@ -136,30 +136,21 @@ class _HttpHarness:
                         "fact_source_ids": candidate["fact_source_ids"],
                         "source_scope": {
                             "relation_label": "报销",
-                            "subject_anchors": [
-                                {
-                                    "source_id": source_id,
-                                    "quote": source_quotes[source_id],
-                                }
+                            "subject_anchor_ids": [
+                                source_anchors[source_id]
                                 for source_id in candidate[
                                     "fact_source_ids"
                                 ]
                             ],
-                            "relation_anchors": [
-                                {
-                                    "source_id": source_id,
-                                    "quote": source_quotes[source_id],
-                                }
+                            "relation_anchor_ids": [
+                                source_anchors[source_id]
                                 for source_id in candidate[
                                     "fact_source_ids"
                                 ]
                             ],
-                            "stage_anchors": [],
-                            "condition_anchors": [
-                                {
-                                    "source_id": source_id,
-                                    "quote": source_quotes[source_id],
-                                }
+                            "stage_anchor_ids": [],
+                            "condition_anchor_ids": [
+                                source_anchors[source_id]
                                 for source_id in candidate[
                                     "fact_source_ids"
                                 ]

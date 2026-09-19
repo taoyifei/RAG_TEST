@@ -109,7 +109,7 @@ _QUANTITY_UNIT_ATOM = (
     r"台|件|人|双|套|副|只|张|支|瓶|组|批|份|条|顶|块|辆|"
     r"艘|架|门|床|℃|[A-Za-zμµΩ°]+)"
 )
-_TABLE_INTERSECTION_SPAN_COUNT = 3
+_TABLE_INTERSECTION_MIN_SPANS = 3
 _QUANTITY_UNIT = (
     rf"(?:{_QUANTITY_UNIT_ATOM})(?:\s*/\s*(?:{_QUANTITY_UNIT_ATOM}))*"
 )
@@ -3404,7 +3404,13 @@ def _can_repair_atom(
         "CLAIM_FRAGMENT_INCOMPLETE",
     }
     if has_accepted:
-        recoverable.update({"CLAIM_NUMBER_UNSUPPORTED", "CLAIM_NUMBER_DRIFT"})
+        recoverable.update(
+            {
+                "CLAIM_NUMBER_UNSUPPORTED",
+                "CLAIM_NUMBER_DRIFT",
+                "CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
+            }
+        )
     if any(
         atom == atom_id and reason not in recoverable
         for atom, reason in failures
@@ -3964,7 +3970,8 @@ def _certified_table_excerpts(  # noqa: PLR0912
                 continue
             identity = tuple(node for node in nodes if isinstance(node, str))
             if (
-                len(set(identity)) != _TABLE_INTERSECTION_SPAN_COUNT
+                len(set(identity)) < _TABLE_INTERSECTION_MIN_SPANS
+                or len(identity) != len(set(identity))
                 or identity in seen
             ):
                 continue
@@ -3977,7 +3984,7 @@ def _certified_table_excerpts(  # noqa: PLR0912
                 and len(unit.source_spans) == 1
                 and unit.source_spans[0].node_id in identity
             )
-            if len(units) != _TABLE_INTERSECTION_SPAN_COUNT:
+            if len(units) != len(identity):
                 continue
             try:
                 _validate_table_claim_certificate(units)
@@ -5325,7 +5332,7 @@ def _matrix_proves_source_relation(
 
 
 def _validate_table_claim_certificate(units: tuple[EvidenceItem, ...]) -> None:
-    """表格 Claim 必须同时引用同表行名、列头和交点值。"""
+    """表格 Claim 必须引用证书声明的全部真实结构依赖。"""
     for item in units:
         certificate = dict(item.metadata).get("answer_support")
         if (
@@ -5336,12 +5343,16 @@ def _validate_table_claim_certificate(units: tuple[EvidenceItem, ...]) -> None:
         required = certificate.get("supporting_span_ids")
         if (
             not isinstance(required, list)
-            or len(required) != _TABLE_INTERSECTION_SPAN_COUNT
+            or len(required) < _TABLE_INTERSECTION_MIN_SPANS
+            or len(required) != len(set(required))
+            or not all(
+                isinstance(node_id, str) and node_id for node_id in required
+            )
         ):
             raise ValidationFailed(
                 "表格事实缺少完整交点来源。",
                 stage="answer.validate",
-                code="CLAIM_RELATION_UNSUPPORTED",
+                code="CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
             )
         cited = {
             span.node_id
@@ -5354,7 +5365,7 @@ def _validate_table_claim_certificate(units: tuple[EvidenceItem, ...]) -> None:
             raise ValidationFailed(
                 "表格事实缺少同一行的对象、列头或交点来源。",
                 stage="answer.validate",
-                code="CLAIM_RELATION_UNSUPPORTED",
+                code="CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
             )
 
 
@@ -5621,6 +5632,7 @@ def _natural_rejection_code(error: ValidationFailed | ValueError) -> str:
     mapping = {
         "CLAIM_QUERY_RELATION_UNSUPPORTED": "CLAIM_RELATION_UNSUPPORTED",
         "CLAIM_QUERY_RELATION_UNDETERMINED": "CLAIM_RELATION_UNSUPPORTED",
+        "CLAIM_TABLE_DEPENDENCY_INCOMPLETE": "CLAIM_RELATION_UNSUPPORTED",
         "CLAIM_QUERY_TARGET_MISMATCH": "CLAIM_TARGET_UNSUPPORTED",
         "CLAIM_NEGATION_CHANGED": "CLAIM_NEGATION_MISMATCH",
         "CLAIM_OBJECT_CHANGED": "CLAIM_ENTITY_DRIFT",
