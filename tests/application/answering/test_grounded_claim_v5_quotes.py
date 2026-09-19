@@ -382,6 +382,77 @@ def test_pack_rejects_model_support_assigned_to_another_atom() -> None:
     assert outcome.claim_rejection_codes == (("CLAIM_SUPPORT_NOT_OWNED", 1),)
 
 
+def test_pack_splits_model_claim_across_source_groups() -> None:
+    """模型合并多个来源组时，每组原句独立核验并分别发布。"""
+    evidence = _evidence("甲部门保存记录。", "甲部门每周核对记录。")
+    by_text = {item.citation_text: item.support_id for item in evidence}
+    plan = _plan("甲部门记录")
+    first = _claim(
+        "C1",
+        "甲部门保存并核对记录。",
+        "A1",
+        by_text["甲部门保存记录。"],
+        "甲部门保存记录。",
+    )
+    second = _claim(
+        "C2",
+        "甲部门保存并核对记录。",
+        "A1",
+        by_text["甲部门每周核对记录。"],
+        "甲部门每周核对记录。",
+    )
+    merged = first.model_copy(
+        update={"supports": (*first.supports, *second.supports)}
+    )
+    generator = Mock()
+    generator.generate.return_value = _draft((merged,), plan)
+
+    outcome = _answer_with_pack(
+        generator, plan, evidence, ((AtomStatus.MISSING, ()),)
+    )
+
+    assert outcome.accepted_claim_count == 2
+    assert outcome.claim_rejection_codes == ()
+    assert outcome.answer is not None
+    assert "甲部门保存记录。" in outcome.answer
+    assert "甲部门每周核对记录。" in outcome.answer
+
+
+def test_pack_split_discards_group_with_another_explicit_subject() -> None:
+    """拆组后仍逐组校验对象，不发布相邻主体的原句。"""
+    evidence = _evidence("甲部门保存记录。", "乙部门审批采购。")
+    by_text = {item.citation_text: item.support_id for item in evidence}
+    plan = _plan("甲部门")
+    first = _claim(
+        "C1",
+        "甲部门处理相关事项。",
+        "A1",
+        by_text["甲部门保存记录。"],
+        "甲部门保存记录。",
+    )
+    second = _claim(
+        "C2",
+        "甲部门处理相关事项。",
+        "A1",
+        by_text["乙部门审批采购。"],
+        "乙部门审批采购。",
+    )
+    merged = first.model_copy(
+        update={"supports": (*first.supports, *second.supports)}
+    )
+    generator = Mock()
+    generator.generate.return_value = _draft((merged,), plan)
+
+    outcome = _answer_with_pack(
+        generator, plan, evidence, ((AtomStatus.MISSING, ()),)
+    )
+
+    assert outcome.accepted_claim_count == 1
+    assert outcome.answer == (
+        f"甲部门保存记录。 [{by_text['甲部门保存记录。']}]"
+    )
+
+
 def test_one_verified_sentence_covers_each_supported_scalar_atom() -> None:
     source = "各指标牵头部门负责制定考核标准、考核分数和考核频次。"
     evidence = _evidence(source)

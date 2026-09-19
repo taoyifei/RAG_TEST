@@ -2249,6 +2249,62 @@ class GroundedAnsweringService:
                 return draft
             return self.generator.generate(request)
 
+        def validate_natural(
+            natural: NaturalClaim,
+        ) -> tuple[AnswerClaim, ...]:
+            """校验模型事实；只在安全边界内恢复来源原句。"""
+            if generation_evidence_pack is not None:
+                _validate_natural_atom_support_scope(
+                    natural,
+                    query_plan,
+                    linked_ids,
+                )
+            try:
+                claim = _validated_natural_claim(
+                    natural,
+                    query_plan,
+                    atom_support_matrix,
+                    evidence,
+                    analysis,
+                )
+            except (ValidationFailed, ValueError) as error:
+                if (
+                    generation_evidence_pack is not None
+                    and _natural_rejection_code(error)
+                    == "CLAIM_SEMANTIC_SUPPORT_FAILED"
+                ):
+                    return (
+                        _validated_source_faithful_claim(
+                            natural,
+                            query_plan,
+                            atom_support_matrix,
+                            evidence,
+                            analysis,
+                        ),
+                    )
+                if (
+                    generation_evidence_pack is not None
+                    and isinstance(error, ValidationFailed)
+                    and error.code == "CLAIM_SOURCE_MISMATCH"
+                    and (
+                        recovered := _validated_source_group_claims(
+                            natural,
+                            query_plan,
+                            atom_support_matrix,
+                            evidence,
+                            analysis,
+                        )
+                    )
+                ):
+                    return recovered
+                raise
+            if generation_evidence_pack is not None:
+                claim = _source_faithful_claim(
+                    claim,
+                    tuple(by_id[item.support_id] for item in claim.supports),
+                )
+            return (claim,)
+
         def consume(draft: AnswerDraft) -> None:
             """只保留本地核验通过的 Claim，原文由证据回填。"""
             nonlocal generated_claim_count, generation_returned, reason
@@ -2265,62 +2321,26 @@ class GroundedAnsweringService:
                 reason = draft.reason_code or "GENERATION_ABSTAINED"
             for natural in draft.natural_claims:
                 try:
-                    if generation_evidence_pack is not None:
-                        _validate_natural_atom_support_scope(
-                            natural,
-                            query_plan,
-                            linked_ids,
-                        )
-                    claim = _validated_natural_claim(
-                        natural,
-                        query_plan,
-                        atom_support_matrix,
-                        evidence,
-                        analysis,
-                    )
-                    if generation_evidence_pack is not None:
-                        claim = _source_faithful_claim(
-                            claim,
-                            tuple(
-                                by_id[item.support_id]
-                                for item in claim.supports
-                            ),
-                        )
+                    validated_claims = validate_natural(natural)
                 except (ValidationFailed, ValueError) as error:
-                    if (
-                        generation_evidence_pack is not None
-                        and _natural_rejection_code(error)
-                        == "CLAIM_SEMANTIC_SUPPORT_FAILED"
-                    ):
-                        try:
-                            claim = _validated_source_faithful_claim(
-                                natural,
-                                query_plan,
-                                atom_support_matrix,
-                                evidence,
-                                analysis,
-                            )
-                        except (ValidationFailed, ValueError) as recovery_error:
-                            error = recovery_error
-                        else:
-                            error = None
-                    if error is not None:
-                        claim_rejections[_natural_rejection_code(error)] += 1
-                        rejected_atoms[natural.atom_id] += 1
-                        reason = "CLAIM_NOT_SUPPORTED"
-                        continue
-                if any(
-                    item.atom_ids == (natural.atom_id,) and item.claim == claim
-                    for item in accepted
-                ):
+                    claim_rejections[_natural_rejection_code(error)] += 1
+                    rejected_atoms[natural.atom_id] += 1
+                    reason = "CLAIM_NOT_SUPPORTED"
                     continue
-                accepted.append(
-                    ValidatedNaturalClaim(
-                        claim_id=f"C{len(accepted) + 1}",
-                        atom_ids=(natural.atom_id,),
-                        claim=claim,
+                for claim in validated_claims:
+                    if any(
+                        item.atom_ids == (natural.atom_id,)
+                        and item.claim == claim
+                        for item in accepted
+                    ):
+                        continue
+                    accepted.append(
+                        ValidatedNaturalClaim(
+                            claim_id=f"C{len(accepted) + 1}",
+                            atom_ids=(natural.atom_id,),
+                            claim=claim,
+                        )
                     )
-                )
 
         if eligible:
             try:
@@ -3965,6 +3985,42 @@ def _validated_source_faithful_claim(
         validated,
         tuple(by_id[item.support_id] for item in validated.supports),
     )
+
+
+def _validated_source_group_claims(
+    natural: NaturalClaim,
+    plan: QueryPlan,
+    matrix: AtomSupportMatrix,
+    evidence: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+) -> tuple[AnswerClaim, ...]:
+    """把模型混合的来源组拆开，各自恢复原句并独立核验。"""
+    by_id = {item.support_id: item for item in evidence}
+    grouped: dict[tuple[object, ...], list[ClaimSupport]] = {}
+    for support in natural.supports:
+        item = by_id.get(support.support_id)
+        if item is None:
+            return ()
+        groups = _source_groups(item)
+        if len(groups) != 1:
+            return ()
+        grouped.setdefault(next(iter(groups)), []).append(support)
+    recovered: list[AnswerClaim] = []
+    for supports in grouped.values():
+        candidate = natural.model_copy(update={"supports": tuple(supports)})
+        try:
+            claim = _validated_source_faithful_claim(
+                candidate,
+                plan,
+                matrix,
+                evidence,
+                analysis,
+            )
+        except (ValidationFailed, ValueError):
+            continue
+        if claim not in recovered:
+            recovered.append(claim)
+    return tuple(recovered)
 
 
 def _validated_natural_claim(
