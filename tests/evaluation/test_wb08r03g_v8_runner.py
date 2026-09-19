@@ -11,6 +11,40 @@ import pytest
 from evaluation.wanshitong.v2 import run_wb08r03g_v8 as runner
 
 
+def test_runtime_path_observation_does_not_require_a_gold_case(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        runner.legacy,
+        "read_trace",
+        lambda *_args, **_kwargs: (
+            {
+                "retrieval.claim_publication": [
+                    {
+                        "answer_path": "LLM_CLAIM_VALIDATED",
+                        "publication_path": "MODEL_VALIDATED_CLAIM",
+                        "generation_called": True,
+                        "accepted_claim_count": 2,
+                        "published_claim_count": 2,
+                        "final_atom_coverage": [["A1", "PARTIAL"]],
+                    }
+                ]
+            },
+            None,
+        ),
+    )
+    row = {
+        "truth_status": "NEEDS_TRUTH_REVIEW",
+        "answer_path": "NOT_OBSERVED",
+        "accepted_claim_count": "NOT_OBSERVED",
+    }
+    result = runner._enrich([row], {"version_bundle_sha256": "v"})[0]
+    assert result["answer_path"] == "LLM_CLAIM_VALIDATED"
+    assert result["accepted_claim_count"] == 2
+    assert result["final_atom_coverage"] == [["A1", "PARTIAL"]]
+    assert result["truth_status"] == "NEEDS_TRUTH_REVIEW"
+
+
 def _bundle() -> dict[str, str]:
     return {
         **dict.fromkeys(runner._VERSION_FIELDS, "frozen-value"),

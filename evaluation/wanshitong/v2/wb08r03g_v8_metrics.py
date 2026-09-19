@@ -47,7 +47,10 @@ def performance_observation(rows: list[dict[str, Any]]) -> dict[str, Any]:
         )
     }
     for row in rows:
-        if row.get("answer_path") == "DIRECT_EXTRACT":
+        if row.get("answer_path") == "DIRECT_EXTRACT" or (
+            row.get("publication_path") == "SERVER_VALIDATED_EXTRACT"
+            and row.get("generation_called") is False
+        ):
             category = "direct"
         elif row.get("repair_calls", 0) not in {0, "NOT_OBSERVED", None}:
             category = "repair"
@@ -129,10 +132,11 @@ def _transport_observation(
     if invalid:
         return set(), invalid, missing
     sent_keys = {key for _, key in packet["alias_to_support_key"]}
+    rejected = packet.get("evidence_level") == "PREPARATION_REJECTED"
     missing.extend(
         field.upper() + "_NOT_OBSERVED"
         for field in ("messages_sha256", "transport_body_sha256")
-        if not packet.get(field)
+        if not rejected and not packet.get(field)
     )
     sources = packet.get("support_sources")
     if not isinstance(sources, list) or not all(
@@ -142,6 +146,23 @@ def _transport_observation(
         missing.append("SUPPORT_SOURCES_NOT_OBSERVED")
     elif {source["support_key"] for source in sources} != sent_keys:
         invalid.append("PACKET_SOURCE_REGISTRY_MISMATCH")
+    if rejected:
+        if (
+            packet.get("preparation_failure")
+            != "GENERATION_INPUT_BUDGET_EXCEEDED"
+        ):
+            invalid.append("UNKNOWN_PREPARATION_REJECTION")
+        if any(
+            packet.get(field) is not None
+            for field in ("transport_body_sha256", "observed_prompt_tokens")
+        ):
+            invalid.append("REJECTED_PACKET_HAS_TRANSPORT_USAGE")
+        if any(
+            type(packet.get(field)) is not int or packet[field] < 0
+            for field in ("estimated_input_tokens", "max_input_tokens")
+        ):
+            missing.append("REJECTED_PACKET_BUDGET_NOT_OBSERVED")
+        return set(), invalid, missing
     if packet.get("evidence_level") != "TRANSPORT_SENT":
         invalid.append("TRANSPORT_NOT_SENT")
         sent_keys = set()
@@ -250,7 +271,16 @@ def packet_observation(
     missing.extend(publication_missing)
     return {
         "prepared_sent_status": (
-            "FAILED" if invalid else "NOT_OBSERVED" if missing else "OBSERVED"
+            "FAILED"
+            if invalid
+            else "NOT_OBSERVED"
+            if missing
+            else "N/A_INPUT_BUDGET"
+            if all(
+                packet["evidence_level"] == "PREPARATION_REJECTED"
+                for packet in packets
+            )
+            else "OBSERVED"
         ),
         "packet_failures": invalid,
         "packet_missing_observations": missing,

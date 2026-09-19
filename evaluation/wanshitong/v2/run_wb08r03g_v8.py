@@ -203,6 +203,22 @@ def _enrich(
         )
         row["version_bundle_sha256"] = bundle["version_bundle_sha256"]
         row["prepared_sent"] = packet_observation(events)
+        publications = events.get("retrieval.claim_publication", [])
+        if publications:
+            publication = publications[-1]
+            # 运行路径是 Trace 事实，不能因尚无逐题 Gold 而丢失观测。
+            for key in (
+                "answer_path",
+                "publication_path",
+                "generation_called",
+                "accepted_claim_count",
+                "published_claim_count",
+                "final_atom_coverage",
+                "extractive_fallback_used",
+                "repair_attempted",
+            ):
+                if key in publication:
+                    row[key] = publication[key]
         row["v8_trace_error"] = error
     return rows
 
