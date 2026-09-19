@@ -2265,6 +2265,12 @@ class GroundedAnsweringService:
                 reason = draft.reason_code or "GENERATION_ABSTAINED"
             for natural in draft.natural_claims:
                 try:
+                    if generation_evidence_pack is not None:
+                        _validate_natural_atom_support_scope(
+                            natural,
+                            query_plan,
+                            linked_ids,
+                        )
                     claim = _validated_natural_claim(
                         natural,
                         query_plan,
@@ -2281,10 +2287,28 @@ class GroundedAnsweringService:
                             ),
                         )
                 except (ValidationFailed, ValueError) as error:
-                    claim_rejections[_natural_rejection_code(error)] += 1
-                    rejected_atoms[natural.atom_id] += 1
-                    reason = "CLAIM_NOT_SUPPORTED"
-                    continue
+                    if (
+                        generation_evidence_pack is not None
+                        and _natural_rejection_code(error)
+                        == "CLAIM_SEMANTIC_SUPPORT_FAILED"
+                    ):
+                        try:
+                            claim = _validated_source_faithful_claim(
+                                natural,
+                                query_plan,
+                                atom_support_matrix,
+                                evidence,
+                                analysis,
+                            )
+                        except (ValidationFailed, ValueError) as recovery_error:
+                            error = recovery_error
+                        else:
+                            error = None
+                    if error is not None:
+                        claim_rejections[_natural_rejection_code(error)] += 1
+                        rejected_atoms[natural.atom_id] += 1
+                        reason = "CLAIM_NOT_SUPPORTED"
+                        continue
                 if any(
                     item.atom_ids == (natural.atom_id,) and item.claim == claim
                     for item in accepted
@@ -3882,6 +3906,64 @@ def _source_faithful_claim(
     excerpts = tuple(dict.fromkeys(support.quote for support in supports))
     return claim.model_copy(
         update={"text": "\n".join(excerpts), "supports": supports}
+    )
+
+
+def _validate_natural_atom_support_scope(
+    natural: NaturalClaim,
+    plan: QueryPlan,
+    linked_ids: dict[str, tuple[str, ...]],
+) -> None:
+    """模型只能为当前 Atom 选择证据包明确分配的 Support ID。"""
+    if natural.atom_id not in {atom.atom_id for atom in plan.atoms}:
+        raise ValidationFailed(
+            "自然事实引用未知 Atom。",
+            stage="answer.validate",
+            code="CLAIM_UNKNOWN_ATOM",
+        )
+    support_ids = {support.support_id for support in natural.supports}
+    if not support_ids <= set(linked_ids.get(natural.atom_id, ())):
+        raise ValidationFailed(
+            "自然事实引用了未分配给当前 Atom 的来源。",
+            stage="answer.validate",
+            code="CLAIM_SUPPORT_OUTSIDE_ATOM",
+        )
+
+
+def _validated_source_faithful_claim(
+    natural: NaturalClaim,
+    plan: QueryPlan,
+    matrix: AtomSupportMatrix,
+    evidence: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+) -> AnswerClaim:
+    """只为低风险语义改写恢复原句，并重新执行全部安全校验。"""
+    by_id = {item.support_id: item for item in evidence}
+    support_ids = tuple(support.support_id for support in natural.supports)
+    if not support_ids or not set(support_ids) <= by_id.keys():
+        raise ValidationFailed(
+            "自然事实引用未知 Support ID。",
+            stage="answer.validate",
+            code="CLAIM_UNKNOWN_SUPPORT",
+        )
+    source_claim = _source_faithful_claim(
+        AnswerClaim(text=natural.text, supports=natural.supports),
+        tuple(by_id[support_id] for support_id in support_ids),
+    )
+    validated = _validated_natural_claim(
+        NaturalClaim(
+            atom_id=natural.atom_id,
+            text=source_claim.text,
+            supports=source_claim.supports,
+        ),
+        plan,
+        matrix,
+        evidence,
+        analysis,
+    )
+    return _source_faithful_claim(
+        validated,
+        tuple(by_id[item.support_id] for item in validated.supports),
     )
 
 

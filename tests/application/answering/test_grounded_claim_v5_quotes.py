@@ -319,6 +319,69 @@ def test_pack_expands_selected_fragment_to_full_source_sentence() -> None:
     assert outcome.answer == f"{source} [S1]"
 
 
+def test_pack_revalidates_full_source_when_model_rewrites_the_fact() -> None:
+    """模型改写不可信时，保留其合法选源并发布重新核验的完整原句。"""
+    source = "员工在证书领取年份完成费用报销。"
+    evidence = _evidence(source)
+    plan = _plan("钱能放明年报不？")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                "相关费用依时间节点处理。",
+                "A1",
+                "S1",
+                source,
+            ),
+        ),
+        plan,
+    )
+
+    outcome = _answer_with_pack(
+        generator, plan, evidence, ((AtomStatus.MISSING, ()),)
+    )
+
+    assert outcome.mode == "llm"
+    assert outcome.answer == f"{source} [S1]"
+    assert outcome.claim_rejection_codes == ()
+    assert outcome.accepted_claim_count == 1
+
+
+def test_pack_rejects_model_support_assigned_to_another_atom() -> None:
+    """原句恢复不能把另一 Atom 的候选来源借给当前事实。"""
+    evidence = _evidence("甲部门保存记录。", "乙部门审批采购。")
+    by_text = {item.citation_text: item.support_id for item in evidence}
+    plan = _plan("甲部门保存", "乙部门审批")
+    mapping = {
+        by_text["甲部门保存记录。"]: ("A1",),
+        by_text["乙部门审批采购。"]: ("A2",),
+    }
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                "乙部门审批采购。",
+                "A1",
+                by_text["乙部门审批采购。"],
+            ),
+        ),
+        plan,
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()), (AtomStatus.MISSING, ())),
+        pack=_pack(plan, evidence, atom_ids_by_support=mapping),
+    )
+
+    assert outcome.accepted_claim_count == 0
+    assert outcome.claim_rejection_codes == (("CLAIM_SUPPORT_NOT_OWNED", 1),)
+
+
 def test_one_verified_sentence_covers_each_supported_scalar_atom() -> None:
     source = "各指标牵头部门负责制定考核标准、考核分数和考核频次。"
     evidence = _evidence(source)
