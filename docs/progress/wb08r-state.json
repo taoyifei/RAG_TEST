@@ -9,7 +9,7 @@
   ],
   "current_phase": "WB08R-03",
   "phase_status": "FAILED",
-  "implementation_status": "wb08r03g_v10_failed_paused_after_two_8289_candidates",
+  "implementation_status": "wb08r03g_v11_failed_paused_after_two_8289_candidates",
   "wb08r03r2_phase_start_sha": "399cf2184c4b3f47f6f4b274c4333913f610f1d2",
   "candidate_code_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
@@ -17,10 +17,10 @@
   "candidate_runtime_source_revision": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_runtime_tree_hash": null,
   "candidate_product_asset_manifest_sha256": "927660b0864b710719c8af4d6911e22087c63baef1587f783d3c895482b09f72",
-  "phase_report_sha": "6c78a86b1a4a4005cc1076b17243e381c2bdfb3c",
-  "current_report": "docs/progress/wb08r-03g-v10-report.md",
-  "current_manifest": "docs/progress/wb08r-03g-v10-manifest.json",
-  "current_p0_issues": "docs/progress/wb08r-03g-v10-p0-issues.md",
+  "phase_report_sha": "4e689ffc776fa8b87c6e449d778dd4f1b300a03d",
+  "current_report": "docs/progress/wb08r-03g-v11-report.md",
+  "current_manifest": "docs/progress/wb08r-03g-v11-manifest.json",
+  "current_p0_issues": "docs/progress/wb08r-03g-v11-p0-issues.md",
   "runtime_relevant_diff_after_candidate": true,
   "implementation_microphases": {
     "R0_stream_terminal": "IMPLEMENTED",
@@ -31,7 +31,8 @@
     "R5_natural_claims": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
     "03G_P0_evidence_freeze": "PASS_WITH_DECLARED_PACKAGE_INPUT_GAPS",
     "03G_V8_integrated_repair": "FAILED_FROZEN_AT_TWO_ROUND_LIMIT",
-    "03G_V10_evidence_first_gate_refactor": "FAILED_FROZEN_AT_TWO_CANDIDATE_LIMIT"
+    "03G_V10_evidence_first_gate_refactor": "FAILED_FROZEN_AT_TWO_CANDIDATE_LIMIT",
+    "03G_V11_physical_fact_and_generation_protocol": "FAILED_FROZEN_AT_TWO_CANDIDATE_LIMIT"
   },
   "verification_gates": {
     "Preflight-16": {
@@ -39,38 +40,39 @@
       "candidate_count": 2,
       "run_count": 32,
       "c1_nonempty_answer_with_support": 0,
-      "c2_nonempty_answer_with_support": 1,
+      "c2_nonempty_answer_with_support": 0,
       "truth_verified_answer_count": 0,
-      "known_answerable_false_refusals_per_candidate": 3
+      "c2_repair_calls": 7,
+      "dominant_failure": "GENERATION_CLAIMS_INVALID_RESPONSE_CONTRACT"
     },
     "A_EvidencePack-12": {
       "status": "NOT_RUN",
-      "reason": "V10_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
       "same_version_pass": false
     },
     "B_CoreAnswer-16": {
       "status": "NOT_RUN",
-      "reason": "V10_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
       "same_version_pass": false
     },
     "C_Failed-24": {
       "status": "NOT_RUN",
-      "reason": "V10_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
       "same_version_pass": false
     },
     "D_Natural-36": {
       "status": "NOT_RUN",
-      "reason": "V10_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
       "same_version_pass": false
     },
     "E_Full-96": {
       "status": "NOT_RUN",
-      "reason": "V10_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
       "same_version_pass": false
     },
     "F_Concurrency-4": {
       "status": "NOT_RUN",
-      "reason": "V10_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
       "same_version_pass": false
     }
   },
@@ -94,6 +96,31 @@
     "report": "docs/progress/wb08r-03g-v10-report.md",
     "manifest": "docs/progress/wb08r-03g-v10-manifest.json",
     "p0_issues": "docs/progress/wb08r-03g-v10-p0-issues.md"
+  },
+  "wb08r03g_v11_verification": {
+    "status": "FAILED",
+    "phase_status": "PAUSED",
+    "source_head_sha": "ef0c648ad83121fd3d1f8996a6681fea90331ba4",
+    "report_commit_sha": "4e689ffc776fa8b87c6e449d778dd4f1b300a03d",
+    "candidate_limit": 2,
+    "functional_candidates_built": 2,
+    "functional_deployments": 2,
+    "quality_business_requests": 32,
+    "preflight_c1": "FAILED_NONEMPTY_ANSWER_0_OF_16_INPUT_BUDGET_BLOCKED_N031_F015",
+    "preflight_c2": "FAILED_NONEMPTY_ANSWER_0_OF_16_REPAIR_7_RESPONSE_CONTRACT_REPEATED",
+    "answering_pytest": "242 passed",
+    "generation_evidence_and_retrieval_pytest": "58 passed",
+    "provider_packet_budget_review_pytest": "73 passed",
+    "internal_model_pytest": "12 passed, 1 warning",
+    "physical_fact_attempt_pytest": "16 passed",
+    "A_to_F": "NOT_RUN",
+    "final_8289": "ROLLED_BACK_BD00C56_HEALTHY_200",
+    "production_modified": false,
+    "production_18288_health": 200,
+    "cleanup_complete": true,
+    "report": "docs/progress/wb08r-03g-v11-report.md",
+    "manifest": "docs/progress/wb08r-03g-v11-manifest.json",
+    "p0_issues": "docs/progress/wb08r-03g-v11-p0-issues.md"
   },
   "wb08r03r2_verification": {
     "candidate_code_sha": "8337bdbc73c721744cf63e36127925bf7064beb6",

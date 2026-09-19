@@ -1,0 +1,237 @@
+{
+  "schema_version": "wb08r03g-v11-final-v1",
+  "version": "V11",
+  "status": "FAILED",
+  "phase_status": "PAUSED",
+  "merge_allowed": false,
+  "production_publish_allowed": false,
+  "independent_verification_ready": false,
+  "stop_reason": "TWO_FUNCTIONAL_CANDIDATES_FAILED_NO_THIRD_ATTEMPT",
+  "branch": "codex/wb-08r-adaptive-rag",
+  "audit_base_sha": "9db975f4eb566a05c8cffef8886cbb623a1e5fdf",
+  "source_head_sha": "ef0c648ad83121fd3d1f8996a6681fea90331ba4",
+  "report_commit_sha": "4e689ffc776fa8b87c6e449d778dd4f1b300a03d",
+  "source_commits": [
+    {
+      "sha": "06e8ce2a870c7c3c226463ff74ee4840cdb9f156",
+      "subject": "fix(rag): 建立物理表格事实与逐原子补充协议"
+    },
+    {
+      "sha": "ef0c648ad83121fd3d1f8996a6681fea90331ba4",
+      "subject": "fix(rag): 压缩物理事实包并恢复协议失败补充"
+    }
+  ],
+  "candidate_limit": 2,
+  "functional_candidates_built": 2,
+  "functional_deployments": 2,
+  "quality_business_requests": 32,
+  "production_modified": false,
+  "qdrant_modified": false,
+  "reports": {
+    "report": "docs/progress/wb08r-03g-v11-report.md",
+    "report_sha256": "87e7f74149c56fa74bb380633269625f6b6eac9a02f1fc0c29076a204cd2f1df",
+    "p0_issues": "docs/progress/wb08r-03g-v11-p0-issues.md",
+    "p0_issues_sha256": "840c1645640df81a55bd47673b3ad6e3141d6c5c253432fe6523f21d2b16a415",
+    "state": "docs/progress/wb08r-state.json"
+  },
+  "p0_ids": [
+    "P0-01_REAL_MODEL_STRICT_CLAIM_PROTOCOL_INCOMPATIBLE_INVALID_FIELD_NOT_OBSERVED",
+    "P0-02_REPAIR_REPEATS_PRIMARY_RESPONSE_CONTRACT_FAILURE",
+    "P0-03_PHYSICAL_FACT_AND_TRANSPORT_BUDGET_FIXED_MUST_NOT_REGRESS",
+    "P0-04_RELATION_REVIEW_UNSTABLE_AND_SUPPLEMENT_SLOT_COUPLED",
+    "P0-05_HARD_SEMANTIC_BOUNDARIES_MUST_REMAIN",
+    "P0-06_SAFE_REAL_PROTOCOL_REPLAY_GAP"
+  ],
+  "candidates": {
+    "c1": {
+      "code_sha": "06e8ce2a870c7c3c226463ff74ee4840cdb9f156",
+      "image_tag": "rag-test-wanshitong:wb08r03g-v11-c1-06e8ce2",
+      "image_id": "sha256:0e918cd433026c7868eb61caa0f05069dc840fc1b6cfdc9de2b064e35ef6c0a9",
+      "runtime_tree_sha256": "48aff8c3bfd96e9c0bebc643abf664c5e70834f99ba271328bce63ec4c8bbebc",
+      "version_bundle_sha256": "d2d45d83037dab4613ff665f18723abc310fa3d39d4f995f4d554c0fb2960081",
+      "asset_manifest_sha256": "976c75e01d2767bee01f543ef9d1d65f9509d0061da97dd90b5f89450f9cb7b9",
+      "preflight_requests": 16,
+      "exactly_one_final": 16,
+      "nonempty_answer_with_support": 0,
+      "repair_calls": 0,
+      "provider_calls": {
+        "embedding.query": 16,
+        "generation": 11,
+        "query.interpret": 9,
+        "query.rewrite": 0,
+        "reranking": 16
+      },
+      "first_observed_breakpoints": {
+        "n031_estimated_input_tokens": 8919,
+        "f015_estimated_input_tokens": 11653,
+        "max_input_tokens": 6144,
+        "reason": "GENERATION_INPUT_BUDGET_EXCEEDED_BEFORE_SEND"
+      },
+      "gate": "FAILED"
+    },
+    "c2": {
+      "code_sha": "ef0c648ad83121fd3d1f8996a6681fea90331ba4",
+      "image_tag": "rag-test-wanshitong:wb08r03g-v11-c2-ef0c648",
+      "image_id": "sha256:1aec1f0f2c959c9d4936ffe2c6cbe599a73d51935aabf95cf2c77cc5c7c4b5f7",
+      "runtime_tree_sha256": "a63af9d62bca0cb1418bb663f40a9db5f622c9a1f83943697145c2db8f7f9480",
+      "version_bundle_sha256": "b94a18fbcdd6d2b7446108fecac00af975a37b9f9f62b79f7040953620bd3f39",
+      "asset_manifest_sha256": "be35898081351b5dcebe80927c8f617013e77a65ec6bf42611f18d030f4159c1",
+      "preflight_requests": 16,
+      "exactly_one_final": 16,
+      "nonempty_answer_with_support": 0,
+      "accepted_claims": 0,
+      "published_claims": 0,
+      "repair_calls": 7,
+      "provider_calls": {
+        "embedding.query": 16,
+        "generation": 25,
+        "query.interpret": 9,
+        "query.rewrite": 0,
+        "reranking": 16
+      },
+      "performance_by_path": {
+        "refuse": {
+          "sample_count": 9,
+          "p50_ms": 8491.05,
+          "p95_ms": 33272.8
+        },
+        "repair": {
+          "sample_count": 7,
+          "p50_ms": 36955.32,
+          "p95_ms": 62659.82
+        },
+        "request_total": {
+          "sample_count": 16,
+          "p50_ms": 16190.92,
+          "p95_ms": 62659.82
+        },
+        "answer_stage": {
+          "sample_count": 16,
+          "p50_ms": 12961.52,
+          "p95_ms": 57575.82
+        }
+      },
+      "trace_capture": {
+        "complete_records": 16,
+        "dropped_spans": 0,
+        "dropped_decisions": 0,
+        "raw_provider_body_retained": false
+      },
+      "gate": "FAILED"
+    }
+  },
+  "fixed_runtime": {
+    "document_count": 46,
+    "chunk_count": 2880,
+    "active_index_revision_id": "irev_0329a35ca9ea700133f7b309160118f0",
+    "generation_model": "Qwen/Qwen3-8B-AWQ",
+    "max_input_tokens": 6144,
+    "max_output_tokens": 1536,
+    "rerank_candidate_limit": 24,
+    "runtime_file_count": 391,
+    "serving_fingerprint": "sha256:ff858c8bb682e1620db264984c09fc176e307d933699b95e7d4ceb9fc30a0707",
+    "candidate_disable_thinking_supported": true,
+    "candidate_disable_thinking": true
+  },
+  "gates": {
+    "answering_pytest": "PASS_242",
+    "generation_evidence_and_retrieval_pytest": "PASS_58",
+    "provider_packet_budget_review_pytest": "PASS_73",
+    "internal_model_pytest": "PASS_12_WITH_1_WARNING",
+    "physical_fact_attempt_pytest": "PASS_16",
+    "ruff_changed_files": "PASS",
+    "ruff_format_changed_files": "PASS",
+    "mypy_changed_source_files": "PASS_2_FILES",
+    "py_compile": "PASS",
+    "git_diff_check": "PASS",
+    "preflight_16": "FAILED_BOTH_CANDIDATES",
+    "A_EvidencePack_12": "NOT_RUN",
+    "B_CoreAnswer_16": "NOT_RUN",
+    "C_Failed_24": "NOT_RUN",
+    "D_Natural_36": "NOT_RUN",
+    "E_Full_96": "NOT_RUN",
+    "F_Concurrency_4": "NOT_RUN",
+    "unrelated_full_repository_tests": "NOT_RUN_BY_USER_SCOPE"
+  },
+  "live_findings": {
+    "n031": {
+      "runs": 3,
+      "primary_packets_sent": 3,
+      "repair_packets_sent": 3,
+      "primary_estimated_input_tokens": 5728,
+      "repair_estimated_input_tokens": 5731,
+      "retained_table_facts": 4,
+      "retained_supports": 14,
+      "protected_supports": 11,
+      "primary_and_repair_result": "GENERATION_CLAIMS_INVALID_RESPONSE_CONTRACT",
+      "invalid_field": "NOT_OBSERVED"
+    },
+    "f015": {
+      "runs": 3,
+      "primary_packets_sent": 3,
+      "repair_packets_sent": 3,
+      "primary_estimated_input_tokens": 5857,
+      "repair_estimated_input_tokens": 5847,
+      "retained_table_facts": 4,
+      "retained_supports": 12,
+      "protected_supports": 11,
+      "primary_and_repair_result": "GENERATION_CLAIMS_INVALID_RESPONSE_CONTRACT",
+      "invalid_field": "NOT_OBSERVED"
+    },
+    "n033": "CLAIM_STAGE_UNSUPPORTED_3_OF_3",
+    "f013": "CLAIM_MODALITY_MISMATCH_3_OF_3",
+    "f024": "CLAIM_STAGE_UNSUPPORTED",
+    "f034": "PRIMARY_AND_REPAIR_GENERATION_CLAIMS_INVALID_RESPONSE_CONTRACT",
+    "n035": "RELATION_REVIEW_HTTP_TRANSPORT_TRANSIENT_MODEL_STATUS_NOT_OBSERVED",
+    "a001": "CLAIM_SOURCE_MISMATCH_AND_FOUR_MODEL_NOT_SUPPORTED_RESULTS"
+  },
+  "final_runtime": {
+    "candidate_port": 8289,
+    "candidate_status": "ROLLED_BACK_BASELINE_HEALTHY_200",
+    "candidate_container_id": "c21d6ade83a05b777a2fad2788ebf300af243cccdacd97bec7718c850deabb27",
+    "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
+    "candidate_image_id": "sha256:621acc792c12169d347fde03a8cfb06dff4ca033bf4867171d35bc46f284b75c",
+    "production_container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
+    "production_image_tag": "rag-test-wanshitong:604ef63",
+    "production_image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306",
+    "production_60_8288_health": 200,
+    "production_54_18288_health": 200,
+    "production_identity_exact_match": true
+  },
+  "cleanup": {
+    "global_prune_used": false,
+    "v11_candidate_images_removed_remote": 2,
+    "v11_candidate_images_removed_local": 2,
+    "remote_remaining_image_tags": [
+      "rag-test-wanshitong:604ef63",
+      "rag-test-wanshitong:wb08r03f-bd00c56",
+      "rag-test-wanshitong:wb08r02-9c3b029"
+    ],
+    "local_remaining_image_tags": [
+      "rag-test-wanshitong:604ef63",
+      "rag-test-wanshitong:wb08r03f-bd00c56"
+    ],
+    "temporary_v11_files_on_54": "NONE_REMAINING",
+    "temporary_v11_files_on_60": "NONE_REMAINING",
+    "local_v11_worktrees_and_temporary_files_removed": true,
+    "original_untracked_result_files_preserved": 10,
+    "original_untracked_result_hashes_match_v9": true
+  },
+  "private_evidence": [
+    {
+      "candidate": "c1",
+      "path": "C:/Users/jerry/AppData/Local/Codex/diagnostics/wb08r03g-v11-20260919/c1-evidence.private.tar.gz",
+      "sha256": "f4b465163c4ce855ce96ce1ab0274e127b39efa1323582cb669ea584e32ce3f0",
+      "size_bytes": 60108,
+      "tracked_in_git": false
+    },
+    {
+      "candidate": "c2",
+      "path": "C:/Users/jerry/AppData/Local/Codex/diagnostics/wb08r03g-v11-20260920/c2-evidence.private.tar.gz",
+      "sha256": "c5fd97378e53c228ba99fcab02765fff48e3865727c20320c832e7e287aa5697",
+      "size_bytes": 121103,
+      "archive_integrity": "PASS",
+      "tracked_in_git": false
+    }
+  ]
+}
