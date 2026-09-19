@@ -212,10 +212,15 @@ def test_source_modifier_is_inherited_without_model_repeating_its_clause() -> (
 
 def test_declarative_lead_in_is_context_for_colloquial_question() -> None:
     request = _request("我刚考了证，钱能放明年报不？")
+    schema = planner_json_schema(build_input_spans(request))
+    fragment_ids = schema["$defs"]["MinimalAtomPayload"]["properties"][
+        "f"
+    ]["items"]["enum"]
     atom = _build(
         _payload(_atom(("Q.C2",), "Q.T2", "Q.R2")),
         request,
     )[0]
 
+    assert fragment_ids == ["Q.C2"]
     assert atom.original_fragment == "我刚考了证 钱能放明年报不"
     assert all(item.kind.value != "NEGATION" for item in atom.constraints)

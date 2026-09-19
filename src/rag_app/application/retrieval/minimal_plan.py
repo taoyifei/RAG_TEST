@@ -73,11 +73,16 @@ def planner_json_schema(
     spans: tuple[QueryInputSpan, ...],
 ) -> dict[str, object]:
     """把本请求受信 Span 的类型约束加入模型输出 Schema。"""
-    clause_ids = [
-        span.span_id
+    current_clauses = tuple(
+        span
         for span in spans
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
-    ]
+    )
+    modifiers = _context_modifier_clauses(current_clauses)
+    answer_clauses = tuple(
+        span for span in current_clauses if span not in modifiers
+    ) or current_clauses
+    clause_ids = [span.span_id for span in answer_clauses]
     target_ids = [
         span.span_id for span in spans if span.kind is SpanKind.TARGET
     ]
@@ -114,19 +119,7 @@ def build_query_atoms(
         for span in spans
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
     )
-    has_interrogative_clause = any(
-        _INTERROGATIVE_CLAUSE.search(span.text) for span in current_clauses
-    )
-    modifier_clauses = tuple(
-        span
-        for index, span in enumerate(current_clauses)
-        if _CONTEXT_MODIFIER.fullmatch(span.text)
-        or (
-            has_interrogative_clause
-            and index < len(current_clauses) - 1
-            and _INTERROGATIVE_CLAUSE.search(span.text) is None
-        )
-    )
+    modifier_clauses = _context_modifier_clauses(current_clauses)
     required_clauses = tuple(
         span for span in current_clauses if span not in modifier_clauses
     ) or current_clauses
@@ -189,6 +182,25 @@ def build_query_atoms(
     if any(value not in atom_text for value in literal_values):
         raise MinimalPlanValidationError("PLANNER_LITERAL_VIOLATION")
     return tuple(atoms)
+
+
+def _context_modifier_clauses(
+    current_clauses: tuple[QueryInputSpan, ...],
+) -> tuple[QueryInputSpan, ...]:
+    """识别只限定后续问句、无需独立回答的当前轮分句。"""
+    has_interrogative_clause = any(
+        _INTERROGATIVE_CLAUSE.search(span.text) for span in current_clauses
+    )
+    return tuple(
+        span
+        for index, span in enumerate(current_clauses)
+        if _CONTEXT_MODIFIER.fullmatch(span.text)
+        or (
+            has_interrogative_clause
+            and index < len(current_clauses) - 1
+            and _INTERROGATIVE_CLAUSE.search(span.text) is None
+        )
+    )
 
 
 def _constraints_for_fragment(
