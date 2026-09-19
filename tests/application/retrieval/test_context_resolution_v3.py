@@ -147,6 +147,28 @@ def test_response_directive_is_excluded_from_root_and_spans() -> None:
     assert all("别引用" not in span.text for span in spans)
 
 
+def test_degraded_plan_keeps_lead_in_inside_single_answer_atom() -> None:
+    request = _request("我刚考了证，钱能放明年报不？")
+    analysis = QueryAnalyzer().analyze(request)
+    spans = build_input_spans(request)
+    root = resolve_root_query(request, spans)
+
+    plan = degraded_query_plan(
+        request,
+        analysis,
+        spans,
+        root,
+        effort="ASSISTED",
+        reason_code="PLANNER_OUTPUT_TRUNCATED",
+        planner_called=True,
+    )
+
+    assert len(plan.atoms) == 1
+    assert plan.atoms[0].target == "钱能放明年报不"
+    assert plan.atoms[0].original_fragment == "我刚考了证 钱能放明年报不"
+    assert plan.fallback_mode == "DEGRADED_RULE_ATOMS"
+
+
 def test_stage_modifier_keeps_shared_target_and_short_current_relations() -> (
     None
 ):

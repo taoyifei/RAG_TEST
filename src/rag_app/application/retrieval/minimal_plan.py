@@ -9,6 +9,7 @@ from pydantic import ConfigDict, Field
 from rag_app.application.retrieval.context_resolution import (
     QueryInputSpan,
     SpanKind,
+    current_context_modifier_clauses,
 )
 from rag_app.core.models import QueryAnalysis
 from rag_app.core.models.common import FrozenModel
@@ -27,13 +28,6 @@ _NEGATION = re.compile(
 )
 _UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年|万元|元|%|％|千克|公斤|米)")
 _DURATION_UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年)")
-_CONTEXT_MODIFIER = re.compile(
-    r"^(?:(?:根据|依据|按照)《[^》]+》|.+从.+到.+(?:后|前|期间))$"
-)
-_INTERROGATIVE_CLAUSE = re.compile(
-    r"谁|什么|啥|哪些|哪(?:个|些|里|一)|多少|多久|怎么|如何|怎样|"
-    r"何时|什么时候|是否|能否|可否|[吗呢]$|不$"
-)
 
 
 class MinimalPlanValidationError(ValueError):
@@ -78,7 +72,7 @@ def planner_json_schema(
         for span in spans
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
     )
-    modifiers = _context_modifier_clauses(current_clauses)
+    modifiers = current_context_modifier_clauses(current_clauses)
     answer_clauses = tuple(
         span for span in current_clauses if span not in modifiers
     ) or current_clauses
@@ -119,7 +113,7 @@ def build_query_atoms(
         for span in spans
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
     )
-    modifier_clauses = _context_modifier_clauses(current_clauses)
+    modifier_clauses = current_context_modifier_clauses(current_clauses)
     required_clauses = tuple(
         span for span in current_clauses if span not in modifier_clauses
     ) or current_clauses
@@ -182,25 +176,6 @@ def build_query_atoms(
     if any(value not in atom_text for value in literal_values):
         raise MinimalPlanValidationError("PLANNER_LITERAL_VIOLATION")
     return tuple(atoms)
-
-
-def _context_modifier_clauses(
-    current_clauses: tuple[QueryInputSpan, ...],
-) -> tuple[QueryInputSpan, ...]:
-    """识别只限定后续问句、无需独立回答的当前轮分句。"""
-    has_interrogative_clause = any(
-        _INTERROGATIVE_CLAUSE.search(span.text) for span in current_clauses
-    )
-    return tuple(
-        span
-        for index, span in enumerate(current_clauses)
-        if _CONTEXT_MODIFIER.fullmatch(span.text)
-        or (
-            has_interrogative_clause
-            and index < len(current_clauses) - 1
-            and _INTERROGATIVE_CLAUSE.search(span.text) is None
-        )
-    )
 
 
 def _constraints_for_fragment(

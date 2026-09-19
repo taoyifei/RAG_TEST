@@ -26,6 +26,13 @@ _REFERENCES = re.compile(r"这个|那个|上述|前者|后者|其中|它|其|这
 _SHORT_RELATION = re.compile(
     r"多久|何时|什么时候|多少|谁|哪里|怎么|如何|哪些|什么"
 )
+_CONTEXT_MODIFIER = re.compile(
+    r"^(?:(?:根据|依据|按照)《[^》]+》|.+从.+到.+(?:后|前|期间))$"
+)
+_INTERROGATIVE_CLAUSE = re.compile(
+    r"谁|什么|啥|哪些|哪(?:个|些|里|一)|多少|多久|怎么|如何|怎样|"
+    r"何时|什么时候|是否|能否|可否|[吗呢]$|不$"
+)
 _TARGET_BEFORE_QUESTION = re.compile(
     r"^(.+?)(?:什么时候|何时|多久|多少|怎么|如何|是什么|有哪些|"
     r"负责什么|需要什么|需要哪些|包括哪些|包含哪些|由谁|谁负责)"
@@ -501,6 +508,25 @@ def _append(
         )
 
 
+def current_context_modifier_clauses(
+    current_clauses: tuple[QueryInputSpan, ...],
+) -> tuple[QueryInputSpan, ...]:
+    """识别只限定后续问句、无需独立回答的当前轮分句。"""
+    has_interrogative_clause = any(
+        _INTERROGATIVE_CLAUSE.search(span.text) for span in current_clauses
+    )
+    return tuple(
+        span
+        for index, span in enumerate(current_clauses)
+        if _CONTEXT_MODIFIER.fullmatch(span.text)
+        or (
+            has_interrogative_clause
+            and index < len(current_clauses) - 1
+            and _INTERROGATIVE_CLAUSE.search(span.text) is None
+        )
+    )
+
+
 def degraded_query_plan(  # noqa: PLR0913
     request: SearchRequest,
     analysis: QueryAnalysis,
@@ -537,6 +563,10 @@ def degraded_query_plan(  # noqa: PLR0913
         for span in spans
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
     )
+    modifier_clauses = current_context_modifier_clauses(clauses)
+    answer_clauses = tuple(
+        span for span in clauses if span not in modifier_clauses
+    ) or clauses
     targets = tuple(
         span
         for span in spans
@@ -544,7 +574,7 @@ def degraded_query_plan(  # noqa: PLR0913
     )
     atoms: list[QueryAtom] = []
     if len(clauses) > 1 or len(targets) > 1:
-        for clause in clauses:
+        for clause in answer_clauses:
             clause_targets = tuple(
                 span for span in targets if span.text in clause.text
             )
@@ -581,18 +611,23 @@ def degraded_query_plan(  # noqa: PLR0913
                             ),
                             clause.text[:160],
                         ),
-                        "original_fragment": clause.text,
+                        "original_fragment": " ".join(
+                            (
+                                *(span.text for span in modifier_clauses),
+                                clause.text,
+                            )
+                        )[:320],
                     }
                 )
                 atoms.append(atom)
-        if len(atoms) > 1:
+        if atoms:
             return make_query_plan(
                 standalone_query=root.resolved_query,
                 original_query=request.text,
                 context_resolution_mode=root.mode,
                 context_digest=root.context_digest,
                 referenced_span_ids=root.referenced_span_ids,
-                intent="COMPOUND",
+                intent="COMPOUND" if len(atoms) > 1 else "SINGLE",
                 effort=effort,
                 atoms=tuple(atoms),
                 reason_code=reason_code,
