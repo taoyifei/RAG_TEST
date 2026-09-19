@@ -63,6 +63,7 @@ from rag_app.core.models.retrieval import (
     ClaimSupport,
     EvidenceItem,
     NaturalClaim,
+    PhysicalTableFact,
     TableFactSelection,
 )
 from rag_app.core.ports import CancellationPort
@@ -160,6 +161,8 @@ _NATURAL_GROUNDED_SYSTEM = (
     "对每个support_id逐字复制覆盖该事实的完整相关原句或结构成员作为quote；"
     "若原句分散在多个ID中，分别引用这些ID，不把半句拼成未经证明的新事实。"
     "若提供table_facts，表格回答只能在table_fact_selections中选择fact_id；"
+    "atom_table_fact_ids限定每个Atom可选择的fact_id，table_facts中的来源ID"
+    "指向evidence里只发送一次的真实表格文字。"
     "不要把行名、表头或值改写成普通claims。行名和表头只是物理结构依赖，"
     "不能单独成为事实；服务端会按fact_id恢复值及全部结构来源。"
     "source_structure.table_cell是真实表格坐标；仅用来关联同表的行列，"
@@ -787,6 +790,66 @@ class _TableProofUnit:
     context_support_ids: tuple[str, ...] = ()
 
 
+def _retained_physical_fact_context(
+    units: tuple[_TableProofUnit, ...],
+    facts: tuple[PhysicalTableFact, ...],
+    support_ids: set[str],
+) -> tuple[dict[str, PhysicalTableFact], tuple[_TableProofUnit, ...], set[str]]:
+    """返回本次消息完整保留的事实、绑定单元和去重来源集合。"""
+    registry = {fact.fact_id: fact for fact in facts}
+    retained = tuple(
+        unit
+        for unit in units
+        if unit.atom_id is not None
+        and unit.reason == "PHYSICAL_TABLE_FACT"
+        and unit.fact_id in registry
+        and unit.support_ids <= support_ids
+    )
+    retained_support_ids = {
+        support_id for unit in retained for support_id in unit.support_ids
+    }
+    return registry, retained, retained_support_ids
+
+
+def _physical_fact_payloads(
+    units: tuple[_TableProofUnit, ...],
+    facts: Mapping[str, PhysicalTableFact],
+    atom_ids: tuple[str, ...],
+) -> tuple[tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:
+    """将事实本体与逐 Atom 可选关系分开，避免重复发送同一事实。"""
+    fact_ids = tuple(
+        dict.fromkeys(
+            unit.fact_id for unit in units if unit.fact_id is not None
+        )
+    )
+    fact_payloads: tuple[dict[str, object], ...] = tuple(
+        {
+            "fact_id": fact_id,
+            "value_support_ids": facts[fact_id].value_support_ids,
+            "row_label_support_ids": facts[fact_id].row_label_support_ids,
+            "headers": tuple(
+                header.support_ids for header in facts[fact_id].headers
+            ),
+        }
+        for fact_id in fact_ids
+    )
+    bindings: tuple[dict[str, object], ...] = tuple(
+        {
+            "atom_id": atom_id,
+            "fact_ids": tuple(
+                dict.fromkeys(
+                    unit.fact_id
+                    for unit in units
+                    if unit.atom_id == atom_id and unit.fact_id is not None
+                )
+            ),
+        }
+        for atom_id in atom_ids
+        if any(unit.atom_id == atom_id for unit in units)
+    )
+    return fact_payloads, bindings
+
+
 def _table_proof_units(  # noqa: PLR0912
     candidates: tuple[EvidenceItem, ...], request: GenerationRequest
 ) -> tuple[_TableProofUnit, ...]:
@@ -1174,6 +1237,14 @@ def _prepare_natural_messages(  # noqa: PLR0915
         evidence_payloads: list[dict[str, object]] = []
         table_aliases: dict[str, str] = {}
         group_aliases: dict[tuple[str | None, str | None, str], str] = {}
+        current_ids = {item.support_id for item in items}
+        physical_facts, physical_units, physical_support_ids = (
+            _retained_physical_fact_context(
+                table_proof_units,
+                request.physical_table_facts,
+                current_ids,
+            )
+        )
         certificate_keys = {
             key for _, key, _ in request.per_atom_source_certificates
         }
@@ -1232,13 +1303,22 @@ def _prepare_natural_messages(  # noqa: PLR0915
                         }
                         for unit in table_proof_units
                         if unit.atom_id is not None
-                        and unit.reason
-                        in {"TABLE_INTERSECTION", "PHYSICAL_TABLE_FACT"}
+                        and unit.reason == "TABLE_INTERSECTION"
                         and item.support_id in unit.support_ids
                     )
                     if table_roles:
                         structure_projection["table_roles"] = table_roles
                 projection["source_structure"] = structure_projection
+            if item.support_id in physical_support_ids:
+                # 物理事实已经在服务端按真实坐标闭合。模型只需要看一次
+                # 来源文字；坐标、来源组与逐 Atom 角色均由服务端登记的
+                # table_facts/atom_table_fact_ids 持有，避免同一文字重复展开。
+                projection = {
+                    "support_id": item.support_id,
+                    "text": item.citation_text,
+                }
+                evidence_payloads.append(projection)
+                continue
             verified_group_id = complete_group_id(item)
             group_covered = False
             if verified_group_id is not None:
@@ -1291,34 +1371,14 @@ def _prepare_natural_messages(  # noqa: PLR0915
         if not request.repair_atom_ids:
             payload["original_query"] = plan.original_query
             payload["resolved_root_query"] = plan.resolved_root_query
-        current_ids = {item.support_id for item in items}
-        physical_facts = {
-            fact.fact_id: fact for fact in request.physical_table_facts
-        }
-        table_facts = tuple(
-            {
-                "atom_id": unit.atom_id,
-                "fact_id": unit.fact_id,
-                "value_support_ids": unit.value_support_ids,
-                "row_label_support_ids": physical_facts[
-                    unit.fact_id
-                ].row_label_support_ids,
-                "headers": tuple(
-                    {
-                        "support_ids": header.support_ids,
-                        "column_indexes": header.column_indexes,
-                    }
-                    for header in physical_facts[unit.fact_id].headers
-                ),
-            }
-            for unit in table_proof_units
-            if unit.atom_id is not None
-            and unit.reason == "PHYSICAL_TABLE_FACT"
-            and unit.fact_id in physical_facts
-            and unit.support_ids <= current_ids
+        table_facts, atom_table_fact_ids = _physical_fact_payloads(
+            physical_units,
+            physical_facts,
+            tuple(atom.atom_id for atom in atoms),
         )
         if table_facts:
             payload["table_facts"] = table_facts
+            payload["atom_table_fact_ids"] = atom_table_fact_ids
         legacy_table_fact_units = tuple(
             {
                 "atom_id": unit.atom_id,
@@ -1399,10 +1459,12 @@ def _prepare_natural_messages(  # noqa: PLR0915
         ),
         budget_exceeded,
         tuple(
-            unit.fact_id
-            for unit in table_proof_units
-            if unit.fact_id is not None
-            and unit.support_ids <= {item.support_id for item in candidates}
+            dict.fromkeys(
+                unit.fact_id
+                for unit in table_proof_units
+                if unit.fact_id is not None
+                and unit.support_ids <= {item.support_id for item in candidates}
+            )
         ),
     )
 

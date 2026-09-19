@@ -12,6 +12,8 @@ from rag_app.adapters.providers.aliyun_chat import (
     ChatUsage,
     _natural_answer_draft,
     _natural_messages,
+    _prepare_natural_messages,
+    message_token_estimate,
 )
 from rag_app.adapters.providers.http_common import ProviderHttpClient
 from rag_app.adapters.providers.openai_compatible import (
@@ -221,6 +223,78 @@ def test_model_selects_fact_id_and_header_only_cannot_guess_value() -> None:
         )
 
 
+def test_multi_atom_fact_catalog_sends_each_source_and_fact_once() -> None:
+    """多 Atom 可共享物理事实目录，但不得重复展开来源或角色。"""
+    atoms = (
+        QueryAtom(
+            atom_id="A1",
+            target="工装试制",
+            relation="准备事项",
+            answer_shape=AtomAnswerShape.ENUMERATION,
+        ),
+        QueryAtom(
+            atom_id="A2",
+            target="工装试制",
+            relation="启动要求",
+            answer_shape=AtomAnswerShape.FACT,
+        ),
+    )
+    question = "工装试制要准备什么，满足什么要求后可以启动？"
+    plan = _plan(*atoms).model_copy(
+        update={
+            "standalone_query": question,
+            "original_query": question,
+            "resolved_root_query": question,
+        }
+    )
+    pack = _pack(plan, _sources())
+    request = GenerationRequest(
+        query=question,
+        evidence=pack.evidence,
+        citation_protocol="support-id-v4-table-facts",
+        query_plan=plan,
+        atom_support_matrix=AtomSupportMatrix(
+            atoms=tuple(
+                AtomSupport(atom_id=atom.atom_id, status=AtomStatus.MISSING)
+                for atom in atoms
+            )
+        ),
+        per_atom_candidate_support_ids=pack.per_atom_candidate_support_ids,
+        priority_source_units=pack.priority_source_units,
+        physical_table_facts=pack.physical_table_facts,
+        atom_fact_bindings=pack.atom_fact_bindings,
+    )
+
+    prepared = _prepare_natural_messages(
+        request,
+        max_input_tokens=4_159,
+        retain_budget_rejection=True,
+    )
+    payload = json.loads(prepared.messages[1].content)
+    facts = payload["table_facts"]
+    bindings = payload["atom_table_fact_ids"]
+    physical_support_ids = {
+        support_id
+        for fact in pack.physical_table_facts
+        for support_id in fact.all_support_ids
+    }
+    sent_physical = [
+        item
+        for item in payload["evidence"]
+        if item["support_id"] in physical_support_ids
+    ]
+
+    assert not prepared.input_budget_exceeded
+    assert message_token_estimate(prepared.messages) <= 4_159
+    assert len(facts) == len(pack.physical_table_facts) == 4
+    assert len({fact["fact_id"] for fact in facts}) == len(facts)
+    assert {item["atom_id"] for item in bindings} == {"A1", "A2"}
+    assert all(len(item["fact_ids"]) == 4 for item in bindings)
+    assert len(sent_physical) == len(physical_support_ids)
+    assert all(set(item) == {"support_id", "text"} for item in sent_physical)
+    assert len(prepared.retained_table_fact_ids) == 4
+
+
 def test_value_and_header_without_physical_row_label_cannot_form_fact() -> None:
     value = _table_cell(310, "图纸基线、材料清单。", 3, 2)
     header = _table_cell(311, "输入", 0, 2)
@@ -304,3 +378,82 @@ def test_full_answer_service_publishes_selected_physical_fact() -> None:
     assert outcome.accepted_claim_count == outcome.published_claim_count == 1
     assert outcome.relation_review_calls == outcome.repair_calls == 0
     assert len(outcome.calls) == len(outcome.prepared_packets) == 1
+
+
+def test_response_contract_failure_uses_one_scoped_fact_repair() -> None:
+    """真实发送后的协议失败可用唯一补充名额重试当前 Atom。"""
+    plan = _fact_plan()
+    pack = _pack(plan, _sources())
+    fact = pack.physical_table_facts[0]
+    sent_bodies: list[dict[str, object]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent = json.loads(body["messages"][1]["content"])
+        sent_bodies.append(sent)
+        content = (
+            "not-json"
+            if len(sent_bodies) == 1
+            else json.dumps(
+                {
+                    "table_fact_selections": [
+                        {"atom_id": "A1", "fact_id": fact.fact_id}
+                    ]
+                }
+            )
+        )
+        return httpx.Response(
+            200,
+            json={
+                "model": "synthetic",
+                "choices": [
+                    {
+                        "message": {"content": content},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                },
+            },
+        )
+
+    adapter = OpenAICompatibleChatAdapter(
+        OpenAICompatibleChatConfig(
+            model="synthetic",
+            egress_allowed=True,
+            disable_thinking_supported=True,
+            disable_thinking=True,
+            structured_output_mode="response_format",
+        ),
+        http_client=ProviderHttpClient(
+            "https://provider.example/v1",
+            client=httpx.Client(transport=httpx.MockTransport(handle)),
+            max_attempts=1,
+        ),
+        api_key_resolver=lambda: "",
+    )
+    matrix = AtomSupportMatrix(
+        atoms=(AtomSupport(atom_id="A1", status=AtomStatus.MISSING),)
+    )
+
+    outcome = GroundedAnsweringService(adapter).answer(
+        plan.standalone_query,
+        pack.evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        analysis=QueryAnalyzer().analyze(_request(plan.standalone_query)),
+        query_plan=plan,
+        atom_support_matrix=matrix,
+        generation_evidence_pack=pack,
+    )
+
+    assert outcome.answer is not None
+    assert outcome.repair_calls == 1
+    assert outcome.accepted_claim_count == outcome.published_claim_count == 1
+    assert len(outcome.calls) == len(outcome.prepared_packets) == 2
+    assert sent_bodies[1]["repair_only"] is True
+    assert sent_bodies[1]["raw_failures"] == [
+        ["A1", "GENERATION_CLAIMS_INVALID"]
+    ]

@@ -2998,7 +2998,47 @@ class GroundedAnsweringService:
         if eligible:
             try:
                 _raise_if_cancelled(cancellation)
-                consume(generate())
+                try:
+                    consume(generate())
+                except RagError as error:
+                    failed_packets = _failed_generation_packets(error)
+                    failed_calls = error.provider_calls or (
+                        ()
+                        if error.provider_call is None
+                        else (error.provider_call,)
+                    )
+                    prepared_packets.extend(failed_packets)
+                    calls.extend(failed_calls)
+                    sent_packet = next(
+                        (
+                            packet
+                            for packet in reversed(failed_packets)
+                            if packet.evidence_level == "TRANSPORT_SENT"
+                        ),
+                        None,
+                    )
+                    if sent_packet is not None:
+                        attempt_linked_ids = dict(
+                            sent_packet.per_atom_support_ids
+                        )
+                    reason = error.code
+                    raw_reason = error.code
+                    if isinstance(error, ProviderInvalidResponse):
+                        detailed_reason = dict(error.details).get("reason_code")
+                        if isinstance(detailed_reason, str):
+                            raw_reason = detailed_reason
+                    raw_failures.extend(
+                        (atom_id, raw_reason)
+                        for atom_id in sorted(eligible)
+                        if (atom_id, raw_reason) not in raw_failures
+                    )
+                except ValueError:
+                    reason = "GENERATION_OUTPUT_INVALID"
+                    raw_failures.extend(
+                        (atom_id, reason)
+                        for atom_id in sorted(eligible)
+                        if (atom_id, reason) not in raw_failures
+                    )
                 # 资料完整但模型漏掉结构成员时，也只补对应 Atom。
                 omitted = tuple(
                     atom.atom_id
@@ -3536,6 +3576,7 @@ def _can_repair_atom(
     """只修组织缺项和低风险语义组织错误，硬边界失败不再试探。"""
     recoverable = {
         "GENERATION_ABSTAINED",
+        "GENERATION_CLAIMS_INVALID",
         "GENERATION_INCOMPLETE",
         "CLAIM_TEXT_UNSUPPORTED",
         "CLAIM_FRAGMENT_INCOMPLETE",
