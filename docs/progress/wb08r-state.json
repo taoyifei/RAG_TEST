@@ -2,10 +2,14 @@
   "base_sha": "746b030d0b63c937d9a17817596c0533f17eb966",
   "phase_start_sha": "09f019a8cdb46e4e7e7ea20566b8491a235f70e4",
   "work_branch": "codex/wb-08r-adaptive-rag",
-  "completed_phases": ["WB08R-00", "WB08R-01", "WB08R-02"],
+  "completed_phases": [
+    "WB08R-00",
+    "WB08R-01",
+    "WB08R-02"
+  ],
   "current_phase": "WB08R-03",
-  "phase_status": "PAUSED",
-  "implementation_status": "wb08r03g_p0_pass_with_declared_package_input_gaps",
+  "phase_status": "FAILED",
+  "implementation_status": "wb08r03g_v8_frozen_with_functional_regressions",
   "wb08r03r2_phase_start_sha": "399cf2184c4b3f47f6f4b274c4333913f610f1d2",
   "candidate_code_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
@@ -22,18 +26,46 @@
     "R3_root_atom_retrieval": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
     "R4_group_alignment": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
     "R5_natural_claims": "IMPLEMENTED_NEEDS_REAL_VERIFICATION",
-    "03G_P0_evidence_freeze": "PASS_WITH_DECLARED_PACKAGE_INPUT_GAPS"
+    "03G_P0_evidence_freeze": "PASS_WITH_DECLARED_PACKAGE_INPUT_GAPS",
+    "03G_V8_integrated_repair": "FAILED_FROZEN_AT_TWO_ROUND_LIMIT"
   },
   "verification_gates": {
-    "candidate_identity": "PASSED_BD00C56",
-    "targeted_answering_regression": "PASSED_131",
-    "static_checks": "PASSED_RUFF_DIFF_CHECK_UNIVERSAL_FIRST_HARDCODE_AUDIT",
-    "gate_a_evidence_pack_12": "NOT_RERUN_ON_BD00C56_PRIOR_A5AE4CC_PASS_ONLY",
-    "gate_b_core_answer_16": "NOT_RERUN_ON_BD00C56_PRIOR_A5AE4CC_PASS_ONLY",
-    "gate_c_failed_24": "NOT_RERUN_ON_BD00C56_PRIOR_A5AE4CC_PASS_ONLY",
-    "gate_d_natural_36": "FAILED_TARGETED_N031_WRONG_SOURCE_N033_INSUFFICIENT_EVIDENCE",
-    "gate_e_full_96": "NOT_RUN_BLOCKED_BY_GATE_D",
-    "gate_f_concurrency_4": "NOT_RUN_BLOCKED_BY_GATE_D"
+    "Preflight-16": {
+      "status": "FAILED",
+      "run_count": 16,
+      "fact_source_pass": 3,
+      "fact_source_fail": 13
+    },
+    "A_EvidencePack-12": {
+      "status": "NOT_RUN",
+      "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+      "same_version_pass": false
+    },
+    "B_CoreAnswer-16": {
+      "status": "NOT_RUN",
+      "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+      "same_version_pass": false
+    },
+    "C_Failed-24": {
+      "status": "NOT_RUN",
+      "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+      "same_version_pass": false
+    },
+    "D_Natural-36": {
+      "status": "NOT_RUN",
+      "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+      "same_version_pass": false
+    },
+    "E_Full-96": {
+      "status": "NOT_RUN",
+      "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+      "same_version_pass": false
+    },
+    "F_Concurrency-4": {
+      "status": "NOT_RUN",
+      "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+      "same_version_pass": false
+    }
   },
   "wb08r03r2_verification": {
     "candidate_code_sha": "8337bdbc73c721744cf63e36127925bf7064beb6",
@@ -63,9 +95,18 @@
     "targeted_pytest": "131 passed",
     "static_checks": "PASSED_RUFF_DIFF_CHECK_UNIVERSAL_FIRST_HARDCODE_AUDIT",
     "targeted_real_cases": {
-      "answerable": ["N019", "N025", "N027", "A013"],
-      "wrong_source": ["N031"],
-      "insufficient_evidence": ["N033"],
+      "answerable": [
+        "N019",
+        "N025",
+        "N027",
+        "A013"
+      ],
+      "wrong_source": [
+        "N031"
+      ],
+      "insufficient_evidence": [
+        "N033"
+      ],
       "n033_claim_rejection": "CLAIM_SUPPORT_NOT_OWNED"
     },
     "gate_a_evidence_pack_12": "NOT_RERUN_ON_BD00C56",
@@ -134,7 +175,10 @@
     "r0_gate": "passed",
     "r1_probe": {
       "thinking_disable_supported": true,
-      "supported_modes": ["response_format", "structured_outputs"],
+      "supported_modes": [
+        "response_format",
+        "structured_outputs"
+      ],
       "selected_mode": "response_format",
       "guided_json": "INVALID_RESPONSE"
     },
@@ -162,7 +206,17 @@
       "p95_ms": 5010.41,
       "gate": "failed"
     },
-    "remaining_gates": ["R2", "R3", "R4", "R5", "R6", "Planner-24", "Ownership-16", "Claims-16", "Full-96"]
+    "remaining_gates": [
+      "R2",
+      "R3",
+      "R4",
+      "R5",
+      "R6",
+      "Planner-24",
+      "Ownership-16",
+      "Claims-16",
+      "Full-96"
+    ]
   },
   "wb08r03g_p0_verification": {
     "phase_start_sha": "661498176a2c885f7a109c0af0024ae2ad59b88f",
@@ -231,5 +285,76 @@
     "runtime_access": "AUTHORIZED_AND_USED_FOR_READ_ONLY_EVIDENCE_AND_SINGLE_8289_OBSERVATION",
     "phase_status": "PAUSED",
     "merge_allowed": false
+  },
+  "wb08r03g_v8": {
+    "status": "FAILED",
+    "report": "docs/progress/wb08r-03g-v8-report.md",
+    "manifest": "docs/progress/wb08r-03g-v8-manifest.json",
+    "audit_head": "a06235053f692f4947d762f23c04b6855acc128a",
+    "candidate_replacements": 2,
+    "merge_allowed": false,
+    "implementation_status": "FROZEN_WITH_FUNCTIONAL_REGRESSIONS",
+    "live_gates": "PREFLIGHT16_FAILED_3_OF_16_FACT_SOURCE_PASS",
+    "new_root_cause_fix_round_limit": 2,
+    "candidate_sha": "a654323adfe3c30b2bbda89704b4698e58482401",
+    "phase_status": "FAILED",
+    "build_attempts": 1,
+    "final_source_commit": "152bf163a97fbfac555269343dd9f798495e59b8",
+    "final_runtime_code_commit": "6a8ea584603e388f3512d6dc6e0bf8950fb7fc86",
+    "final_source_deployed": false,
+    "independent_verification_ready": false,
+    "stop_reason": "USER_NEW_ROOT_CAUSE_TWO_ROUND_LIMIT_REACHED_WITH_THREE_EXISTING_POSITIVE_REGRESSIONS",
+    "remaining_known_functional_regressions": 3,
+    "candidate_8289_restored": true,
+    "production_8288_unchanged": true,
+    "gates": {
+      "Preflight-16": {
+        "status": "FAILED",
+        "run_count": 16,
+        "fact_source_pass": 3,
+        "fact_source_fail": 13
+      },
+      "A_EvidencePack-12": {
+        "status": "NOT_RUN",
+        "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+        "same_version_pass": false
+      },
+      "B_CoreAnswer-16": {
+        "status": "NOT_RUN",
+        "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+        "same_version_pass": false
+      },
+      "C_Failed-24": {
+        "status": "NOT_RUN",
+        "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+        "same_version_pass": false
+      },
+      "D_Natural-36": {
+        "status": "NOT_RUN",
+        "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+        "same_version_pass": false
+      },
+      "E_Full-96": {
+        "status": "NOT_RUN",
+        "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+        "same_version_pass": false
+      },
+      "F_Concurrency-4": {
+        "status": "NOT_RUN",
+        "reason": "PREFLIGHT_FAILED_AND_FINAL_CODE_FUNCTIONAL_REGRESSION",
+        "same_version_pass": false
+      }
+    }
+  },
+  "pre_v8_top_level_verification_gates": {
+    "candidate_identity": "PASSED_BD00C56",
+    "targeted_answering_regression": "PASSED_131",
+    "static_checks": "PASSED_RUFF_DIFF_CHECK_UNIVERSAL_FIRST_HARDCODE_AUDIT",
+    "gate_a_evidence_pack_12": "NOT_RERUN_ON_BD00C56_PRIOR_A5AE4CC_PASS_ONLY",
+    "gate_b_core_answer_16": "NOT_RERUN_ON_BD00C56_PRIOR_A5AE4CC_PASS_ONLY",
+    "gate_c_failed_24": "NOT_RERUN_ON_BD00C56_PRIOR_A5AE4CC_PASS_ONLY",
+    "gate_d_natural_36": "FAILED_TARGETED_N031_WRONG_SOURCE_N033_INSUFFICIENT_EVIDENCE",
+    "gate_e_full_96": "NOT_RUN_BLOCKED_BY_GATE_D",
+    "gate_f_concurrency_4": "NOT_RUN_BLOCKED_BY_GATE_D"
   }
 }
