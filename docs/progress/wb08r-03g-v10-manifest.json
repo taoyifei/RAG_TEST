@@ -1,0 +1,201 @@
+{
+  "schema_version": "wb08r03g-v10-final-v1",
+  "version": "V10",
+  "status": "FAILED",
+  "phase_status": "PAUSED",
+  "merge_allowed": false,
+  "production_publish_allowed": false,
+  "independent_verification_ready": false,
+  "stop_reason": "TWO_FUNCTIONAL_CANDIDATES_FAILED_NO_THIRD_ATTEMPT",
+  "branch": "codex/wb-08r-adaptive-rag",
+  "audit_base_sha": "52df5f6056d91a4c104f1def076ac28059e1a551",
+  "source_head_sha": "da854865f4dbb0c8b673b2d23087988d0a8e49cf",
+  "report_commit_sha": "6c78a86b1a4a4005cc1076b17243e381c2bdfb3c",
+  "source_commits": [
+    {
+      "sha": "a7892fa6cb03ae46fa3c0c4e6f9b8721301e2ad3",
+      "subject": "fix(rag): restore evidence-first relation review"
+    },
+    {
+      "sha": "da854865f4dbb0c8b673b2d23087988d0a8e49cf",
+      "subject": "fix(rag): project certified table facts"
+    }
+  ],
+  "candidate_limit": 2,
+  "functional_candidates_built": 2,
+  "functional_deployments": 2,
+  "quality_business_requests": 32,
+  "production_modified": false,
+  "qdrant_modified": false,
+  "reports": {
+    "report": "docs/progress/wb08r-03g-v10-report.md",
+    "report_sha256": "08994f4a1884e4bc43df09354dd27dd404d3e29d9c5cdb845144c406450e9722",
+    "p0_issues": "docs/progress/wb08r-03g-v10-p0-issues.md",
+    "p0_issues_sha256": "8949ab6ffcfb050d07c3079a80cf2359f68c8f7e1182c2149554cb4b4968773e",
+    "state": "docs/progress/wb08r-state.json"
+  },
+  "p0_ids": [
+    "P0-01_PHYSICAL_TABLE_IDENTITY_CONFLATED_WITH_SEMANTIC_TARGET",
+    "P0-02_RELATION_REVIEW_REMAINS_UNSTABLE_CRITICAL_PATH",
+    "P0-03_REPAIR_COUPLED_TO_ACCEPTED_AND_CROSS_ATOM_FAILURES",
+    "P0-04_N031_FACT_GROUPING_AND_BUDGET_FAILURE",
+    "P0-05_HARD_BOUNDARY_CASES_REQUIRE_TRUTH_REVIEW",
+    "P0-06_OFFLINE_LIVE_REPLAY_GAP"
+  ],
+  "candidates": {
+    "c1": {
+      "code_sha": "a7892fa6cb03ae46fa3c0c4e6f9b8721301e2ad3",
+      "image_tag": "rag-test-wanshitong:wb08r03g-v10-c1-a7892fa",
+      "image_id": "sha256:5f8251fb803b969061fe0929bc9e47d024968f679a2fc0ae3f351b664c1f7d12",
+      "runtime_tree_sha256": "21c7e29d6621a8bbc95161452f29f49eff74803437352ecbcccdb03989cf463e",
+      "version_bundle_sha256": "80c8c852bfcae0e84bae60ad52aa76597947b74dbcc4c0f33fd582d824284c85",
+      "review_revision": "wb08r-relation-review-v3",
+      "preflight_duration_seconds": 308,
+      "preflight_requests": 16,
+      "exactly_one_final": 16,
+      "nonempty_answer_with_support": 0,
+      "known_answerable_false_refusals": 3,
+      "repair_calls": 0,
+      "provider_calls": {
+        "embedding.query": 16,
+        "generation": 28,
+        "query.interpret": 9,
+        "query.rewrite": 0,
+        "reranking": 16
+      },
+      "gate": "FAILED"
+    },
+    "c2": {
+      "code_sha": "da854865f4dbb0c8b673b2d23087988d0a8e49cf",
+      "image_tag": "rag-test-wanshitong:wb08r03g-v10-c2-da85486",
+      "image_id": "sha256:7ff2c1ee55a8658842b18c3ff899360c9a4e8dfb38a40d415aa94591ae28f51c",
+      "runtime_tree_sha256": "8b71a90115c1211273cd5f2fbbc225c3f213881a5b69f55f6602ecc5b05dd03d",
+      "version_bundle_sha256": "bbaaa7a0ca5dff63c43cb393f66d48e829f4ace4400a2ef39c72862c4601ceaa",
+      "review_revision": "wb08r-relation-review-v4",
+      "preflight_duration_seconds": 260,
+      "preflight_requests": 16,
+      "exactly_one_final": 16,
+      "nonempty_answer_with_support": 1,
+      "truth_verified_answers": 0,
+      "known_answerable_false_refusals": 3,
+      "repair_calls": 0,
+      "provider_calls": {
+        "embedding.query": 16,
+        "generation": 22,
+        "query.interpret": 9,
+        "query.rewrite": 0,
+        "reranking": 16
+      },
+      "performance_by_path": {
+        "generate": {
+          "sample_count": 1,
+          "p50_ms": 8955.55,
+          "p95_ms": 8955.55
+        },
+        "refuse": {
+          "sample_count": 12,
+          "p50_ms": 6699.875,
+          "p95_ms": 35426.98
+        },
+        "unknown": {
+          "sample_count": 3,
+          "p50_ms": 23460.9,
+          "p95_ms": 23859.17
+        }
+      },
+      "gate": "FAILED"
+    }
+  },
+  "fixed_runtime": {
+    "document_count": 46,
+    "chunk_count": 2880,
+    "active_index_revision_id": "irev_0329a35ca9ea700133f7b309160118f0",
+    "generation_model": "Qwen/Qwen3-8B-AWQ",
+    "max_input_tokens": 6144,
+    "max_output_tokens": 1536,
+    "rerank_candidate_limit": 24,
+    "runtime_file_count": 391,
+    "serving_fingerprint": "sha256:ff858c8bb682e1620db264984c09fc176e307d933699b95e7d4ceb9fc30a0707"
+  },
+  "gates": {
+    "question_answering_related_pytest": "PASS_338",
+    "candidate_and_evaluation_related_pytest": "PASS_152",
+    "ruff_changed_files": "PASS",
+    "mypy_changed_source_files": "PASS_5_FILES",
+    "py_compile": "PASS",
+    "git_diff_check": "PASS",
+    "preflight_16": "FAILED_BOTH_CANDIDATES",
+    "A_EvidencePack_12": "NOT_RUN",
+    "B_CoreAnswer_16": "NOT_RUN",
+    "C_Failed_24": "NOT_RUN",
+    "D_Natural_36": "NOT_RUN",
+    "E_Full_96": "NOT_RUN",
+    "F_Concurrency_4": "NOT_RUN",
+    "unrelated_full_repository_tests": "NOT_RUN_BY_USER_SCOPE"
+  },
+  "live_findings": {
+    "f015": {
+      "runs": 3,
+      "false_refusals": 3,
+      "a1_raw_rejection": "CLAIM_TABLE_DEPENDENCY_INCOMPLETE",
+      "a2_raw_rejection": "CLAIM_QUERY_RELATION_UNDETERMINED",
+      "v4_review_supports": [
+        "S1",
+        "S13",
+        "S19"
+      ],
+      "v4_review_http_read_timeouts": 3,
+      "accepted_claims": 0,
+      "published_claims": 0,
+      "repair_calls": 0
+    },
+    "n031": {
+      "runs": 3,
+      "main_claims_per_run": 8,
+      "raw_rejection": "CLAIM_QUERY_RELATION_UNDETERMINED",
+      "review_skip": "RELATION_REVIEW_INPUT_BUDGET_EXCEEDED",
+      "final_status": "BUDGET_BLOCKED"
+    },
+    "n033": "CLAIM_STAGE_UNSUPPORTED",
+    "f013": "CLAIM_MODALITY_MISMATCH",
+    "f024_f034": "CLAIM_SOURCE_MISMATCH",
+    "n035": "NONEMPTY_BUT_NEEDS_TRUTH_REVIEW"
+  },
+  "final_runtime": {
+    "candidate_port": 8289,
+    "candidate_status": "ROLLED_BACK_BASELINE_HEALTHY_200",
+    "candidate_container_id": "3ccc487c2dbe555b5da2ae8782187655e9befffcc232004d05dd6e8408dd6eda",
+    "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
+    "candidate_image_id": "sha256:621acc792c12169d347fde03a8cfb06dff4ca033bf4867171d35bc46f284b75c",
+    "production_container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
+    "production_image_tag": "rag-test-wanshitong:604ef63",
+    "production_image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306",
+    "production_60_8288_health": 200,
+    "production_54_18288_health": 200,
+    "production_identity_exact_match": true
+  },
+  "cleanup": {
+    "global_prune_used": false,
+    "v10_candidate_images_removed_remote": 2,
+    "v10_candidate_images_removed_local": 2,
+    "remote_remaining_image_tags": [
+      "rag-test-wanshitong:604ef63",
+      "rag-test-wanshitong:wb08r03f-bd00c56",
+      "rag-test-wanshitong:wb08r02-9c3b029"
+    ],
+    "local_remaining_image_tags": [
+      "rag-test-wanshitong:604ef63",
+      "rag-test-wanshitong:wb08r03f-bd00c56"
+    ],
+    "temporary_transfer_files_on_54_removed": 6,
+    "temporary_work_directory_on_60_removed": true,
+    "original_untracked_result_files_preserved": 10
+  },
+  "private_evidence": {
+    "path": "C:/Users/jerry/AppData/Local/Codex/diagnostics/wb08r03g-v10-20260919/v10-evidence-da85486.private.tar.gz",
+    "sha256": "7e16b9f032d03aabacb288fe64799d3b792d077ead2dd6598c3d6dec9de66461",
+    "size_bytes": 134204,
+    "contains_private_business_text": true,
+    "tracked_in_git": false
+  }
+}
