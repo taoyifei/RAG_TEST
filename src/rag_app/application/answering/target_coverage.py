@@ -17,8 +17,10 @@ from rag_app.core.models.query import QuerySemantics
 from rag_app.core.models.query_plan import AtomAnswerShape, QueryAtom
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
+    literal_relation_modifiers_supported,
     normalize_document_label,
     normalize_duty_heading_label,
+    table_axis_label_in_query,
 )
 from rag_app.core.source_compatibility import (
     source_group_contains,
@@ -225,7 +227,12 @@ def _table_members(
         (member, cell)
         for member, cell in located
         if cell[2] == 0
-        and normalize_duty_heading_label(member.citation_text) == target
+        and (
+            normalize_duty_heading_label(member.citation_text) == target
+            or table_axis_label_in_query(
+                atom.original_fragment or "", member.citation_text
+            )
+        )
         and member.source_spans[0].node_id not in headers
     )
     relation = normalize_document_label(semantics.relation or atom.relation)
@@ -234,8 +241,13 @@ def _table_members(
         for member, cell in located
         if member.source_spans[0].node_id in headers
         and cell[2] > 0
-        and _relation_header_matches(atom.answer_shape, relation, member)
+        and _relation_header_matches(atom, relation, member)
     )
+    if not literal_relation_modifiers_supported(
+        atom.original_fragment or "",
+        " ".join(member.citation_text for member, _cell in selected_headers),
+    ):
+        return None
     facts: list[EvidenceItem] = []
     context: list[EvidenceItem] = []
     for label, row in labels:
@@ -255,13 +267,17 @@ def _table_members(
 
 
 def _relation_header_matches(
-    shape: AtomAnswerShape, relation: str, member: EvidenceItem
+    atom: QueryAtom, relation: str, member: EvidenceItem
 ) -> bool:
     header = normalize_document_label(member.citation_text)
     if relation and (relation == header or relation in header):
         return True
+    if table_axis_label_in_query(
+        atom.original_fragment or "", member.citation_text
+    ):
+        return True
     # 此处仅识别请求的字段类型；主体与阶段另由完整规范标签选定。
-    return shape is AtomAnswerShape.DUTIES and "职责" in header
+    return atom.answer_shape is AtomAnswerShape.DUTIES and "职责" in header
 
 
 def _project_group(

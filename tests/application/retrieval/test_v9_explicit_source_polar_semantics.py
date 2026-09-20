@@ -41,6 +41,27 @@ def test_source_prefix_with_polite_request_keeps_correct_offset() -> None:
 
 @pytest.mark.parametrize(
     "query",
+    (
+        "《开发中心三种工作模式》中，需求快验的输入项是什么？",
+        "《开发中心三种工作模式》的需求快验输入项是什么？",
+    ),
+)
+def test_bare_book_title_prefix_keeps_source_out_of_question_body(
+    query: str,
+) -> None:
+
+    source, body, start = split_explicit_source_scope(query)
+
+    assert source == "开发中心三种工作模式"
+    assert body in {
+        "需求快验的输入项是什么？",
+        "需求快验输入项是什么？",
+    }
+    assert query[start:] == body
+
+
+@pytest.mark.parametrize(
+    "query",
     [
         "根据实际情况，甲部门要归档吗？",
         "甲部门编写甲手册，乙部门要归档吗？",

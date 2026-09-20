@@ -296,3 +296,100 @@ def test_complete_requested_table_column_ignores_unasked_columns() -> None:
     )
     assert result.complete
     assert len(result.required_member_keys) == 1
+
+
+def _input_table() -> tuple[tuple[EvidenceItem, ...], EvidenceGroup]:
+    """把现有物理表格夹具转为短行名与短列名对照样本。"""
+    specs = (
+        (0, 0, "模式"),
+        (0, 1, "输入（业务团队 / 外部单位需提供）"),
+        (0, 2, "输出"),
+        (1, 0, "需求快验"),
+        (1, 1, "需求功能点描述。"),
+        (1, 1, "验收标准。"),
+        (1, 2, "快验结论。"),
+        (2, 0, "其他模式"),
+        (2, 1, "其他输入。"),
+    )
+    by_text = {
+        item.citation_text: item
+        for item in EvidenceAssembler().assemble(
+            _candidates("".join(_paragraph(text) for _, _, text in specs)),
+            _POLICY.model_copy(
+                update={
+                    "max_evidence_items_per_chunk": 16,
+                    "max_evidence_items": 16,
+                    "per_document_cap": 16,
+                    "per_section_cap": 16,
+                }
+            ),
+        )
+    }
+    evidence = tuple(
+        _table_cell(by_text[text], row, column) for row, column, text in specs
+    )
+    group = trusted_list_group(evidence).model_copy(
+        update={
+            "kind": EvidenceGroupKind.TABLE_ROW_GROUP,
+            "heading_path": ("协同方案",),
+            "metadata": freeze_json_object(
+                {
+                    "canonical_header_node_ids": [
+                        item.source_spans[0].node_id for item in evidence[:3]
+                    ]
+                }
+            ),
+        }
+    )
+    return evidence, group
+
+
+def test_explicit_row_and_column_words_prove_short_table_axes() -> None:
+    evidence, group = _input_table()
+    question = "需求快验的“输入”项列了哪些内容？"
+    atom = QueryAtom(
+        atom_id="A1",
+        target=question.rstrip("？"),
+        relation="内容",
+        answer_shape=AtomAnswerShape.FACT,
+        original_fragment=question,
+    )
+
+    result = target_member_coverage(
+        atom,
+        evidence,
+        _claims(*evidence[4:6]),
+        trusted_groups=(group,),
+        semantics=QuerySemantics(target=atom.target, relation=atom.relation),
+        fact_covered=_source_fact_content_covered,
+    )
+
+    assert result.complete
+    assert result.source_complete
+    assert len(result.required_member_keys) == 2
+
+
+def test_query_only_timing_and_modality_do_not_complete_input_relation() -> (
+    None
+):
+    evidence, group = _input_table()
+    question = "需求快验之前必须提供什么？"
+    atom = QueryAtom(
+        atom_id="A1",
+        target="需求快验",
+        relation="提供",
+        answer_shape=AtomAnswerShape.ENUMERATION,
+        original_fragment=question,
+    )
+
+    result = target_member_coverage(
+        atom,
+        evidence,
+        _claims(*evidence[4:6]),
+        trusted_groups=(group,),
+        semantics=QuerySemantics(target=atom.target, relation=atom.relation),
+        fact_covered=_source_fact_content_covered,
+    )
+
+    assert not result.complete
+    assert result.reason_codes == ("TARGET_MEMBER_SET_UNPROVED",)

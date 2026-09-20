@@ -21,7 +21,7 @@ from rag_app.core.models.retrieval import (
     PhysicalTableFact,
 )
 
-SOURCE_PROJECTION_REVISION = "wb08r-source-projection-v1"
+SOURCE_PROJECTION_REVISION = "wb08r-source-projection-v2"
 _MAX_CLAIM_TEXT_CHARS = 6000
 
 

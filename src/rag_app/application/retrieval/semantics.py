@@ -100,7 +100,10 @@ _EXPLICIT_SOURCE_SCOPE = re.compile(
     r"(?:(?:中|里|内)(?:的(?:规定|内容|说明)?)?|"
     r"的(?:规定|内容|说明)?|规定|内容|说明)?|"
     r"(?:在|从)\s*《(?P<within>[^》\r\n]+)》"
-    r"(?:中|里|内))\s*[，,：:\s]*(?P<body>.+)$"
+    r"(?:中|里|内)|"
+    r"《(?P<bare>[^》\r\n]+)》"
+    r"(?:(?:中|里|内)(?:的(?:规定|内容|说明)?)?|的))"
+    r"\s*[，,：:\s]*(?P<body>.+)$"
 )
 _UNQUOTED_SOURCE_SCOPE = re.compile(
     r"^(?:在|从)?\s*(?P<source>.{2,160}?"
@@ -852,6 +855,7 @@ def split_explicit_source_scope(value: str) -> tuple[str | None, str, int]:
     source = (
         groups.get("based_on")
         or groups.get("within")
+        or groups.get("bare")
         or groups.get("source")
         or ""
     ).strip(" 的")

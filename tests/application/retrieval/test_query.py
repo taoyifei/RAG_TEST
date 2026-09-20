@@ -614,9 +614,7 @@ def test_conditional_permission_question_targets_complete_rule_row() -> None:
     assert semantics.target == "产品开发"
     assert semantics.relation == "对应内容"
     assert semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY
-    assert semantics.reason_codes == (
-        "CONDITIONAL_PERMISSION_QUESTION_SYNTAX",
-    )
+    assert semantics.reason_codes == ("CONDITIONAL_PERMISSION_QUESTION_SYNTAX",)
 
 
 @pytest.mark.parametrize(
@@ -809,6 +807,21 @@ def test_source_label_signals_do_not_become_answer_constraints() -> None:
     assert analysis.numbers == ()
     assert all(
         constraint.raw_text not in {"GM-09", "09"}
+        for constraint in analysis.semantics.constraints
+    )
+    assert "SOURCE_SCOPE_EXCLUDED_FROM_CONSTRAINTS" in analysis.reason_codes
+
+
+def test_bare_book_title_scope_does_not_become_answer_count() -> None:
+    analysis = _analyze("《开发中心三种工作模式》中，需求快验的输入项是什么？")
+
+    assert analysis.resolved_query is not None
+    assert analysis.resolved_query.endswith("需求快验的输入项是什么?")
+    assert analysis.semantics.source_qualifier == "开发中心三种工作模式"
+    assert analysis.semantics.expected_count is None
+    assert analysis.numbers == ()
+    assert all(
+        constraint.raw_text not in {"三", "开发中心三种工作模式"}
         for constraint in analysis.semantics.constraints
     )
     assert "SOURCE_SCOPE_EXCLUDED_FROM_CONSTRAINTS" in analysis.reason_codes

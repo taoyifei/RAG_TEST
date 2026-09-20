@@ -46,13 +46,17 @@ from rag_app.core.models.query_plan import (
     QueryPlan,
     SourceResolution,
 )
-from rag_app.core.query_text import named_table_label_in_query
+from rag_app.core.query_text import (
+    literal_relation_modifiers_supported,
+    named_table_label_in_query,
+    table_axis_label_in_query,
+)
 from rag_app.core.source_compatibility import (
     source_compatibility,
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v14"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v15"
 _MIN_TABLE_FACT_COLUMNS = 2
 _TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
@@ -1069,14 +1073,29 @@ def _atom_fact_bindings(
             relation = _normalized(atom.relation)
             normalized_label = _normalized(label)
             normalized_headers = _normalized(headers)
+            original_fragment = atom.original_fragment or ""
+            explicit_axis_relation = bool(
+                table_axis_label_in_query(original_fragment, label)
+                and any(
+                    table_axis_label_in_query(
+                        original_fragment,
+                        by_id[support_id].citation_text,
+                    )
+                    for support_id in fact.header_support_ids
+                )
+            )
             constraint_values = tuple(
                 _normalized(constraint.value) for constraint in atom.constraints
             )
             physical_text = _normalized(" ".join((label, headers, values)))
             relation_supported = bool(
-                target
-                and relation
-                and (target in normalized_label or normalized_label in target)
+                (target or explicit_axis_relation)
+                and (relation or explicit_axis_relation)
+                and (
+                    target in normalized_label
+                    or normalized_label in target
+                    or explicit_axis_relation
+                )
                 and (
                     relation in normalized_headers
                     or any(
@@ -1086,6 +1105,10 @@ def _atom_fact_bindings(
                             for support_id in fact.header_support_ids
                         )
                     )
+                    or explicit_axis_relation
+                )
+                and literal_relation_modifiers_supported(
+                    original_fragment, headers
                 )
                 and all(value in physical_text for value in constraint_values)
             )

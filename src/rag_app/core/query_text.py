@@ -19,9 +19,15 @@ _APPROXIMATE_LABEL_MINIMUM_SCORE = 0.8
 _APPROXIMATE_LABEL_MINIMUM_MARGIN = 0.15
 _TABLE_LABEL_QUALIFIER = re.compile(r"[（(]([^）)]+)[）)]")
 _TABLE_LEVEL = re.compile(r"(?<![a-z0-9])[ivx\d一二三四五六七八九十]+级")
+_RELATION_SCOPE_MODIFIER = re.compile(
+    r"之前|之后|以前|以后|期间|过程中|"
+    r"必须|应当|应该|不得|禁止|严禁|无需|不必|"
+    r"至少|至多|仅限|只限|不超过|不低于"
+)
 _MIN_NAMED_LABEL_CHARS = 6
 _MIN_LABEL_BASE_CHARS = 4
 _MIN_LABEL_QUALIFIER_CHARS = 2
+_MIN_TABLE_AXIS_CHARS = 2
 _STRUCTURAL_NUMBER_PREFIX = re.compile(
     r"^\s*(?:(?:第[零一二三四五六七八九十百两\d]+(?:章|节|条|项)\s*)|"
     r"(?:(?:[1-9]\d{0,3}(?:[.．][1-9]\d{0,2}){0,5})|"
@@ -81,6 +87,57 @@ def named_table_label_in_query(query: str, label: str) -> bool:
             )
         )
         and qualifier_matches
+    )
+
+
+def table_axis_label_in_query(query: str, label: str) -> bool:
+    """检查问句是否逐字指定短表格轴标签。
+
+    这个函数只在行名和列名同时命中时用于确定性关系证明。
+    括号内的解释不作为列名命中的必要条件，但不允许单字
+    标签通过，避免宽泛的字面偶合。
+
+    Args:
+        query: 当前 Atom 的原始问句片段。
+        label: 可信物理表格的行名或列名。
+
+    Returns:
+        问句显式包含规范标签时返回 True。
+
+    """
+    normalized_query = normalize_document_label(query)
+    base = _TABLE_LABEL_QUALIFIER.sub("", label)
+    normalized_label = normalize_document_label(base)
+    return (
+        len(normalized_label) >= _MIN_TABLE_AXIS_CHARS
+        and normalized_label in normalized_query
+    )
+
+
+def literal_relation_modifiers_supported(query: str, source_text: str) -> bool:
+    """限定词只在来源逐字包含时参与确定性关系证明。
+
+    这里不判定自然语言语义；不能逐字证明时仅返回未确定，
+    由后续语义复核处理，不因此拒绝该来源。
+
+    Args:
+        query: 当前 Atom 的原始问句片段。
+        source_text: 表头等可信结构来源文本。
+
+    Returns:
+        问句没有高风险限定词，或这些限定词全部在来源中时
+        返回 True。
+
+    """
+    modifiers = tuple(
+        dict.fromkeys(
+            match.group(0) for match in _RELATION_SCOPE_MODIFIER.finditer(query)
+        )
+    )
+    normalized_source = normalize_document_label(source_text)
+    return all(
+        normalize_document_label(modifier) in normalized_source
+        for modifier in modifiers
     )
 
 
@@ -283,6 +340,7 @@ def select_unique_label_owner(
 __all__ = [
     "context_label_variants",
     "duty_heading_path_owns_target",
+    "literal_relation_modifiers_supported",
     "named_table_label_in_query",
     "normalize_document_label",
     "normalize_duty_heading_label",
@@ -291,4 +349,5 @@ __all__ = [
     "normalize_semantic_text",
     "section_heading_path_owns_target",
     "select_unique_label_owner",
+    "table_axis_label_in_query",
 ]
