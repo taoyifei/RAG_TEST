@@ -1,4 +1,4 @@
-"""严格 JSON 的 supported 仍不能新增来源没有的主体或关系。"""
+"""新自然路径由批量语义状态决定事实是否取得发布许可。"""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ from tests.application.answering.test_natural_grounded_answer import (
 
 
 @pytest.mark.parametrize(
-    "subject,relation", [("员工", "费用报销"), ("所有人员", "报销")]
+    "status,accepted", [("supported", True), ("contradicted", False)]
 )
-def test_model_supported_cannot_add_unquoted_scope(
-    subject: str, relation: str
+def test_semantic_status_controls_publication(
+    status: str, accepted: bool
 ) -> None:
     source = "对于员工跨年领到证书的情况，请在证书领取年份进行报销。"
     evidence = _evidence(source)
@@ -42,19 +42,19 @@ def test_model_supported_cannot_add_unquoted_scope(
     )
     generator = fixed_review_generator(
         draft,
-        subject=subject,
-        relation=relation,
-        conditions=("跨年领到证书", "证书领取年份"),
+        statuses=(status,),
     )
 
     outcome = _answer_with_pack(
         generator, plan, evidence, ((AtomStatus.MISSING, ()),)
     )
 
-    assert outcome.answer is None
-    assert outcome.accepted_claim_count == 0
-    assert outcome.published_claim_count == 0
-    assert outcome.atom_coverage == (("A1", "MISSING"),)
+    assert (outcome.answer is not None) is accepted
+    assert outcome.accepted_claim_count == int(accepted)
+    assert outcome.published_claim_count == int(accepted)
+    assert outcome.atom_coverage == (
+        ("A1", "SUPPORTED" if accepted else "MISSING"),
+    )
     assert len(outcome.prepared_packets) == 2
     assert all(
         packet.evidence_level == "TRANSPORT_SENT"
@@ -81,10 +81,6 @@ def test_semantic_relation_label_uses_verbatim_source_anchor() -> None:
     )
     generator = fixed_review_generator(
         draft,
-        subject="员工",
-        relation="跨年费用处理职责",
-        relation_anchor="报销",
-        conditions=("跨年领到证书", "证书领取年份"),
     )
 
     outcome = _answer_with_pack(

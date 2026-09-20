@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import replace
 
@@ -27,7 +26,6 @@ from tests.application.answering.test_grounded_claim_v5_quotes import (
     _table_cell,
 )
 from tests.application.answering.test_natural_grounded_answer import (
-    _claim,
     _evidence,
     _plan,
 )
@@ -45,14 +43,12 @@ from tests.application.answering.test_natural_grounded_answer import (
         "unsent_header",
         "other_reading_unit",
         "other_subject",
-        "borrow_other_column",
-        "context_as_support",
     ],
 )
-def test_service_review_retains_only_sent_row_label_and_column_header(  # noqa: PLR0915
+def test_service_binds_only_closed_table_read_units(
     mutation: str,
 ) -> None:
-    """首包发送整行，复核只取当前值格所需的两个上下文格。"""
+    """不闭合的表格坐标不能降级成可独立引用的普通段落。"""
     texts = (
         "乙部门" if mutation == "other_subject" else "甲部门",
         "归档",
@@ -171,7 +167,6 @@ def test_service_review_retains_only_sent_row_label_and_column_header(  # noqa: 
         ),
     )
     value = evidence[2]
-    claim = _claim("C1", value.citation_text, "A1", value.support_id)
     bodies = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -179,50 +174,35 @@ def test_service_review_retains_only_sent_row_label_and_column_header(  # noqa: 
         content = json.loads(body["messages"][1]["content"])
         bodies.append(content)
         if len(bodies) == 1:
-            payload = {"claims": [claim.model_dump(mode="json")]}
+            table_units = [
+                unit
+                for unit in content["read_units"]
+                if unit["kind"] == "table_fact"
+            ]
+            payload = {
+                "claims": [
+                    {
+                        "atom_id": "A1",
+                        "text": value.citation_text,
+                        "refs": [table_units[0]["unit_id"]],
+                    }
+                ]
+                if table_units
+                else []
+            }
         else:
             assert len(bodies) == 2
-            source_anchors = {
-                item["source_id"]: item["quote_anchors"][0]["anchor_id"]
-                for item in content["evidence"]
-            }
             payload = {
                 "results": [
                     {
                         "claim_id": candidate["claim_id"],
-                        "status": "supported",
-                        "fact_source_ids": candidate["fact_source_ids"],
-                        "source_scope": {
-                            "relation_label": "归档",
-                            "subject_anchor_ids": [
-                                source_anchors[source_id]
-                                for source_id in (
-                                    candidate["context_source_ids"][:1]
-                                    or candidate["fact_source_ids"]
-                                )
-                            ],
-                            "relation_anchor_ids": [
-                                source_anchors[source_id]
-                                for source_id in (
-                                    candidate["context_source_ids"][1:]
-                                    or candidate["fact_source_ids"]
-                                )
-                            ],
-                            "stage_anchor_ids": [],
-                            "condition_anchor_ids": [],
-                        },
+                        "status": "contradicted"
+                        if mutation == "other_subject"
+                        else "supported",
                     }
                     for candidate in content["candidates"]
                 ]
             }
-            if mutation == "context_as_support":
-                payload["results"][0]["fact_source_ids"] = content[
-                    "candidates"
-                ][0]["context_source_ids"][:1]
-            if mutation == "borrow_other_column":
-                payload["results"][0]["source_scope"][
-                    "relation_anchor_ids"
-                ] = ["E999Q1"]
         return httpx.Response(
             200,
             json={
@@ -263,64 +243,16 @@ def test_service_review_retains_only_sent_row_label_and_column_header(  # noqa: 
         assert outcome.published_claim_count == 0
         assert not outcome.prepared_packets
         return
-    assert len(bodies) == 2, (
-        outcome.raw_failures,
-        outcome.claim_rejection_diagnostics,
-    )
-    valid_context = mutation in {
-        "none",
-        "nonzero_header",
-        "borrow_other_column",
-        "context_as_support",
-        "other_subject",
-    }
-    accepted = mutation in {"none", "nonzero_header"}
-    expected = evidence[:3] if valid_context else (value,)
-    assert {
-        tuple(anchor["quote"] for anchor in item["quote_anchors"])
-        for item in bodies[1]["evidence"]
-    } == {
-        (item.citation_text,) for item in expected
-    }
-    aliases = {
-        item["quote_anchors"][0]["quote"]: item["source_id"]
-        for item in bodies[1]["evidence"]
-    }
-    assert bodies[1]["candidates"][0]["context_source_ids"] == [
-        aliases[item.citation_text]
-        for item in (evidence[:2] if valid_context else ())
-    ]
-    assert (
-        outcome.accepted_claim_count
-        == outcome.published_claim_count
-        == int(accepted)
-    )
-    assert outcome.published_support_ids == (
-        (value.support_id,) if accepted else ()
-    )
-    assert outcome.atom_coverage == (
-        ("A1", "SUPPORTED" if accepted else "MISSING"),
-    )
+    assert pack.physical_table_facts == ()
+    assert len(bodies) == 1
+    assert bodies[0]["read_units"] == []
+    assert outcome.accepted_claim_count == outcome.published_claim_count == 0
+    assert outcome.published_support_ids == ()
+    assert outcome.atom_coverage == (("A1", "MISSING"),)
     assert outcome.repair_calls == 0
-    assert len(outcome.prepared_packets) == 2
+    assert len(outcome.prepared_packets) == 1
     assert all(
         packet.evidence_level == "TRANSPORT_SENT"
         for packet in outcome.prepared_packets
     )
-    expected_status = "supported" if mutation == "other_subject" else (
-        "supported" if accepted else "NOT_OBSERVED"
-    )
-    expected_reason = (
-        "RELATION_REVIEW_RESPONSE_INVALID"
-        if mutation not in {"none", "nonzero_header", "other_subject"}
-        else "RELATION_REVIEW_VALIDATED"
-        if accepted
-        else "HARD_SCOPE_CONTRADICTION"
-    )
-    assert outcome.relation_review_results == (
-        (
-            hashlib.sha256(value.citation_text.encode()).hexdigest(),
-            expected_status,
-            expected_reason,
-        ),
-    )
+    assert outcome.relation_review_results == ()

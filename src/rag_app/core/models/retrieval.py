@@ -128,7 +128,7 @@ class AnswerClaim(FrozenModel):
     """供应用层进行对象、数值、否定和来源支持校验的事实。"""
 
     text: str = Field(min_length=1, max_length=6000, repr=False)
-    supports: tuple[ClaimSupport, ...] = Field(min_length=1, max_length=8)
+    supports: tuple[ClaimSupport, ...] = Field(min_length=1, max_length=128)
 
 
 class NaturalClaim(FrozenModel):
@@ -136,7 +136,33 @@ class NaturalClaim(FrozenModel):
 
     atom_id: str = Field(pattern=r"^A[1-4]$")
     text: str = Field(min_length=1, max_length=6000, repr=False)
-    supports: tuple[ClaimSupport, ...] = Field(min_length=1, max_length=8)
+    supports: tuple[ClaimSupport, ...] = Field(min_length=1, max_length=128)
+
+
+class GroundedWireClaim(FrozenModel):
+    """模型线只表达事实、所属 Atom 与阅读单元短引用。"""
+
+    atom_id: str = Field(pattern=r"^A[1-4]$")
+    text: str = Field(min_length=1, max_length=6000, repr=False)
+    refs: tuple[str, ...] = Field(min_length=1, max_length=8)
+
+    @model_validator(mode="after")
+    def _reject_duplicate_refs(self) -> Self:
+        if len(self.refs) != len(set(self.refs)):
+            raise ValueError("WIRE_DUPLICATE_REF")
+        return self
+
+
+class GroundedWireDiagnostic(FrozenModel):
+    """不含模型正文或输入值的逐项 Wire 失败诊断。"""
+
+    item_index: StrictInt = Field(ge=0)
+    atom_id: str | None = Field(default=None, pattern=r"^A[1-4]$")
+    failure_stage: Literal["wire_schema", "evidence_binding"]
+    failure_code: str = Field(min_length=1, max_length=120)
+    json_path: str = Field(min_length=1, max_length=200)
+    expected_type: str | None = Field(default=None, max_length=80)
+    observed_type: str | None = Field(default=None, max_length=80)
 
 
 class TableFactSelection(FrozenModel):
@@ -248,6 +274,12 @@ class AnswerDraft(FrozenModel):
     cited_evidence_ids: tuple[str, ...]
     claims: tuple[AnswerClaim, ...] = Field(default=(), max_length=24)
     natural_claims: tuple[NaturalClaim, ...] = Field(default=(), max_length=24)
+    wire_claims: tuple[GroundedWireClaim, ...] = Field(
+        default=(), max_length=24, exclude=True, repr=False
+    )
+    wire_diagnostics: tuple[GroundedWireDiagnostic, ...] = Field(
+        default=(), max_length=24, exclude=True, repr=False
+    )
     atom_coverage: tuple[GeneratedAtomCoverage, ...] = ()
     missing_atoms: tuple[str, ...] = ()
     provider_calls: tuple[ProviderCall, ...] = ()

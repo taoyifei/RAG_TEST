@@ -138,9 +138,6 @@ def test_batch_review_success_clears_final_rejection_counts() -> None:
     )
     generator = fixed_review_generator(
         draft,
-        subject="管理员",
-        relation="负责",
-        conditions=(),
     )
     outcome = _answer_with_pack(
         generator,
@@ -155,7 +152,7 @@ def test_batch_review_success_clears_final_rejection_counts() -> None:
     assert outcome.relation_review_calls == 1
     assert outcome.repair_calls == 0
     assert len(outcome.calls) == 2
-    assert len(outcome.raw_failures) == 2  # 历史拒绝保留，最终拒绝计数清零。
+    assert outcome.raw_failures == ()
 
 
 def test_mixed_review_removes_only_the_accepted_claim_diagnostic() -> None:
@@ -176,37 +173,31 @@ def test_mixed_review_removes_only_the_accepted_claim_diagnostic() -> None:
         assert calls <= 2
         body = json.loads(request.content)
         data = json.loads(body["messages"][1]["content"])
-        payload = {
-            "claims": [
-                item.model_dump(mode="json") for item in draft.natural_claims
-            ]
-        }
-        if calls == 2:
-            source_anchors = {
-                source["source_id"]: source["quote_anchors"][0][
-                    "anchor_id"
+        if calls == 1:
+            payload = {
+                "claims": [
+                    {
+                        "atom_id": item.atom_id,
+                        "text": item.text,
+                        "refs": [
+                            unit["unit_id"]
+                            for unit in data["read_units"]
+                            if any(
+                                support.quote in unit["text"]
+                                or unit["text"] in support.quote
+                                for support in item.supports
+                            )
+                        ],
+                    }
+                    for item in draft.natural_claims
                 ]
-                for source in data["evidence"]
             }
+        else:
             payload = {
                 "results": [
                     {
                         "claim_id": item["claim_id"],
-                        "status": "supported" if index == 1 else "undetermined",
-                        "fact_source_ids": item["fact_source_ids"],
-                        "source_scope": {
-                            "relation_label": "负责",
-                            "subject_anchor_ids": [
-                                source_anchors[source_id]
-                                for source_id in item["fact_source_ids"]
-                            ],
-                            "relation_anchor_ids": [
-                                source_anchors[source_id]
-                                for source_id in item["fact_source_ids"]
-                            ],
-                            "stage_anchor_ids": [],
-                            "condition_anchor_ids": [],
-                        },
+                        "status": "supported" if index == 1 else "unknown",
                     }
                     for index, item in enumerate(data["candidates"])
                 ]
@@ -252,10 +243,8 @@ def test_mixed_review_removes_only_the_accepted_claim_diagnostic() -> None:
     )
     assert outcome.accepted_claim_count == 1
     assert outcome.relation_review_calls == 1
-    assert len(outcome.claim_rejection_diagnostics) == 1
-    assert outcome.claim_rejection_diagnostics[0].selected_support_ids == (
-        evidence[0].support_id,
-    )
+    assert outcome.claim_rejection_codes == (("SEMANTIC_UNKNOWN", 1),)
+    assert outcome.claim_rejection_diagnostics == ()
 
 
 @pytest.mark.parametrize(
@@ -294,30 +283,16 @@ def test_yes_no_action_match_does_not_erase_role_or_source(
 
 
 @pytest.mark.parametrize(
-    "question,source,document,subject,relation",
+    "question,source,document",
     [
-        (
-            "甲部门要归档吗？",
-            "甲部门需要归档。",
-            "归档规范.docx",
-            "甲部门",
-            "归档",
-        ),
-        (
-            "根据甲手册，费用可以报销吗？",
-            "费用可以报销。",
-            "甲手册.docx",
-            "费用",
-            "报销",
-        ),
+        ("甲部门要归档吗？", "甲部门需要归档。", "归档规范.docx"),
+        ("根据甲手册，费用可以报销吗？", "费用可以报销。", "甲手册.docx"),
     ],
 )
 def test_yes_no_matching_role_and_source_remain_answerable(
     question: str,
     source: str,
     document: str,
-    subject: str,
-    relation: str,
 ) -> None:
     plan = _plan(question)
     evidence = tuple(
@@ -340,9 +315,6 @@ def test_yes_no_matching_role_and_source_remain_answerable(
     )
     generator = fixed_review_generator(
         draft,
-        subject=subject,
-        relation=relation,
-        conditions=(),
     )
     outcome = _answer_with_pack(
         generator,
@@ -354,8 +326,8 @@ def test_yes_no_matching_role_and_source_remain_answerable(
     assert outcome.published_claim_count == 1
     assert outcome.answer is not None
     assert source in outcome.answer
-    review_calls = int(decision.status is RequestRelationStatus.UNDETERMINED)
-    assert outcome.relation_review_calls == review_calls
+    review_calls = 1
+    assert outcome.relation_review_calls == 1
     assert outcome.repair_calls == 0
     assert len(outcome.prepared_packets) == 1 + review_calls
     assert all(
@@ -365,31 +337,17 @@ def test_yes_no_matching_role_and_source_remain_answerable(
 
 
 @pytest.mark.parametrize(
-    "question,source,document,subject,relation",
+    "question,source,document",
     [
-        (
-            "甲部门要归档吗？",
-            "乙部门需要归档。",
-            "归档规范.docx",
-            "乙部门",
-            "归档",
-        ),
-        (
-            "根据甲手册，费用可以报销吗？",
-            "费用可以报销。",
-            "乙手册.docx",
-            "费用",
-            "报销",
-        ),
+        ("甲部门要归档吗？", "乙部门需要归档。", "归档规范.docx"),
+        ("根据甲手册，费用可以报销吗？", "费用可以报销。", "乙手册.docx"),
     ],
 )
 @pytest.mark.parametrize("punctuation", ["？", ""])
-def test_review_supported_cannot_override_explicit_clause_scope(  # noqa: PLR0913, PLR0917
+def test_semantic_contradiction_rejects_explicit_clause_scope(
     question: str,
     source: str,
     document: str,
-    subject: str,
-    relation: str,
     punctuation: str,
 ) -> None:
     question = question.rstrip("？") + punctuation
@@ -403,9 +361,7 @@ def test_review_supported_cannot_override_explicit_clause_scope(  # noqa: PLR091
     draft = _draft((_claim("C1", source, "A1", "S1"),), plan)
     generator = fixed_review_generator(
         draft,
-        subject=subject,
-        relation=relation,
-        conditions=(),
+        statuses=("contradicted",),
     )
     outcome = _answer_with_pack(
         generator,

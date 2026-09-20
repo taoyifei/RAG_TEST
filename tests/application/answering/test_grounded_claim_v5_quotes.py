@@ -387,9 +387,6 @@ def test_pack_preserves_validated_paraphrase_without_source_rewrite() -> None:
     )
     generator = fixed_review_generator(
         draft,
-        subject="员工",
-        relation="报销",
-        conditions=("跨年领到证书", "证书领取年份"),
     )
 
     outcome = _answer_with_pack(
@@ -418,8 +415,8 @@ def test_pack_expands_selected_fragment_to_full_source_sentence() -> None:
     assert outcome.answer == f"{source} [S1]"
 
 
-def test_pack_revalidates_full_source_when_model_rewrites_the_fact() -> None:
-    """模型改写不可信时，保留其合法选源并发布重新核验的完整原句。"""
+def test_semantic_review_preserves_supported_natural_rewrite() -> None:
+    """语义复核通过后保留自然改写，引用仍由服务端完整恢复。"""
     source = "员工在证书领取年份完成费用报销。"
     evidence = _evidence(source)
     plan = _plan("钱能放明年报不？")
@@ -437,9 +434,6 @@ def test_pack_revalidates_full_source_when_model_rewrites_the_fact() -> None:
     )
     generator = fixed_review_generator(
         draft,
-        subject="员工",
-        relation="费用报销",
-        conditions=("证书领取年份",),
     )
 
     outcome = _answer_with_pack(
@@ -447,7 +441,7 @@ def test_pack_revalidates_full_source_when_model_rewrites_the_fact() -> None:
     )
 
     assert outcome.mode == "llm"
-    assert outcome.answer == f"{source} [S1]"
+    assert outcome.answer == "相关费用依时间节点处理。 [S1]"
     assert outcome.claim_rejection_codes == ()
     assert outcome.accepted_claim_count == 1
 
@@ -557,7 +551,7 @@ def test_pack_split_discards_group_with_another_explicit_subject() -> None:
     )
 
 
-def test_one_verified_sentence_covers_each_supported_scalar_atom() -> None:
+def test_one_claim_only_covers_its_declared_scalar_atom() -> None:
     source = "各指标牵头部门负责制定考核标准、考核分数和考核频次。"
     evidence = _evidence(source)
     plan = _plan("考核标准", "考核分数和频次")
@@ -574,8 +568,9 @@ def test_one_verified_sentence_covers_each_supported_scalar_atom() -> None:
         ((AtomStatus.MISSING, ()), (AtomStatus.MISSING, ())),
     )
 
-    assert outcome.atom_coverage == (("A1", "SUPPORTED"), ("A2", "SUPPORTED"))
-    assert outcome.answer == f"{source} [S1]"
+    assert outcome.atom_coverage == (("A1", "MISSING"), ("A2", "SUPPORTED"))
+    assert outcome.answer is not None
+    assert source in outcome.answer
     assert outcome.accepted_claim_count == 1
 
 
@@ -632,9 +627,6 @@ def test_yes_no_answer_uses_source_about_asked_action() -> None:
     )
     generator = fixed_review_generator(
         draft,
-        subject="任务",
-        relation="重新启动",
-        conditions=("任务转为正式交付模式时", "另行满足准入要求"),
         statuses=("irrelevant", "supported"),
     )
 
@@ -645,7 +637,7 @@ def test_yes_no_answer_uses_source_about_asked_action() -> None:
         ((AtomStatus.MISSING, ()),),
     )
 
-    assert outcome.claim_rejection_codes == (("CLAIM_RELATION_UNSUPPORTED", 1),)
+    assert outcome.claim_rejection_codes == (("SEMANTIC_CONTRADICTED", 1),)
     assert outcome.answer is not None
     assert "重新启动流程" in outcome.answer
     assert "提交验收材料" not in outcome.answer

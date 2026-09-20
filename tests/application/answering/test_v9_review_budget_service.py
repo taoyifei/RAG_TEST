@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+import rag_app.application.answering.grounded as grounded_module
 from rag_app.adapters.providers.http_common import ProviderHttpClient
 from rag_app.adapters.providers.openai_compatible import (
     OpenAICompatibleChatAdapter,
@@ -18,6 +19,10 @@ from rag_app.adapters.providers.openai_compatible import (
 from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     GroundedOutcome,
+)
+from rag_app.application.answering.semantic_validation import (
+    SemanticValidationRequest,
+    SemanticValidationResponse,
 )
 from rag_app.clients.resilience import StreamCancellation
 from rag_app.core.errors import ProviderInputTooLarge, QueryCancelled
@@ -30,10 +35,6 @@ from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomStatus,
     QueryPlan,
-)
-from rag_app.core.models.relation_review import (
-    RelationReviewRequest,
-    RelationReviewResponse,
 )
 from rag_app.core.models.retrieval import NaturalClaim
 from tests.application.answering.test_grounded_claim_v5_quotes import _pack
@@ -70,36 +71,37 @@ def _fixture(
 
 
 class _PreparationFailingAdapter(OpenAICompatibleChatAdapter):
-    """在发送关系复核 HTTP 前模拟本地输入预算拒绝。"""
+    """在发送语义复核 HTTP 前模拟本地输入预算拒绝。"""
 
-    def review_relations(
-        self, request: RelationReviewRequest
-    ) -> RelationReviewResponse:
+    def review_semantics(
+        self, request: SemanticValidationRequest
+    ) -> SemanticValidationResponse:
         del request
         raise ProviderInputTooLarge(
             "synthetic preparation rejection",
-            stage="relation_review.prepare",
-            code="RELATION_REVIEW_INPUT_BUDGET_EXCEEDED",
+            stage="generation.semantic_review",
+            code="SEMANTIC_REVIEW_INPUT_BUDGET_EXCEEDED",
         )
 
 
 class _HttpHarness:
-    """保存真实发送请求，第二次响应只能是repair或review之一。"""
+    """保存真实发送请求，第二次响应只能是一次批量语义复核。"""
 
     def __init__(
         self,
         claims: tuple[NaturalClaim, ...],
         *,
-        repair: tuple[NaturalClaim, ...] | None = None,
+        max_input_tokens: int = 6144,
         failure: str | None = None,
-        after_send: Callable[[int], None] | None = None,
+        statuses: tuple[str, ...] | None = None,
         fail_review_preparation: bool = False,
     ) -> None:
         self.sent: list[httpx.Request] = []
         self.claims = claims
-        self.repair = repair
         self.failure = failure
-        self.after_send = after_send
+        self.statuses = statuses
+        self.after_send: Callable[[int], None] | None = None
+        self.append_bad_wire_item = False
         adapter_type = (
             _PreparationFailingAdapter
             if fail_review_preparation
@@ -109,6 +111,7 @@ class _HttpHarness:
             OpenAICompatibleChatConfig(
                 model="synthetic",
                 egress_allowed=True,
+                max_input_tokens=max_input_tokens,
                 disable_thinking_supported=True,
                 disable_thinking=True,
                 structured_output_mode="response_format",
@@ -130,11 +133,38 @@ class _HttpHarness:
         if self.after_send:
             self.after_send(len(self.sent))
         if len(self.sent) == 1:
+            read_units = data["read_units"]
+            allowed_by_atom = {
+                atom["atom_id"]: set(atom["allowed_ref_ids"])
+                for atom in data["atoms"]
+            }
             payload = {
                 "claims": [
-                    claim.model_dump(mode="json") for claim in self.claims
+                    {
+                        "atom_id": claim.atom_id,
+                        "text": claim.text,
+                        "refs": [
+                            unit["unit_id"]
+                            for unit in read_units
+                            if unit["unit_id"] in allowed_by_atom[claim.atom_id]
+                            and any(
+                                support.quote in unit["text"]
+                                or unit["text"] in support.quote
+                                for support in claim.supports
+                            )
+                        ],
+                    }
+                    for claim in self.claims
                 ]
             }
+            if self.append_bad_wire_item:
+                payload["claims"].append(
+                    {
+                        "atom_id": "A1",
+                        "text": "不得发布的坏条目",
+                        "refs": ["E999"],
+                    }
+                )
         elif self.failure == "transport":
             raise httpx.ReadTimeout("synthetic timeout", request=request)
         elif self.failure == "json":
@@ -143,43 +173,17 @@ class _HttpHarness:
             return self.response(
                 json.dumps({"results": [], "claim": "禁止的新事实"})
             )
-        elif self.repair is not None:
-            assert "candidates" not in data
-            payload = {
-                "claims": [
-                    claim.model_dump(mode="json") for claim in self.repair
-                ]
-            }
         else:
             assert "candidates" in data
-            source_anchors = {
-                item["source_id"]: item["quote_anchors"][0]["anchor_id"]
-                for item in data["evidence"]
-            }
             payload = {
                 "results": [
                     {
                         "claim_id": candidate["claim_id"],
-                        "status": "supported",
-                        "fact_source_ids": candidate["fact_source_ids"],
-                        "source_scope": {
-                            "relation_label": "报销",
-                            "subject_anchor_ids": [
-                                source_anchors[source_id]
-                                for source_id in candidate["fact_source_ids"]
-                            ],
-                            "relation_anchor_ids": [
-                                source_anchors[source_id]
-                                for source_id in candidate["fact_source_ids"]
-                            ],
-                            "stage_anchor_ids": [],
-                            "condition_anchor_ids": [
-                                source_anchors[source_id]
-                                for source_id in candidate["fact_source_ids"]
-                            ],
-                        },
+                        "status": self.statuses[index]
+                        if self.statuses is not None
+                        else "supported",
                     }
-                    for candidate in data["candidates"]
+                    for index, candidate in enumerate(data["candidates"])
                 ]
             }
         return self.response(json.dumps(payload, ensure_ascii=False))
@@ -250,25 +254,63 @@ def test_multiple_unknown_claims_share_one_review_http() -> None:
     assert len(second["candidates"]) == 2
 
 
-def test_missing_atom_repair_is_chosen_over_unrelated_relation_review() -> None:
+def test_wire_path_never_calls_legacy_lexical_validator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """新 Provider 路径只做绑定与一次语义复核，不回到旧硬门。"""
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("新 Wire 路径调用了旧词面裁决")
+
+    monkeypatch.setattr(grounded_module, "_validated_natural_claim", forbidden)
     fixture = _fixture()
-    harness = _HttpHarness(fixture[2][:1], repair=fixture[2][1:])
+    harness = _HttpHarness(fixture[2])
+
     outcome = _run(harness.adapter, fixture)
-    assert outcome.relation_review_calls == 0
-    assert outcome.repair_calls == 1
-    assert outcome.relation_review_skip_reason == (
-        "SUPPLEMENT_SLOT_RESERVED_FOR_ATOM_REPAIR"
+
+    assert outcome.accepted_claim_count == 2
+    assert outcome.repair_calls == 0
+    assert outcome.relation_review_calls == 1
+    assert len(harness.sent) == 2
+
+
+def test_bad_wire_item_does_not_delete_independent_valid_claim() -> None:
+    fixture = _fixture()
+    harness = _HttpHarness(fixture[2][:1])
+    harness.append_bad_wire_item = True
+
+    outcome = _run(harness.adapter, fixture)
+
+    assert outcome.answer is not None
+    assert _FIRST in outcome.answer
+    assert "不得发布的坏条目" not in outcome.answer
+    assert outcome.accepted_claim_count == outcome.published_claim_count == 1
+    assert tuple(item.failure_code for item in outcome.wire_diagnostics) == (
+        "UNKNOWN_OR_OUT_OF_SCOPE_REF",
     )
+    assert outcome.repair_calls == 0
+    assert outcome.relation_review_calls == 1
+    assert len(harness.sent) == 2
+
+
+def test_missing_atom_does_not_trigger_generation_repair() -> None:
+    fixture = _fixture()
+    harness = _HttpHarness(fixture[2][:1])
+    outcome = _run(harness.adapter, fixture)
+    assert outcome.relation_review_calls == 1
+    assert outcome.repair_calls == 0
+    assert outcome.repair_skip_reason == "AUTOMATIC_GENERATION_REPAIR_DISABLED"
+    assert ("A2", "MISSING") in outcome.atom_coverage
     assert len(harness.sent) == len(outcome.prepared_packets) == 2
 
 
-def test_unknown_repair_cannot_trigger_a_third_review_call() -> None:
+def test_single_claim_uses_only_generation_and_one_review() -> None:
     fixture = _fixture(direct_first=True)
-    harness = _HttpHarness(fixture[2][:1], repair=fixture[2][1:])
+    harness = _HttpHarness(fixture[2][:1])
     outcome = _run(harness.adapter, fixture)
     assert outcome.accepted_claim_count == 1
-    assert outcome.repair_calls == 1
-    assert outcome.relation_review_calls == 0
+    assert outcome.repair_calls == 0
+    assert outcome.relation_review_calls == 1
     assert len(harness.sent) == len(outcome.prepared_packets) == 2
     assert ("A2", "MISSING") in outcome.atom_coverage
     assert _SECOND not in (outcome.answer or "")
@@ -294,7 +336,9 @@ def test_expired_outer_deadline_prevents_review_and_publication() -> None:
     outcome = _run(harness.adapter, fixture, cancellation=cancellation)
     assert outcome.answer is None
     assert outcome.relation_review_calls == outcome.repair_calls == 0
-    assert outcome.relation_review_skip_reason == "DEADLINE_EXHAUSTED"
+    assert outcome.relation_review_skip_reason == (
+        "SEMANTIC_REVIEW_DEADLINE_EXHAUSTED"
+    )
     assert len(harness.sent) == len(outcome.prepared_packets) == 1
 
 
@@ -323,29 +367,73 @@ def test_failed_optional_review_keeps_already_valid_fact(
 
     outcome = _run(harness.adapter, fixture)
 
-    assert outcome.answer is not None
-    assert _DIRECT in outcome.answer
-    assert _SECOND not in outcome.answer
-    assert outcome.accepted_claim_count == outcome.published_claim_count == 1
+    assert outcome.accepted_claim_count == outcome.published_claim_count == 0
     assert outcome.relation_review_calls == 1
     assert outcome.repair_calls == 0
     assert len(harness.sent) == len(outcome.prepared_packets) == 2
+
+
+def test_all_semantic_claims_rejected_has_precise_terminal_reason() -> None:
+    fixture = _fixture()
+    harness = _HttpHarness(
+        fixture[2], statuses=("contradicted", "unknown")
+    )
+
+    outcome = _run(harness.adapter, fixture)
+
+    assert outcome.answer is None
+    assert outcome.reason_code == "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM"
+    assert outcome.accepted_claim_count == outcome.published_claim_count == 0
+    assert outcome.repair_calls == 0
+    assert len(harness.sent) == 2
 
 
 def test_review_preparation_failure_does_not_consume_repair_slot() -> None:
     fixture = _fixture(direct_first=True)
     harness = _HttpHarness(
         fixture[2],
-        repair=fixture[2][1:],
         fail_review_preparation=True,
     )
 
     outcome = _run(harness.adapter, fixture)
 
-    assert outcome.answer is not None and _DIRECT in outcome.answer
     assert outcome.relation_review_calls == 0
-    assert outcome.repair_calls == 1
-    assert len(harness.sent) == len(outcome.prepared_packets) == 2
+    assert outcome.repair_calls == 0
+    assert outcome.repair_skip_reason == "AUTOMATIC_GENERATION_REPAIR_DISABLED"
+    assert len(harness.sent) == 1
+    assert len(outcome.prepared_packets) == 1
+
+
+def test_generation_output_is_reserved_for_later_semantic_review() -> None:
+    """生成发送前即压低输出上限，保证同一证据仍能进入批量复核。"""
+    fixture = _fixture()
+    harness = _HttpHarness(fixture[2], max_input_tokens=4000)
+
+    outcome = _run(harness.adapter, fixture)
+
+    assert outcome.accepted_claim_count == 2
+    assert len(harness.sent) == 2
+    first_body = json.loads(harness.sent[0].content)
+    first_reserved = outcome.prepared_packets[0].reserved_output_tokens
+    assert 128 <= first_body["max_tokens"] == first_reserved < 1536
+    assert outcome.prepared_packets[1].estimated_input_tokens <= 4000
+
+
+def test_impossible_semantic_preflight_sends_no_generation_http() -> None:
+    """共同证据规模无法容纳复核时，在任何模型发送前明确拒绝。"""
+    fixture = _fixture()
+    harness = _HttpHarness(fixture[2], max_input_tokens=3800)
+
+    outcome = _run(harness.adapter, fixture)
+
+    assert outcome.answer is None
+    assert outcome.reason_code == (
+        "SEMANTIC_REVIEW_PREFLIGHT_BUDGET_EXCEEDED"
+    )
+    assert harness.sent == []
+    assert outcome.relation_review_calls == outcome.repair_calls == 0
+    assert len(outcome.prepared_packets) == 1
+    assert outcome.prepared_packets[0].evidence_level == "PREPARATION_REJECTED"
 
 
 def test_hard_failure_on_a2_does_not_change_a1_repair_eligibility() -> None:
@@ -406,11 +494,9 @@ def test_cancelled_request_never_publishes_review_result(
 ) -> None:
     fixture = _fixture()
     cancellation = StreamCancellation()
-    harness = _HttpHarness(
-        fixture[2],
-        after_send=lambda count: (
-            cancellation.cancel() if count == cancel_on_send else None
-        ),
+    harness = _HttpHarness(fixture[2])
+    harness.after_send = lambda count: (
+        cancellation.cancel() if count == cancel_on_send else None
     )
     with pytest.raises(QueryCancelled) as error:
         _run(harness.adapter, fixture, cancellation=cancellation)
@@ -458,11 +544,11 @@ def test_hard_boundary_never_reaches_supported_review_response(
         )
     claims = (_claim("C1", text, "A1", evidence[0].support_id, source),)
     fixture = (plan, evidence, claims)
-    harness = _HttpHarness(claims)
+    harness = _HttpHarness(claims, statuses=("contradicted",))
 
     outcome = _run(harness.adapter, fixture)
 
     assert outcome.accepted_claim_count == outcome.published_claim_count == 0
-    assert outcome.relation_review_calls == 0
+    assert outcome.relation_review_calls == 1
     assert outcome.repair_calls == 0
-    assert len(harness.sent) == len(outcome.prepared_packets) == 1
+    assert len(harness.sent) == len(outcome.prepared_packets) == 2

@@ -5,6 +5,7 @@ import json
 import sqlite3
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import FunctionType
 
 import pytest
 
@@ -157,13 +158,18 @@ def test_provider_configuration_change_changes_runtime_guard(
     monkeypatch.setattr(
         sqlite3, "connect", lambda *_args, **_kwargs: connection
     )
+
+    def run_guard() -> None:
+        code = compile(runner._DATABASE_GUARD, "<database-guard>", "exec")
+        FunctionType(code, {})()
+
     with redirect_stdout(io.StringIO()) as first:
-        exec(runner._DATABASE_GUARD, {})  # noqa: S102 - 执行受信只读摘要脚本。
+        run_guard()
     connection.execute(
         "UPDATE provider_connections SET configuration='config-b'"
     )
     with redirect_stdout(io.StringIO()) as second:
-        exec(runner._DATABASE_GUARD, {})  # noqa: S102 - 同一脚本核对配置漂移。
+        run_guard()
     assert (
         json.loads(first.getvalue())["database_behavior_sha256"]
         != json.loads(second.getvalue())["database_behavior_sha256"]

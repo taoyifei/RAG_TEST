@@ -70,6 +70,7 @@ from rag_app.core.models.evidence_group import (
     EvidenceGroupKind,
     GroupSourceMap,
 )
+from rag_app.core.models.generation_packet import EvidenceReadUnit
 from rag_app.core.models.jobs import DocumentEmbeddingBudget, IngestionJobState
 from rag_app.core.models.lexical import (
     AnalyzedLexicalDocument,
@@ -157,6 +158,8 @@ from rag_app.core.models.retrieval import (
     AtomFactBinding,
     ClaimSupport,
     EvidenceItem,
+    GroundedWireClaim,
+    GroundedWireDiagnostic,
     LexicalSearchRequest,
     OcrClaimVerification,
     OcrVerificationState,
@@ -281,12 +284,15 @@ __all__ = [
     "EvidenceGroup",
     "EvidenceGroupKind",
     "EvidenceItem",
+    "EvidenceReadUnit",
     "EvidenceSelectionContext",
     "ExactSearchRequest",
     "FailoverReason",
     "FrozenModel",
     "FusedCandidate",
     "GcPlan",
+    "GroundedWireClaim",
+    "GroundedWireDiagnostic",
     "GroupSourceMap",
     "HydratedChunk",
     "ImageAttributes",

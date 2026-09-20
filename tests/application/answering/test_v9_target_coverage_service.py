@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from unittest.mock import Mock
 
 from rag_app.application.answering.grounded import (
@@ -97,23 +97,33 @@ def _material() -> tuple[tuple[EvidenceItem, ...], EvidenceGroup]:
     return evidence, group
 
 
-def _run(  # noqa: PLR0913
+@dataclass(frozen=True, slots=True)
+class _RunOptions:
+    """收拢目标覆盖夹具的可选问答语义。"""
+
+    target: str = "开发团队"
+    relation: str = "职责"
+    shape: AtomAnswerShape = AtomAnswerShape.DUTIES
+    context_supports: tuple[EvidenceItem, ...] = ()
+    stage: str | None = None
+
+
+def _run(
     evidence: tuple[EvidenceItem, ...],
     groups: tuple[EvidenceGroup, ...],
     facts: tuple[EvidenceItem, ...],
     *,
-    target: str = "开发团队",
-    relation: str = "职责",
-    shape: AtomAnswerShape = AtomAnswerShape.DUTIES,
-    context_supports: tuple[EvidenceItem, ...] = (),
-    stage: str | None = None,
+    options: _RunOptions | None = None,
 ) -> tuple[GroundedOutcome, Mock]:
+    options = options or _RunOptions()
     atom = QueryAtom(
         atom_id="A1",
-        target=target,
-        relation=relation,
-        answer_shape=shape,
-        original_fragment=f"{stage or ''}{target}的{relation}有哪些？",
+        target=options.target,
+        relation=options.relation,
+        answer_shape=options.shape,
+        original_fragment=(
+            f"{options.stage or ''}{options.target}的{options.relation}有哪些？"
+        ),
     )
     plan = make_query_plan(
         standalone_query=atom.original_fragment,
@@ -135,7 +145,7 @@ def _run(  # noqa: PLR0913
                             support_id=proof.support_id,
                             quote=proof.citation_text,
                         )
-                        for proof in (*context_supports, item)
+                        for proof in (*options.context_supports, item)
                     )
                 }
             )
@@ -168,13 +178,13 @@ def _run(  # noqa: PLR0913
             normalized_query=plan.standalone_query,
             conversation_fingerprint="sha256:" + "0" * 64,
             semantics=QuerySemantics(
-                target=target,
-                relation=relation,
-                context_qualifier=stage,
-                answer_type=RequestedAnswerType(shape.value),
+                target=options.target,
+                relation=options.relation,
+                context_qualifier=options.stage,
+                answer_type=RequestedAnswerType(options.shape.value),
             ),
         )
-        if stage
+        if options.stage
         else None,
     )
     return outcome, generator
@@ -197,7 +207,7 @@ def test_service_same_role_wrong_stage_cannot_complete_target() -> None:
         evidence,
         (group,),
         evidence[4:6],
-        stage="需求评审阶段",
+        options=_RunOptions(stage="需求评审阶段"),
     )
     assert outcome.atom_coverage != (("A1", "SUPPORTED"),)
 
@@ -312,9 +322,11 @@ def test_service_complete_requested_column_needs_no_other_duties() -> None:
         evidence,
         (group,),
         (evidence[6],),
-        relation="交付成果",
-        shape=AtomAnswerShape.ENUMERATION,
-        context_supports=(evidence[3], evidence[2]),
+        options=_RunOptions(
+            relation="交付成果",
+            shape=AtomAnswerShape.ENUMERATION,
+            context_supports=(evidence[3], evidence[2]),
+        ),
     )
     assert outcome.accepted_claim_count == 1
     assert outcome.atom_coverage == (("A1", "SUPPORTED"),)

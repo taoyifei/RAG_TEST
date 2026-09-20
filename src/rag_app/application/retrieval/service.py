@@ -462,9 +462,7 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": (
-                    "wb08r-unified-request-relation-v9-c2"
-                ),
+                "answer_pipeline_revision": ("wb08r-wire-binding-semantic-v1"),
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -1875,6 +1873,10 @@ class RetrievalService:
                             }
                             for item in generated.claim_rejection_diagnostics
                         ),
+                        "wire_diagnostics": tuple(
+                            item.model_dump(mode="json")
+                            for item in generated.wire_diagnostics
+                        ),
                         "extractive_fallback_reason": (
                             generated.extractive_fallback_reason
                         ),
@@ -2109,6 +2111,12 @@ class RetrievalService:
                 )
                 if generated
                 else (),
+                "wire_diagnostics": tuple(
+                    item.model_dump(mode="json")
+                    for item in generated.wire_diagnostics
+                )
+                if generated
+                else (),
                 "extractive_fallback_reason": (
                     generated.extractive_fallback_reason if generated else None
                 ),
@@ -2230,10 +2238,29 @@ class RetrievalService:
                 revision_id=snapshot.revision.index_revision_id,
                 rerank_mode=reranked.mode,
             )
-            display_message = related_display_message(
-                related_contents,
-                reranked.mode,
-                failure_category=reranked.failure_category,
+            generation_incomplete = bool(
+                generation_reason
+                and any(
+                    marker in generation_reason
+                    for marker in (
+                        "GENERATION_JSON_DECODE",
+                        "GENERATION_WIRE_SCHEMA",
+                        "GENERATION_ITEMS_REJECTED",
+                        "GENERATION_OUTPUT_INVALID",
+                        "EVIDENCE_BINDING_",
+                        "SEMANTIC_REVIEW_",
+                    )
+                )
+            )
+            display_message = (
+                "已找到相关资料，但本次答案生成或核验未完成。"
+                "你可以稍后重试，下面内容仅供查阅。"
+                if generation_incomplete
+                else related_display_message(
+                    related_contents,
+                    reranked.mode,
+                    failure_category=reranked.failure_category,
+                )
             )
         result = SearchAnswerResult(
             trace_id=trace_id,
@@ -2792,9 +2819,7 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": (
-                    "wb08r-unified-request-relation-v9-c2"
-                ),
+                "answer_pipeline_revision": ("wb08r-wire-binding-semantic-v1"),
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -4878,7 +4903,12 @@ def _model_capability_status(  # noqa: PLR0911
                 "PROVIDER_RATE_LIMITED",
                 "PROVIDER_TIMEOUT",
                 "GENERATION_JSON_INVALID",
+                "GENERATION_JSON_DECODE",
+                "GENERATION_WIRE_SCHEMA",
+                "GENERATION_ITEMS_REJECTED",
                 "GENERATION_OUTPUT_INVALID",
+                "EVIDENCE_BINDING_",
+                "SEMANTIC_REVIEW_",
                 "HTTP_429",
                 "CONNECT_TIMEOUT",
                 "READ_TIMEOUT",

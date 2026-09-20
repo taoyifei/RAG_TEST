@@ -16,7 +16,6 @@ from rag_app.adapters.providers.aliyun_chat import (
     ChatResponseError,
     _call_usage,
     _ChatStreamAccumulator,
-    _NaturalDraftPayload,
     _sse_data_events,
     decode_chat_content,
     message_token_estimate,
@@ -30,6 +29,7 @@ from rag_app.adapters.providers.generation_packet import (
     complete_generation_transport,
     observe_generation_transport,
 )
+from rag_app.adapters.providers.grounded_wire import GroundedWirePayload
 from rag_app.adapters.providers.http_common import (
     ProviderHttpClient,
     ProviderHttpError,
@@ -452,12 +452,16 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         return "provider.openai_compatible.generation"
 
     def _complete_natural(
-        self, messages: tuple[ChatMessage, ...]
+        self,
+        messages: tuple[ChatMessage, ...],
+        *,
+        max_output_tokens: int,
     ) -> ChatCompletion:
         """按已探测的唯一 Schema 协议执行自然 Claim 生成。"""
         return self.complete(
             messages,
-            json_schema=_NaturalDraftPayload.model_json_schema(),
+            max_output_tokens=max_output_tokens,
+            json_schema=GroundedWirePayload.model_json_schema(),
             schema_revision=GROUNDED_CLAIM_SCHEMA_REVISION,
         )
 
@@ -467,7 +471,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             return 0
         return _schema_payload_tokens(
             _structured_schema_fields(
-                _NaturalDraftPayload.model_json_schema(),
+                GroundedWirePayload.model_json_schema(),
                 mode=self._compatible_config.structured_output_mode,
                 revision=GROUNDED_CLAIM_SCHEMA_REVISION,
             )

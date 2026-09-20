@@ -14,6 +14,12 @@ from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from rag_app.application.answering.atom_semantics import current_atom_analysis
+from rag_app.application.answering.evidence_binding import (
+    BoundClaim,
+    EvidenceBindingError,
+    bind_wire_claim,
+    revalidate_bound_claim,
+)
 from rag_app.application.answering.natural_renderer import (
     MissingAtomReason,
     ValidatedNaturalClaim,
@@ -33,6 +39,13 @@ from rag_app.application.answering.request_relation import (
     relation_review_key,
     relation_review_scope,
 )
+from rag_app.application.answering.semantic_validation import (
+    SemanticValidationCandidate,
+    SemanticValidationPayload,
+    SemanticValidationRequest,
+    SemanticValidationResponse,
+    normalized_semantic_results,
+)
 from rag_app.application.answering.target_coverage import target_member_coverage
 from rag_app.core.errors import (
     ProviderInvalidResponse,
@@ -49,6 +62,7 @@ from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
+    GroundedWireDiagnostic,
     OcrVerificationState,
     PhysicalTableFact,
     ProviderCall,
@@ -413,6 +427,7 @@ class GroundedOutcome:
     repair_skip_reason: str | None = None
     raw_failures: tuple[tuple[str, str], ...] = ()
     recovery_results: tuple[tuple[str, str, str], ...] = ()
+    wire_diagnostics: tuple[GroundedWireDiagnostic, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2126,7 +2141,7 @@ class GroundedAnsweringService:
         on_claim: Callable[[AnswerClaim], None] | None,
         cancellation: CancellationPort | None,
     ) -> GroundedOutcome:
-        """单次自然生成、逐原子事实核验和仅缺项的局部修复。"""
+        """执行单次 Wire 生成、来源绑定和一次批量语义复核。"""
         if confidence.status not in {
             ConfidenceStatus.ANSWERABLE,
             ConfidenceStatus.INSUFFICIENT_EVIDENCE,
@@ -2364,10 +2379,15 @@ class GroundedAnsweringService:
         repair_calls = 0
         relation_review_calls = 0
         relation_review_elapsed_ms = 0.0
-        relation_review_skip_reason: str | None = "NO_UNDETERMINED_CLAIM"
+        relation_review_skip_reason: str | None = "NO_BOUND_CLAIM"
         relation_review_results: list[tuple[str, str, str]] = []
-        pending_relations: list[NaturalClaim] = []
-        pending_diagnostics: dict[NaturalClaim, ClaimRejectionDiagnostic] = {}
+        pending_relations: list[BoundClaim] = []
+        pending_legacy_relations: list[NaturalClaim] = []
+        pending_legacy_diagnostics: dict[
+            NaturalClaim, ClaimRejectionDiagnostic
+        ] = {}
+        wire_diagnostics: list[GroundedWireDiagnostic] = []
+        legacy_protocol = False
         generation_started: float | None = None
         extractive_fallback_reason: str | None = None
         request_id = uuid4().hex
@@ -2382,6 +2402,11 @@ class GroundedAnsweringService:
             repair_atom_ids: tuple[str, ...] = (),
         ) -> AnswerDraft:
             """从准入证据中选出本次 Atom 的候选，不以发布许可过滤。"""
+            # 延迟导入以避开 retrieval.service -> grounded 的包初始化环。
+            from rag_app.application.retrieval.generation_evidence import (  # noqa: PLC0415
+                project_evidence_read_units,
+            )
+
             nonlocal active_request
             nonlocal generation_started
             if generation_started is None:
@@ -2506,6 +2531,9 @@ class GroundedAnsweringService:
                 ),
                 physical_table_facts=selected_facts,
                 atom_fact_bindings=selected_bindings,
+                evidence_read_units=project_evidence_read_units(
+                    candidates, selected_facts
+                ),
                 repair_raw_failures=tuple(
                     (atom_id, raw)
                     for atom_id, raw in raw_failures
@@ -2545,10 +2573,10 @@ class GroundedAnsweringService:
                 return draft
             return self.generator.generate(request)
 
-        def validate_natural(
+        def validate_legacy_natural(
             natural: NaturalClaim,
         ) -> tuple[AnswerClaim, ...]:
-            """校验模型事实；只在安全边界内恢复来源原句。"""
+            """仅为旧 Provider/测试替身保留 V8 校验链。"""
             _validate_natural_atom_support_scope(
                 natural,
                 query_plan,
@@ -2626,36 +2654,26 @@ class GroundedAnsweringService:
                             validation_evidence,
                             analysis,
                             trusted_groups=trusted_groups,
-                            on_undetermined=pending_relations.append,
+                            on_undetermined=pending_legacy_relations.append,
                         )
                     )
                 ):
                     recovery_results.append(
-                        (natural.atom_id, raw, "SOURCE_PARTITIONS_VALIDATED")
+                        (
+                            natural.atom_id,
+                            raw,
+                            "SOURCE_PARTITIONS_VALIDATED",
+                        )
                     )
                     return recovered
                 raise
             return (claim,)
 
-        def consume(draft: AnswerDraft) -> None:
-            """只保留本地核验通过的 Claim，原文由证据回填。"""
-            nonlocal generated_claim_count, generation_returned, reason
-            nonlocal attempt_linked_ids
-            if draft.generation_mode != "natural":
-                raise ValidationFailed(
-                    "类型化生成返回错误协议。",
-                    stage="answer.validate",
-                    code="GENERATION_CLAIMS_INVALID",
-                )
-            calls.extend(draft.provider_calls)
+        def consume_legacy(draft: AnswerDraft) -> None:
+            """兼容旧 NaturalClaim 草稿；真实 V9 Provider 不进入此分支。"""
+            nonlocal generated_claim_count, reason
             if active_request is None:
                 raise ValueError("生成草稿缺少对应的请求身份。")
-            attempt_linked_ids = _generation_attempt_allowance(
-                active_request, draft
-            )
-            if draft.prepared_packet is not None:
-                prepared_packets.append(draft.prepared_packet)
-            generation_returned = True
             generated_claim_count += len(draft.natural_claims)
             repair_scope = set(active_request.repair_atom_ids)
             if repair_scope and any(
@@ -2670,15 +2688,16 @@ class GroundedAnsweringService:
                 )
             for natural in draft.natural_claims:
                 try:
-                    validated_claims = validate_natural(natural)
+                    validated_claims = validate_legacy_natural(natural)
                 except (ValidationFailed, ValueError) as error:
+                    pending_natural: NaturalClaim | None = None
                     if isinstance(error, RequestRelationUndetermined):
                         pending_natural = NaturalClaim(
                             atom_id=natural.atom_id,
                             text=error.claim.text,
                             supports=error.claim.supports,
                         )
-                        pending_relations.append(pending_natural)
+                        pending_legacy_relations.append(pending_natural)
                     raw = (
                         error.code
                         if isinstance(error, ValidationFailed)
@@ -2697,18 +2716,15 @@ class GroundedAnsweringService:
                         in {atom.atom_id for atom in query_plan.atoms}
                         else (),
                     )
-                    claim_rejection_diagnostics.append(
-                        _claim_rejection_diagnostic(
-                            natural,
-                            error,
-                            public_reason=public_reason,
-                            allowed_support_ids=allowed_support_ids,
-                        )
+                    diagnostic = _claim_rejection_diagnostic(
+                        natural,
+                        error,
+                        public_reason=public_reason,
+                        allowed_support_ids=allowed_support_ids,
                     )
-                    if isinstance(error, RequestRelationUndetermined):
-                        pending_diagnostics[pending_natural] = (
-                            claim_rejection_diagnostics[-1]
-                        )
+                    claim_rejection_diagnostics.append(diagnostic)
+                    if pending_natural is not None:
+                        pending_legacy_diagnostics[pending_natural] = diagnostic
                     rejected_atoms[natural.atom_id] += 1
                     reason = "CLAIM_NOT_SUPPORTED"
                     continue
@@ -2727,17 +2743,111 @@ class GroundedAnsweringService:
                         )
                     )
 
-        def review_pending() -> None:  # noqa: PLR0912, PLR0915
-            """对已发送且只差语义判断的事实使用唯一补充名额。"""
-            nonlocal relation_review_calls, relation_review_elapsed_ms
-            nonlocal relation_review_skip_reason
-            nonlocal reason
-            if not pending_relations:
+        def consume(draft: AnswerDraft) -> None:
+            """逐项绑定 Wire Claim；语义发布许可留给一次批量复核。"""
+            nonlocal generated_claim_count, generation_returned, reason
+            nonlocal attempt_linked_ids, legacy_protocol
+            if draft.generation_mode != "natural":
+                raise ValidationFailed(
+                    "类型化生成返回错误协议。",
+                    stage="answer.validate",
+                    code="GENERATION_CLAIMS_INVALID",
+                )
+            calls.extend(draft.provider_calls)
+            if active_request is None:
+                raise ValueError("生成草稿缺少对应的请求身份。")
+            attempt_linked_ids = _generation_attempt_allowance(
+                active_request, draft
+            )
+            if draft.prepared_packet is not None:
+                prepared_packets.append(draft.prepared_packet)
+            generation_returned = True
+            if draft.natural_claims and not draft.wire_claims:
+                legacy_protocol = True
+                consume_legacy(draft)
                 return
-            unique = tuple(dict.fromkeys(pending_relations))
+            if (
+                draft.prepared_packet is None
+                and not draft.wire_claims
+                and not draft.wire_diagnostics
+            ):
+                legacy_protocol = True
+                consume_legacy(draft)
+                return
+            packet = draft.prepared_packet
+            if packet is None:
+                raise ValueError("自然生成缺少实际发送包。")
+            generated_claim_count += len(draft.wire_claims) + len(
+                draft.wire_diagnostics
+            )
+            wire_diagnostics.extend(draft.wire_diagnostics)
+            for diagnostic in draft.wire_diagnostics:
+                if diagnostic.atom_id is not None:
+                    raw_failures.append(
+                        (diagnostic.atom_id, diagnostic.failure_code)
+                    )
+                    rejected_atoms[diagnostic.atom_id] += 1
+                claim_rejections[diagnostic.failure_code] += 1
+
+            sent_unit_ids = set(packet.sent_read_unit_ids)
+            read_units = tuple(
+                unit
+                for unit in active_request.evidence_read_units
+                if unit.unit_id in sent_unit_ids
+            )
+            wire_claims = list(draft.wire_claims)
+            if not wire_claims:
+                reason = draft.reason_code or "GENERATION_ABSTAINED"
+                raw_failures.extend(
+                    (atom_id, reason) for atom_id in attempt_linked_ids
+                )
+            allowed_units = {
+                atom_id: frozenset(unit_ids)
+                for atom_id, unit_ids in packet.per_atom_read_unit_ids
+            }
+            for index, wire_claim in enumerate(wire_claims, start=1):
+                try:
+                    bound = bind_wire_claim(
+                        wire_claim,
+                        claim_id=f"C{index}",
+                        read_units=read_units,
+                        evidence=active_request.evidence,
+                        allowed_unit_ids=allowed_units.get(
+                            wire_claim.atom_id, frozenset()
+                        ),
+                        physical_table_facts=active_request.physical_table_facts,
+                        atom_fact_bindings=active_request.atom_fact_bindings,
+                    )
+                except EvidenceBindingError as error:
+                    diagnostic = GroundedWireDiagnostic(
+                        item_index=index - 1,
+                        atom_id=wire_claim.atom_id,
+                        failure_stage="evidence_binding",
+                        failure_code=error.failure_code,
+                        json_path=error.json_path,
+                        expected_type="sent_read_unit",
+                        observed_type="binding_mismatch",
+                    )
+                    wire_diagnostics.append(diagnostic)
+                    raw_failures.append(
+                        (wire_claim.atom_id, error.failure_code)
+                    )
+                    claim_rejections[error.failure_code] += 1
+                    rejected_atoms[wire_claim.atom_id] += 1
+                    reason = "EVIDENCE_BINDING_FAILED"
+                    continue
+                if bound not in pending_relations:
+                    pending_relations.append(bound)
+
+        def review_legacy_pending() -> None:  # noqa: PLR0912, PLR0915
+            """仅为旧 V8 协议保留原有关系复核行为。"""
+            nonlocal relation_review_calls, relation_review_elapsed_ms
+            nonlocal relation_review_skip_reason, reason
+            if not pending_legacy_relations:
+                return
+            unique = tuple(dict.fromkeys(pending_legacy_relations))
 
             def observed(natural: NaturalClaim, status: str, code: str) -> None:
-                """仅保留事实摘要、固定模型状态和服务器判定码。"""
                 relation_review_results.append(
                     (
                         hashlib.sha256(natural.text.encode()).hexdigest(),
@@ -2863,8 +2973,8 @@ class GroundedAnsweringService:
                     calls.extend(failed_calls)
                     relation_review_calls = int(
                         any(
-                            packet.evidence_level == "TRANSPORT_SENT"
-                            for packet in failed_packets
+                            item.evidence_level == "TRANSPORT_SENT"
+                            for item in failed_packets
                         )
                         or any(call.call_count for call in failed_calls)
                     )
@@ -2931,12 +3041,12 @@ class GroundedAnsweringService:
                     )
                     continue
                 plain = AnswerClaim(
-                    text=candidate.claim.text, supports=candidate.claim.supports
+                    text=candidate.claim.text,
+                    supports=candidate.claim.supports,
                 )
                 record_relation_review(
                     relation_review_key(candidate.atom, plain, units)
                 )
-                # 引用、角色、阶段、数字和条件硬门再次运行，模型不能覆盖它们。
                 try:
                     claim = _validated_natural_claim(
                         candidate.claim,
@@ -2970,7 +3080,9 @@ class GroundedAnsweringService:
                     )
                     raise
                 observed(
-                    candidate.claim, result.status, "RELATION_REVIEW_VALIDATED"
+                    candidate.claim,
+                    result.status,
+                    "RELATION_REVIEW_VALIDATED",
                 )
                 accepted.append(
                     ValidatedNaturalClaim(
@@ -2979,7 +3091,9 @@ class GroundedAnsweringService:
                         claim=claim,
                     )
                 )
-                pending_diagnostic = pending_diagnostics.get(candidate.claim)
+                pending_diagnostic = pending_legacy_diagnostics.get(
+                    candidate.claim
+                )
                 if pending_diagnostic is not None:
                     code = pending_diagnostic.public_reason_code
                     claim_rejections[code] -= 1
@@ -2994,6 +3108,192 @@ class GroundedAnsweringService:
                         "RELATION_REVIEW_VALIDATED",
                     )
                 )
+
+        def review_pending() -> None:  # noqa: PLR0912, PLR0915
+            """对全部绑定事实执行一次批量语义判定。"""
+            nonlocal relation_review_calls, relation_review_elapsed_ms
+            nonlocal relation_review_skip_reason, reason
+            if not pending_relations:
+                return
+            unique = tuple(dict.fromkeys(pending_relations))
+
+            def observed(bound: BoundClaim, status: str, code: str) -> None:
+                relation_review_results.append(
+                    (
+                        hashlib.sha256(bound.text.encode()).hexdigest(),
+                        status,
+                        code,
+                    )
+                )
+
+            review_method = getattr(
+                type(self.generator), "review_semantics", None
+            )
+            packet = prepared_packets[0] if prepared_packets else None
+            timeout = getattr(
+                self.generator, "supplement_timeout_seconds", None
+            )
+            if (
+                not callable(review_method)
+                or packet is None
+                or packet.evidence_level != "TRANSPORT_SENT"
+                or generation_started is None
+                or not isinstance(timeout, (int, float))
+            ):
+                relation_review_skip_reason = (
+                    "NO_SENT_PACKET_OR_PROVIDER_DEADLINE"
+                )
+                reason = "SEMANTIC_REVIEW_NOT_AVAILABLE"
+                for bound in unique:
+                    observed(bound, "NOT_OBSERVED", reason)
+                return
+            deadline = generation_started + timeout
+            outer_deadline = getattr(cancellation, "deadline_monotonic", None)
+            if isinstance(outer_deadline, (int, float)):
+                deadline = min(deadline, outer_deadline)
+            if deadline <= monotonic():
+                relation_review_skip_reason = (
+                    "SEMANTIC_REVIEW_DEADLINE_EXHAUSTED"
+                )
+                reason = relation_review_skip_reason
+                for bound in unique:
+                    observed(bound, "NOT_OBSERVED", reason)
+                return
+            atoms = {atom.atom_id: atom for atom in query_plan.atoms}
+            selected_unit_ids = {
+                unit_id
+                for bound in unique
+                for unit_id in bound.selected_unit_ids
+            }
+            if active_request is None:
+                raise ValueError("语义复核缺少原生成请求。")
+            request = SemanticValidationRequest(
+                original_query=query_plan.original_query,
+                candidates=tuple(
+                    SemanticValidationCandidate(
+                        claim=bound, atom=atoms[bound.atom_id]
+                    )
+                    for bound in unique
+                ),
+                read_units=tuple(
+                    unit
+                    for unit in active_request.evidence_read_units
+                    if unit.unit_id in selected_unit_ids
+                ),
+                sent_packet=packet,
+                request_id=request_id,
+                attempt_id=uuid4().hex,
+                deadline_monotonic=deadline,
+                generation_model=next(
+                    (
+                        call.model
+                        for call in reversed(calls)
+                        if call.operation == "generation"
+                    ),
+                    None,
+                ),
+            )
+            _raise_if_cancelled(cancellation)
+            relation_review_skip_reason = None
+            started = monotonic()
+            try:
+                response = review_method(self.generator, request)
+            except (RagError, ValueError) as error:
+                review_reason = (
+                    dict(error.details).get("reason_code")
+                    if isinstance(error, ProviderInvalidResponse)
+                    else error.code
+                    if isinstance(error, RagError)
+                    else "SEMANTIC_REVIEW_PROVIDER_ERROR"
+                )
+                if not isinstance(review_reason, str):
+                    review_reason = "SEMANTIC_REVIEW_PROVIDER_ERROR"
+                relation_review_skip_reason = review_reason
+                reason = review_reason
+                if isinstance(error, RagError):
+                    failed_packets = _failed_generation_packets(error)
+                    failed_calls = error.provider_calls or (
+                        ()
+                        if error.provider_call is None
+                        else (error.provider_call,)
+                    )
+                    prepared_packets.extend(failed_packets)
+                    calls.extend(failed_calls)
+                    relation_review_calls = int(
+                        any(
+                            item.evidence_level == "TRANSPORT_SENT"
+                            for item in failed_packets
+                        )
+                        or any(call.call_count for call in failed_calls)
+                    )
+                for candidate in request.candidates:
+                    observed(candidate.claim, "NOT_OBSERVED", review_reason)
+                return
+            finally:
+                relation_review_elapsed_ms = (monotonic() - started) * 1000
+            if not isinstance(response, SemanticValidationResponse):
+                raise ValueError("语义复核没有返回严格协议。")
+            relation_review_calls = 1
+            calls.append(response.call)
+            prepared_packets.append(response.prepared_packet)
+            _raise_if_cancelled(cancellation)
+            if response.prepared_packet.evidence_level != "TRANSPORT_SENT":
+                raise ValueError("语义复核缺少实际发送证据。")
+            by_claim = {
+                candidate.claim.claim_id: candidate
+                for candidate in request.candidates
+            }
+            allowed_units = {
+                atom_id: frozenset(unit_ids)
+                for atom_id, unit_ids in packet.per_atom_read_unit_ids
+            }
+            results = normalized_semantic_results(
+                SemanticValidationPayload(results=response.results), request
+            )
+            supported_count = 0
+            for result in results:
+                candidate = by_claim[result.claim_id]
+                bound = candidate.claim.with_semantic_status(result.status)
+                if result.status != "supported":
+                    rejected_atoms[bound.atom_id] += 1
+                    claim_rejections[f"SEMANTIC_{result.status.upper()}"] += 1
+                    observed(bound, result.status, "MODEL_NOT_SUPPORTED")
+                    continue
+                try:
+                    rebound = revalidate_bound_claim(
+                        bound,
+                        packet=packet,
+                        read_units=active_request.evidence_read_units,
+                        evidence=active_request.evidence,
+                        allowed_unit_ids=allowed_units.get(
+                            bound.atom_id, frozenset()
+                        ),
+                        physical_table_facts=active_request.physical_table_facts,
+                        atom_fact_bindings=active_request.atom_fact_bindings,
+                    )
+                except EvidenceBindingError:
+                    observed(
+                        bound, result.status, "HARD_BINDING_REVALIDATION_FAILED"
+                    )
+                    raise ValueError("语义通过后的来源身份重验失败。") from None
+                observed(bound, result.status, "SEMANTIC_REVIEW_VALIDATED")
+                supported_count += 1
+                accepted.append(
+                    ValidatedNaturalClaim(
+                        claim_id=rebound.claim_id,
+                        atom_ids=(rebound.atom_id,),
+                        claim=rebound.answer_claim,
+                    )
+                )
+                recovery_results.append(
+                    (
+                        rebound.atom_id,
+                        "SEMANTIC_REVIEW_REQUIRED",
+                        "SEMANTIC_REVIEW_VALIDATED",
+                    )
+                )
+            if supported_count == 0:
+                reason = "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM"
 
         if eligible:
             try:
@@ -3027,6 +3327,7 @@ class GroundedAnsweringService:
                         detailed_reason = dict(error.details).get("reason_code")
                         if isinstance(detailed_reason, str):
                             raw_reason = detailed_reason
+                            reason = detailed_reason
                     raw_failures.extend(
                         (atom_id, raw_reason)
                         for atom_id in sorted(eligible)
@@ -3039,87 +3340,92 @@ class GroundedAnsweringService:
                         for atom_id in sorted(eligible)
                         if (atom_id, reason) not in raw_failures
                     )
-                # 资料完整但模型漏掉结构成员时，也只补对应 Atom。
-                omitted = tuple(
-                    atom.atom_id
-                    for atom in query_plan.atoms
-                    if atom.atom_id in eligible
-                    and (
-                        linked_ids.get(atom.atom_id)
-                        or (
-                            generation_evidence_pack is None
-                            and atom_support_matrix.for_atom(
-                                atom.atom_id
-                            ).status
-                            is AtomStatus.SUPPORTED
+                if legacy_protocol:
+                    # 旧协议只为兼容既有离线 Provider；V9 线上路径不修补。
+                    omitted = tuple(
+                        atom.atom_id
+                        for atom in query_plan.atoms
+                        if atom.atom_id in eligible
+                        and (
+                            linked_ids.get(atom.atom_id)
+                            or (
+                                generation_evidence_pack is None
+                                and atom_support_matrix.for_atom(
+                                    atom.atom_id
+                                ).status
+                                is AtomStatus.SUPPORTED
+                            )
+                        )
+                        and not _natural_atom_complete(
+                            atom,
+                            atom_support_matrix,
+                            tuple(accepted),
+                            evidence,
+                            analysis,
+                            generation_evidence_pack=generation_evidence_pack,
                         )
                     )
-                    and not _natural_atom_complete(
-                        atom,
-                        atom_support_matrix,
-                        tuple(accepted),
-                        evidence,
-                        analysis,
-                        generation_evidence_pack=generation_evidence_pack,
-                    )
-                )
-                repairable = tuple(
-                    atom_id
-                    for atom_id in omitted
-                    if _can_repair_atom(
-                        atom_id,
-                        evidence,
-                        linked_ids.get(
+                    repairable = tuple(
+                        atom_id
+                        for atom_id in omitted
+                        if _can_repair_atom(
                             atom_id,
-                            atom_support_matrix.for_atom(
-                                atom_id
-                            ).supporting_support_ids,
-                        ),
-                        tuple(raw_failures),
-                    )
-                )
-                repair_skip_reason = (
-                    None
-                    if repairable
-                    else "NON_RECOVERABLE_OR_NO_CITABLE_SOURCE"
-                    if omitted
-                    else "NO_MISSING_ATOM"
-                )
-                pending_atom_ids = {
-                    natural.atom_id for natural in pending_relations
-                }
-                repair_first = tuple(
-                    atom_id
-                    for atom_id in repairable
-                    if atom_id not in pending_atom_ids
-                )
-                if repair_first:
-                    if pending_relations:
-                        relation_review_skip_reason = (
-                            "SUPPLEMENT_SLOT_RESERVED_FOR_ATOM_REPAIR"
+                            evidence,
+                            linked_ids.get(
+                                atom_id,
+                                atom_support_matrix.for_atom(
+                                    atom_id
+                                ).supporting_support_ids,
+                            ),
+                            tuple(raw_failures),
                         )
-                    _raise_if_cancelled(cancellation)
-                    repair_calls = 1
-                    consume(generate(repair_first))
-                elif pending_relations:
-                    review_pending()
-                    if (
-                        repairable
-                        and not relation_review_calls
-                        and relation_review_skip_reason
-                        == "RELATION_REVIEW_INPUT_BUDGET_EXCEEDED"
-                    ):
+                    )
+                    repair_skip_reason = (
+                        None
+                        if repairable
+                        else "NON_RECOVERABLE_OR_NO_CITABLE_SOURCE"
+                        if omitted
+                        else "NO_MISSING_ATOM"
+                    )
+                    pending_atom_ids = {
+                        natural.atom_id for natural in pending_legacy_relations
+                    }
+                    repair_first = tuple(
+                        atom_id
+                        for atom_id in repairable
+                        if atom_id not in pending_atom_ids
+                    )
+                    if repair_first:
+                        if pending_legacy_relations:
+                            relation_review_skip_reason = (
+                                "SUPPLEMENT_SLOT_RESERVED_FOR_ATOM_REPAIR"
+                            )
+                        _raise_if_cancelled(cancellation)
+                        repair_calls = 1
+                        consume(generate(repair_first))
+                    elif pending_legacy_relations:
+                        review_legacy_pending()
+                        if (
+                            repairable
+                            and not relation_review_calls
+                            and relation_review_skip_reason
+                            == "RELATION_REVIEW_INPUT_BUDGET_EXCEEDED"
+                        ):
+                            _raise_if_cancelled(cancellation)
+                            repair_calls = 1
+                            consume(generate(repairable))
+                        elif repairable and relation_review_calls:
+                            repair_skip_reason = (
+                                "SUPPLEMENT_SLOT_USED_BY_RELATION_REVIEW"
+                            )
+                    elif repairable:
                         _raise_if_cancelled(cancellation)
                         repair_calls = 1
                         consume(generate(repairable))
-                    elif repairable and relation_review_calls:
-                        repair_skip_reason = (
-                            "SUPPLEMENT_SLOT_USED_BY_RELATION_REVIEW"
-                        )
-                elif repairable:
-                    _raise_if_cancelled(cancellation)
-                    repair_calls = 1
-                    consume(generate(repairable))
+                else:
+                    repair_skip_reason = "AUTOMATIC_GENERATION_REPAIR_DISABLED"
+                    if pending_relations:
+                        review_pending()
             except QueryCancelled as error:
                 error.provider_calls = (*calls, *error.provider_calls)
                 raise
@@ -3136,67 +3442,6 @@ class GroundedAnsweringService:
                 reason = error.code
             except ValueError:
                 reason = "GENERATION_OUTPUT_INVALID"
-
-        if generation_evidence_pack is not None and len(query_plan.atoms) > 1:
-            # 同一条已核验的原句可回答多个标量子问；逐 Atom 重新核验后
-            # 才扩展覆盖，不要求模型重复输出相同句子。
-            scalar_shapes = {
-                AtomAnswerShape.FACT,
-                AtomAnswerShape.DURATION,
-                AtomAnswerShape.COUNT,
-                AtomAnswerShape.RESPONSIBLE_PARTY,
-                AtomAnswerShape.DEFINITION,
-            }
-            for atom in query_plan.atoms:
-                if atom.answer_shape not in scalar_shapes or any(
-                    atom.atom_id in item.atom_ids for item in accepted
-                ):
-                    continue
-                linked = set(linked_ids.get(atom.atom_id, ()))
-                for index, shared_claim in enumerate(accepted):
-                    if (
-                        not all(
-                            support.support_id in linked
-                            for support in shared_claim.claim.supports
-                        )
-                        or len(
-                            _terms(atom.search_text)
-                            & _terms(shared_claim.claim.text)
-                        )
-                        < _FALLBACK_MIN_BIGRAM_OVERLAP
-                    ):
-                        continue
-                    try:
-                        _validated_natural_claim(
-                            NaturalClaim(
-                                atom_id=atom.atom_id,
-                                text=shared_claim.claim.text,
-                                supports=shared_claim.claim.supports,
-                            ),
-                            query_plan,
-                            atom_support_matrix,
-                            _atom_validation_evidence(
-                                atom.atom_id,
-                                evidence,
-                                generation_evidence_pack.per_atom_source_certificates,
-                            ),
-                            analysis,
-                            trusted_groups=trusted_groups,
-                            physical_table_facts=(
-                                generation_evidence_pack.physical_table_facts
-                            ),
-                            atom_fact_bindings=(
-                                generation_evidence_pack.atom_fact_bindings
-                            ),
-                        )
-                    except (ValidationFailed, ValueError):
-                        continue
-                    accepted[index] = ValidatedNaturalClaim(
-                        claim_id=shared_claim.claim_id,
-                        atom_ids=(*shared_claim.atom_ids, atom.atom_id),
-                        claim=shared_claim.claim,
-                    )
-                    break
 
         accepted_claims = tuple(item.claim for item in accepted)
         try:
@@ -3217,6 +3462,7 @@ class GroundedAnsweringService:
             generation_evidence_pack is not None
             and generation_returned
             and not accepted
+            and legacy_protocol
         ):
             fallback_diagnostics: list[str] = []
             fallback = _safe_extractive_fallback(
@@ -3277,6 +3523,7 @@ class GroundedAnsweringService:
                     repair_skip_reason=repair_skip_reason,
                     raw_failures=tuple(raw_failures),
                     recovery_results=tuple(recovery_results),
+                    wire_diagnostics=tuple(wire_diagnostics),
                 )
 
         covered = {atom_id for item in accepted for atom_id in item.atom_ids}
@@ -3294,13 +3541,24 @@ class GroundedAnsweringService:
             )
             if pre.status is AtomStatus.CONTRADICTORY:
                 final = AtomStatus.CONTRADICTORY
-            elif atom.atom_id in covered and _natural_atom_complete(
-                atom,
-                atom_support_matrix,
-                tuple(accepted),
-                evidence,
-                analysis,
-                generation_evidence_pack=generation_evidence_pack,
+            elif atom.atom_id in covered and (
+                (
+                    not legacy_protocol
+                    and atom.answer_shape
+                    not in {
+                        AtomAnswerShape.ENUMERATION,
+                        AtomAnswerShape.DUTIES,
+                        AtomAnswerShape.PROCEDURE,
+                    }
+                )
+                or _natural_atom_complete(
+                    atom,
+                    atom_support_matrix,
+                    tuple(accepted),
+                    evidence,
+                    analysis,
+                    generation_evidence_pack=generation_evidence_pack,
+                )
             ):
                 final = AtomStatus.SUPPORTED
                 if pre.status is AtomStatus.PARTIAL:
@@ -3396,6 +3654,7 @@ class GroundedAnsweringService:
                 repair_skip_reason=repair_skip_reason,
                 raw_failures=tuple(raw_failures),
                 recovery_results=tuple(recovery_results),
+                wire_diagnostics=tuple(wire_diagnostics),
             )
         published = list(accepted_support_ids)
         for matrix_atom in atom_support_matrix.atoms:
@@ -3468,6 +3727,7 @@ class GroundedAnsweringService:
             repair_skip_reason=repair_skip_reason,
             raw_failures=tuple(raw_failures),
             recovery_results=tuple(recovery_results),
+            wire_diagnostics=tuple(wire_diagnostics),
         )
 
 

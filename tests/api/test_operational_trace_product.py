@@ -33,29 +33,32 @@ _MEDIA_TYPE = (
 
 
 def _grounded_response(request: httpx.Request) -> httpx.Response:
-    """把首条候选原样返回为通过引用校验的离线回答。"""
+    """按新 Wire 与批量语义协议返回可重复的离线回答。"""
     request_payload = json.loads(request.content)
     grounded = json.loads(request_payload["messages"][1]["content"])
-    candidates = grounded["evidence"]
-    # 局部修复只携带失败 Atom；离线 Provider 同样按它的目标保持拒答。
-    question = grounded.get("question") or " ".join(
-        atom["target"] for atom in grounded["atoms"]
-    )
-    claims = []
-    if candidates and "月球库存编号" not in question:
-        evidence = candidates[0]
-        claims = [
-            {
-                "atom_id": grounded["atoms"][0]["atom_id"],
-                "text": evidence["text"],
-                "supports": [
-                    {
-                        "support_id": evidence["support_id"],
-                        "quote": evidence["text"],
-                    }
-                ],
-            }
-        ]
+    if "candidates" in grounded:
+        response_body = {
+            "results": [
+                {"claim_id": item["claim_id"], "status": "supported"}
+                for item in grounded["candidates"]
+            ]
+        }
+    else:
+        read_units = grounded["read_units"]
+        question = grounded.get("question") or " ".join(
+            atom["target"] for atom in grounded["atoms"]
+        )
+        claims = []
+        if read_units and "月球库存编号" not in question:
+            unit = read_units[0]
+            claims = [
+                {
+                    "atom_id": grounded["atoms"][0]["atom_id"],
+                    "text": unit["text"],
+                    "refs": [unit["unit_id"]],
+                }
+            ]
+        response_body = {"claims": claims}
     return httpx.Response(
         200,
         json={
@@ -66,7 +69,7 @@ def _grounded_response(request: httpx.Request) -> httpx.Response:
                     "message": {
                         "role": "assistant",
                         "content": json.dumps(
-                            {"claims": claims}, ensure_ascii=False
+                            response_body, ensure_ascii=False
                         ),
                     },
                 }

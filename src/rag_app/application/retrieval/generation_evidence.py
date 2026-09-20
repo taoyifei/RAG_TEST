@@ -7,6 +7,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 from rag_app.application.retrieval.atom_group_alignment import (
     AlignmentQualification,
@@ -25,6 +26,7 @@ from rag_app.core.models import (
     ChunkRole,
     EvidenceGroup,
     EvidenceItem,
+    EvidenceReadUnit,
     PhysicalTableFact,
     PhysicalTableHeader,
     RankedChunk,
@@ -48,7 +50,7 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v10"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v11"
 _MIN_TABLE_FACT_COLUMNS = 2
 _TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
@@ -278,6 +280,133 @@ class GenerationEvidencePack:
                 "ADMITTED_STRUCTURAL_GROUP_AND_TABLE_ROW"
             ),
         }
+
+
+def project_evidence_read_units(
+    evidence: tuple[EvidenceItem, ...],
+    physical_table_facts: tuple[PhysicalTableFact, ...] = (),
+) -> tuple[EvidenceReadUnit, ...]:
+    """把已准入来源投影成模型可读、服务端可恢复的短编号单元。
+
+    表格事实只向模型展示一次可读的行、列和值；完整的真实跨度仍由
+    ``support_ids`` 与 ``fact_id`` 留在服务端。普通来源保持原始完整引用，
+    不在这里判断其是否回答了用户问题。
+
+    Args:
+        evidence: 当前生成尝试获准读取的真实来源。
+        physical_table_facts: 已按物理坐标闭合的表格事实。
+
+    Returns:
+        按当前请求编号的阅读单元，编号只在对应发送包内有效。
+
+    """
+    by_id = {item.support_id: item for item in evidence}
+    if len(by_id) != len(evidence):
+        raise ValueError("READ_UNIT_DUPLICATE_SUPPORT")
+    complete_facts = tuple(
+        fact
+        for fact in physical_table_facts
+        if set(fact.all_support_ids) <= by_id.keys()
+    )
+    physical_support_ids = {
+        support_id
+        for fact in complete_facts
+        for support_id in fact.all_support_ids
+    }
+    units: list[EvidenceReadUnit] = []
+
+    def source_complete(items: tuple[EvidenceItem, ...]) -> bool:
+        return bool(items) and all(
+            item.publishable
+            and item.source_spans
+            and all(span.is_citable for span in item.source_spans)
+            for item in items
+        )
+
+    for item in evidence:
+        if item.support_id in physical_support_ids:
+            continue
+        # 单个表格单元格不能降级成普通段落绕过行名、表头和值的坐标闭合。
+        if item.table_locator is not None or any(
+            part.startswith("tbl:")
+            for span in item.source_spans
+            for part in span.structural_path
+        ):
+            continue
+        metadata = dict(item.metadata)
+        group_type = metadata.get("evidence_group_type")
+        kind: Literal["paragraph", "list_item", "table_fact", "catalog_entry"]
+        if group_type == "CATALOG_ENTRY":
+            kind = "catalog_entry"
+        elif group_type in {"LIST_GROUP", "PROCEDURE_GROUP"}:
+            kind = "list_item"
+        else:
+            kind = "paragraph"
+        context = {
+            "source_label": item.source_label,
+            "heading_path": list(item.heading_path),
+            "table_locator": item.table_locator,
+        }
+        units.append(
+            EvidenceReadUnit(
+                unit_id=f"E{len(units) + 1}",
+                kind=kind,
+                text=item.citation_text,
+                source_context=freeze_json_object(
+                    {
+                        key: value
+                        for key, value in context.items()
+                        if value not in (None, "", ())
+                    }
+                ),
+                support_ids=(item.support_id,),
+                source_complete=source_complete((item,)),
+            )
+        )
+    for fact in complete_facts:
+        fact_items = tuple(by_id[item] for item in fact.all_support_ids)
+        row_labels = tuple(
+            dict.fromkeys(
+                by_id[support_id].citation_text.strip()
+                for support_id in fact.row_label_support_ids
+            )
+        )
+        headers = tuple(
+            "".join(
+                by_id[support_id].citation_text
+                for support_id in header.support_ids
+            ).strip()
+            for header in fact.headers
+        )
+        values = tuple(
+            dict.fromkeys(
+                by_id[support_id].citation_text.strip()
+                for support_id in fact.value_support_ids
+            )
+        )
+        anchor = by_id[fact.value_support_ids[0]]
+        units.append(
+            EvidenceReadUnit(
+                unit_id=f"E{len(units) + 1}",
+                kind="table_fact",
+                text=(
+                    f"行：{' / '.join(row_labels)}；"
+                    f"列：{' / '.join(headers)}；"
+                    f"值：{' / '.join(values)}"
+                ),
+                source_context=freeze_json_object(
+                    {
+                        "source_label": anchor.source_label,
+                        "heading_path": list(anchor.heading_path),
+                        "table_locator": anchor.table_locator,
+                    }
+                ),
+                support_ids=fact.all_support_ids,
+                fact_id=fact.fact_id,
+                source_complete=source_complete(fact_items),
+            )
+        )
+    return tuple(units)
 
 
 def _normalized(value: str) -> str:

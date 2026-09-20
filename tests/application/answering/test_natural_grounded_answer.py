@@ -334,9 +334,10 @@ def test_repair_prompt_contains_only_missing_atom_and_its_evidence() -> None:
 
     assert "question" not in payload
     assert [item["atom_id"] for item in payload["atoms"]] == ["A2"]
-    assert [item["support_id"] for item in payload["evidence"]] == [
-        by_text["乙部门审核记录 3 天。"]
+    assert [item["text"] for item in payload["read_units"]] == [
+        "乙部门审核记录 3 天。"
     ]
+    assert payload["atoms"][0]["allowed_ref_ids"] == ["E1"]
     assert payload["accepted_claim_ids"] == ["C1"]
 
 
@@ -353,12 +354,13 @@ def test_natural_prompt_omits_internal_coordinates() -> None:
     )
 
     payload = json.loads(_natural_messages(request)[1].content)
-    projected = payload["evidence"][0]
+    projected = payload["read_units"][0]
 
     assert projected["text"] == evidence[0].citation_text
-    assert projected["support_id"] == "S1"
-    assert "anchors" not in projected["source_structure"]
-    assert "document_version_id" not in projected["source_structure"]
+    assert projected["unit_id"] == "E1"
+    assert "support_id" not in projected
+    assert "anchors" not in projected["source_context"]
+    assert "document_version_id" not in projected["source_context"]
     assert evidence[0].source_spans
 
 
@@ -401,14 +403,13 @@ def test_natural_prompt_prunes_complete_groups_within_budget() -> None:
 
     messages = _natural_messages(request, max_input_tokens=full_estimate - 1)
     selected = {
-        item["support_id"]
-        for item in json.loads(messages[1].content)["evidence"]
+        item["text"] for item in json.loads(messages[1].content)["read_units"]
     }
 
     assert message_token_estimate(messages) <= full_estimate - 1
-    assert {item.support_id for item in grouped[:2]} <= selected
+    assert {item.citation_text for item in grouped[:2]} <= selected
     for start in (0, 2, 4):
-        members = {item.support_id for item in grouped[start : start + 2]}
+        members = {item.citation_text for item in grouped[start : start + 2]}
         assert members <= selected or members.isdisjoint(selected)
 
 
@@ -466,12 +467,11 @@ def test_natural_prompt_protects_named_table_row_when_budget_is_tight() -> None:
 
     messages = _natural_messages(request, max_input_tokens=full_estimate - 1)
     selected = {
-        item["support_id"]
-        for item in json.loads(messages[1].content)["evidence"]
+        item["text"] for item in json.loads(messages[1].content)["read_units"]
     }
 
-    assert {item.support_id for item in grouped[2:]} <= selected
-    assert {item.support_id for item in grouped[:2]}.isdisjoint(selected)
+    assert {item.citation_text for item in grouped[2:]} <= selected
+    assert {item.citation_text for item in grouped[:2]}.isdisjoint(selected)
 
 
 def test_natural_prompt_protects_direct_support_without_group() -> None:
@@ -528,8 +528,8 @@ def test_natural_prompt_protects_direct_support_without_group() -> None:
         ].content
     )
 
-    assert [item["support_id"] for item in payload["evidence"]] == [
-        direct.support_id
+    assert [item["text"] for item in payload["read_units"]] == [
+        direct.citation_text
     ]
 
 

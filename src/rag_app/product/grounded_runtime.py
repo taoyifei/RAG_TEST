@@ -34,6 +34,10 @@ from rag_app.adapters.providers.openai_compatible import (
     OpenAICompatibleChatConfig,
 )
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
+from rag_app.application.answering.semantic_validation import (
+    SemanticValidationRequest,
+    SemanticValidationResponse,
+)
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlanOutcome,
     ReasoningEffort,
@@ -314,6 +318,26 @@ class ProductGroundedModel:
         with self._scope("generation", hashes):
             return candidates[0].review_relations(request)
 
+    def review_semantics(
+        self, request: SemanticValidationRequest
+    ) -> SemanticValidationResponse:
+        """在首次生成的同一模型和语料授权内执行一次语义复核。"""
+        candidates = tuple(
+            adapter
+            for adapter in self.adapters
+            if request.generation_model == adapter.config.model
+            or (request.generation_model is None and len(self.adapters) == 1)
+        )
+        if len(candidates) != 1:
+            raise PolicyDenied(
+                "语义复核不能变更首次生成使用的模型。",
+                stage="generation.semantic_review",
+                code="SEMANTIC_REVIEW_MODEL_IDENTITY_REQUIRED",
+            )
+        hashes = self._source_hashes(request)
+        with self._scope("generation", hashes):
+            return candidates[0].review_semantics(request)
+
     @contextmanager
     def _scope(
         self, operation: str, source_hashes: tuple[str, ...] = ()
@@ -493,12 +517,45 @@ class ProductGroundedModel:
         return result
 
     def _source_hashes(
-        self, request: GenerationRequest | RelationReviewRequest
+        self,
+        request: (
+            GenerationRequest
+            | RelationReviewRequest
+            | SemanticValidationRequest
+        ),
     ) -> tuple[str, ...]:
         """重新核对本次证据仍属于当前活动知识库版本。"""
         hashes: set[str] = set()
+        if isinstance(request, SemanticValidationRequest):
+            bindings = dict(request.sent_packet.read_unit_bindings)
+            selected_keys = {
+                key
+                for unit in request.read_units
+                for key in bindings[unit.unit_id]
+            }
+            source_identities = tuple(
+                (
+                    source.get("document_version_id"),
+                    source.get("document_id"),
+                )
+                for source in request.sent_packet.support_sources
+                if source.get("support_key") in selected_keys
+            )
+        else:
+            source_identities = tuple(
+                (item.document_version_id, item.document_id)
+                for item in request.evidence
+            )
         with self.connections.transaction() as connection:
-            for item in request.evidence:
+            for document_version_id, document_id in source_identities:
+                if not isinstance(document_version_id, str) or not isinstance(
+                    document_id, str
+                ):
+                    raise PolicyDenied(
+                        "生成来源身份不完整。",
+                        stage="generation.scope",
+                        code="GENERATION_SOURCE_UNAVAILABLE",
+                    )
                 row = connection.execute(
                     "SELECT v.content_sha256 FROM document_versions v "
                     "JOIN documents d ON d.document_id=v.document_id "
@@ -506,8 +563,8 @@ class ProductGroundedModel:
                     "AND d.project_id=? AND d.knowledge_base_id=? "
                     "AND d.deleted_at IS NULL AND d.status='active'",
                     (
-                        item.document_version_id,
-                        item.document_id,
+                        document_version_id,
+                        document_id,
                         self.project_id,
                         self.knowledge_base_id,
                     ),

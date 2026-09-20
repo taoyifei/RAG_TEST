@@ -5,12 +5,8 @@ from __future__ import annotations
 import json
 
 import httpx
-import pytest
 
 from rag_app.adapters.providers.aliyun_chat import (
-    ChatCompletion,
-    ChatUsage,
-    _natural_answer_draft,
     _natural_messages,
     _prepare_natural_messages,
     message_token_estimate,
@@ -28,7 +24,6 @@ from rag_app.application.retrieval.generation_evidence import (
 from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
-    ProviderCall,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.query_plan import (
@@ -83,21 +78,6 @@ def _generation_request(
         priority_source_units=pack.priority_source_units,
         physical_table_facts=pack.physical_table_facts,
         atom_fact_bindings=pack.atom_fact_bindings,
-    )
-
-
-def _completion(payload: dict[str, object]) -> ChatCompletion:
-    return ChatCompletion(
-        content=json.dumps(payload, ensure_ascii=False),
-        model="synthetic",
-        usage=ChatUsage(),
-        call=ProviderCall(
-            provider_id="synthetic",
-            operation="generation",
-            call_count=1,
-            retry_count=0,
-            elapsed_ms=1,
-        ),
     )
 
 
@@ -173,54 +153,21 @@ def test_multilevel_nonzero_canonical_headers_close_physical_fact() -> None:
     assert fact.value_column_index == 2
 
 
-def test_model_selects_fact_id_and_header_only_cannot_guess_value() -> None:
+def test_model_sees_one_table_read_unit_without_internal_fact_id() -> None:
     plan = _fact_plan()
     pack = _pack(plan, _sources())
     request = _generation_request(plan, pack)
     fact = pack.physical_table_facts[0]
     payload = json.loads(_natural_messages(request)[1].content)
 
-    assert payload["table_facts"][0]["fact_id"] == fact.fact_id
-    draft = _natural_answer_draft(
-        _completion(
-            {
-                "table_fact_selections": [
-                    {"atom_id": "A1", "fact_id": fact.fact_id}
-                ]
-            }
-        ),
-        request,
-    )
-    claim = draft.natural_claims[0]
-    assert claim.text == "图纸基线、材料清单。"
-    assert {support.support_id for support in claim.supports} == set(
-        fact.all_support_ids
-    )
-
-    header_id = fact.header_support_ids[0]
-    header = next(
-        item for item in pack.evidence if item.support_id == header_id
-    )
-    with pytest.raises(ValueError, match="TABLE_FACT_ID_REQUIRED"):
-        _natural_answer_draft(
-            _completion(
-                {
-                    "claims": [
-                        {
-                            "atom_id": "A1",
-                            "text": header.citation_text,
-                            "supports": [
-                                {
-                                    "support_id": header_id,
-                                    "quote": header.citation_text,
-                                }
-                            ],
-                        }
-                    ]
-                }
-            ),
-            request,
-        )
+    table_units = [
+        unit for unit in payload["read_units"] if unit["kind"] == "table_fact"
+    ]
+    assert len(table_units) == 1
+    assert "图纸基线、材料清单" in table_units[0]["text"]
+    assert "fact_id" not in table_units[0]
+    assert payload["atoms"][0]["allowed_ref_ids"] == [table_units[0]["unit_id"]]
+    assert fact.fact_id not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_multi_atom_fact_catalog_sends_each_source_and_fact_once() -> None:
@@ -271,27 +218,20 @@ def test_multi_atom_fact_catalog_sends_each_source_and_fact_once() -> None:
         retain_budget_rejection=True,
     )
     payload = json.loads(prepared.messages[1].content)
-    facts = payload["table_facts"]
-    bindings = payload["atom_table_fact_ids"]
-    physical_support_ids = {
-        support_id
-        for fact in pack.physical_table_facts
-        for support_id in fact.all_support_ids
-    }
-    sent_physical = [
-        item
-        for item in payload["evidence"]
-        if item["support_id"] in physical_support_ids
+    facts = [
+        unit for unit in payload["read_units"] if unit["kind"] == "table_fact"
     ]
+    bindings = {
+        item["atom_id"]: item["allowed_ref_ids"] for item in payload["atoms"]
+    }
 
     assert not prepared.input_budget_exceeded
     assert message_token_estimate(prepared.messages) <= 4_159
     assert len(facts) == len(pack.physical_table_facts) == 4
-    assert len({fact["fact_id"] for fact in facts}) == len(facts)
-    assert {item["atom_id"] for item in bindings} == {"A1", "A2"}
-    assert all(len(item["fact_ids"]) == 4 for item in bindings)
-    assert len(sent_physical) == len(physical_support_ids)
-    assert all(set(item) == {"support_id", "text"} for item in sent_physical)
+    assert len({fact["unit_id"] for fact in facts}) == len(facts)
+    assert set(bindings) == {"A1", "A2"}
+    assert all(len(unit_ids) == 4 for unit_ids in bindings.values())
+    assert all("fact_id" not in item for item in facts)
     assert len(prepared.retained_table_fact_ids) == 4
 
 
@@ -309,12 +249,39 @@ def test_full_answer_service_publishes_selected_physical_fact() -> None:
     plan = _fact_plan()
     pack = _pack(plan, _sources())
     fact = pack.physical_table_facts[0]
+    sent_bodies: list[dict[str, object]] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         assert body["chat_template_kwargs"] == {"enable_thinking": False}
         sent = json.loads(body["messages"][1]["content"])
-        assert sent["table_facts"][0]["fact_id"] == fact.fact_id
+        sent_bodies.append(sent)
+        if len(sent_bodies) == 1:
+            table_unit = next(
+                unit
+                for unit in sent["read_units"]
+                if unit["kind"] == "table_fact"
+                and "图纸基线、材料清单" in unit["text"]
+            )
+            payload = {
+                "claims": [
+                    {
+                        "atom_id": "A1",
+                        "text": "工装试制的输入包括图纸基线、材料清单。",
+                        "refs": [table_unit["unit_id"]],
+                    }
+                ]
+            }
+        else:
+            payload = {
+                "results": [
+                    {
+                        "claim_id": candidate["claim_id"],
+                        "status": "supported",
+                    }
+                    for candidate in sent["candidates"]
+                ]
+            }
         return httpx.Response(
             200,
             json={
@@ -322,16 +289,7 @@ def test_full_answer_service_publishes_selected_physical_fact() -> None:
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps(
-                                {
-                                    "table_fact_selections": [
-                                        {
-                                            "atom_id": "A1",
-                                            "fact_id": fact.fact_id,
-                                        }
-                                    ]
-                                }
-                            )
+                            "content": json.dumps(payload, ensure_ascii=False)
                         },
                         "finish_reason": "stop",
                     }
@@ -376,39 +334,29 @@ def test_full_answer_service_publishes_selected_physical_fact() -> None:
     assert outcome.answer is not None
     assert "图纸基线、材料清单" in outcome.answer
     assert outcome.accepted_claim_count == outcome.published_claim_count == 1
-    assert outcome.relation_review_calls == outcome.repair_calls == 0
-    assert len(outcome.calls) == len(outcome.prepared_packets) == 1
+    assert set(outcome.accepted_support_ids) == set(fact.all_support_ids)
+    assert outcome.relation_review_calls == 1
+    assert outcome.repair_calls == 0
+    assert len(outcome.calls) == len(outcome.prepared_packets) == 2
 
 
-def test_response_contract_failure_uses_one_scoped_fact_repair() -> None:
-    """真实发送后的协议失败可用唯一补充名额重试当前 Atom。"""
+def test_response_contract_failure_does_not_retry_generation() -> None:
+    """真实发送后的根协议失败直接终止，不用补生成掩盖缺陷。"""
     plan = _fact_plan()
     pack = _pack(plan, _sources())
-    fact = pack.physical_table_facts[0]
     sent_bodies: list[dict[str, object]] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         sent = json.loads(body["messages"][1]["content"])
         sent_bodies.append(sent)
-        content = (
-            "not-json"
-            if len(sent_bodies) == 1
-            else json.dumps(
-                {
-                    "table_fact_selections": [
-                        {"atom_id": "A1", "fact_id": fact.fact_id}
-                    ]
-                }
-            )
-        )
         return httpx.Response(
             200,
             json={
                 "model": "synthetic",
                 "choices": [
                     {
-                        "message": {"content": content},
+                        "message": {"content": "not-json"},
                         "finish_reason": "stop",
                     }
                 ],
@@ -449,11 +397,10 @@ def test_response_contract_failure_uses_one_scoped_fact_repair() -> None:
         generation_evidence_pack=pack,
     )
 
-    assert outcome.answer is not None
-    assert outcome.repair_calls == 1
-    assert outcome.accepted_claim_count == outcome.published_claim_count == 1
-    assert len(outcome.calls) == len(outcome.prepared_packets) == 2
-    assert sent_bodies[1]["repair_only"] is True
-    assert sent_bodies[1]["raw_failures"] == [
-        ["A1", "GENERATION_CLAIMS_INVALID"]
-    ]
+    assert outcome.answer is None
+    assert outcome.repair_calls == 0
+    assert outcome.repair_skip_reason == "AUTOMATIC_GENERATION_REPAIR_DISABLED"
+    assert outcome.accepted_claim_count == outcome.published_claim_count == 0
+    assert outcome.reason_code == "GENERATION_JSON_DECODE_FAILED"
+    assert len(outcome.calls) == len(outcome.prepared_packets) == 1
+    assert len(sent_bodies) == 1

@@ -18,7 +18,10 @@ from rag_app.core.models import (
 )
 from rag_app.core.models.common import FrozenModel, JsonObject
 from rag_app.core.models.evidence_group import EvidenceGroup
-from rag_app.core.models.generation_packet import stable_support_key
+from rag_app.core.models.generation_packet import (
+    EvidenceReadUnit,
+    stable_support_key,
+)
 from rag_app.core.models.query_plan import AtomSupportMatrix, QueryPlan
 
 
@@ -60,9 +63,12 @@ class GenerationRequest(FrozenModel):
     atom_fact_bindings: tuple[AtomFactBinding, ...] = Field(
         default=(), exclude=True, repr=False
     )
+    evidence_read_units: tuple[EvidenceReadUnit, ...] = Field(
+        default=(), exclude=True, repr=False
+    )
 
     @model_validator(mode="after")
-    def _validate_evidence_sets(self) -> Self:  # noqa: PLR0912
+    def _validate_evidence_sets(self) -> Self:  # noqa: PLR0912, PLR0915
         """保证直接支持集和模型候选均来自有界 evidence 包。"""
         evidence_ids = {item.support_id for item in self.evidence}
         for name, items in (
@@ -146,6 +152,19 @@ class GenerationRequest(FrozenModel):
                 for binding in self.atom_fact_bindings
             ):
                 raise ValueError("Atom 只能绑定本次请求内的物理表格事实。")
+        unit_ids = [unit.unit_id for unit in self.evidence_read_units]
+        if len(unit_ids) != len(set(unit_ids)):
+            raise ValueError("阅读单元短编号不允许重复。")
+        if any(
+            not set(unit.support_ids) <= evidence_ids
+            for unit in self.evidence_read_units
+        ):
+            raise ValueError("阅读单元必须完整来自本次 Evidence。")
+        if any(
+            unit.fact_id is not None and unit.fact_id not in set(fact_ids)
+            for unit in self.evidence_read_units
+        ):
+            raise ValueError("表格阅读单元必须绑定本次物理事实。")
         return self
 
 

@@ -4,17 +4,52 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, Self
 
-from pydantic import Field, StrictInt, model_validator
+from pydantic import Field, StrictInt, field_validator, model_validator
 
 from rag_app.core.identifiers import canonical_sha256
-from rag_app.core.models.common import FrozenModel
+from rag_app.core.models.common import (
+    FrozenModel,
+    JsonObject,
+    freeze_json_object,
+)
 
 if TYPE_CHECKING:
     from rag_app.core.models.retrieval import EvidenceItem
 
 EVIDENCE_IDENTITY_REVISION = "wb08r-source-key-v1"
-PREPARED_PACKET_REVISION = "wb08r-prepared-packet-v2"
-GENERATION_BUDGET_REVISION = "wb08r-generation-budget-v2"
+PREPARED_PACKET_REVISION = "wb08r-prepared-packet-v3"
+GENERATION_BUDGET_REVISION = "wb08r-generation-budget-v3"
+
+
+class EvidenceReadUnit(FrozenModel):
+    """模型可读的短编号来源单元及其服务端来源映射。"""
+
+    unit_id: str = Field(pattern=r"^E[1-9][0-9]*$")
+    kind: Literal["paragraph", "list_item", "table_fact", "catalog_entry"]
+    text: str = Field(min_length=1, max_length=12_000, repr=False)
+    source_context: JsonObject = ()
+    support_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
+    fact_id: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    source_complete: bool
+
+    @field_validator("source_context", mode="before")
+    @classmethod
+    def _freeze_source_context(cls, value: object) -> JsonObject:
+        """冻结不含正文的可读来源语境。"""
+        return freeze_json_object(value)
+
+    @model_validator(mode="after")
+    def _validate_identity(self) -> EvidenceReadUnit:
+        if len(self.support_ids) != len(set(self.support_ids)):
+            raise ValueError("阅读单元的来源 ID 不允许重复。")
+        if (self.kind == "table_fact") != (self.fact_id is not None):
+            raise ValueError("只有物理表格阅读单元必须绑定 fact_id。")
+        return self
+
+
+def stable_read_unit_digest(unit: EvidenceReadUnit) -> str:
+    """摘要本次可读投影，防止复核阶段替换正文或可信语境。"""
+    return canonical_sha256(unit.model_dump(mode="json"))
 
 
 def safe_support_source(item: EvidenceItem) -> dict[str, object]:
@@ -109,6 +144,9 @@ class PreparedGenerationPacket(FrozenModel):
         "PREPARATION_REJECTED", "TRANSPORT_PREPARED", "TRANSPORT_SENT"
     ]
     alias_to_support_key: tuple[tuple[str, str], ...]
+    read_unit_bindings: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    read_unit_sha256s: tuple[tuple[str, str], ...] = ()
+    per_atom_read_unit_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     support_sources: tuple[dict[str, object], ...] = ()
     per_atom_support_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     protected_support_keys: tuple[str, ...] = ()
@@ -157,12 +195,35 @@ class PreparedGenerationPacket(FrozenModel):
         """
         return {key: alias for alias, key in self.alias_to_support_key}
 
+    @property
+    def sent_read_unit_ids(self) -> tuple[str, ...]:
+        """返回本次实际发送的阅读单元短编号。"""
+        return tuple(unit_id for unit_id, _keys in self.read_unit_bindings)
+
     @model_validator(mode="after")
     def _validate_registry(self) -> Self:
         aliases = self.sent_support_ids
         keys = tuple(key for _, key in self.alias_to_support_key)
         if len(set(aliases)) != len(aliases) or len(set(keys)) != len(keys):
             raise ValueError("PREPARED_PACKET_DUPLICATE_IDENTITY")
+        read_unit_ids = self.sent_read_unit_ids
+        if len(read_unit_ids) != len(set(read_unit_ids)) or any(
+            not members or not set(members) <= set(keys)
+            for _unit_id, members in self.read_unit_bindings
+        ):
+            raise ValueError("PREPARED_PACKET_INVALID_READ_UNIT_BINDING")
+        digest_ids = [unit_id for unit_id, _digest in self.read_unit_sha256s]
+        if self.read_unit_sha256s and (
+            len(digest_ids) != len(set(digest_ids))
+            or set(digest_ids) != set(read_unit_ids)
+        ):
+            raise ValueError("PREPARED_PACKET_INVALID_READ_UNIT_DIGEST")
+        atom_ids = [atom_id for atom_id, _units in self.per_atom_read_unit_ids]
+        if len(atom_ids) != len(set(atom_ids)) or any(
+            not set(unit_ids) <= set(read_unit_ids)
+            for _atom_id, unit_ids in self.per_atom_read_unit_ids
+        ):
+            raise ValueError("PREPARED_PACKET_READ_UNIT_OUTSIDE_SENT")
         if any(
             not set(allowed) <= set(aliases)
             for _, allowed in self.per_atom_support_ids

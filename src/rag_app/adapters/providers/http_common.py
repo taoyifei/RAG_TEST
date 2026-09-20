@@ -1008,7 +1008,11 @@ def provider_error(failure: ProviderHttpError, *, stage: str) -> RagError:
 
 
 def invalid_response_error(
-    reason_code: str, call: ProviderCall, *, stage: str
+    reason_code: str,
+    call: ProviderCall,
+    *,
+    stage: str,
+    diagnostics: Mapping[str, object] | None = None,
 ) -> ProviderInvalidResponse:
     """构造不携带响应正文的合同错误。
 
@@ -1016,6 +1020,7 @@ def invalid_response_error(
         reason_code: 稳定合同失败码。
         call: 已完成 HTTP 调用的脱敏审计。
         stage: Provider 阶段名。
+        diagnostics: 可选的无正文协议阶段、字段路径与类型诊断。
 
     Returns:
         带 ``provider_call`` 属性的响应错误。
@@ -1024,7 +1029,7 @@ def invalid_response_error(
     error = ProviderInvalidResponse(
         "Provider 响应违反数量、索引、维度或数值合同。",
         stage=stage,
-        details={"reason_code": reason_code},
+        details={"reason_code": reason_code, **(diagnostics or {})},
     )
     error.provider_call = call
     return error

@@ -178,10 +178,27 @@ def _assert_refused_state(
 
 
 def _grounded_response(request: httpx.Request) -> httpx.Response:
-    """把候选证据第一项原样返回为合法 claim。"""
+    """按新 Wire 与语义复核协议返回合法的离线结果。"""
     request_payload = json.loads(request.content)
     grounded = json.loads(request_payload["messages"][1]["content"])
-    evidence = grounded["evidence"][0]
+    if "candidates" in grounded:
+        content = {
+            "results": [
+                {"claim_id": item["claim_id"], "status": "supported"}
+                for item in grounded["candidates"]
+            ]
+        }
+    else:
+        read_unit = grounded["read_units"][0]
+        content = {
+            "claims": [
+                {
+                    "atom_id": grounded["atoms"][0]["atom_id"],
+                    "text": read_unit["text"],
+                    "refs": [read_unit["unit_id"]],
+                }
+            ]
+        }
     return httpx.Response(
         200,
         json={
@@ -192,22 +209,7 @@ def _grounded_response(request: httpx.Request) -> httpx.Response:
                     "message": {
                         "role": "assistant",
                         "content": json.dumps(
-                            {
-                                "claims": [
-                                    {
-                                        "text": evidence["text"],
-                                        "supports": [
-                                            {
-                                                "support_id": evidence[
-                                                    "support_id"
-                                                ],
-                                                "quote": evidence["text"],
-                                            }
-                                        ],
-                                    }
-                                ]
-                            },
-                            ensure_ascii=False,
+                            content, ensure_ascii=False
                         ),
                     },
                 }
@@ -248,19 +250,23 @@ def test_llm_can_validate_candidate_separate_from_empty_support_set(
             knowledge_base_id,
             "合成设备维护安排是什么？",
         )
-        assert result["status"] == "ANSWERABLE"
+        assert result["status"] == "ANSWERABLE", {
+            "status": result["status"],
+            "generation_reason_code": result["generation_reason_code"],
+            "degraded_reason_codes": result["degraded_reason_codes"],
+            "request_count": len(requests),
+        }
         assert result["answer"]
         assert result["generation_mode"] == "llm"
         assert result["generation_called_this_request"] is True
-        assert len(requests) == 1
+        assert len(requests) == 2
         provider_payload = json.loads(requests[0].content)
         grounded = json.loads(provider_payload["messages"][1]["content"])
-        assert grounded["evidence"]
+        assert grounded["read_units"]
         assert "answer_support_set" not in grounded
         assert "model_evidence_candidates" not in grounded
-        assert (
-            result["evidence"][0]["evidence_id"]
-            == grounded["evidence"][0]["support_id"]
+        assert result["evidence"][0]["citation_text"] == (
+            grounded["read_units"][0]["text"]
         )
     finally:
         harness.close()
@@ -382,19 +388,30 @@ def test_exhausted_budget_reuses_valid_cache_and_refuses_new_queries(
         _upload_capability_fixture(harness, project_id, knowledge_base_id)
         _, _, _, connection_id = create_provider_connections(harness)
         _configure_generation(harness, knowledge_base_id, connection_id)
-        _approve_generation(harness, knowledge_base_id, request_limit=1)
+        # 新自然链固定一次生成和一次语义复核；两次都计入同一 generation 预算。
+        _approve_generation(harness, knowledge_base_id, request_limit=2)
 
-        generated = _answer(harness, project_id, knowledge_base_id, "MX-41")
+        generated = _answer(
+            harness,
+            project_id,
+            knowledge_base_id,
+            "合成设备维护安排是什么？",
+        )
         assert generated["generation_mode"] == "llm"
         assert generated["generation_called_this_request"] is True
-        assert len(requests) == 1
+        assert len(requests) == 2
 
-        cached = _answer(harness, project_id, knowledge_base_id, "MX-41")
+        cached = _answer(
+            harness,
+            project_id,
+            knowledge_base_id,
+            "合成设备维护安排是什么？",
+        )
         assert cached["answer"] == generated["answer"]
         assert cached["cache_hit"] is True
         assert cached["generation_called_this_request"] is False
         assert cached["data_plane"]["budget_state"] == "EXHAUSTED"
-        assert len(requests) == 1
+        assert len(requests) == 2
 
         direct_blocked = _answer(
             harness,
@@ -412,13 +429,13 @@ def test_exhausted_budget_reuses_valid_cache_and_refuses_new_queries(
             harness,
             project_id,
             knowledge_base_id,
-            "合成设备维护安排是什么？",
+            "合成设备的维护责任是什么？",
         )
         assert blocked["answer"] is None
         _assert_refused_state(harness, blocked, "BUDGET_BLOCKED")
         assert blocked["generation_reason_code"] == "BLOCKED_BUDGET"
         assert blocked["generation_called_this_request"] is False
-        assert len(requests) == 1
+        assert len(requests) == 2
 
         with harness.runtime.connections.transaction(write=True) as connection:
             connection.execute(
@@ -429,7 +446,12 @@ def test_exhausted_budget_reuses_valid_cache_and_refuses_new_queries(
                     knowledge_base_id,
                 ),
             )
-        expired = _answer(harness, project_id, knowledge_base_id, "MX-41")
+        expired = _answer(
+            harness,
+            project_id,
+            knowledge_base_id,
+            "合成设备维护安排是什么？",
+        )
         assert expired["answer"] is None
         assert expired["cache_hit"] is False
         assert expired["generation_called_this_request"] is False
@@ -437,18 +459,18 @@ def test_exhausted_budget_reuses_valid_cache_and_refuses_new_queries(
             "BUSINESS_AUTHORIZATION_EXPIRED"
         )
         _assert_refused_state(harness, expired, "POLICY_DENIED")
-        assert len(requests) == 1
+        assert len(requests) == 2
     finally:
         harness.close()
 
 
 @pytest.mark.parametrize("failure", ("rate_limit", "timeout"))
-def test_provider_failure_refuses_regardless_of_local_support(
+def test_provider_failure_refuses_when_semantic_generation_required(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
 ) -> None:
-    """429 与超时都必须保留调用事实并拒答。"""
+    """需要自然生成时，429 与超时都必须保留调用事实并拒答。"""
     monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
     requests: list[httpx.Request] = []
 
@@ -471,21 +493,6 @@ def test_provider_failure_refuses_regardless_of_local_support(
         _configure_generation(harness, knowledge_base_id, connection_id)
         _approve_generation(harness, knowledge_base_id, request_limit=8)
 
-        direct_failure = _answer(
-            harness,
-            project_id,
-            knowledge_base_id,
-            "设备 MX-41 的维护周期是多少？",
-        )
-        assert direct_failure["answer"] is None
-        assert direct_failure["generation_mode"] == "none"
-        assert direct_failure["generation_called_this_request"] is True
-        _assert_refused_state(
-            harness,
-            direct_failure,
-            "PROVIDER_UNAVAILABLE",
-        )
-
         unavailable = _answer(
             harness,
             project_id,
@@ -503,7 +510,7 @@ def test_provider_failure_refuses_regardless_of_local_support(
             "PROVIDER_RATE_LIMITED",
             "PROVIDER_UNAVAILABLE",
         }
-        assert len(requests) == 2
+        assert len(requests) == 1
     finally:
         harness.close()
 
@@ -512,7 +519,7 @@ def test_invalid_model_json_with_complete_support_is_refused(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """无效 JSON 只修复一次，仍失败时必须拒答。"""
+    """无效根 JSON 精确失败，不再用自动补生成掩盖协议缺陷。"""
     monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
     requests: list[httpx.Request] = []
 
@@ -551,13 +558,15 @@ def test_invalid_model_json_with_complete_support_is_refused(
             harness,
             project_id,
             knowledge_base_id,
-            "设备 MX-41 的维护周期是多少？",
+            "合成设备维护安排是什么？",
         )
         assert result["answer"] is None
         assert result["generation_mode"] == "none"
         assert result["generation_called_this_request"] is True
-        assert result["generation_reason_code"] == "PROVIDER_INVALID_RESPONSE"
-        assert len(requests) == 2
+        assert result["generation_reason_code"] == (
+            "GENERATION_JSON_DECODE_FAILED"
+        )
+        assert len(requests) == 1
         _assert_refused_state(
             harness,
             result,
