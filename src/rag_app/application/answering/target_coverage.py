@@ -20,6 +20,8 @@ from rag_app.core.query_text import (
     literal_relation_modifiers_supported,
     normalize_document_label,
     normalize_duty_heading_label,
+    query_without_source_qualifier,
+    select_unique_label_owner,
     table_axis_label_in_query,
 )
 from rag_app.core.source_compatibility import (
@@ -223,17 +225,29 @@ def _table_members(
         for member in members
         if (cell := table_cell_coordinate(member)) is not None
     )
-    labels = tuple(
+    question_body = query_without_source_qualifier(
+        atom.original_fragment or "", atom.source_qualifier
+    )
+    row_labels = tuple(
         (member, cell)
         for member, cell in located
-        if cell[2] == 0
-        and (
-            normalize_duty_heading_label(member.citation_text) == target
-            or table_axis_label_in_query(
-                atom.original_fragment or "", member.citation_text
-            )
+        if cell[2] == 0 and member.source_spans[0].node_id not in headers
+    )
+    unique_row_key = select_unique_label_owner(
+        target,
+        (
+            (stable_support_key(member), member.citation_text)
+            for member, _cell in row_labels
+        ),
+    )
+    labels = tuple(
+        (member, cell)
+        for member, cell in row_labels
+        if (
+            stable_support_key(member) == unique_row_key
+            or normalize_duty_heading_label(member.citation_text) == target
+            or table_axis_label_in_query(question_body, member.citation_text)
         )
-        and member.source_spans[0].node_id not in headers
     )
     relation = normalize_document_label(semantics.relation or atom.relation)
     selected_headers = tuple(
@@ -241,10 +255,10 @@ def _table_members(
         for member, cell in located
         if member.source_spans[0].node_id in headers
         and cell[2] > 0
-        and _relation_header_matches(atom, relation, member)
+        and _relation_header_matches(atom, relation, member, question_body)
     )
     if not literal_relation_modifiers_supported(
-        atom.original_fragment or "",
+        question_body,
         " ".join(member.citation_text for member, _cell in selected_headers),
     ):
         return None
@@ -267,14 +281,15 @@ def _table_members(
 
 
 def _relation_header_matches(
-    atom: QueryAtom, relation: str, member: EvidenceItem
+    atom: QueryAtom,
+    relation: str,
+    member: EvidenceItem,
+    question_body: str,
 ) -> bool:
     header = normalize_document_label(member.citation_text)
     if relation and (relation == header or relation in header):
         return True
-    if table_axis_label_in_query(
-        atom.original_fragment or "", member.citation_text
-    ):
+    if table_axis_label_in_query(question_body, member.citation_text):
         return True
     # 此处仅识别请求的字段类型；主体与阶段另由完整规范标签选定。
     return atom.answer_shape is AtomAnswerShape.DUTIES and "职责" in header

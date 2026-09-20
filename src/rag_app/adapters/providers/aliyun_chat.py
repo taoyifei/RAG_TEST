@@ -788,7 +788,11 @@ def _allowed_read_unit_ids(
     linked_ids: Mapping[str, tuple[str, ...]],
     request: GenerationRequest,
 ) -> tuple[str, ...]:
-    """把逐 Atom 的真实来源许可投影为本次 Wire 短编号。"""
+    """把逐 Atom 的真实来源许可投影为本次 Wire 短编号。
+
+    已有闭合物理事实时，同一表格的字面碎片不能作为旁路引用；普通
+    段落和其它非表格来源仍可与该事实共同回答当前 Atom。
+    """
     admitted_support_ids = set(
         linked_ids.get(atom_id, (item.support_id for item in request.evidence))
     )
@@ -797,15 +801,19 @@ def _allowed_read_unit_ids(
         for binding in request.atom_fact_bindings
         if binding.atom_id == atom_id
     }
-    return tuple(
-        unit.unit_id
-        for unit in read_units
-        if (
-            unit.fact_id in fact_ids
-            if unit.fact_id is not None
-            else set(unit.support_ids) <= admitted_support_ids
+
+    def allowed(unit: EvidenceReadUnit) -> bool:
+        if unit.fact_id is not None:
+            return unit.fact_id in fact_ids
+        literal_table_fragment = (
+            dict(unit.source_context).get("structure_scope")
+            == "literal_table_fragment"
         )
-    )
+        return (not fact_ids or not literal_table_fragment) and set(
+            unit.support_ids
+        ) <= admitted_support_ids
+
+    return tuple(unit.unit_id for unit in read_units if allowed(unit))
 
 
 @dataclass(frozen=True, slots=True)

@@ -369,6 +369,55 @@ def test_explicit_row_and_column_words_prove_short_table_axes() -> None:
     assert len(result.required_member_keys) == 2
 
 
+def test_source_title_words_do_not_expand_requested_table_columns() -> None:
+    evidence, group = _input_table()
+    question = "《输出管理办法》中，需求快验的输入项是什么？"
+    atom = QueryAtom(
+        atom_id="A1",
+        target="需求快验",
+        relation="输入",
+        answer_shape=AtomAnswerShape.ENUMERATION,
+        source_qualifier="输出管理办法",
+        original_fragment=question,
+    )
+
+    result = target_member_coverage(
+        atom,
+        evidence,
+        _claims(*evidence[4:6]),
+        trusted_groups=(group,),
+        semantics=QuerySemantics(target=atom.target, relation=atom.relation),
+        fact_covered=_source_fact_content_covered,
+    )
+
+    assert result.complete
+    assert len(result.required_member_keys) == 2
+
+
+def test_unique_short_row_target_and_input_relation_are_complete() -> None:
+    evidence, group = _input_table()
+    question = "做快验前到底得备齐啥？"
+    atom = QueryAtom(
+        atom_id="A1",
+        target="快验",
+        relation="输入",
+        answer_shape=AtomAnswerShape.ENUMERATION,
+        original_fragment=question,
+    )
+
+    result = target_member_coverage(
+        atom,
+        evidence,
+        _claims(*evidence[4:6]),
+        trusted_groups=(group,),
+        semantics=QuerySemantics(target=atom.target, relation=atom.relation),
+        fact_covered=_source_fact_content_covered,
+    )
+
+    assert result.complete
+    assert len(result.required_member_keys) == 2
+
+
 def test_query_only_timing_and_modality_do_not_complete_input_relation() -> (
     None
 ):

@@ -768,7 +768,7 @@ def test_colloquial_prerequisite_question_has_typed_semantics() -> None:
     analysis = _analyze("做快验前到底得备齐啥？")
 
     assert analysis.semantics.target == "快验"
-    assert analysis.semantics.relation == "备齐"
+    assert analysis.semantics.relation == "输入"
     assert analysis.semantics.answer_type is RequestedAnswerType.ENUMERATION
 
 

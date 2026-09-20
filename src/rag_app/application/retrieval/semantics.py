@@ -151,6 +151,7 @@ _PREREQUISITE_ENUMERATION = re.compile(
     r"(?P<relation>备齐|备好|准备|提供|提交)"
     r"(?:什么|啥|哪些)(?:材料|东西|内容)?$"
 )
+_INPUT_PREPARATION_RELATIONS = frozenset({"备齐", "备好", "准备"})
 _RESPONSIBLE_PREFIX = re.compile(
     r"^(?:由)?谁(?:来)?(?:负责|牵头|管理|受理)(?P<target>.+)$"
 )
@@ -312,10 +313,15 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
     if prerequisite is not None:
         target, source = _target_and_source(prerequisite["target"])
         if target:
+            surface_relation = prerequisite["relation"]
             return QuerySemantics(
                 target=target,
                 source_qualifier=source or explicit_source,
-                relation=prerequisite["relation"],
+                relation=(
+                    "输入"
+                    if surface_relation in _INPUT_PREPARATION_RELATIONS
+                    else surface_relation
+                ),
                 answer_type=RequestedAnswerType.ENUMERATION,
                 source="RULE",
                 reason_codes=("PREREQUISITE_ENUMERATION_QUESTION_SYNTAX",),

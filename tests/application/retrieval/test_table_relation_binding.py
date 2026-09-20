@@ -14,7 +14,14 @@ from rag_app.core.models.query_plan import (
 from tests.application.answering.test_evidence_binding import _fixture
 
 
-def _binding_for(*, target: str, relation: str, original_fragment: str) -> str:
+def _binding_for(
+    *,
+    target: str,
+    relation: str,
+    original_fragment: str,
+    header_label: str = "输入",
+    source_qualifier: str | None = None,
+) -> str:
     evidence, fact, _unit, _binding = _fixture()
     replacements = {
         "S1": "需求快验",
@@ -25,7 +32,7 @@ def _binding_for(*, target: str, relation: str, original_fragment: str) -> str:
         "S6": "界面设计草图",
         "S7": "其他输入",
         "S8": "补充说明",
-        "S9": "输入",
+        "S9": header_label,
         "S10": "（业务团队 / 外部单位需提供）",
     }
     evidence = tuple(
@@ -37,6 +44,7 @@ def _binding_for(*, target: str, relation: str, original_fragment: str) -> str:
         target=target,
         relation=relation,
         answer_shape=AtomAnswerShape.FACT,
+        source_qualifier=source_qualifier,
         original_fragment=original_fragment,
     )
     plan = make_query_plan(
@@ -83,6 +91,30 @@ def test_query_only_timing_and_modality_stay_undetermined() -> None:
             target="需求快验",
             relation="提供",
             original_fragment="需求快验之前必须提供什么？",
+        )
+        == "UNDETERMINED"
+    )
+
+
+def test_colloquial_preparation_certifies_only_the_input_relation() -> None:
+    assert (
+        _binding_for(
+            target="快验",
+            relation="输入",
+            original_fragment="做快验前到底得备齐啥？",
+        )
+        == "SUPPORTED"
+    )
+
+
+def test_explicit_source_title_cannot_certify_an_unasked_column() -> None:
+    assert (
+        _binding_for(
+            target="需求快验",
+            relation="输入",
+            original_fragment=("《输出管理办法》中，需求快验的输入项是什么？"),
+            header_label="输出",
+            source_qualifier="输出管理办法",
         )
         == "UNDETERMINED"
     )

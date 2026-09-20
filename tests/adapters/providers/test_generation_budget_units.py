@@ -104,11 +104,11 @@ def test_missing_offsets_cannot_break_a_protected_continuous_source() -> None:
         _natural_messages(request, max_input_tokens=budget)[1].content
     )
 
-    assert {item["support_id"] for item in payload["evidence"]} == {
-        item.support_id for item in pair
-    }
-    assert [item["text"] for item in payload["evidence"]] == [
+    assert [item["text"] for item in payload["read_units"]] == [
         item.citation_text for item in pair
+    ]
+    assert payload["atoms"][0]["allowed_ref_ids"] == [
+        item["unit_id"] for item in payload["read_units"]
     ]
 
 
@@ -136,9 +136,12 @@ def test_application_reading_unit_survives_missing_semantic_certificate() -> (
         _natural_messages(request, max_input_tokens=budget)[1].content
     )
 
-    assert {item["support_id"] for item in payload["evidence"]} == {
-        item.support_id for item in pair
-    }
+    assert [item["text"] for item in payload["read_units"]] == [
+        item.citation_text for item in pair
+    ]
+    assert payload["atoms"][0]["allowed_ref_ids"] == [
+        item["unit_id"] for item in payload["read_units"]
+    ]
 
 
 def _small_table_request() -> GenerationRequest:
@@ -209,15 +212,24 @@ def test_small_complete_table_fits_without_losing_header_or_condition() -> None:
         _natural_messages(request, max_input_tokens=4882)[1].content
     )
 
-    assert [item["text"] for item in payload["evidence"]] == [
-        item.citation_text for item in request.evidence
+    sent_lines = {
+        line
+        for item in payload["read_units"]
+        for line in item["text"].splitlines()
+        if line
+    }
+    assert sent_lines == {item.citation_text for item in request.evidence}
+    assert all(
+        item["source_context"]["structure_scope"] == "literal_table_fragment"
+        for item in payload["read_units"]
+    )
+    assert all(
+        item["source_context"]["table_relation_complete"] is False
+        for item in payload["read_units"]
+    )
+    assert payload["atoms"][0]["allowed_ref_ids"] == [
+        item["unit_id"] for item in payload["read_units"]
     ]
-    cells = [
-        item["source_structure"]["table_cell"] for item in payload["evidence"]
-    ]
-    assert len({cell["table_key"] for cell in cells}) == 1
-    assert {cell["row"] for cell in cells} == {0, 3}
-    assert {cell["column"] for cell in cells} == {0, 1, 2, 3}
 
 
 def test_budget_rejection_keeps_actual_preparation_without_transport() -> None:
@@ -293,17 +305,24 @@ def test_priority_intersection_keeps_headers_and_drops_other_cells() -> None:
         _natural_messages(request, max_input_tokens=budget)[1].content
     )
 
-    assert {item["support_id"] for item in payload["evidence"]} == {
-        item.support_id for item in members
+    sent_lines = {
+        line
+        for item in payload["read_units"]
+        for line in item["text"].splitlines()
+        if line
     }
+    assert sent_lines == {item.citation_text for item in members}
     assert all(
-        item["evidence_group"]["complete"] is False
-        for item in payload["evidence"]
+        item["source_context"]["structure_scope"] == "literal_table_fragment"
+        for item in payload["read_units"]
     )
-    assert {
-        item["source_structure"]["table_cell"]["row"]
-        for item in payload["evidence"]
-    } == {0, 3}
+    assert all(
+        item["source_context"]["table_relation_complete"] is False
+        for item in payload["read_units"]
+    )
+    assert payload["atoms"][0]["allowed_ref_ids"] == [
+        item["unit_id"] for item in payload["read_units"]
+    ]
 
 
 def test_repair_does_not_reintroduce_root_or_other_atom_reading_unit() -> None:
@@ -330,8 +349,11 @@ def test_repair_does_not_reintroduce_root_or_other_atom_reading_unit() -> None:
 
     payload = json.loads(_natural_messages(request)[1].content)
 
-    assert [item["support_id"] for item in payload["evidence"]] == ["S2"]
+    assert [item["text"] for item in payload["read_units"]] == [
+        "乙组负责巡检。"
+    ]
     assert [atom["atom_id"] for atom in payload["atoms"]] == ["A2"]
+    assert payload["atoms"][0]["allowed_ref_ids"] == ["E1"]
     assert payload["repair_only"] is True
 
 

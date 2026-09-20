@@ -114,6 +114,28 @@ def table_axis_label_in_query(query: str, label: str) -> bool:
     )
 
 
+def query_without_source_qualifier(
+    query: str, source_qualifier: str | None
+) -> str:
+    """从关系核验文本中移除已解析的来源标签。
+
+    来源身份已由独立合同保存，不能再让文档标题中的短词被当成
+    用户询问的表格行名或列名。这里只移除第一次逐字命中，不解析
+    新的来源，也不删除正文中其它相同词语。
+
+    Args:
+        query: 当前 Atom 的原始问句片段。
+        source_qualifier: 已由来源解析器确认的文档标签。
+
+    Returns:
+        不含首个来源标签的关系核验文本。
+
+    """
+    if not source_qualifier:
+        return query
+    return query.replace(source_qualifier, "", 1)
+
+
 def literal_relation_modifiers_supported(query: str, source_text: str) -> bool:
     """限定词只在来源逐字包含时参与确定性关系证明。
 
@@ -347,6 +369,7 @@ __all__ = [
     "normalize_identifier",
     "normalize_section_heading_label",
     "normalize_semantic_text",
+    "query_without_source_qualifier",
     "section_heading_path_owns_target",
     "select_unique_label_owner",
     "table_axis_label_in_query",

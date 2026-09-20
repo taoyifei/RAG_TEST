@@ -49,6 +49,7 @@ from rag_app.core.models.query_plan import (
 from rag_app.core.query_text import (
     literal_relation_modifiers_supported,
     named_table_label_in_query,
+    query_without_source_qualifier,
     table_axis_label_in_query,
 )
 from rag_app.core.source_compatibility import (
@@ -56,7 +57,7 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v15"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v16"
 _MIN_TABLE_FACT_COLUMNS = 2
 _TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
@@ -1073,7 +1074,9 @@ def _atom_fact_bindings(
             relation = _normalized(atom.relation)
             normalized_label = _normalized(label)
             normalized_headers = _normalized(headers)
-            original_fragment = atom.original_fragment or ""
+            original_fragment = query_without_source_qualifier(
+                atom.original_fragment or "", atom.source_qualifier
+            )
             explicit_axis_relation = bool(
                 table_axis_label_in_query(original_fragment, label)
                 and any(
