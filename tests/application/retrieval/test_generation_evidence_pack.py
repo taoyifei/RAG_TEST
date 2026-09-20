@@ -15,6 +15,7 @@ from rag_app.application.retrieval.generation_evidence import (
     EvidenceAdmissionStatus,
     GenerationEvidencePack,
     build_generation_evidence_pack,
+    project_evidence_read_units,
 )
 from rag_app.core.models import (
     ChunkRole,
@@ -862,6 +863,59 @@ def test_partial_group_evidence_is_admitted_for_limited_answer() -> None:
         EvidenceAdmissionStatus.ADMITTED_STRUCTURED_PARTIAL
     )
     assert pack.partial_group_ids == ("egrp_partial",)
+
+
+def test_literal_table_fragment_is_readable_without_relation_inference() -> (
+    None
+):
+    """未闭合成表格事实的自包含原文可读，但不伪造行列关系。"""
+    candidate = make_ranked_chunk(
+        41,
+        "甲团队负责编制实施方案。",
+        role=ChunkRole.TABLE,
+    )
+    chunk = candidate.hydrated.chunk
+    span = chunk.source_spans[0]
+    path = ("body", "tbl:2", "tr:3", "tc:1", "p:1")
+    table_span = span.model_copy(
+        update={
+            "structural_path": path,
+            "source_anchor": span.source_anchor.model_copy(
+                update={"structural_path": path}
+            ),
+        }
+    )
+    item = _evidence_item(
+        candidate.model_copy(
+            update={
+                "hydrated": candidate.hydrated.model_copy(
+                    update={
+                        "chunk": chunk.model_copy(
+                            update={"source_spans": (table_span,)}
+                        )
+                    }
+                )
+            }
+        ),
+        table_span,
+        chunk.citation_text,
+        "S1",
+    )
+
+    units = project_evidence_read_units((item,))
+
+    assert len(units) == 1
+    assert units[0].kind == "paragraph"
+    assert units[0].text == "甲团队负责编制实施方案。"
+    assert units[0].support_ids == ("S1",)
+    assert units[0].source_complete is True
+    assert dict(units[0].source_context) == {
+        "source_label": item.source_label,
+        "heading_path": [],
+        "table_locator": item.table_locator,
+        "structure_scope": "literal_table_fragment",
+        "table_relation_complete": False,
+    }
 
 
 def test_direct_single_value_literal_contradiction_is_hard_rejected() -> None:

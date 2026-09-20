@@ -17,7 +17,7 @@ from rag_app.core.models.generation_packet import (
 from rag_app.core.models.provider import ProviderCall
 from rag_app.core.models.query_plan import QueryAtom
 
-SEMANTIC_VALIDATION_REVISION = "wb08r-semantic-validation-v1"
+SEMANTIC_VALIDATION_REVISION = "wb08r-semantic-validation-v2"
 _MAX_CANDIDATES = 24
 
 

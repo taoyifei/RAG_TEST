@@ -43,6 +43,26 @@ def test_invalid_generated_claims_are_not_projected_as_provider_outage() -> (
     )
 
 
+def test_semantic_rejection_is_not_projected_as_provider_outage() -> None:
+    """复核成功但无可发布事实时应保持证据不足终态。"""
+    context = QueryDataPlaneContext(
+        generation_provider_id="openai-compatible",
+        generation_model="synthetic-model",
+        model_configuration_state="CONFIGURED",
+    )
+
+    assert (
+        _model_capability_status(context, "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM")
+        is None
+    )
+    assert _model_capability_status(
+        context, "SEMANTIC_REVIEW_PROVIDER_ERROR"
+    ) == (
+        ConfidenceStatus.PROVIDER_UNAVAILABLE,
+        "SEMANTIC_REVIEW_PROVIDER_ERROR",
+    )
+
+
 def test_formal_span_recheck_accepts_trimmed_source_coordinates() -> None:
     """表格单元格去尾空白后同步缩短来源范围，不误报索引损坏。"""
     ranked = make_ranked_chunk(1, "QVK（Qua ")

@@ -2240,6 +2240,7 @@ class RetrievalService:
             )
             generation_incomplete = bool(
                 generation_reason
+                and generation_reason != "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM"
                 and any(
                     marker in generation_reason
                     for marker in (
@@ -4858,6 +4859,10 @@ def _model_capability_status(  # noqa: PLR0911
     blocker = _configured_generation_blocker(context)
     for candidate in dict.fromkeys((reason, blocker)):
         normalized = (candidate or "").upper()
+        if normalized == "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM":
+            # 语义复核已正常完成，只是没有事实取得发布许可。
+            # 这是证据不足的业务结果，不是 Provider 故障。
+            continue
         if "BUDGET" in normalized:
             return (
                 ConfidenceStatus.BUDGET_BLOCKED,

@@ -50,7 +50,7 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v11"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v12"
 _MIN_TABLE_FACT_COLUMNS = 2
 _TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
@@ -289,8 +289,9 @@ def project_evidence_read_units(
     """把已准入来源投影成模型可读、服务端可恢复的短编号单元。
 
     表格事实只向模型展示一次可读的行、列和值；完整的真实跨度仍由
-    ``support_ids`` 与 ``fact_id`` 留在服务端。普通来源保持原始完整引用，
-    不在这里判断其是否回答了用户问题。
+    ``support_ids`` 与 ``fact_id`` 留在服务端。未形成物理事实的表格原文只作为
+    字面片段发送，不补行名、列名或隐藏单元格关系。普通来源保持原始
+    完整引用，不在这里判断其是否回答了用户问题。
 
     Args:
         evidence: 当前生成尝试获准读取的真实来源。
@@ -326,13 +327,11 @@ def project_evidence_read_units(
     for item in evidence:
         if item.support_id in physical_support_ids:
             continue
-        # 单个表格单元格不能降级成普通段落绕过行名、表头和值的坐标闭合。
-        if item.table_locator is not None or any(
+        table_fragment = item.table_locator is not None or any(
             part.startswith("tbl:")
             for span in item.source_spans
             for part in span.structural_path
-        ):
-            continue
+        )
         metadata = dict(item.metadata)
         group_type = metadata.get("evidence_group_type")
         kind: Literal["paragraph", "list_item", "table_fact", "catalog_entry"]
@@ -346,6 +345,12 @@ def project_evidence_read_units(
             "source_label": item.source_label,
             "heading_path": list(item.heading_path),
             "table_locator": item.table_locator,
+            # 该单元只证明它自身的逐字内容。只有下方带
+            # fact_id 的 table_fact 才允许使用行、列、值关系。
+            "structure_scope": (
+                "literal_table_fragment" if table_fragment else None
+            ),
+            "table_relation_complete": False if table_fragment else None,
         }
         units.append(
             EvidenceReadUnit(
