@@ -9,7 +9,7 @@
   ],
   "current_phase": "WB08R-03",
   "phase_status": "FAILED",
-  "implementation_status": "wb08r03g_v11_failed_paused_after_two_8289_candidates",
+  "implementation_status": "wb08r03g_v12_failed_paused_after_three_8289_candidates",
   "wb08r03r2_phase_start_sha": "399cf2184c4b3f47f6f4b274c4333913f610f1d2",
   "candidate_code_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
@@ -17,10 +17,10 @@
   "candidate_runtime_source_revision": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_runtime_tree_hash": null,
   "candidate_product_asset_manifest_sha256": "927660b0864b710719c8af4d6911e22087c63baef1587f783d3c895482b09f72",
-  "phase_report_sha": "4e689ffc776fa8b87c6e449d778dd4f1b300a03d",
-  "current_report": "docs/progress/wb08r-03g-v11-report.md",
-  "current_manifest": "docs/progress/wb08r-03g-v11-manifest.json",
-  "current_p0_issues": "docs/progress/wb08r-03g-v11-p0-issues.md",
+  "phase_report_sha": "b25438064d93e496511e67aa02094540c06c6ce7",
+  "current_report": "docs/progress/wb08r-03g-v12-report.md",
+  "current_manifest": "docs/progress/wb08r-03g-v12-manifest.json",
+  "current_p0_issues": "docs/progress/wb08r-03g-v12-p0-issues.md",
   "runtime_relevant_diff_after_candidate": true,
   "implementation_microphases": {
     "R0_stream_terminal": "IMPLEMENTED",
@@ -32,47 +32,52 @@
     "03G_P0_evidence_freeze": "PASS_WITH_DECLARED_PACKAGE_INPUT_GAPS",
     "03G_V8_integrated_repair": "FAILED_FROZEN_AT_TWO_ROUND_LIMIT",
     "03G_V10_evidence_first_gate_refactor": "FAILED_FROZEN_AT_TWO_CANDIDATE_LIMIT",
-    "03G_V11_physical_fact_and_generation_protocol": "FAILED_FROZEN_AT_TWO_CANDIDATE_LIMIT"
+    "03G_V11_physical_fact_and_generation_protocol": "FAILED_FROZEN_AT_TWO_CANDIDATE_LIMIT",
+    "03G_V12_wire_binding_and_semantic_convergence": "FAILED_FROZEN_AT_THREE_REPAIR_ROUND_LIMIT"
   },
   "verification_gates": {
     "Preflight-16": {
       "status": "FAILED",
-      "candidate_count": 2,
-      "run_count": 32,
-      "c1_nonempty_answer_with_support": 0,
-      "c2_nonempty_answer_with_support": 0,
-      "truth_verified_answer_count": 0,
-      "c2_repair_calls": 7,
-      "dominant_failure": "GENERATION_CLAIMS_INVALID_RESPONSE_CONTRACT"
+      "candidate_count": 3,
+      "run_count": 48,
+      "c1_statuses": "ANSWERABLE_8_PROVIDER_UNAVAILABLE_5_INSUFFICIENT_3",
+      "c2_statuses": "ANSWERABLE_13_INSUFFICIENT_2_BUDGET_BLOCKED_1",
+      "c3_statuses": "ANSWERABLE_14_INSUFFICIENT_2",
+      "c3_v8_packet_status": "OBSERVED",
+      "c3_review_status": "FAILED",
+      "dominant_failures": [
+        "F024_SAFE_REFUSAL_WRONG_SOURCE_TEMPLATE_OVERREACH",
+        "N031_QUESTION_TIMING_UNSUPPORTED_3_OF_3"
+      ]
     },
     "A_EvidencePack-12": {
       "status": "NOT_RUN",
-      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V12_PREFLIGHT_FAILED_AFTER_THREE_REPAIR_ROUNDS",
       "same_version_pass": false
     },
     "B_CoreAnswer-16": {
       "status": "NOT_RUN",
-      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V12_PREFLIGHT_FAILED_AFTER_THREE_REPAIR_ROUNDS",
       "same_version_pass": false
     },
     "C_Failed-24": {
       "status": "NOT_RUN",
-      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V12_PREFLIGHT_FAILED_AFTER_THREE_REPAIR_ROUNDS",
       "same_version_pass": false
     },
     "D_Natural-36": {
       "status": "NOT_RUN",
-      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V12_PREFLIGHT_FAILED_AFTER_THREE_REPAIR_ROUNDS",
       "same_version_pass": false
     },
     "E_Full-96": {
       "status": "NOT_RUN",
-      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V12_PREFLIGHT_FAILED_AFTER_THREE_REPAIR_ROUNDS",
       "same_version_pass": false
     },
     "F_Concurrency-4": {
       "status": "NOT_RUN",
-      "reason": "V11_PREFLIGHT_FAILED_AFTER_TWO_CANDIDATES",
+      "reason": "V12_PREFLIGHT_FAILED_AFTER_THREE_REPAIR_ROUNDS",
       "same_version_pass": false
     }
   },
@@ -121,6 +126,32 @@
     "report": "docs/progress/wb08r-03g-v11-report.md",
     "manifest": "docs/progress/wb08r-03g-v11-manifest.json",
     "p0_issues": "docs/progress/wb08r-03g-v11-p0-issues.md"
+  },
+  "wb08r03g_v12_verification": {
+    "status": "FAILED",
+    "phase_status": "PAUSED",
+    "source_head_sha": "4d668b1613a7bd21edef7f9d5c495117befd0870",
+    "report_commit_sha": "b25438064d93e496511e67aa02094540c06c6ce7",
+    "candidate_limit": 3,
+    "functional_candidates_built": 3,
+    "functional_deployments": 3,
+    "preflight_records": 48,
+    "preflight_c1": "FAILED_ANSWERABLE_8_PROVIDER_UNAVAILABLE_5_INSUFFICIENT_3",
+    "preflight_c2": "FAILED_ANSWERABLE_13_INSUFFICIENT_2_BUDGET_BLOCKED_F024",
+    "preflight_c3": "FAILED_F024_WRONG_SOURCE_TEMPLATE_OVERREACH_N031_UNSUPPORTED_TIMING_3_OF_3",
+    "c2_protocol_probe": "PASSED_12_OF_12",
+    "c3_protocol_probe": "PASSED_12_OF_12",
+    "question_answering_targeted_pytest": "132 passed, 1 warning",
+    "static_checks": "PASSED_RUFF_FORMAT_MYPY_5_FILES_DIFF_CHECK",
+    "A_to_F": "NOT_RUN",
+    "final_8289": "ROLLED_BACK_BD00C56_HEALTHY_200",
+    "production_modified": false,
+    "production_8288_health": 200,
+    "production_18288_health": 200,
+    "cleanup_complete": true,
+    "report": "docs/progress/wb08r-03g-v12-report.md",
+    "manifest": "docs/progress/wb08r-03g-v12-manifest.json",
+    "p0_issues": "docs/progress/wb08r-03g-v12-p0-issues.md"
   },
   "wb08r03r2_verification": {
     "candidate_code_sha": "8337bdbc73c721744cf63e36127925bf7064beb6",
