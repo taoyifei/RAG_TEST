@@ -12,7 +12,7 @@
   "tested_source_sha": "35b6e3c9e17cf61690f91afeaf76c9f374b0e757",
   "final_code_commit_sha": "ead4f2c29d90cd7a8242d6db738c169f32246d92",
   "prelive_audit_commit_sha": "35b6e3c9e17cf61690f91afeaf76c9f374b0e757",
-  "report_commit_sha": null,
+  "report_commit_sha": "6eab23dcf31b8211bec3c05b8c5d1c56fab79f53",
   "source_commits": [
     {
       "sha": "8fd7833ecb38035d7874df888a1fdb5aceeed0a8",
