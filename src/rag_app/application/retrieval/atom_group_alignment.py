@@ -269,7 +269,7 @@ def qualify_atom_evidence(  # noqa: PLR0913
     direct_target = bool(
         _normalized(atom.target)
         and any(
-            _normalized(atom.target) in _normalized(proof.citation_text)
+            _target_in_anchor(atom.target, proof.citation_text)
             for proof in proof_items
         )
     )
@@ -476,7 +476,7 @@ def align_atom_to_groups(
                     _normalized(anchor)
                 )
                 for anchor in anchor_texts
-                if _normalized(atom.target) in _normalized(anchor)
+                if _target_in_anchor(atom.target, anchor)
             )
         )
         relation_compatible = structural_relation_proven or bool(
@@ -587,6 +587,41 @@ def _normalized(value: str) -> str:
 
 
 def _anchor_score(target: str, anchor: str) -> float:
+    return max(
+        _literal_anchor_score(variant, anchor)
+        for variant in _role_owner_variants(target)
+    )
+
+
+def _target_in_anchor(target: str, anchor: str) -> bool:
+    """职责角色仅折叠通用团队后缀，其它对象仍保持逐字边界。"""
+    literal_target = _normalized(target)
+    literal_anchor = _normalized(anchor)
+    return bool(literal_target) and (
+        literal_target in literal_anchor
+        or any(
+            variant in literal_anchor
+            for variant in _role_owner_variants(target)
+        )
+    )
+
+
+def _role_owner_variants(value: str) -> tuple[str, ...]:
+    """只为完整角色后缀生成“团队/组”两种通用写法。"""
+    normalized = _normalized(value)
+    variants = [normalized]
+    if normalized.endswith("团队") and len(normalized) > len("团队"):
+        variants.append(normalized[: -len("团队")] + "组")
+    elif (
+        normalized.endswith("组")
+        and not normalized.endswith("小组")
+        and len(normalized) > len("组")
+    ):
+        variants.append(normalized[: -len("组")] + "团队")
+    return tuple(dict.fromkeys(variants))
+
+
+def _literal_anchor_score(target: str, anchor: str) -> float:
     if not target or not anchor:
         return 0.0
     if target in anchor:

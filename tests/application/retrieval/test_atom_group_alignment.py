@@ -132,6 +132,30 @@ def test_same_section_duties_lists_stay_separate() -> None:
     ) == (first,)
 
 
+def test_generic_team_suffix_alias_selects_only_matching_duties_group() -> None:
+    development = _group(
+        1,
+        EvidenceGroupKind.LIST_GROUP,
+        ("开发团队职责：", "负责缺陷定位。"),
+        heading=("岗位职责",),
+    )
+    operations = _group(
+        2,
+        EvidenceGroupKind.LIST_GROUP,
+        ("运维团队职责：", "负责日常监控。"),
+        heading=("岗位职责",),
+    )
+
+    assert _selected(
+        _atom(
+            "开发组",
+            shape=AtomAnswerShape.DUTIES,
+            relation="职责",
+        ),
+        (development, operations),
+    ) == (development,)
+
+
 def test_table_header_does_not_open_adjacent_row() -> None:
     first = _group(
         1,
@@ -215,9 +239,7 @@ def test_complete_list_can_certify_structural_relation_from_its_lead_in() -> (
         relation="组成",
     )
 
-    alignment = align_atom_to_groups(
-        atom, (group,), (), RetrievalPolicy()
-    )[0]
+    alignment = align_atom_to_groups(atom, (group,), (), RetrievalPolicy())[0]
 
     assert alignment.qualification is AlignmentQualification.STRONG
     assert alignment.structural_relation_proven
@@ -237,9 +259,7 @@ def test_list_without_target_relation_lead_in_has_no_certificate() -> None:
         relation="组成",
     )
 
-    alignment = align_atom_to_groups(
-        atom, (group,), (), RetrievalPolicy()
-    )[0]
+    alignment = align_atom_to_groups(atom, (group,), (), RetrievalPolicy())[0]
 
     assert not alignment.structural_relation_proven
     assert not alignment.publishable
@@ -257,9 +277,7 @@ def test_relation_marker_in_sibling_member_cannot_certify_target() -> None:
         relation="组成",
     )
 
-    alignment = align_atom_to_groups(
-        atom, (group,), (), RetrievalPolicy()
-    )[0]
+    alignment = align_atom_to_groups(atom, (group,), (), RetrievalPolicy())[0]
 
     assert not alignment.structural_relation_proven
     assert not alignment.publishable

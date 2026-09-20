@@ -222,6 +222,23 @@ def normalize_duty_heading_label(value: str) -> str:
     return _DUTY_LABEL_SUFFIX.sub("", normalize_section_heading_label(value))
 
 
+def normalize_role_owner_text(value: str) -> str:
+    """规范化角色所有者，并统一通用的“团队/组”组织后缀。
+
+    Args:
+        value: 查询角色或来源角色的完整名称。
+
+    Returns:
+        保留角色核心名称，只将名称末尾的“团队”折叠为同义的“组”；
+        不会改写正文，也不会把部门、机构、岗位或小组映射为其它类型。
+
+    """
+    normalized = normalize_document_label(value)
+    if normalized.endswith("团队") and len(normalized) > len("团队"):
+        return normalized[: -len("团队")] + "组"
+    return normalized
+
+
 def normalize_section_heading_label(value: str) -> str:
     """规范化通用章节标题，同时保留标题的完整语义边界。
 
@@ -367,6 +384,7 @@ __all__ = [
     "normalize_document_label",
     "normalize_duty_heading_label",
     "normalize_identifier",
+    "normalize_role_owner_text",
     "normalize_section_heading_label",
     "normalize_semantic_text",
     "query_without_source_qualifier",

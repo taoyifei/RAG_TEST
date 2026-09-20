@@ -347,16 +347,17 @@ def test_atom_table_intersection_requires_citable_row_header_and_value() -> (
         ),
     )
     payload = json.loads(_natural_messages(request)[1].content)
-    assert payload["table_fact_units"] == [
-        {
-            "atom_id": "A1",
-            "fact_support_id": supports[2].support_id,
-            "context_support_ids": [
-                supports[0].support_id,
-                supports[1].support_id,
-            ],
-        }
+    assert "table_fact_units" not in payload
+    assert payload["atoms"][0]["allowed_ref_ids"] == [
+        unit["unit_id"] for unit in payload["read_units"]
     ]
+    projected_text = "\n".join(unit["text"] for unit in payload["read_units"])
+    assert all(item.citation_text in projected_text for item in supports)
+    assert all(
+        unit["source_context"]["structure_scope"] == "literal_table_fragment"
+        and unit["source_context"]["table_relation_complete"] is False
+        for unit in payload["read_units"]
+    )
     completion = ChatCompletion(
         content=json.dumps(
             {

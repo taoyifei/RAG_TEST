@@ -174,9 +174,7 @@ def test_planner_schema_references_only_trusted_ids_of_each_kind() -> None:
     )
 
 
-def test_trusted_root_keeps_modifier_without_hiding_question_clauses() -> (
-    None
-):
+def test_trusted_root_keeps_modifier_without_hiding_question_clauses() -> None:
     request = _request("甲方案从申请到结束后，如何报送，多久完成？")
     atoms = _build(
         _payload(
@@ -210,12 +208,23 @@ def test_source_modifier_is_inherited_without_model_repeating_its_clause() -> (
     assert atom.source_qualifier == "甲制度V2"
 
 
+def test_planner_cannot_weaken_server_duties_shape_to_fact() -> None:
+    request = _request("甲团队在试运行阶段需要承担哪些主要职责？")
+
+    atom = _build(
+        _payload(_atom(("Q.C1",), "Q.T1", "Q.R1", "FACT")),
+        request,
+    )[0]
+
+    assert atom.answer_shape.value == "DUTIES"
+
+
 def test_declarative_lead_in_is_context_for_colloquial_question() -> None:
     request = _request("我刚考了证，钱能放明年报不？")
     schema = planner_json_schema(build_input_spans(request))
-    fragment_ids = schema["$defs"]["MinimalAtomPayload"]["properties"][
-        "f"
-    ]["items"]["enum"]
+    fragment_ids = schema["$defs"]["MinimalAtomPayload"]["properties"]["f"][
+        "items"
+    ]["enum"]
     atom = _build(
         _payload(_atom(("Q.C2",), "Q.T2", "Q.R2")),
         request,

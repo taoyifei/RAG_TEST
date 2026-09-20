@@ -20,7 +20,10 @@ from rag_app.core.models import (
 )
 from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import QueryAtom
-from rag_app.core.query_text import normalize_semantic_text
+from rag_app.core.query_text import (
+    normalize_role_owner_text,
+    normalize_semantic_text,
+)
 
 _SUBJECT = re.compile(r"^(.+?(?:部门|团队|小组|组|经理|主管|负责人|系统))(.*)$")
 _ACTION = re.compile(
@@ -150,15 +153,24 @@ def decide_request_relation(
         if not target or not normalized:
             continue
         source_owner = _SUBJECT.match(normalized)
+        owners_match = bool(
+            owner
+            and source_owner
+            and normalize_role_owner_text(owner[1])
+            == normalize_role_owner_text(source_owner[1])
+        )
         if owner and source_owner:
-            if owner[1] != source_owner[1]:
+            if not owners_match:
                 saw_different_subject = True
                 continue
             saw_requested_subject = True
+        target_covered = target in normalized or bool(
+            owners_match and owner is not None and not owner[2].strip()
+        )
         # 完整对象在同一句内且句中实际有谓词，不能跨主体拼词或只命中标题。
         if (
             generic
-            and target in normalized
+            and target_covered
             and re.search(
                 r"负责|包括|包含|承担|为|是|应|需|可|不得|保存|归档", sentence
             )
@@ -169,10 +181,8 @@ def decide_request_relation(
         if (
             generic
             and _ACTION.search(sentence)
-            and _phrase_covered(target, normalized)
-            and (
-                owner is None or (source_owner and owner[1] == source_owner[1])
-            )
+            and (_phrase_covered(target, normalized) or target_covered)
+            and (owner is None or owners_match)
         ):
             return RequestRelationDecision(
                 supported, "BOUND_CLAUSE_OBJECT_AND_ACTION"

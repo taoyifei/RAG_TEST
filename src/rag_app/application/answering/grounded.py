@@ -115,6 +115,7 @@ from rag_app.core.query_text import (
     duty_heading_path_owns_target,
     named_table_label_in_query,
     normalize_catalog_label,
+    normalize_role_owner_text,
     normalize_semantic_text,
     section_heading_path_owns_target,
 )
@@ -314,6 +315,7 @@ _LEADING_AGENT_PREFIX = re.compile(r"^\s*(?:(?:并|且|同时|以及)\s*)?由\s*
 _LEADING_OBJECT_PREFIX = re.compile(
     r"^\s*(?:(?:并|且|同时|以及)\s*)?(?:对|向|给|为|与|同|跟)\s*"
 )
+_POST_SUBJECT_CONTEXT = r"(?:在[^，,。；;！？?]{1,24})?"
 _MODAL_ACTION = re.compile(
     r"^(?:准备|整理|提交|上传|填报|填写|确认|补充|完成|检查|核对|"
     r"提供|记录|归档|执行)"
@@ -323,7 +325,7 @@ _ENTITY_SUBJECT = re.compile(
     r"[\u4e00-\u9fff]{1,24}?(?:负责人|经理|主管|专员|工程师|部门|团队|"
     r"单位|机构|公司|中心|实验室|用户|客户|人员|岗位|角色|小组|组|委员会|平台|"
     r"服务|应用|模块|组件|设备|系统|模式|库|部)))"
-    r"\s*(?=(?:(?:应当|必须|可以|应|须|需|可|已)?"
+    rf"\s*(?={_POST_SUBJECT_CONTEXT}(?:(?:应当|必须|可以|应|须|需|可|已)?"
     r"(?:不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|尚未|没有|未|无|不)?"
     rf"(?:{_ACTION_MODIFIER})?(?:{_DUTY_ACTION_VERB}))"
     r"|的(?:核心)?职责|的(?:维护)?周期)"
@@ -842,10 +844,7 @@ def _standalone_subjects(text: str) -> set[str]:
 
 def _same_subject(left: str, right: str) -> bool:
     """按完整职责标签比较对象，禁止把较长岗位名当成短岗位名。"""
-    return (
-        re.sub(r"\s+", "", left).casefold()
-        == re.sub(r"\s+", "", right).casefold()
-    )
+    return normalize_role_owner_text(left) == normalize_role_owner_text(right)
 
 
 def _leading_explicit_subject(text: str) -> str | None:
@@ -891,6 +890,16 @@ def _source_has_explicit_subject(subject: str, text: str) -> bool:
     if any(
         _same_subject(subject, candidate)
         for candidate in _NAMED_SUBJECT.findall(text)
+    ):
+        return True
+    if any(
+        detected is not None and _same_subject(subject, detected)
+        for clause, inherited in _clauses_with_subject(text)
+        if (
+            detected := inherited
+            or _leading_explicit_subject(clause)
+            or _subject(clause)
+        )
     ):
         return True
     for match in re.finditer(re.escape(subject), text, re.IGNORECASE):

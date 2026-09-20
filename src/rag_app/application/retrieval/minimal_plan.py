@@ -11,7 +11,7 @@ from rag_app.application.retrieval.context_resolution import (
     SpanKind,
     current_context_modifier_clauses,
 )
-from rag_app.core.models import QueryAnalysis
+from rag_app.core.models import QueryAnalysis, RequestedAnswerType
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
@@ -23,11 +23,19 @@ from rag_app.core.models.query_plan import (
 _VERSION = re.compile(r"(?i)(?<![a-z0-9])v\d+(?:\.\d+)*(?![a-z0-9])")
 _DATE = re.compile(r"\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
-_NEGATION = re.compile(
-    r"不得|无需|不必|禁止|严禁|没有|未|不(?![呢吗呀啊]?$)"
-)
+_NEGATION = re.compile(r"不得|无需|不必|禁止|严禁|没有|未|不(?![呢吗呀啊]?$)")
 _UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年|万元|元|%|％|千克|公斤|米)")
 _DURATION_UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年)")
+
+_TRUSTED_ANSWER_SHAPES = {
+    RequestedAnswerType.DEFINITION: AtomAnswerShape.DEFINITION,
+    RequestedAnswerType.ENUMERATION: AtomAnswerShape.ENUMERATION,
+    RequestedAnswerType.PROCEDURE: AtomAnswerShape.PROCEDURE,
+    RequestedAnswerType.DUTIES: AtomAnswerShape.DUTIES,
+    RequestedAnswerType.RESPONSIBLE_PARTY: AtomAnswerShape.RESPONSIBLE_PARTY,
+    RequestedAnswerType.DURATION: AtomAnswerShape.DURATION,
+    RequestedAnswerType.COUNT: AtomAnswerShape.COUNT,
+}
 
 
 class MinimalPlanValidationError(ValueError):
@@ -73,9 +81,10 @@ def planner_json_schema(
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
     )
     modifiers = current_context_modifier_clauses(current_clauses)
-    answer_clauses = tuple(
-        span for span in current_clauses if span not in modifiers
-    ) or current_clauses
+    answer_clauses = (
+        tuple(span for span in current_clauses if span not in modifiers)
+        or current_clauses
+    )
     clause_ids = [span.span_id for span in answer_clauses]
     target_ids = [
         span.span_id for span in spans if span.kind is SpanKind.TARGET
@@ -90,9 +99,7 @@ def planner_json_schema(
     schema = MinimalPlanPayload.model_json_schema()
     # 澄清已由可信 Root 决定；输出仍兼容旧 c 字段，但不再要求模型重复 null。
     schema["properties"].pop("c")
-    schema["required"] = [
-        field for field in schema["required"] if field != "c"
-    ]
+    schema["required"] = [field for field in schema["required"] if field != "c"]
     atom_definition = schema["$defs"]["MinimalAtomPayload"]
     properties = atom_definition["properties"]
     properties["f"]["items"]["enum"] = clause_ids
@@ -114,9 +121,10 @@ def build_query_atoms(
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
     )
     modifier_clauses = current_context_modifier_clauses(current_clauses)
-    required_clauses = tuple(
-        span for span in current_clauses if span not in modifier_clauses
-    ) or current_clauses
+    required_clauses = (
+        tuple(span for span in current_clauses if span not in modifier_clauses)
+        or current_clauses
+    )
     referenced_clauses: set[str] = set()
     atoms: list[QueryAtom] = []
     for index, item in enumerate(payload.atoms, 1):
@@ -152,12 +160,18 @@ def build_query_atoms(
             )
         )
         source = analysis.semantics.source_qualifier
+        answer_shape = _trusted_answer_shape(
+            fragment,
+            item.answer_shape,
+            analysis,
+            single_atom=len(payload.atoms) == 1,
+        )
         atoms.append(
             QueryAtom(
                 atom_id=f"A{index}",
                 target=target.text,
                 relation=relation.text,
-                answer_shape=item.answer_shape,
+                answer_shape=answer_shape,
                 source_qualifier=source,
                 constraints=_constraints_for_fragment(fragment, source),
                 original_fragment=fragment[:320],
@@ -176,6 +190,41 @@ def build_query_atoms(
     if any(value not in atom_text for value in literal_values):
         raise MinimalPlanValidationError("PLANNER_LITERAL_VIOLATION")
     return tuple(atoms)
+
+
+def _trusted_answer_shape(
+    fragment: str,
+    proposed: AtomAnswerShape,
+    analysis: QueryAnalysis,
+    *,
+    single_atom: bool,
+) -> AtomAnswerShape:
+    """冻结服务端可确定的回答形状，Planner 只能补充未知形状。
+
+    Args:
+        fragment: 当前 Atom 引用的受信原文分句。
+        proposed: 模型从枚举中选择的回答形状。
+        analysis: 根问题的确定性服务端分析。
+        single_atom: 当前计划是否只包含一个 Atom。
+
+    Returns:
+        当前分句或单 Atom 根问题已经确定时使用服务端形状；只有服务端
+        仍为 FACT/UNKNOWN 时才接受 Planner 的有限枚举选择。
+
+    """
+    from rag_app.application.retrieval.semantics import (  # noqa: PLC0415
+        parse_query_semantics,
+    )
+
+    parsed = parse_query_semantics(fragment).answer_type
+    trusted = _TRUSTED_ANSWER_SHAPES.get(parsed)
+    if trusted is not None:
+        return trusted
+    if single_atom:
+        trusted = _TRUSTED_ANSWER_SHAPES.get(analysis.semantics.answer_type)
+        if trusted is not None:
+            return trusted
+    return proposed
 
 
 def _constraints_for_fragment(

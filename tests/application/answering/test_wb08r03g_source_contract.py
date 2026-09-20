@@ -243,6 +243,70 @@ def test_explicit_organization_owner_cannot_be_replaced(suffix: str) -> None:
     }
 
 
+def test_post_subject_context_cannot_hide_organization_replacement() -> None:
+    evidence = _evidence("甲机构在该项工作中负责设备巡检。")
+    plan = _plan("乙组")
+    plan = plan.model_copy(
+        update={
+            "atoms": (
+                plan.atoms[0].model_copy(
+                    update={
+                        "relation": "负责",
+                        "answer_shape": AtomAnswerShape.DUTIES,
+                        "original_fragment": "乙组在该项工作中负责什么？",
+                    }
+                ),
+            )
+        }
+    )
+    matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
+    natural = NaturalClaim(
+        atom_id="A1",
+        text="乙组在该项工作中负责设备巡检。",
+        supports=(
+            ClaimSupport(support_id="S1", quote=evidence[0].citation_text),
+        ),
+    )
+
+    with pytest.raises(ValidationFailed) as failure:
+        _validated_natural_claim(natural, plan, matrix, evidence, None)
+
+    assert failure.value.code in {
+        "CLAIM_TARGET_UNSUPPORTED",
+        "CLAIM_OBJECT_CHANGED",
+    }
+
+
+def test_generic_team_suffix_alias_keeps_same_role_owner() -> None:
+    evidence = _evidence("甲团队在该项工作中负责设备巡检。")
+    plan = _plan("甲组")
+    plan = plan.model_copy(
+        update={
+            "atoms": (
+                plan.atoms[0].model_copy(
+                    update={
+                        "relation": "负责",
+                        "answer_shape": AtomAnswerShape.DUTIES,
+                        "original_fragment": "甲组在该项工作中负责什么？",
+                    }
+                ),
+            )
+        }
+    )
+    matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
+    natural = NaturalClaim(
+        atom_id="A1",
+        text="甲组在该项工作中负责设备巡检。",
+        supports=(
+            ClaimSupport(support_id="S1", quote=evidence[0].citation_text),
+        ),
+    )
+
+    validated = _validated_natural_claim(natural, plan, matrix, evidence, None)
+
+    assert validated.text == natural.text
+
+
 def test_legacy_and_direct_validation_reject_wrong_document_identity() -> None:
     """旧协议与服务端摘录也必须服从同一精确文档身份合同。"""
     evidence = _evidence("另一份方案中的真实要求。")
