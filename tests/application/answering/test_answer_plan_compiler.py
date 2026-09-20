@@ -445,6 +445,50 @@ def test_explicit_column_variant_keeps_same_selection_identity() -> None:
     assert second.obligations[0].atom_ids == ("A1", "A2")
 
 
+def test_explicit_field_does_not_satisfy_independent_condition_atom() -> None:
+    query = "需求快验模式需要哪些输入内容，并且其启动需要什么条件？"
+    query_plan, pack, evidence = _fixture_plan(
+        query,
+        relations=("输入", "启动条件"),
+        input_status="UNDETERMINED",
+    )
+    condition_header = evidence[2].model_copy(
+        update={"citation_text": "启动条件"}
+    )
+    pack = replace(
+        pack,
+        entries=tuple(
+            replace(entry, evidence_item=condition_header)
+            if entry.support_id == condition_header.support_id
+            else entry
+            for entry in pack.entries
+        ),
+        atom_fact_bindings=tuple(
+            binding.model_copy(
+                update={
+                    "requested_relation": "启动条件",
+                    "relation_status": "UNDETERMINED",
+                }
+            )
+            if binding.atom_id == "A2"
+            else binding
+            for binding in pack.atom_fact_bindings
+        ),
+    )
+
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+
+    assert len(plan.selections) == 2
+    assert tuple(item.atom_ids for item in plan.obligations) == (
+        ("A1",),
+        ("A2",),
+    )
+    assert tuple(item.field_label for item in plan.selections) == (
+        "输入（业务团队 / 外部单位需提供）",
+        "启动条件",
+    )
+
+
 def test_candidate_reorder_and_alias_change_keep_selection_identity() -> None:
     query_plan, pack, _ = _fixture_plan("需求快验的输入是什么？")
     before = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")

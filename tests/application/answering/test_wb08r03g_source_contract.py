@@ -243,7 +243,10 @@ def test_explicit_organization_owner_cannot_be_replaced(suffix: str) -> None:
     }
 
 
-def test_post_subject_context_cannot_hide_organization_replacement() -> None:
+@pytest.mark.parametrize("marker", ("", "- ", "• "))
+def test_post_subject_context_cannot_hide_organization_replacement(
+    marker: str,
+) -> None:
     evidence = _evidence("甲机构在该项工作中负责设备巡检。")
     plan = _plan("乙组")
     plan = plan.model_copy(
@@ -262,7 +265,7 @@ def test_post_subject_context_cannot_hide_organization_replacement() -> None:
     matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
     natural = NaturalClaim(
         atom_id="A1",
-        text="乙组在该项工作中负责设备巡检。",
+        text=f"{marker}乙组在该项工作中负责设备巡检。",
         supports=(
             ClaimSupport(support_id="S1", quote=evidence[0].citation_text),
         ),

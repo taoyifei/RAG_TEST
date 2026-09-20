@@ -304,10 +304,13 @@ def run(
     output_dir: Path,
     *,
     candidate_id: str,
+    prior_request_count: int = 0,
 ) -> dict[str, Any]:
     """逐题执行一次真实请求并生成私有证据与 SAFE 摘要。"""
     if re.fullmatch(r"c[1-3]", candidate_id) is None:
         raise ValueError("CANDIDATE_ID_INVALID")
+    if prior_request_count < 0:
+        raise ValueError("PRIOR_REQUEST_COUNT_INVALID")
     parsed = urllib.parse.urlsplit(base_url)
     if (
         parsed.scheme != "http"
@@ -319,6 +322,7 @@ def run(
     private_path = output / "private-replay.ndjson"
     safe_path = output / "safe-replay.json"
     safe_rows: list[dict[str, Any]] = []
+    run_suffix = f"-r{prior_request_count}" if prior_request_count else ""
     with _private_file(private_path) as private_stream:
         for case_id, question in _CASES:
             opener, csrf = _session(base_url)
@@ -328,6 +332,7 @@ def run(
                 base_url,
                 "wb08r03-v14-"
                 + candidate_id
+                + run_suffix
                 + "-"
                 + case_id.lower().replace("_", "-"),
                 question,
@@ -409,7 +414,7 @@ def run(
         "candidate_id": candidate_id,
         "candidate_url": base_url,
         "request_count": len(safe_rows),
-        "retry_count": 0,
+        "retry_count": prior_request_count,
         "private_replay_sha256": hashlib.sha256(
             private_path.read_bytes()
         ).hexdigest(),
@@ -445,12 +450,14 @@ def main() -> None:
     parser.add_argument("--trace-db", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--candidate-id", required=True)
+    parser.add_argument("--prior-request-count", type=int, default=0)
     args = parser.parse_args()
     run(
         args.base_url.rstrip("/"),
         args.trace_db,
         args.output_dir,
         candidate_id=args.candidate_id,
+        prior_request_count=args.prior_request_count,
     )
 
 

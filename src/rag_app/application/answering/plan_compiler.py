@@ -234,6 +234,45 @@ def _binding_target_matches_fact(
     return _label_matches(binding.requested_target, target)
 
 
+def _select_fact_bindings(
+    *,
+    explicit_axes: tuple[bool, bool],
+    has_qualifiers: bool,
+    supported: tuple[AtomFactBinding, ...],
+    semantic: tuple[AtomFactBinding, ...],
+    same_target: tuple[AtomFactBinding, ...],
+) -> tuple[tuple[AtomFactBinding, ...], str]:
+    """只把已证明属于当前字段的 Atom 绑定进物理事实义务。"""
+    explicit_row, explicit_field = explicit_axes
+    certified = tuple(dict.fromkeys((*semantic, *supported)))
+    if explicit_row and explicit_field and certified:
+        return (
+            tuple(
+                dict.fromkeys(
+                    (*certified, *(same_target if has_qualifiers else ()))
+                )
+            ),
+            "EXPLICIT_SCHEMA_AXIS",
+        )
+    if supported:
+        return (
+            tuple(
+                dict.fromkeys(
+                    (*supported, *(same_target if has_qualifiers else ()))
+                )
+            ),
+            "CERTIFIED_ATOM_BINDING",
+        )
+    if explicit_row and semantic:
+        return semantic, "SEMANTIC_SCHEMA_AXIS"
+    if has_qualifiers and semantic:
+        return (
+            tuple(dict.fromkeys((*semantic, *same_target))),
+            "QUALIFIED_BASE_FACT",
+        )
+    return (), ""
+
+
 def _candidate_facts(
     plan: QueryPlan,
     pack: GenerationEvidencePack,
@@ -290,21 +329,13 @@ def _candidate_facts(
             for binding in bindings
             if _binding_target_matches_fact(binding, fact, registry)
         )
-        selected_bindings: tuple[AtomFactBinding, ...] = ()
-        basis = ""
-        if explicit_row and explicit_field:
-            selected_bindings = bindings
-            basis = "EXPLICIT_SCHEMA_AXIS"
-        elif supported:
-            selected_bindings = tuple(
-                dict.fromkeys(
-                    (*supported, *(same_target if qualifiers else ()))
-                )
-            )
-            basis = "CERTIFIED_ATOM_BINDING"
-        elif qualifiers and semantic:
-            selected_bindings = tuple(dict.fromkeys((*semantic, *same_target)))
-            basis = "QUALIFIED_BASE_FACT"
+        selected_bindings, basis = _select_fact_bindings(
+            explicit_axes=(explicit_row, explicit_field),
+            has_qualifiers=bool(qualifiers),
+            supported=supported,
+            semantic=semantic,
+            same_target=same_target,
+        )
         if selected_bindings:
             raw.append(
                 (
@@ -316,10 +347,30 @@ def _candidate_facts(
                 )
             )
 
-    if any(item[2] and item[3] for item in raw):
-        raw = [item for item in raw if item[2] and item[3]]
-    elif any(item[4] == "CERTIFIED_ATOM_BINDING" for item in raw):
-        raw = [item for item in raw if item[4] == "CERTIFIED_ATOM_BINDING"]
+    basis_priority = {
+        "QUALIFIED_BASE_FACT": 1,
+        "SEMANTIC_SCHEMA_AXIS": 2,
+        "CERTIFIED_ATOM_BINDING": 3,
+        "EXPLICIT_SCHEMA_AXIS": 4,
+    }
+    best_priority_by_atom: dict[str, int] = defaultdict(int)
+    for _fact, bindings, _row, _field, basis in raw:
+        for binding in bindings:
+            best_priority_by_atom[binding.atom_id] = max(
+                best_priority_by_atom[binding.atom_id], basis_priority[basis]
+            )
+    raw = [
+        (fact, preferred, row, field, basis)
+        for fact, bindings, row, field, basis in raw
+        if (
+            preferred := tuple(
+                binding
+                for binding in bindings
+                if basis_priority[basis]
+                == best_priority_by_atom[binding.atom_id]
+            )
+        )
+    ]
     facts_by_atom: dict[str, set[str]] = defaultdict(set)
     for fact, bindings, _row, _field, _basis in raw:
         for binding in bindings:

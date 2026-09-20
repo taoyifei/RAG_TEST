@@ -338,7 +338,8 @@ _STANDALONE_SUBJECT = re.compile(
 )
 _SECTION_NUMBER_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\s*")
 _LEADING_LIST_MARKER = re.compile(
-    r"^\s*(?:[（(]?(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*)"
+    r"^\s*(?:(?:[（(]?(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*)|"
+    r"(?:[-*+•‣◦⁃●○▪▫–—]\s+))"
 )
 _LEADING_SECTION_MARKER = re.compile(
     r"^\s*[（(][一二三四五六七八九十百千\d]+[）)]\s*"
