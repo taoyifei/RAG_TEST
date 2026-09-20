@@ -1538,6 +1538,26 @@ def _prepared_packet(
             for unit in sent_read_units
         ),
         per_atom_read_unit_ids=per_atom_read_units,
+        per_atom_source_scope_digests=tuple(
+            (
+                atom_id,
+                atom.source_scope.scope_digest,
+            )
+            for atom_id, _unit_ids in per_atom_read_units
+            if request.query_plan is not None
+            and (
+                atom := next(
+                    (
+                        item
+                        for item in request.query_plan.atoms
+                        if item.atom_id == atom_id
+                    ),
+                    None,
+                )
+            )
+            is not None
+            and atom.source_scope is not None
+        ),
         support_sources=tuple(
             safe_support_source(item) for item in prepared.evidence
         ),

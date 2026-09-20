@@ -12,13 +12,14 @@ from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
-QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v8"
+QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v9"
 QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v3"
 ATOM_GROUP_ALIGNMENT_REVISION = "wb08r-atom-group-alignment-v3"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v2"
 GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-wire-v9"
-NATURAL_RENDERER_REVISION = "wb08r-natural-renderer-v5"
+NATURAL_RENDERER_REVISION = "wb08r-natural-renderer-v6"
 CORRECTIVE_RETRIEVAL_REVISION = "wb08r-per-atom-correction-v2"
+SOURCE_SCOPE_SCHEMA_REVISION = "wb08r-source-scope-v1"
 _MAX_ATOMS = 4
 ReasoningEffortValue = Literal["DIRECT", "ASSISTED", "DEEP"]
 
@@ -59,6 +60,79 @@ class QueryConstraint(FrozenModel):
     unit: str | None = Field(default=None, max_length=40)
 
 
+class SourceIntent(StrEnum):
+    """原问题中来源名称对当前 Atom 的约束用途。"""
+
+    OPEN = "OPEN"
+    DOCUMENT_AUTHORITY = "DOCUMENT_AUTHORITY"
+    DOCUMENT_SET = "DOCUMENT_SET"
+    MENTION_IN_SOURCE = "MENTION_IN_SOURCE"
+
+
+class SourceResolution(StrEnum):
+    """来源名称解析到活动文档身份后的确定性状态。"""
+
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+    AMBIGUOUS = "AMBIGUOUS"
+    UNRESOLVED = "UNRESOLVED"
+    CATALOG_ONLY = "CATALOG_ONLY"
+
+
+class SourceContentRequirement(StrEnum):
+    """当前问题要求来源证明的内容层级。"""
+
+    BODY = "BODY"
+    EXISTENCE = "EXISTENCE"
+    REFERENCE = "REFERENCE"
+
+
+class SourceDocumentIdentity(FrozenModel):
+    """用户指定来源解析出的逻辑文档及不可变版本。"""
+
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
+    document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+
+
+class SourceScopeDecision(FrozenModel):
+    """逐 Atom 的来源所有权合同；空许可绝不代表开放查询。"""
+
+    atom_id: str = Field(pattern=r"^A[1-4]$")
+    source_intent: SourceIntent
+    resolution: SourceResolution
+    allowed_documents: tuple[SourceDocumentIdentity, ...] = ()
+    required_content: SourceContentRequirement = SourceContentRequirement.BODY
+    mention_sha256: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    registry_revision: str = Field(min_length=1, max_length=160)
+    scope_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _validate_resolution(self) -> Self:
+        identities = tuple(
+            (item.document_id, item.document_version_id)
+            for item in self.allowed_documents
+        )
+        if len(identities) != len(set(identities)):
+            raise ValueError("来源许可文档身份不允许重复。")
+        if self.resolution is SourceResolution.OPEN:
+            if (
+                self.source_intent is not SourceIntent.OPEN
+                or self.allowed_documents
+                or self.mention_sha256 is not None
+            ):
+                raise ValueError("OPEN 来源范围不能携带文档许可或来源提及。")
+        elif self.source_intent is SourceIntent.OPEN:
+            raise ValueError("显式来源解析状态不能使用 OPEN 意图。")
+        elif self.resolution is SourceResolution.RESOLVED:
+            if not self.allowed_documents or self.mention_sha256 is None:
+                raise ValueError("RESOLVED 来源范围必须包含身份与提及摘要。")
+        elif self.allowed_documents:
+            raise ValueError("未确定来源不能签发文档许可。")
+        return self
+
+
 class QueryAtom(FrozenModel):
     """一项可以独立检索和验证的用户要求。"""
 
@@ -69,6 +143,9 @@ class QueryAtom(FrozenModel):
     source_qualifier: str | None = Field(default=None, max_length=160)
     constraints: tuple[QueryConstraint, ...] = Field(default=(), max_length=12)
     original_fragment: str | None = Field(default=None, max_length=320)
+    source_scope: SourceScopeDecision | None = Field(
+        default=None, exclude=True, repr=False
+    )
 
     @property
     def search_text(self) -> str:
@@ -101,6 +178,11 @@ class QueryAtom(FrozenModel):
                 "relation": normalized(self.relation),
                 "shape": self.answer_shape.value,
                 "source": normalized(self.source_qualifier),
+                "source_scope": (
+                    self.source_scope.scope_digest
+                    if self.source_scope is not None
+                    else None
+                ),
                 "constraints": sorted(
                     (
                         item.kind.value,
@@ -144,6 +226,12 @@ class QueryPlan(FrozenModel):
             raise ValueError("Atom ID 必须连续且唯一。")
         if len({atom.dedup_key for atom in self.atoms}) != len(self.atoms):
             raise ValueError("QueryPlan 不接受重复原子。")
+        if any(
+            atom.source_scope is not None
+            and atom.source_scope.atom_id != atom.atom_id
+            for atom in self.atoms
+        ):
+            raise ValueError("来源范围必须与所在 Atom 身份一致。")
         return self
 
 

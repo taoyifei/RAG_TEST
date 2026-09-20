@@ -22,6 +22,13 @@ from rag_app.core.models.generation_packet import (
     PreparedGenerationPacket,
     stable_support_key,
 )
+from rag_app.core.models.query_plan import (
+    SourceContentRequirement,
+    SourceDocumentIdentity,
+    SourceIntent,
+    SourceResolution,
+    SourceScopeDecision,
+)
 from tests.application.answering.test_natural_grounded_answer import _evidence
 
 
@@ -76,6 +83,28 @@ def _fixture() -> tuple[
         requested_relation="对应值",
     )
     return evidence, fact, unit, binding
+
+
+def _scope(
+    item: EvidenceItem, *, digest_seed: str = "a"
+) -> SourceScopeDecision:
+    assert item.document_id is not None
+    assert item.document_version_id is not None
+    return SourceScopeDecision(
+        atom_id="A1",
+        source_intent=SourceIntent.DOCUMENT_AUTHORITY,
+        resolution=SourceResolution.RESOLVED,
+        allowed_documents=(
+            SourceDocumentIdentity(
+                document_id=item.document_id,
+                document_version_id=item.document_version_id,
+            ),
+        ),
+        required_content=SourceContentRequirement.BODY,
+        mention_sha256=canonical_sha256("指定文档"),
+        registry_revision="test-registry-v1",
+        scope_digest=f"sha256:{digest_seed * 64}",
+    )
 
 
 def test_one_model_ref_restores_more_than_eight_physical_spans() -> None:
@@ -158,4 +187,88 @@ def test_revalidation_detects_read_unit_identity_change() -> None:
             allowed_unit_ids=frozenset({"E1"}),
             physical_table_facts=(fact,),
             atom_fact_bindings=(binding,),
+        )
+
+
+def test_binding_rejects_real_but_wrong_document() -> None:
+    evidence = _evidence("错误文档中的真实句子。")
+    item = evidence[0]
+    unit = EvidenceReadUnit(
+        unit_id="E1",
+        kind="paragraph",
+        text=item.citation_text,
+        support_ids=(item.support_id,),
+        source_complete=True,
+    )
+    wrong_scope = _scope(
+        item.model_copy(
+            update={
+                "document_id": f"doc_{'e' * 32}",
+                "document_version_id": f"dver_{'f' * 32}",
+            }
+        )
+    )
+
+    with pytest.raises(EvidenceBindingError, match="DOCUMENT_SCOPE_MISMATCH"):
+        bind_wire_claim(
+            GroundedWireClaim(
+                atom_id="A1", text="看似有来源的回答。", refs=("E1",)
+            ),
+            claim_id="C1",
+            read_units=(unit,),
+            evidence=evidence,
+            allowed_unit_ids=frozenset({"E1"}),
+            source_scope=wrong_scope,
+        )
+
+
+def test_revalidation_rejects_changed_source_scope_digest() -> None:
+    evidence = _evidence("指定文档中的真实句子。")
+    item = evidence[0]
+    unit = EvidenceReadUnit(
+        unit_id="E1",
+        kind="paragraph",
+        text=item.citation_text,
+        support_ids=(item.support_id,),
+        source_complete=True,
+    )
+    scope = _scope(item)
+    claim = bind_wire_claim(
+        GroundedWireClaim(atom_id="A1", text="回答。", refs=("E1",)),
+        claim_id="C1",
+        read_units=(unit,),
+        evidence=evidence,
+        allowed_unit_ids=frozenset({"E1"}),
+        source_scope=scope,
+    ).with_semantic_status("supported")
+    support_key = stable_support_key(item)
+    packet = PreparedGenerationPacket(
+        request_id="request",
+        attempt_id="attempt",
+        packet_id=canonical_sha256("packet"),
+        schema_revision="test",
+        evidence_level="TRANSPORT_SENT",
+        alias_to_support_key=((item.support_id, support_key),),
+        read_unit_bindings=(("E1", (support_key,)),),
+        per_atom_read_unit_ids=(("A1", ("E1",)),),
+        per_atom_source_scope_digests=(("A1", f"sha256:{'b' * 64}"),),
+        original_support_keys=(support_key,),
+        messages_sha256=canonical_sha256("messages"),
+        transport_body_sha256=canonical_sha256("transport"),
+        estimated_input_tokens=1,
+        max_input_tokens=10,
+        reserved_output_tokens=1,
+        safety_margin_tokens=1,
+    )
+
+    with pytest.raises(
+        EvidenceBindingError, match="SOURCE_SCOPE_IDENTITY_CHANGED"
+    ):
+        revalidate_bound_claim(
+            claim,
+            packet=packet,
+            read_units=(unit,),
+            evidence=evidence,
+            allowed_unit_ids=frozenset({"E1"}),
+            source_scope=scope,
         )

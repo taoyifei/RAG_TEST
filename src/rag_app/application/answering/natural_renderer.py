@@ -38,6 +38,10 @@ class ValidatedNaturalClaim:
     claim_id: str
     atom_ids: tuple[str, ...]
     claim: AnswerClaim
+    render_origin: str = "model_text"
+    selected_assertion_ids: tuple[str, ...] = ()
+    relation_complete: bool = True
+    relation_gap_reason: str | None = None
 
 
 def _cited_text(claim: AnswerClaim) -> str:

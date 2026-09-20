@@ -46,6 +46,10 @@ from rag_app.application.answering.semantic_validation import (
     SemanticValidationResponse,
     normalized_semantic_results,
 )
+from rag_app.application.answering.source_projection import (
+    SourceProjectionError,
+    project_bound_claim,
+)
 from rag_app.application.answering.target_coverage import target_member_coverage
 from rag_app.core.errors import (
     ProviderInvalidResponse,
@@ -82,6 +86,7 @@ from rag_app.core.models.query_plan import (
     AtomSupportMatrix,
     QueryAtom,
     QueryPlan,
+    SourceContentRequirement,
 )
 from rag_app.core.models.relation_review import (
     RelationReviewCandidate,
@@ -114,6 +119,7 @@ from rag_app.core.source_compatibility import (
     source_group_keys,
     table_cell_coordinate,
 )
+from rag_app.core.source_scope import evidence_allowed_for_atom
 
 if TYPE_CHECKING:
     from rag_app.application.retrieval.generation_evidence import (
@@ -428,6 +434,7 @@ class GroundedOutcome:
     raw_failures: tuple[tuple[str, str], ...] = ()
     recovery_results: tuple[tuple[str, str, str], ...] = ()
     wire_diagnostics: tuple[GroundedWireDiagnostic, ...] = ()
+    source_projection_records: tuple[JsonObject, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2264,6 +2271,7 @@ class GroundedAnsweringService:
                 direct := _direct_extract(query_plan, direct_evidence, analysis)
             )
             is not None
+            and validate_source_excerpt(direct[0], query_plan.atoms[0].atom_id)
         ):
             claim, item = direct
             _raise_if_cancelled(cancellation)
@@ -2396,7 +2404,22 @@ class GroundedAnsweringService:
         attempt_linked_ids: dict[str, tuple[str, ...]] = {}
         raw_failures: list[tuple[str, str]] = []
         recovery_results: list[tuple[str, str, str]] = []
+        source_projection_records: list[JsonObject] = []
         repair_skip_reason: str | None = "NO_MISSING_ATOM"
+
+        def finalized_source_projection_records() -> tuple[JsonObject, ...]:
+            """给每条 SAFE 投影补充真实发布终态，不记录任何正文。"""
+            published_claim_ids = {item.claim_id for item in accepted}
+            return tuple(
+                freeze_json_object(
+                    {
+                        **dict(record),
+                        "published": dict(record).get("claim_id")
+                        in published_claim_ids,
+                    }
+                )
+                for record in source_projection_records
+            )
 
         def generate(
             repair_atom_ids: tuple[str, ...] = (),
@@ -2743,7 +2766,7 @@ class GroundedAnsweringService:
                         )
                     )
 
-        def consume(draft: AnswerDraft) -> None:
+        def consume(draft: AnswerDraft) -> None:  # noqa: PLR0912, PLR0915
             """逐项绑定 Wire Claim；语义发布许可留给一次批量复核。"""
             nonlocal generated_claim_count, generation_returned, reason
             nonlocal attempt_linked_ids, legacy_protocol
@@ -2805,8 +2828,14 @@ class GroundedAnsweringService:
                 atom_id: frozenset(unit_ids)
                 for atom_id, unit_ids in packet.per_atom_read_unit_ids
             }
+            atoms_by_id = {atom.atom_id: atom for atom in query_plan.atoms}
             for index, wire_claim in enumerate(wire_claims, start=1):
                 try:
+                    atom = atoms_by_id.get(wire_claim.atom_id)
+                    if atom is None:
+                        raise EvidenceBindingError(
+                            "UNKNOWN_ATOM", f"claim[{index - 1}].atom_id"
+                        )
                     bound = bind_wire_claim(
                         wire_claim,
                         claim_id=f"C{index}",
@@ -2817,25 +2846,62 @@ class GroundedAnsweringService:
                         ),
                         physical_table_facts=active_request.physical_table_facts,
                         atom_fact_bindings=active_request.atom_fact_bindings,
+                        source_scope=atom.source_scope,
                     )
-                except EvidenceBindingError as error:
+                    bound = project_bound_claim(
+                        bound,
+                        read_units=read_units,
+                        evidence=active_request.evidence,
+                        physical_table_facts=(
+                            active_request.physical_table_facts
+                        ),
+                        atom_fact_bindings=active_request.atom_fact_bindings,
+                        source_scope=atom.source_scope,
+                    )
+                except (EvidenceBindingError, SourceProjectionError) as error:
+                    failure_code = error.failure_code
                     diagnostic = GroundedWireDiagnostic(
                         item_index=index - 1,
                         atom_id=wire_claim.atom_id,
                         failure_stage="evidence_binding",
-                        failure_code=error.failure_code,
-                        json_path=error.json_path,
+                        failure_code=failure_code,
+                        json_path=(
+                            error.json_path
+                            if isinstance(error, EvidenceBindingError)
+                            else f"claim[{index - 1}]"
+                        ),
                         expected_type="sent_read_unit",
                         observed_type="binding_mismatch",
                     )
                     wire_diagnostics.append(diagnostic)
-                    raw_failures.append(
-                        (wire_claim.atom_id, error.failure_code)
-                    )
-                    claim_rejections[error.failure_code] += 1
+                    raw_failures.append((wire_claim.atom_id, failure_code))
+                    claim_rejections[failure_code] += 1
                     rejected_atoms[wire_claim.atom_id] += 1
                     reason = "EVIDENCE_BINDING_FAILED"
                     continue
+                source_projection_records.append(
+                    freeze_json_object(
+                        {
+                            "claim_id": bound.claim_id,
+                            "atom_id": bound.atom_id,
+                            "draft_text_sha256": bound.draft_text_sha256,
+                            "published_text_sha256": (
+                                bound.published_text_sha256
+                            ),
+                            "render_origin": bound.render_origin,
+                            "selected_assertion_ids": (
+                                bound.selected_assertion_ids
+                            ),
+                            "relation_gap": not bound.relation_complete,
+                            "relation_gap_reason": (bound.relation_gap_reason),
+                            "scope_digest": (
+                                atom.source_scope.scope_digest
+                                if atom.source_scope is not None
+                                else None
+                            ),
+                        }
+                    )
+                )
                 if bound not in pending_relations:
                     pending_relations.append(bound)
 
@@ -3270,6 +3336,7 @@ class GroundedAnsweringService:
                         ),
                         physical_table_facts=active_request.physical_table_facts,
                         atom_fact_bindings=active_request.atom_fact_bindings,
+                        source_scope=candidate.atom.source_scope,
                     )
                 except EvidenceBindingError:
                     observed(
@@ -3283,6 +3350,10 @@ class GroundedAnsweringService:
                         claim_id=rebound.claim_id,
                         atom_ids=(rebound.atom_id,),
                         claim=rebound.answer_claim,
+                        render_origin=rebound.render_origin,
+                        selected_assertion_ids=(rebound.selected_assertion_ids),
+                        relation_complete=rebound.relation_complete,
+                        relation_gap_reason=rebound.relation_gap_reason,
                     )
                 )
                 recovery_results.append(
@@ -3524,6 +3595,9 @@ class GroundedAnsweringService:
                     raw_failures=tuple(raw_failures),
                     recovery_results=tuple(recovery_results),
                     wire_diagnostics=tuple(wire_diagnostics),
+                    source_projection_records=(
+                        finalized_source_projection_records()
+                    ),
                 )
 
         covered = {atom_id for item in accepted for atom_id in item.atom_ids}
@@ -3541,24 +3615,13 @@ class GroundedAnsweringService:
             )
             if pre.status is AtomStatus.CONTRADICTORY:
                 final = AtomStatus.CONTRADICTORY
-            elif atom.atom_id in covered and (
-                (
-                    not legacy_protocol
-                    and atom.answer_shape
-                    not in {
-                        AtomAnswerShape.ENUMERATION,
-                        AtomAnswerShape.DUTIES,
-                        AtomAnswerShape.PROCEDURE,
-                    }
-                )
-                or _natural_atom_complete(
-                    atom,
-                    atom_support_matrix,
-                    tuple(accepted),
-                    evidence,
-                    analysis,
-                    generation_evidence_pack=generation_evidence_pack,
-                )
+            elif atom.atom_id in covered and _natural_atom_complete(
+                atom,
+                atom_support_matrix,
+                tuple(accepted),
+                evidence,
+                analysis,
+                generation_evidence_pack=generation_evidence_pack,
             ):
                 final = AtomStatus.SUPPORTED
                 if pre.status is AtomStatus.PARTIAL:
@@ -3574,7 +3637,16 @@ class GroundedAnsweringService:
                         for entry in generation_evidence_pack.entries
                     )
                 )
-                if (
+                relation_incomplete = not any(
+                    item.relation_complete
+                    for item in accepted
+                    if atom.atom_id in item.atom_ids
+                )
+                if relation_incomplete:
+                    missing[atom.atom_id] = (
+                        MissingAtomReason.EVIDENCE_NOT_DIRECT
+                    )
+                elif (
                     atom.answer_shape
                     in {
                         AtomAnswerShape.ENUMERATION,
@@ -3655,6 +3727,9 @@ class GroundedAnsweringService:
                 raw_failures=tuple(raw_failures),
                 recovery_results=tuple(recovery_results),
                 wire_diagnostics=tuple(wire_diagnostics),
+                source_projection_records=(
+                    finalized_source_projection_records()
+                ),
             )
         published = list(accepted_support_ids)
         for matrix_atom in atom_support_matrix.atoms:
@@ -3728,6 +3803,7 @@ class GroundedAnsweringService:
             raw_failures=tuple(raw_failures),
             recovery_results=tuple(recovery_results),
             wire_diagnostics=tuple(wire_diagnostics),
+            source_projection_records=finalized_source_projection_records(),
         )
 
 
@@ -5567,6 +5643,22 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
         )
     support = matrix.for_atom(natural.atom_id)
     units = tuple(by_id[support_id] for support_id in support_ids)
+    atom = atoms[natural.atom_id]
+    if any(
+        not evidence_allowed_for_atom(
+            atom.source_scope,
+            item,
+            atom.source_scope.required_content
+            if atom.source_scope is not None
+            else SourceContentRequirement.BODY,
+        )
+        for item in units
+    ):
+        raise ValidationFailed(
+            "自然事实的来源不属于用户指定文档。",
+            stage="answer.validate",
+            code="CLAIM_DOCUMENT_SCOPE_MISMATCH",
+        )
     _validate_contextual_source_scope(plan, evidence, units)
     physical_fact = _physical_fact_for_claim(
         natural.atom_id,
@@ -5584,7 +5676,6 @@ def _validated_natural_claim(  # noqa: PLR0912, PLR0913, PLR0915
         text=natural.text,
         supports=natural.supports,
     )
-    atom = atoms[natural.atom_id]
     atom_units = units
     if not all(
         item.publishable
@@ -6328,10 +6419,13 @@ def _natural_atom_complete(  # noqa: PLR0911, PLR0912, PLR0913
             evidence,
             generation_evidence_pack.per_atom_source_certificates,
         )
-    atom_claims = tuple(
-        item.claim for item in claims if atom.atom_id in item.atom_ids
+    atom_claim_items = tuple(
+        item for item in claims if atom.atom_id in item.atom_ids
     )
+    atom_claims = tuple(item.claim for item in atom_claim_items)
     if not atom_claims:
+        return False
+    if not any(item.relation_complete for item in atom_claim_items):
         return False
     by_id = {item.support_id: item for item in evidence}
     if generation_evidence_pack is not None:

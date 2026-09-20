@@ -19,6 +19,7 @@ from rag_app.application.retrieval.evidence import (
 )
 from rag_app.application.retrieval.evidence_groups import GroupCandidate
 from rag_app.application.retrieval.filters import apply_candidate_filters
+from rag_app.application.retrieval.source_scope import evidence_allowed_for_atom
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AtomFactBinding,
@@ -43,6 +44,7 @@ from rag_app.core.models.query_plan import (
     AtomSupportMatrix,
     QueryAtom,
     QueryPlan,
+    SourceResolution,
 )
 from rag_app.core.query_text import named_table_label_in_query
 from rag_app.core.source_compatibility import (
@@ -50,7 +52,7 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v13"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v14"
 _MIN_TABLE_FACT_COLUMNS = 2
 _TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
@@ -482,6 +484,8 @@ def _source_order(item: EvidenceItem) -> int | None:
 
 
 def _source_matches(atom: QueryAtom, item: EvidenceItem) -> bool:
+    if atom.source_scope is not None:
+        return evidence_allowed_for_atom(atom.source_scope, item)
     if not atom.source_qualifier:
         return True
     metadata = dict(item.metadata)
@@ -489,6 +493,17 @@ def _source_matches(atom: QueryAtom, item: EvidenceItem) -> bool:
         (item.display_name or "", str(metadata.get("document_title", "")))
     )
     return _normalized(atom.source_qualifier) in _normalized(identity)
+
+
+def _source_restricted(atom: QueryAtom) -> bool:
+    """显式来源合同不能因 Planner 漏填 qualifier 而失效。"""
+    return bool(
+        atom.source_qualifier
+        or (
+            atom.source_scope is not None
+            and atom.source_scope.resolution is not SourceResolution.OPEN
+        )
+    )
 
 
 def _candidate_visible(
@@ -638,7 +653,7 @@ def _hard_reasons(  # noqa: PLR0913
     ):
         reasons.append(EvidenceAdmissionReason.INACTIVE_VERSION)
     if possible_atoms and all(
-        atom.source_qualifier and not _source_matches(atom, item)
+        _source_restricted(atom) and not _source_matches(atom, item)
         for atom in possible_atoms
     ):
         reasons.append(EvidenceAdmissionReason.EXPLICIT_SOURCE_MISMATCH)

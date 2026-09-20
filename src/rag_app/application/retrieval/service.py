@@ -22,6 +22,9 @@ from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     GroundedOutcome,
 )
+from rag_app.application.answering.source_projection import (
+    SOURCE_PROJECTION_REVISION,
+)
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlannerPort,
     AdaptivePlanOutcome,
@@ -100,6 +103,11 @@ from rag_app.application.retrieval.reranking import (
     RerankingOutcome,
 )
 from rag_app.application.retrieval.retention import structural_seed_ids
+from rag_app.application.retrieval.source_scope import (
+    query_plan_requires_source_resolution,
+    resolve_query_plan_source_scopes,
+    source_identity_allowed,
+)
 from rag_app.application.retrieval.structural import StructuralChannel
 from rag_app.core.errors import (
     ChannelRateLimited,
@@ -167,6 +175,7 @@ from rag_app.core.models.query_plan import (
     NATURAL_RENDERER_REVISION,
     QUERY_PLAN_SCHEMA_REVISION,
     QUERY_UNIT_FUSION_REVISION,
+    SOURCE_SCOPE_SCHEMA_REVISION,
     AtomAnswerShape,
     AtomCandidateLink,
     AtomCoverage,
@@ -235,6 +244,34 @@ _CONFLICT_QUANTITY = re.compile(
 _MAX_SCALAR_DIRECT_CANDIDATES = 12
 
 
+def _source_scope_allows_query_unit(
+    query_plan: QueryPlan,
+    unit_id: str,
+    *,
+    document_id: str | None,
+    document_version_id: str | None,
+) -> bool:
+    """按 Atom 合同过滤候选；Root 只取各 Atom 许可集合的并集。"""
+    if unit_id != "ROOT":
+        atom = next(
+            (item for item in query_plan.atoms if item.atom_id == unit_id),
+            None,
+        )
+        return atom is not None and source_identity_allowed(
+            atom.source_scope,
+            document_id=document_id,
+            document_version_id=document_version_id,
+        )
+    return any(
+        source_identity_allowed(
+            atom.source_scope,
+            document_id=document_id,
+            document_version_id=document_version_id,
+        )
+        for atom in query_plan.atoms
+    )
+
+
 def _atom_scoped_candidates(  # noqa: PLR0913
     atom: QueryAtom,
     candidates: tuple[RankedChunk, ...],
@@ -249,6 +286,32 @@ def _atom_scoped_candidates(  # noqa: PLR0913
     tuple[AtomGroupAlignment, ...],
 ]:
     """按目标和结构身份锁组；Root 强锚点可补足 Atom 召回失误。"""
+    candidates = tuple(
+        candidate
+        for candidate in candidates
+        if source_identity_allowed(
+            atom.source_scope,
+            document_id=candidate.hydrated.chunk.version.document_id,
+            document_version_id=(
+                candidate.hydrated.chunk.version.document_version_id
+            ),
+        )
+    )
+    groups = tuple(
+        group
+        for group in groups
+        if group.members
+        and all(
+            source_identity_allowed(
+                atom.source_scope,
+                document_id=member.hydrated.chunk.version.document_id,
+                document_version_id=(
+                    member.hydrated.chunk.version.document_version_id
+                ),
+            )
+            for member in group.members
+        )
+    )
     if not groups and not multi_atom:
         return candidates, (), ()
     alignments = align_atom_to_groups(atom, groups, links, policy)
@@ -310,7 +373,14 @@ def _numeric_conflict(
         text = unicodedata.normalize("NFKC", item.citation_text).casefold()
         if target not in text or relation not in text:
             continue
-        if atom.source_qualifier:
+        if atom.source_scope is not None:
+            if not source_identity_allowed(
+                atom.source_scope,
+                document_id=item.document_id,
+                document_version_id=item.document_version_id,
+            ):
+                continue
+        elif atom.source_qualifier:
             label = unicodedata.normalize(
                 "NFKC",
                 " ".join(
@@ -462,7 +532,9 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": ("wb08r-wire-binding-semantic-v1"),
+                "source_scope_revision": SOURCE_SCOPE_SCHEMA_REVISION,
+                "source_projection_revision": SOURCE_PROJECTION_REVISION,
+                "answer_pipeline_revision": ("wb08r-wire-binding-semantic-v2"),
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -1073,6 +1145,75 @@ class RetrievalService:
                     referenced_span_ids=resolved_root.referenced_span_ids,
                 )
             )
+        catalog_reader = getattr(self._source, "catalog_documents", None)
+        catalog_documents: tuple[CatalogDocument, ...] = ()
+        catalog_complete = False
+        source_resolution_required = query_plan_requires_source_resolution(
+            query_plan
+        )
+        if source_resolution_required and callable(catalog_reader):
+            current_catalog = catalog_reader(snapshot, limit=2000)
+            if current_catalog is not None:
+                catalog_complete = True
+                catalog_candidates = tuple(
+                    ChannelHit(
+                        revision_id=snapshot.revision.index_revision_id,
+                        chunk_id=document.chunk_id,
+                        document_id=document.document_id,
+                        document_version_id=document.document_version_id,
+                        role="catalog",
+                        section_id="catalog",
+                        content_sha256="0" * 64,
+                        channel="catalog-source-scope",
+                        rank=index,
+                        raw_score=0.0,
+                    )
+                    for index, document in enumerate(current_catalog, start=1)
+                    if document.document_id
+                    not in snapshot.excluded_document_ids
+                )
+                visible_identities = {
+                    (hit.document_id, hit.document_version_id)
+                    for hit in apply_candidate_filters(
+                        catalog_candidates,
+                        request.model_copy(
+                            update={
+                                "metadata_filters": tuple(
+                                    (name, value)
+                                    for name, value in request.metadata_filters
+                                    if name == "document_id"
+                                )
+                            }
+                        ),
+                    )
+                }
+                catalog_documents = tuple(
+                    document
+                    for document in current_catalog
+                    if (
+                        document.document_id,
+                        document.document_version_id,
+                    )
+                    in visible_identities
+                )
+        source_registry_revision = canonical_sha256(
+            {
+                "schema": SOURCE_SCOPE_SCHEMA_REVISION,
+                "index_revision_id": snapshot.revision.index_revision_id,
+                "index_fingerprint": snapshot.revision.index_fingerprint,
+                "catalog_complete": catalog_complete,
+                "source_resolution_required": source_resolution_required,
+                "visible_document_identities": sorted(
+                    (item.document_id, item.document_version_id)
+                    for item in catalog_documents
+                ),
+            }
+        )
+        query_plan = resolve_query_plan_source_scopes(
+            query_plan,
+            catalog_documents,
+            registry_revision=source_registry_revision,
+        )
         atom_mode = len(query_plan.atoms) > 1
         self._record(
             trace_id,
@@ -1103,6 +1244,26 @@ class RetrievalService:
                 "reason_code": query_plan.planner_reason_code,
                 "fallback_mode": query_plan.fallback_mode,
                 "coverage_confidence": query_plan.coverage_confidence,
+                "source_scope_revision": SOURCE_SCOPE_SCHEMA_REVISION,
+                "source_registry_revision": source_registry_revision,
+                "source_catalog_complete": catalog_complete,
+                "source_resolution_required": source_resolution_required,
+                "source_scopes": tuple(
+                    {
+                        "atom_id": atom.atom_id,
+                        "source_intent": atom.source_scope.source_intent.value,
+                        "resolution": atom.source_scope.resolution.value,
+                        "allowed_document_count": len(
+                            atom.source_scope.allowed_documents
+                        ),
+                        "required_content": (
+                            atom.source_scope.required_content.value
+                        ),
+                        "scope_digest": atom.source_scope.scope_digest,
+                    }
+                    for atom in query_plan.atoms
+                    if atom.source_scope is not None
+                ),
                 "resolved_root_query_sha256": hashlib.sha256(
                     query_plan.resolved_root_query.encode()
                 ).hexdigest(),
@@ -1263,6 +1424,21 @@ class RetrievalService:
                 },
             )
             _finish_timing(stage_timings, "vector_channel", channel_started)
+        if not atom_mode:
+            atom_id = query_plan.atoms[0].atom_id
+            channel_hits = {
+                channel: tuple(
+                    hit
+                    for hit in hits
+                    if _source_scope_allows_query_unit(
+                        query_plan,
+                        atom_id,
+                        document_id=hit.document_id,
+                        document_version_id=hit.document_version_id,
+                    )
+                )
+                for channel, hits in channel_hits.items()
+            }
         atom_links: tuple[AtomCandidateLink, ...] = ()
         unit_fused: tuple[FusedCandidate, ...] | None = None
         unit_seed_ids: tuple[str, ...] = ()
@@ -1877,6 +2053,9 @@ class RetrievalService:
                             item.model_dump(mode="json")
                             for item in generated.wire_diagnostics
                         ),
+                        "source_projection_records": (
+                            generated.source_projection_records
+                        ),
                         "extractive_fallback_reason": (
                             generated.extractive_fallback_reason
                         ),
@@ -2117,6 +2296,9 @@ class RetrievalService:
                 )
                 if generated
                 else (),
+                "source_projection_records": (
+                    generated.source_projection_records if generated else ()
+                ),
                 "extractive_fallback_reason": (
                     generated.extractive_fallback_reason if generated else None
                 ),
@@ -2820,7 +3002,9 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": ("wb08r-wire-binding-semantic-v1"),
+                "source_scope_revision": SOURCE_SCOPE_SCHEMA_REVISION,
+                "source_projection_revision": SOURCE_PROJECTION_REVISION,
+                "answer_pipeline_revision": ("wb08r-wire-binding-semantic-v2"),
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -3006,6 +3190,12 @@ class RetrievalService:
                 )
                 for hit in hits
                 if hit.document_id not in snapshot.excluded_document_ids
+                and _source_scope_allows_query_unit(
+                    query_plan,
+                    unit_id,
+                    document_id=hit.document_id,
+                    document_version_id=hit.document_version_id,
+                )
             )
             unit_channels[unit_id][channel] = normalized_hits
             channel_items = merged.setdefault(channel, {})

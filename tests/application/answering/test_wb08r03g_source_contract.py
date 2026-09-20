@@ -13,9 +13,18 @@ from rag_app.application.answering.grounded import (
     _validated_natural_claim,
 )
 from rag_app.core.errors import ValidationFailed
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import AnswerClaim, EvidenceItem, SourceSpanKind
 from rag_app.core.models.common import freeze_json_object
-from rag_app.core.models.query_plan import AtomAnswerShape, AtomStatus
+from rag_app.core.models.query_plan import (
+    AtomAnswerShape,
+    AtomStatus,
+    SourceContentRequirement,
+    SourceDocumentIdentity,
+    SourceIntent,
+    SourceResolution,
+    SourceScopeDecision,
+)
 from rag_app.core.models.retrieval import ClaimSupport, NaturalClaim
 from rag_app.core.source_compatibility import (
     source_compatibility,
@@ -232,6 +241,53 @@ def test_explicit_organization_owner_cannot_be_replaced(suffix: str) -> None:
         "CLAIM_TARGET_UNSUPPORTED",
         "CLAIM_OBJECT_CHANGED",
     }
+
+
+def test_legacy_and_direct_validation_reject_wrong_document_identity() -> None:
+    """旧协议与服务端摘录也必须服从同一精确文档身份合同。"""
+    evidence = _evidence("另一份方案中的真实要求。")
+    plan = _plan("评审会议纪要")
+    scope = SourceScopeDecision(
+        atom_id="A1",
+        source_intent=SourceIntent.DOCUMENT_AUTHORITY,
+        resolution=SourceResolution.RESOLVED,
+        allowed_documents=(
+            SourceDocumentIdentity(
+                document_id=f"doc_{'e' * 32}",
+                document_version_id=f"dver_{'f' * 32}",
+            ),
+        ),
+        required_content=SourceContentRequirement.BODY,
+        mention_sha256=canonical_sha256("指定会议纪要模板"),
+        registry_revision="test-registry-v1",
+        scope_digest=canonical_sha256("source-scope"),
+    )
+    plan = plan.model_copy(
+        update={
+            "atoms": (plan.atoms[0].model_copy(update={"source_scope": scope}),)
+        }
+    )
+    natural = NaturalClaim(
+        atom_id="A1",
+        text=evidence[0].citation_text,
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote=evidence[0].citation_text,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValidationFailed) as failure:
+        _validated_natural_claim(
+            natural,
+            plan,
+            _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),)),
+            evidence,
+            None,
+        )
+
+    assert failure.value.code == "CLAIM_DOCUMENT_SCOPE_MISMATCH"
 
 
 def test_real_derived_list_marker_is_group_member_without_fake_offsets() -> (

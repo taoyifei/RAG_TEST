@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from unittest.mock import Mock
 
 import httpx
@@ -26,6 +27,7 @@ from rag_app.application.answering.semantic_validation import (
 )
 from rag_app.clients.resilience import StreamCancellation
 from rag_app.core.errors import ProviderInputTooLarge, QueryCancelled
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
@@ -35,8 +37,16 @@ from rag_app.core.models.query_plan import (
     AtomAnswerShape,
     AtomStatus,
     QueryPlan,
+    SourceContentRequirement,
+    SourceDocumentIdentity,
+    SourceIntent,
+    SourceResolution,
+    SourceScopeDecision,
 )
 from rag_app.core.models.retrieval import NaturalClaim
+from tests.application.answering.test_evidence_binding import (
+    _fixture as _table_fixture,
+)
 from tests.application.answering.test_grounded_claim_v5_quotes import _pack
 from tests.application.answering.test_natural_grounded_answer import (
     _answer,
@@ -254,6 +264,45 @@ def test_multiple_unknown_claims_share_one_review_http() -> None:
     assert len(second["candidates"]) == 2
 
 
+def test_source_scope_digest_survives_generation_and_review_packets() -> None:
+    plan, evidence, claims = _fixture(direct_first=True)
+    item = evidence[0]
+    assert item.document_id is not None
+    assert item.document_version_id is not None
+    scope = SourceScopeDecision(
+        atom_id="A1",
+        source_intent=SourceIntent.DOCUMENT_AUTHORITY,
+        resolution=SourceResolution.RESOLVED,
+        allowed_documents=(
+            SourceDocumentIdentity(
+                document_id=item.document_id,
+                document_version_id=item.document_version_id,
+            ),
+        ),
+        required_content=SourceContentRequirement.BODY,
+        mention_sha256=canonical_sha256("甲流程手册"),
+        registry_revision="test-registry-v1",
+        scope_digest=canonical_sha256("source-scope"),
+    )
+    plan = plan.model_copy(
+        update={
+            "atoms": (
+                plan.atoms[0].model_copy(update={"source_scope": scope}),
+                plan.atoms[1],
+            )
+        }
+    )
+    harness = _HttpHarness(claims[:1])
+
+    outcome = _run(harness.adapter, (plan, evidence, claims))
+
+    assert len(outcome.prepared_packets) == 2
+    assert all(
+        dict(packet.per_atom_source_scope_digests)["A1"] == scope.scope_digest
+        for packet in outcome.prepared_packets
+    )
+
+
 def test_wire_path_never_calls_legacy_lexical_validator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -272,6 +321,84 @@ def test_wire_path_never_calls_legacy_lexical_validator(
     assert outcome.repair_calls == 0
     assert outcome.relation_review_calls == 1
     assert len(harness.sent) == 2
+
+
+def test_supported_review_cannot_upgrade_incomplete_table_relation() -> None:
+    """复核一律 supported 时，服务端仍按物理关系缺口保持 PARTIAL。"""
+    evidence, fact, _unit, binding = _table_fixture()
+    replacements = {
+        "S1": "需求快验",
+        "S2": "产品需求文档",
+        "S3": "交互原型",
+        "S4": "业务规则",
+        "S5": "接口清单",
+        "S6": "数据字典",
+        "S7": "验收标准",
+        "S8": "参与人员",
+        "S9": "输入",
+        "S10": "（业务团队 / 外部单位需提供）",
+    }
+    evidence = tuple(
+        item.model_copy(update={"citation_text": replacements[item.support_id]})
+        for item in evidence
+    )
+    assert evidence[0].document_id is not None
+    assert evidence[0].document_version_id is not None
+    fact = fact.model_copy(
+        update={
+            "document_id": evidence[0].document_id,
+            "document_version_id": evidence[0].document_version_id,
+        }
+    )
+    plan = _plan("做快验前到底得备齐啥？")
+    binding = binding.model_copy(
+        update={
+            "requested_target": plan.atoms[0].target,
+            "requested_relation": plan.atoms[0].relation,
+            "relation_status": "UNDETERMINED",
+        }
+    )
+    claim = _claim(
+        "C1",
+        "做快验之前必须备齐全部输入。",
+        "A1",
+        "S2",
+        "产品需求文档",
+    )
+    harness = _HttpHarness((claim,), statuses=("supported",))
+    pack = replace(
+        _pack(plan, evidence),
+        physical_table_facts=(fact,),
+        atom_fact_bindings=(binding,),
+    )
+
+    outcome = GroundedAnsweringService(harness.adapter).answer(
+        plan.standalone_query,
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        query_plan=plan,
+        atom_support_matrix=_matrix(
+            plan,
+            (
+                (
+                    AtomStatus.SUPPORTED,
+                    tuple(item.support_id for item in evidence),
+                ),
+            ),
+        ),
+        generation_evidence_pack=pack,
+    )
+
+    assert len(harness.sent) == 2
+    assert outcome.accepted_claim_count == outcome.published_claim_count == 1
+    assert outcome.atom_coverage == (("A1", "PARTIAL"),)
+    assert outcome.missing_atom_reasons == (("A1", "EVIDENCE_NOT_DIRECT"),)
+    assert "需求快验" in (outcome.answer or "")
+    assert "之前必须" not in (outcome.answer or "")
+    assert outcome.source_projection_records
+    projection = dict(outcome.source_projection_records[0])
+    assert projection["render_origin"] == "physical_table_fact"
+    assert projection["relation_gap"] is True
 
 
 def test_bad_wire_item_does_not_delete_independent_valid_claim() -> None:
@@ -375,9 +502,7 @@ def test_failed_optional_review_keeps_already_valid_fact(
 
 def test_all_semantic_claims_rejected_has_precise_terminal_reason() -> None:
     fixture = _fixture()
-    harness = _HttpHarness(
-        fixture[2], statuses=("contradicted", "unknown")
-    )
+    harness = _HttpHarness(fixture[2], statuses=("contradicted", "unknown"))
 
     outcome = _run(harness.adapter, fixture)
 
@@ -427,9 +552,7 @@ def test_impossible_semantic_preflight_sends_no_generation_http() -> None:
     outcome = _run(harness.adapter, fixture)
 
     assert outcome.answer is None
-    assert outcome.reason_code == (
-        "SEMANTIC_REVIEW_PREFLIGHT_BUDGET_EXCEEDED"
-    )
+    assert outcome.reason_code == ("SEMANTIC_REVIEW_PREFLIGHT_BUDGET_EXCEEDED")
     assert harness.sent == []
     assert outcome.relation_review_calls == outcome.repair_calls == 0
     assert len(outcome.prepared_packets) == 1

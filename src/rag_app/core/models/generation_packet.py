@@ -17,8 +17,9 @@ if TYPE_CHECKING:
     from rag_app.core.models.retrieval import EvidenceItem
 
 EVIDENCE_IDENTITY_REVISION = "wb08r-source-key-v1"
-PREPARED_PACKET_REVISION = "wb08r-prepared-packet-v3"
+PREPARED_PACKET_REVISION = "wb08r-prepared-packet-v4"
 GENERATION_BUDGET_REVISION = "wb08r-generation-budget-v3"
+_SHA256_TEXT_LENGTH = len("sha256:") + 64
 
 
 class EvidenceReadUnit(FrozenModel):
@@ -147,6 +148,7 @@ class PreparedGenerationPacket(FrozenModel):
     read_unit_bindings: tuple[tuple[str, tuple[str, ...]], ...] = ()
     read_unit_sha256s: tuple[tuple[str, str], ...] = ()
     per_atom_read_unit_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    per_atom_source_scope_digests: tuple[tuple[str, str], ...] = ()
     support_sources: tuple[dict[str, object], ...] = ()
     per_atom_support_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     protected_support_keys: tuple[str, ...] = ()
@@ -224,6 +226,19 @@ class PreparedGenerationPacket(FrozenModel):
             for _atom_id, unit_ids in self.per_atom_read_unit_ids
         ):
             raise ValueError("PREPARED_PACKET_READ_UNIT_OUTSIDE_SENT")
+        scope_atom_ids = [
+            atom_id for atom_id, _digest in self.per_atom_source_scope_digests
+        ]
+        if (
+            len(scope_atom_ids) != len(set(scope_atom_ids))
+            or not set(scope_atom_ids) <= set(atom_ids)
+            or any(
+                not digest.startswith("sha256:")
+                or len(digest) != _SHA256_TEXT_LENGTH
+                for _atom_id, digest in self.per_atom_source_scope_digests
+            )
+        ):
+            raise ValueError("PREPARED_PACKET_INVALID_SOURCE_SCOPE_DIGEST")
         if any(
             not set(allowed) <= set(aliases)
             for _, allowed in self.per_atom_support_ids

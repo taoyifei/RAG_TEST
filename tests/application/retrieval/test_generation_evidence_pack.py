@@ -40,6 +40,11 @@ from rag_app.core.models.query_plan import (
     QueryAtom,
     QueryConstraint,
     QueryPlan,
+    SourceContentRequirement,
+    SourceDocumentIdentity,
+    SourceIntent,
+    SourceResolution,
+    SourceScopeDecision,
 )
 from tests.application.retrieval.helpers import make_ranked_chunk
 
@@ -809,6 +814,43 @@ def test_explicit_source_mismatch_is_hard_rejected() -> None:
             "node_ids": (evidence.source_spans[0].node_id,),
             "reasons": ("EXPLICIT_SOURCE_MISMATCH",),
         },
+    )
+
+
+def test_resolved_source_scope_rejects_wrong_document_without_qualifier() -> (
+    None
+):
+    """原问来源合同不能依赖 Planner 是否保留 source_qualifier。"""
+    candidate, evidence = _item(1, "错误文档中的真实要求。")
+    scope = SourceScopeDecision(
+        atom_id="A1",
+        source_intent=SourceIntent.DOCUMENT_AUTHORITY,
+        resolution=SourceResolution.RESOLVED,
+        allowed_documents=(
+            SourceDocumentIdentity(
+                document_id=f"doc_{3:032x}",
+                document_version_id=f"dver_{103:032x}",
+            ),
+        ),
+        required_content=SourceContentRequirement.BODY,
+        mention_sha256=f"sha256:{'c' * 64}",
+        registry_revision="test-registry-v1",
+        scope_digest=f"sha256:{'d' * 64}",
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="评审会议纪要",
+        relation="填写要求",
+        answer_shape=AtomAnswerShape.FACT,
+        source_scope=scope,
+    )
+
+    pack = _pack(_plan(atom), (candidate,), root=(evidence,))
+
+    assert not pack.entries
+    assert pack.per_atom_candidate_support_ids == (("A1", ()),)
+    assert EvidenceAdmissionReason.EXPLICIT_SOURCE_MISMATCH in (
+        pack.rejected_entries[0].hard_reject_reasons
     )
 
 

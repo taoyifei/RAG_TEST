@@ -230,6 +230,13 @@ def review_semantics(
             if unit.unit_id in original_unit_digests
         ),
         per_atom_read_unit_ids=per_atom_read_unit_ids,
+        per_atom_source_scope_digests=tuple(
+            (atom_id, digest)
+            for atom_id, digest in (
+                request.sent_packet.per_atom_source_scope_digests
+            )
+            if atom_id in per_atom_units
+        ),
         support_sources=tuple(
             source
             for source in request.sent_packet.support_sources
