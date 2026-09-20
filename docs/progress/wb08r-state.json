@@ -9,7 +9,7 @@
   ],
   "current_phase": "WB08R-03",
   "phase_status": "FAILED",
-  "implementation_status": "wb08r03g_v14_failed_paused_on_strict_five_case_new_p0",
+  "implementation_status": "wb08r03g_v14_1_failed_paused_on_field_resolution_provider_http_400",
   "wb08r03r2_phase_start_sha": "399cf2184c4b3f47f6f4b274c4333913f610f1d2",
   "candidate_code_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
@@ -17,10 +17,10 @@
   "candidate_runtime_source_revision": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_runtime_tree_hash": null,
   "candidate_product_asset_manifest_sha256": "927660b0864b710719c8af4d6911e22087c63baef1587f783d3c895482b09f72",
-  "phase_report_sha": "6eab23dcf31b8211bec3c05b8c5d1c56fab79f53",
-  "current_report": "docs/progress/wb08r-03g-v14-report.md",
-  "current_manifest": "docs/progress/wb08r-03g-v14-manifest.json",
-  "current_p0_issues": "docs/progress/wb08r-03g-v14-p0-issues.md",
+  "phase_report_sha": "8a6cadda74d8d680bf344a08e9e682b61b5ab6a4",
+  "current_report": "docs/progress/wb08r-03g-v14-1-report.md",
+  "current_manifest": "docs/progress/wb08r-03g-v14-1-manifest.json",
+  "current_p0_issues": "docs/progress/wb08r-03g-v14-1-p0-issues.md",
   "runtime_relevant_diff_after_candidate": false,
   "implementation_microphases": {
     "R0_stream_terminal": "IMPLEMENTED",
@@ -35,7 +35,8 @@
     "03G_V11_physical_fact_and_generation_protocol": "FAILED_FROZEN_AT_TWO_CANDIDATE_LIMIT",
     "03G_V12_wire_binding_and_semantic_convergence": "FAILED_FROZEN_AT_THREE_REPAIR_ROUND_LIMIT",
     "03G_V13_deterministic_source_and_table_relation": "FAILED_FROZEN_AT_THREE_REPAIR_ROUND_LIMIT",
-    "03G_V14_unified_answer_plan": "FAILED_PAUSED_ON_STRICT_FIVE_CASE_NEW_P0"
+    "03G_V14_unified_answer_plan": "FAILED_PAUSED_ON_STRICT_FIVE_CASE_NEW_P0",
+    "03G_V14_1_scope_and_semantic_boundary": "FAILED_PAUSED_ON_NEW_PROVIDER_INPUT_CONTRACT_P0"
   },
   "verification_gates": {
     "V13-Targeted-P0": {
@@ -69,38 +70,58 @@
       ],
       "dominant_failure": "TEMPORAL_BASE_FACT_DROPPED_WHILE_QUALIFIERS_UNSUPPORTED"
     },
+    "V14.1-Strict-FiveCase": {
+      "status": "FAILED",
+      "strict_candidate": "C5",
+      "strict_candidate_source_sha": "543b4e3edc49345b9505725c44b8e1beaec43602",
+      "business_requests": 6,
+      "official_batch_requests": 5,
+      "runner_capture_failed_requests": 1,
+      "runner_batch_restart_count": 1,
+      "provider_retry_count": 0,
+      "passed_cases": [
+        "F024",
+        "N031",
+        "EXPLICIT_SOURCE",
+        "EXPLICIT_COLUMN"
+      ],
+      "failed_cases": [
+        "UNSAFE_TEMPORAL"
+      ],
+      "dominant_failure": "FIELD_RESOLUTION_PROVIDER_HTTP_400"
+    },
     "Preflight-16": {
       "status": "NOT_RUN",
-      "reason": "V14_C4_STRICT_FIVE_CASE_NEW_P0"
+      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0"
     },
     "A_EvidencePack-12": {
       "status": "NOT_RUN",
-      "reason": "V14_C4_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
       "same_version_pass": false
     },
     "B_CoreAnswer-16": {
       "status": "NOT_RUN",
-      "reason": "V14_C4_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
       "same_version_pass": false
     },
     "C_Failed-24": {
       "status": "NOT_RUN",
-      "reason": "V14_C4_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
       "same_version_pass": false
     },
     "D_Natural-36": {
       "status": "NOT_RUN",
-      "reason": "V14_C4_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
       "same_version_pass": false
     },
     "E_Full-96": {
       "status": "NOT_RUN",
-      "reason": "V14_C4_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
       "same_version_pass": false
     },
     "F_Concurrency-4": {
       "status": "NOT_RUN",
-      "reason": "V14_C4_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
       "same_version_pass": false
     }
   },
@@ -234,6 +255,38 @@
     "report": "docs/progress/wb08r-03g-v14-report.md",
     "manifest": "docs/progress/wb08r-03g-v14-manifest.json",
     "p0_issues": "docs/progress/wb08r-03g-v14-p0-issues.md"
+  },
+  "wb08r03g_v14_1_verification": {
+    "status": "FAILED",
+    "phase_status": "PAUSED",
+    "plan_sha256": "1ce1a98cd0db80f4ab12e1580f9b39307b323e02f642fe4a52963a4641af311a",
+    "tested_source_sha": "543b4e3edc49345b9505725c44b8e1beaec43602",
+    "implementation_commit_sha": "543b4e3edc49345b9505725c44b8e1beaec43602",
+    "report_commit_sha": "8a6cadda74d8d680bf344a08e9e682b61b5ab6a4",
+    "functional_candidates_built": 1,
+    "functional_deployments": 1,
+    "quality_business_requests": 6,
+    "official_quality_requests": 5,
+    "runner_capture_failed_requests": 1,
+    "strict_c5_five_case": "FAILED_4_PASS_1_NEW_P0_FIELD_RESOLUTION_PROVIDER_HTTP_400",
+    "question_answering_related_pytest": "144 passed in 20.20s",
+    "static_checks": "PASSED_RUFF_FORMAT_MYPY_PYCOMPILE_DIFF_CHECK",
+    "five_case_variants": "NOT_RUN_STRICT_FIVE_CASE_FAILED",
+    "preflight_16": "NOT_RUN_STRICT_FIVE_CASE_FAILED",
+    "A_to_F": "NOT_RUN_STRICT_FIVE_CASE_FAILED",
+    "unrelated_tests": "NOT_RUN_BY_USER_INSTRUCTION",
+    "private_replay_sha256": "cba6f48c1b84326a5c534dfb6e789cf76abc7c3969317a3fd2f6d8ec9adf3bbf",
+    "safe_replay_sha256": "96524e555b17bce5e434ccd7504b87441f1348e8b25e63ff9ea0050ffd69eca2",
+    "private_evidence_archive_sha256": "108314029409120cb4212348cb950c2d077bef69d5b07a32b171d0e2cbc69e11",
+    "local_analysis_bundle": "C:\\Users\\jerry\\Desktop\\湾研院\\湾事通\\WB08R03_V14_1_C5_P0_分析证据_543b4e3",
+    "final_8289": "ROLLED_BACK_BD00C56_HEALTHY_200",
+    "production_modified": false,
+    "production_8288_health": 200,
+    "production_18288_health": 200,
+    "cleanup_complete": true,
+    "report": "docs/progress/wb08r-03g-v14-1-report.md",
+    "manifest": "docs/progress/wb08r-03g-v14-1-manifest.json",
+    "p0_issues": "docs/progress/wb08r-03g-v14-1-p0-issues.md"
   },
   "wb08r03r2_verification": {
     "candidate_code_sha": "8337bdbc73c721744cf63e36127925bf7064beb6",
