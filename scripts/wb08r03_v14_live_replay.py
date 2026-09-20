@@ -42,6 +42,20 @@ _CASES = (
     ),
 )
 _SAFE_TRACE_FIELDS = {
+    "retrieval.source_context": frozenset(
+        {
+            "resolution_stage",
+            "source_intent",
+            "resolution",
+            "source_registry_revision",
+            "source_catalog_complete",
+            "source_resolution_required",
+            "allowed_document_count",
+            "source_scope_digest",
+            "source_mentions",
+            "business_query_sha256",
+        }
+    ),
     "retrieval.atom_grounding": frozenset(
         {
             "answer_plan_id",
@@ -85,6 +99,13 @@ _SAFE_TRACE_FIELDS = {
 def _sha256_text(value: str) -> str:
     """计算 UTF-8 文本摘要。"""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _validated_candidate_id(value: str) -> str:
+    """接受稳定递增的正整数候选编号，拒绝复用或自由文本。"""
+    if re.fullmatch(r"c[1-9][0-9]*", value) is None:
+        raise ValueError("CANDIDATE_ID_INVALID")
+    return value
 
 
 def _private_file(path: Path) -> TextIO:
@@ -307,8 +328,7 @@ def run(
     prior_request_count: int = 0,
 ) -> dict[str, Any]:
     """逐题执行一次真实请求并生成私有证据与 SAFE 摘要。"""
-    if re.fullmatch(r"c[1-3]", candidate_id) is None:
-        raise ValueError("CANDIDATE_ID_INVALID")
+    candidate_id = _validated_candidate_id(candidate_id)
     if prior_request_count < 0:
         raise ValueError("PRIOR_REQUEST_COUNT_INVALID")
     parsed = urllib.parse.urlsplit(base_url)

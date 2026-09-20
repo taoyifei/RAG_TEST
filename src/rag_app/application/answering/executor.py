@@ -1,8 +1,10 @@
-"""执行冻结问答计划中的确定性来源事实任务。"""
+"""调度冻结问答计划；本地执行 D 任务并显式交回 G 任务。"""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from rag_app.application.answering.plan_coverage import (
     CompiledPlanCoverage,
@@ -15,7 +17,7 @@ from rag_app.application.answering.source_projection import (
 from rag_app.application.retrieval.generation_evidence import (
     GenerationEvidencePack,
 )
-from rag_app.core.errors import QueryCancelled
+from rag_app.core.errors import QueryCancelled, RagError
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models.answer_plan import (
     AnswerTaskMode,
@@ -62,6 +64,24 @@ class AnswerExecutionResult:
     artifacts: tuple[ValidatedPlanArtifact, ...]
     records: tuple[DeterministicExecutionRecord, ...]
     deferred_obligation_ids: tuple[str, ...]
+    deferred_atom_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationFailureDisposition:
+    """一次 G 失败是否已经发生真实传输及其稳定原因。"""
+
+    reason_code: str
+    transported: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationBatchRecord:
+    """G 物理批次的调度终态，不包含私有正文。"""
+
+    atom_ids: tuple[str, ...]
+    status: Literal["SUCCEEDED", "FAILED", "INVALID", "REPLANNED"]
+    reason_code: str | None = None
 
 
 def _validate_selection(
@@ -101,13 +121,13 @@ def _validate_selection(
     return sources
 
 
-def execute_deterministic_tasks(
+def execute_compiled_tasks(
     plan: CompiledAnswerPlan,
     pack: GenerationEvidencePack,
     *,
     cancellation: CancellationPort | None = None,
 ) -> AnswerExecutionResult:
-    """读取并发布 D 路径事实，不调用生成或语义复核。
+    """按冻结物理任务调度 D/G，D 本地执行，G 明确标为待处理。
 
     Args:
         plan: 已冻结的统一问答计划。
@@ -131,11 +151,13 @@ def execute_deterministic_tasks(
     artifacts: list[ValidatedPlanArtifact] = []
     records: list[DeterministicExecutionRecord] = []
     deferred: list[str] = []
+    deferred_atoms: list[str] = []
     for task in plan.physical_tasks:
         if cancellation is not None and cancellation.is_cancelled():
             raise QueryCancelled("QUERY_CANCELLED")
         if task.mode is AnswerTaskMode.GROUNDED_GENERATION:
             deferred.extend(task.obligation_ids)
+            deferred_atoms.extend(task.atom_ids)
             continue
         for selection_id in task.selection_ids:
             selection = selections[selection_id]
@@ -208,7 +230,152 @@ def execute_deterministic_tasks(
         artifacts=tuple(artifacts),
         records=tuple(records),
         deferred_obligation_ids=tuple(dict.fromkeys(deferred)),
+        deferred_atom_ids=tuple(dict.fromkeys(deferred_atoms)),
     )
+
+
+def execute_deterministic_tasks(
+    plan: CompiledAnswerPlan,
+    pack: GenerationEvidencePack,
+    *,
+    cancellation: CancellationPort | None = None,
+) -> AnswerExecutionResult:
+    """兼容旧调用名，委托统一的冻结任务调度器。"""
+    return execute_compiled_tasks(
+        plan,
+        pack,
+        cancellation=cancellation,
+    )
+
+
+def split_generation_atoms(
+    atom_ids: tuple[str, ...],
+) -> tuple[tuple[str, ...], ...]:
+    """把真实待执行 Atom 稳定拆成最多两个互不重叠的 G 批次。"""
+    unique = tuple(dict.fromkeys(atom_ids))
+    if len(unique) <= 1:
+        return (unique,) if unique else ()
+    midpoint = (len(unique) + 1) // 2
+    return unique[:midpoint], unique[midpoint:]
+
+
+def execute_generation_tasks(  # noqa: PLR0913
+    atom_ids: tuple[str, ...],
+    *,
+    run_batch: Callable[[tuple[str, ...], bool], None],
+    classify_failure: Callable[[RagError], GenerationFailureDisposition],
+    record_failure: Callable[
+        [RagError, tuple[str, ...], bool, GenerationFailureDisposition], None
+    ],
+    record_invalid: Callable[[tuple[str, ...]], None],
+    cancellation: CancellationPort | None = None,
+) -> tuple[GenerationBatchRecord, ...]:
+    """执行一个 G 任务；只有未传输的输入超限可改编为两个批次。
+
+    Args:
+        atom_ids: 冻结物理任务实际包含的 Atom。
+        run_batch: 执行一批生成、绑定和必要复核；布尔值表示复核可否再分批。
+        classify_failure: 无副作用地识别失败原因及是否已真实传输。
+        record_failure: 保存失败包并更新对应义务终态。
+        record_invalid: 保存响应合同错误并更新对应义务终态。
+        cancellation: 可选的请求取消端口。
+
+    Returns:
+        不含正文的批次调度记录。一次未传输的重编排不算真实模型批次。
+
+    Raises:
+        QueryCancelled: 请求在任一批次前或执行中被取消。
+
+    """
+    scheduled = tuple(dict.fromkeys(atom_ids))
+    if not scheduled:
+        return ()
+
+    records: list[GenerationBatchRecord] = []
+
+    def raise_if_cancelled() -> None:
+        if cancellation is not None and cancellation.is_cancelled():
+            raise QueryCancelled("QUERY_CANCELLED")
+
+    raise_if_cancelled()
+    try:
+        run_batch(scheduled, True)
+    except RagError as error:
+        disposition = classify_failure(error)
+        can_replan = (
+            disposition.reason_code == "GENERATION_INPUT_BUDGET_EXCEEDED"
+            and not disposition.transported
+            and len(scheduled) > 1
+        )
+        record_failure(
+            error,
+            scheduled,
+            not can_replan,
+            disposition,
+        )
+        if not can_replan:
+            return (
+                GenerationBatchRecord(
+                    atom_ids=scheduled,
+                    status="FAILED",
+                    reason_code=disposition.reason_code,
+                ),
+            )
+        records.append(
+            GenerationBatchRecord(
+                atom_ids=scheduled,
+                status="REPLANNED",
+                reason_code=disposition.reason_code,
+            )
+        )
+    except ValueError:
+        record_invalid(scheduled)
+        return (
+            GenerationBatchRecord(
+                atom_ids=scheduled,
+                status="INVALID",
+                reason_code="GENERATION_OUTPUT_INVALID",
+            ),
+        )
+    else:
+        return (
+            GenerationBatchRecord(
+                atom_ids=scheduled,
+                status="SUCCEEDED",
+            ),
+        )
+
+    for batch in split_generation_atoms(scheduled):
+        raise_if_cancelled()
+        try:
+            run_batch(batch, False)
+        except RagError as error:
+            disposition = classify_failure(error)
+            record_failure(error, batch, True, disposition)
+            records.append(
+                GenerationBatchRecord(
+                    atom_ids=batch,
+                    status="FAILED",
+                    reason_code=disposition.reason_code,
+                )
+            )
+        except ValueError:
+            record_invalid(batch)
+            records.append(
+                GenerationBatchRecord(
+                    atom_ids=batch,
+                    status="INVALID",
+                    reason_code="GENERATION_OUTPUT_INVALID",
+                )
+            )
+        else:
+            records.append(
+                GenerationBatchRecord(
+                    atom_ids=batch,
+                    status="SUCCEEDED",
+                )
+            )
+    return tuple(records)
 
 
 def render_deterministic_answer(
@@ -289,7 +456,12 @@ __all__ = [
     "AnswerExecutionError",
     "AnswerExecutionResult",
     "DeterministicExecutionRecord",
+    "GenerationBatchRecord",
+    "GenerationFailureDisposition",
     "compiled_atom_coverage",
+    "execute_compiled_tasks",
     "execute_deterministic_tasks",
+    "execute_generation_tasks",
     "render_deterministic_answer",
+    "split_generation_atoms",
 ]

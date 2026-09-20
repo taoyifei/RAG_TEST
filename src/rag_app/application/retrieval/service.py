@@ -104,8 +104,11 @@ from rag_app.application.retrieval.reranking import (
 )
 from rag_app.application.retrieval.retention import structural_seed_ids
 from rag_app.application.retrieval.source_scope import (
+    ResolvedSourceContext,
     query_plan_requires_source_resolution,
+    query_requires_source_resolution,
     resolve_query_plan_source_scopes,
+    resolve_query_source_context,
     source_identity_allowed,
 )
 from rag_app.application.retrieval.structural import StructuralChannel
@@ -540,7 +543,7 @@ class RetrievalService:
                 "source_projection_revision": SOURCE_PROJECTION_REVISION,
                 "answer_plan_schema_revision": ANSWER_PLAN_SCHEMA_REVISION,
                 "answer_plan_policy_revision": ANSWER_PLAN_POLICY_REVISION,
-                "answer_pipeline_revision": "wb08r-compiled-answer-plan-v1",
+                "answer_pipeline_revision": "wb08r-compiled-answer-plan-v2",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -691,7 +694,23 @@ class RetrievalService:
 
         """
         snapshot = self._query_snapshot(request)
-        analysis = self._analyzer.analyze(request)
+        source_required = query_requires_source_resolution(request.text)
+        catalog_documents, _catalog_complete, source_registry_revision = (
+            self._source_catalog_context(
+                request,
+                snapshot,
+                resolution_required=source_required,
+            )
+        )
+        source_context = resolve_query_source_context(
+            request.text,
+            catalog_documents,
+            registry_revision=source_registry_revision,
+        )
+        semantic_request = request.model_copy(
+            update={"text": source_context.query_view.business_query}
+        )
+        analysis = self._analyzer.analyze(semantic_request)
         variants = self._expander.expand(analysis)
         plan = self._planner.plan(
             analysis,
@@ -699,7 +718,13 @@ class RetrievalService:
             self._policy,
             dense_required=request.dense_required,
         )
-        identity = self._cache_identity(request, snapshot, analysis, plan)
+        identity = self._cache_identity(
+            request,
+            snapshot,
+            analysis,
+            plan,
+            source_context=source_context,
+        )
         return RetrievalExecutionIdentity(
             key_hash=identity.persistent_key,
             active_revision_id=snapshot.revision.index_revision_id,
@@ -765,15 +790,62 @@ class RetrievalService:
         )
         stage_started = _finish_timing(stage_timings, "snapshot", stage_started)
         _raise_if_cancelled(cancellation, provider_calls)
-        analysis = self._analyzer.analyze(request)
-        input_spans = build_input_spans(request)
-        resolved_root = resolve_root_query(request, input_spans)
+        pre_analysis_source_required = query_requires_source_resolution(
+            request.text
+        )
+        catalog_documents, catalog_complete, source_registry_revision = (
+            self._source_catalog_context(
+                request,
+                snapshot,
+                resolution_required=pre_analysis_source_required,
+            )
+        )
+        source_context = resolve_query_source_context(
+            request.text,
+            catalog_documents,
+            registry_revision=source_registry_revision,
+        )
+        semantic_request = request.model_copy(
+            update={"text": source_context.query_view.business_query}
+        )
+        self._record(
+            trace_id,
+            "source_context",
+            {
+                "resolution_stage": "PRE_ANALYSIS",
+                "source_intent": source_context.source_intent.value,
+                "resolution": source_context.resolution.value,
+                "source_registry_revision": source_registry_revision,
+                "source_catalog_complete": catalog_complete,
+                "source_resolution_required": (
+                    source_context.resolution_required
+                ),
+                "allowed_document_count": len(source_context.allowed_documents),
+                "source_scope_digest": source_context.scope_digest,
+                "source_mentions": tuple(
+                    {
+                        "role": mention.role.value,
+                        "original_start": mention.original_start,
+                        "original_end": mention.original_end,
+                        "scope_key": mention.scope_key,
+                        "scope_digest": mention.scope_digest,
+                    }
+                    for mention in source_context.query_view.source_mentions
+                ),
+                "business_query_sha256": hashlib.sha256(
+                    source_context.query_view.business_query.encode("utf-8")
+                ).hexdigest(),
+            },
+        )
+        analysis = self._analyzer.analyze(semantic_request)
+        input_spans = build_input_spans(semantic_request)
+        resolved_root = resolve_root_query(semantic_request, input_spans)
         effort = reasoning_effort(
             analysis, has_context=bool(request.conversation_context)
         )
         effective_analysis = (
             self._analyzer.resolve(
-                analysis, request, resolved_root.resolved_query
+                analysis, semantic_request, resolved_root.resolved_query
             )
             if resolved_root.mode == "RULE_CONTEXT"
             else analysis
@@ -809,9 +881,12 @@ class RetrievalService:
             "analyze",
             {
                 "query_sha256": hashlib.sha256(
+                    source_context.query_view.business_query.encode("utf-8")
+                ).hexdigest(),
+                "query_length": len(source_context.query_view.business_query),
+                "original_query_sha256": hashlib.sha256(
                     request.text.encode("utf-8")
                 ).hexdigest(),
-                "query_length": len(request.text),
                 "identifier_count": len(analysis.identifiers),
                 "answer_type": analysis.semantics.answer_type.value,
                 "semantic_source": analysis.semantics.source,
@@ -850,7 +925,13 @@ class RetrievalService:
             },
         )
         stage_started = _finish_timing(stage_timings, "plan", stage_started)
-        cache_identity = self._cache_identity(request, snapshot, analysis, plan)
+        cache_identity = self._cache_identity(
+            request,
+            snapshot,
+            analysis,
+            plan,
+            source_context=source_context,
+        )
         cache_key = cache_identity.persistent_key
         cached = self._cache.get(cache_key)
         if cached is not None:
@@ -901,7 +982,7 @@ class RetrievalService:
             return cached_result
         self._record(trace_id, "cache", {"result": "miss"})
         stage_started = _finish_timing(stage_timings, "cache", stage_started)
-        if is_navigation_query(analysis.normalized_query):
+        if is_navigation_query(request.text):
             referenced_targets = tuple(
                 dict.fromkeys(
                     span.text
@@ -912,10 +993,13 @@ class RetrievalService:
                     and span.span_id in resolved_root.referenced_span_ids
                 )
             )
+            normalized_catalog_query = " ".join(
+                unicodedata.normalize("NFKC", request.text).strip().split()
+            )
             catalog_query = (
-                f"{referenced_targets[0]} {analysis.normalized_query}"
+                f"{referenced_targets[0]} {normalized_catalog_query}"
                 if len(referenced_targets) == 1
-                else analysis.normalized_query
+                else normalized_catalog_query
             )
             catalog_result = self._catalog_fast_path(
                 request=request,
@@ -945,14 +1029,14 @@ class RetrievalService:
         ):
             _raise_if_cancelled(cancellation, provider_calls)
             adaptive = self._adaptive_planner.plan_adaptive(
-                request, analysis, effort
+                semantic_request, analysis, effort
             )
             adaptive_attempted = adaptive.attempted
             adaptive_reason = adaptive.reason_code
             provider_calls.extend(adaptive.calls)
             if adaptive.standalone_query and not adaptive.needs_clarification:
                 effective_analysis = self._analyzer.resolve(
-                    analysis, request, adaptive.standalone_query
+                    analysis, semantic_request, adaptive.standalone_query
                 )
                 adaptive_variant = QueryVariant(
                     text=adaptive.standalone_query,
@@ -1007,7 +1091,10 @@ class RetrievalService:
         interpret_reason = "INTERPRET_NOT_CONFIGURED"
         if self._interpreter is not None and self._adaptive_planner is None:
             _raise_if_cancelled(cancellation, provider_calls)
-            interpreted = self._interpreter.interpret(request, analysis)
+            interpreted = self._interpreter.interpret(
+                semantic_request,
+                analysis,
+            )
             interpret_attempted = interpreted.attempted
             interpret_reason = interpreted.reason_code
             provider_calls.extend(interpreted.calls)
@@ -1017,7 +1104,7 @@ class RetrievalService:
             ):
                 effective_analysis = self._analyzer.apply_interpretation(
                     analysis,
-                    request,
+                    semantic_request,
                     interpreted.standalone_query,
                     interpreted.semantics,
                 )
@@ -1069,13 +1156,13 @@ class RetrievalService:
             and not interpret_attempted
         ):
             _raise_if_cancelled(cancellation, provider_calls)
-            rewritten = self._rewriter.rewrite(request)
+            rewritten = self._rewriter.rewrite(semantic_request)
             rewrite_reason = rewritten.reason_code
             rewrite_attempted = rewritten.attempted
             provider_calls.extend(rewritten.calls)
             if rewritten.variant is not None:
                 effective_analysis = self._analyzer.resolve(
-                    analysis, request, rewritten.variant.text
+                    analysis, semantic_request, rewritten.variant.text
                 )
                 plan = self._planner.plan(
                     effective_analysis,
@@ -1151,74 +1238,24 @@ class RetrievalService:
                     referenced_span_ids=resolved_root.referenced_span_ids,
                 )
             )
-        catalog_reader = getattr(self._source, "catalog_documents", None)
-        catalog_documents: tuple[CatalogDocument, ...] = ()
-        catalog_complete = False
         source_resolution_required = query_plan_requires_source_resolution(
             query_plan
         )
-        if source_resolution_required and callable(catalog_reader):
-            current_catalog = catalog_reader(snapshot, limit=2000)
-            if current_catalog is not None:
-                catalog_complete = True
-                catalog_candidates = tuple(
-                    ChannelHit(
-                        revision_id=snapshot.revision.index_revision_id,
-                        chunk_id=document.chunk_id,
-                        document_id=document.document_id,
-                        document_version_id=document.document_version_id,
-                        role="catalog",
-                        section_id="catalog",
-                        content_sha256="0" * 64,
-                        channel="catalog-source-scope",
-                        rank=index,
-                        raw_score=0.0,
-                    )
-                    for index, document in enumerate(current_catalog, start=1)
-                    if document.document_id
-                    not in snapshot.excluded_document_ids
+        if source_resolution_required and not pre_analysis_source_required:
+            catalog_documents, catalog_complete, source_registry_revision = (
+                self._source_catalog_context(
+                    request,
+                    snapshot,
+                    resolution_required=True,
                 )
-                visible_identities = {
-                    (hit.document_id, hit.document_version_id)
-                    for hit in apply_candidate_filters(
-                        catalog_candidates,
-                        request.model_copy(
-                            update={
-                                "metadata_filters": tuple(
-                                    (name, value)
-                                    for name, value in request.metadata_filters
-                                    if name == "document_id"
-                                )
-                            }
-                        ),
-                    )
-                }
-                catalog_documents = tuple(
-                    document
-                    for document in current_catalog
-                    if (
-                        document.document_id,
-                        document.document_version_id,
-                    )
-                    in visible_identities
-                )
-        source_registry_revision = canonical_sha256(
-            {
-                "schema": SOURCE_SCOPE_SCHEMA_REVISION,
-                "index_revision_id": snapshot.revision.index_revision_id,
-                "index_fingerprint": snapshot.revision.index_fingerprint,
-                "catalog_complete": catalog_complete,
-                "source_resolution_required": source_resolution_required,
-                "visible_document_identities": sorted(
-                    (item.document_id, item.document_version_id)
-                    for item in catalog_documents
-                ),
-            }
-        )
+            )
         query_plan = resolve_query_plan_source_scopes(
             query_plan,
             catalog_documents,
             registry_revision=source_registry_revision,
+            root_context=(
+                source_context if source_context.resolution_required else None
+            ),
         )
         atom_mode = len(query_plan.atoms) > 1
         self._record(
@@ -1998,6 +2035,7 @@ class RetrievalService:
                     atom_support_matrix=atom_matrix,
                     generation_evidence_pack=generation_evidence_pack,
                     snapshot_id=snapshot.revision.index_revision_id,
+                    resolved_query_view=source_context.query_view,
                     on_claim=None if on_claim is None else publish_claim,
                     cancellation=cancellation,
                 )
@@ -2972,15 +3010,105 @@ class RetrievalService:
             )
         return snapshot
 
+    def _source_catalog_context(
+        self,
+        request: SearchRequest,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        resolution_required: bool,
+    ) -> tuple[tuple[CatalogDocument, ...], bool, str]:
+        """读取当前请求可见的完整目录并签发来源注册表身份。
+
+        Args:
+            request: 携带文档与访问过滤的原始请求。
+            snapshot: 请求开始时冻结的活动索引快照。
+            resolution_required: 是否存在必须解析的来源权限。
+
+        Returns:
+            可见目录、目录是否完整以及稳定的来源注册表修订。
+
+        """
+        catalog_documents: tuple[CatalogDocument, ...] = ()
+        catalog_complete = False
+        catalog_reader = getattr(self._source, "catalog_documents", None)
+        if resolution_required and callable(catalog_reader):
+            current_catalog = catalog_reader(snapshot, limit=2000)
+            if current_catalog is not None:
+                catalog_complete = True
+                catalog_candidates = tuple(
+                    ChannelHit(
+                        revision_id=snapshot.revision.index_revision_id,
+                        chunk_id=document.chunk_id,
+                        document_id=document.document_id,
+                        document_version_id=document.document_version_id,
+                        role="catalog",
+                        section_id="catalog",
+                        content_sha256="0" * 64,
+                        channel="catalog-source-scope",
+                        rank=index,
+                        raw_score=0.0,
+                    )
+                    for index, document in enumerate(current_catalog, start=1)
+                    if document.document_id
+                    not in snapshot.excluded_document_ids
+                )
+                document_request = request.model_copy(
+                    update={
+                        "metadata_filters": tuple(
+                            (name, value)
+                            for name, value in request.metadata_filters
+                            if name == "document_id"
+                        )
+                    }
+                )
+                visible_identities = {
+                    (hit.document_id, hit.document_version_id)
+                    for hit in apply_candidate_filters(
+                        catalog_candidates,
+                        document_request,
+                    )
+                }
+                catalog_documents = tuple(
+                    document
+                    for document in current_catalog
+                    if (
+                        document.document_id,
+                        document.document_version_id,
+                    )
+                    in visible_identities
+                )
+        registry_revision = canonical_sha256(
+            {
+                "schema": SOURCE_SCOPE_SCHEMA_REVISION,
+                "index_revision_id": snapshot.revision.index_revision_id,
+                "index_fingerprint": snapshot.revision.index_fingerprint,
+                "catalog_complete": catalog_complete,
+                "source_resolution_required": resolution_required,
+                "visible_document_identities": sorted(
+                    (item.document_id, item.document_version_id)
+                    for item in catalog_documents
+                ),
+            }
+        )
+        return catalog_documents, catalog_complete, registry_revision
+
     def _cache_identity(
         self,
         request: SearchRequest,
         snapshot: ActiveRevisionQuerySnapshot,
         analysis: QueryAnalysis,
         plan: RetrievalPlan,
+        *,
+        source_context: ResolvedSourceContext,
     ) -> BaseResultCacheKey:
         """构造不含正文但覆盖全部答案行为的规范缓存键。"""
-        resolved_root = resolve_root_query(request, build_input_spans(request))
+        semantic_request = request.model_copy(
+            update={"text": source_context.query_view.business_query}
+        )
+        resolved_root = resolve_root_query(
+            semantic_request,
+            build_input_spans(semantic_request),
+        )
         normalized_variants = tuple(
             dict.fromkeys(
                 " ".join(
@@ -3021,7 +3149,7 @@ class RetrievalService:
                 "source_projection_revision": SOURCE_PROJECTION_REVISION,
                 "answer_plan_schema_revision": ANSWER_PLAN_SCHEMA_REVISION,
                 "answer_plan_policy_revision": ANSWER_PLAN_POLICY_REVISION,
-                "answer_pipeline_revision": "wb08r-compiled-answer-plan-v1",
+                "answer_pipeline_revision": "wb08r-compiled-answer-plan-v2",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -3036,7 +3164,9 @@ class RetrievalService:
                 snapshot.profile_revision_id or "default-offline-profile"
             ),
             query_sha256=hashlib.sha256(
-                analysis.normalized_query.encode("utf-8")
+                " ".join(
+                    unicodedata.normalize("NFKC", request.text).strip().split()
+                ).encode("utf-8")
             ).hexdigest(),
             owner_identity_hash=hashlib.sha256(
                 request.owner_identity.encode("utf-8")
@@ -3051,6 +3181,7 @@ class RetrievalService:
                 {
                     "semantics": analysis.semantics.model_dump(mode="json"),
                     "plan_variants": normalized_variants,
+                    "source_scope_digest": source_context.scope_digest,
                 }
             ),
             cache_schema=self._policy.cache_schema_version,

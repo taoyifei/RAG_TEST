@@ -34,6 +34,7 @@ from rag_app.core.models import (
     ConfidenceStatus,
     DocumentRef,
     KnowledgeBaseScope,
+    QueryAnalysis,
     RetrievalPolicy,
     SearchRequest,
 )
@@ -469,6 +470,109 @@ def test_assisted_and_deep_use_one_planner(
     assert planner.calls == 1
     assert result.reasoning_effort == effort.value
     assert result.interpret_reason_code == "ADAPTIVE_PLAN_INVALID"
+
+
+def test_explicit_source_is_resolved_before_planner_receives_business_query(
+    tmp_path: Path,
+) -> None:
+    """来源标题中的数量和字段词不得进入 Analyzer 或模型 Planner。"""
+    title = "开发中心三种输出工作模式"
+    business_query = "这个流程咋办?"
+    scope = KnowledgeBaseScope(
+        project_id=deterministic_id("prj", "wb08r-pre-analysis-source"),
+        knowledge_base_id=deterministic_id("kb", "wb08r-pre-analysis-source"),
+    )
+
+    class CapturingPlanner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, ReasoningEffort]] = []
+
+        def plan_adaptive(
+            self,
+            request: SearchRequest,
+            analysis: QueryAnalysis,
+            effort: ReasoningEffort,
+        ) -> AdaptivePlanOutcome:
+            self.calls.append((request.text, analysis.normalized_query, effort))
+            return AdaptivePlanOutcome(
+                reason_code="ADAPTIVE_PLAN_INVALID",
+                attempted=True,
+            )
+
+    planner = CapturingPlanner()
+    with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
+        runtime.persistence.control.put_project(scope.project_id, "Plan")
+        runtime.persistence.control.put_knowledge_base(
+            scope.knowledge_base_id,
+            scope.project_id,
+            "Plan KB",
+            profile_id="dev-p06-memory",
+        )
+        runtime.persistence.builder.build_and_activate(
+            project_id=scope.project_id,
+            knowledge_base_id=scope.knowledge_base_id,
+            documents=_documents(scope, (title,)),
+            idempotency_key="wb08r-pre-analysis-source",
+            budgets=runtime.persistence.default_budgets(),
+        )
+        runtime.retrieval._adaptive_planner = planner  # type: ignore[assignment]
+        runtime.retrieval.search_and_answer(
+            SearchRequest(
+                scope=scope,
+                text=f"《{title}》中，{business_query}",
+            )
+        )
+
+    assert planner.calls == [
+        (business_query, business_query, ReasoningEffort.ASSISTED)
+    ]
+
+
+def test_explicit_source_version_change_invalidates_execution_identity(
+    tmp_path: Path,
+) -> None:
+    title = "缓存版本规范"
+    scope = KnowledgeBaseScope(
+        project_id=deterministic_id("prj", "wb08r-source-cache-version"),
+        knowledge_base_id=deterministic_id("kb", "wb08r-source-cache-version"),
+    )
+    first = _documents(scope, (title,))[0]
+    second = IngestionDocument(
+        document=first.document,
+        content=build_docx(
+            "<w:p><w:r><w:t>缓存版本规范的第二版正文。</w:t></w:r></w:p>"
+        ),
+        media_type=_MEDIA_TYPE,
+    )
+    request = SearchRequest(scope=scope, text=f"《{title}》中，正文是什么？")
+
+    with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
+        runtime.persistence.control.put_project(scope.project_id, "Cache")
+        runtime.persistence.control.put_knowledge_base(
+            scope.knowledge_base_id,
+            scope.project_id,
+            "Cache KB",
+            profile_id="dev-p06-memory",
+        )
+        runtime.persistence.builder.build_and_activate(
+            project_id=scope.project_id,
+            knowledge_base_id=scope.knowledge_base_id,
+            documents=(first,),
+            idempotency_key="wb08r-source-cache-v1",
+            budgets=runtime.persistence.default_budgets(),
+        )
+        before = runtime.retrieval.execution_identity(request)
+        runtime.persistence.builder.build_and_activate(
+            project_id=scope.project_id,
+            knowledge_base_id=scope.knowledge_base_id,
+            documents=(second,),
+            idempotency_key="wb08r-source-cache-v2",
+            budgets=runtime.persistence.default_budgets(),
+        )
+        after = runtime.retrieval.execution_identity(request)
+
+    assert before.active_revision_id != after.active_revision_id
+    assert before.key_hash != after.key_hash
 
 
 def test_insufficient_evidence_never_repeats_full_generation() -> None:

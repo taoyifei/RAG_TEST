@@ -80,7 +80,6 @@ from rag_app.core.models import (
     ProviderCall,
     QueryAnalysis,
     RequestedAnswerType,
-    SourceSpanKind,
 )
 from rag_app.core.models.common import JsonObject, freeze_json_object
 from rag_app.core.models.evidence_group import EvidenceGroup
@@ -135,7 +134,10 @@ if TYPE_CHECKING:
     from rag_app.application.retrieval.generation_evidence import (
         GenerationEvidencePack,
     )
-    from rag_app.core.models.answer_plan import CompiledAnswerPlan
+    from rag_app.core.models.answer_plan import (
+        CompiledAnswerPlan,
+        ResolvedQueryView,
+    )
 
 _QUANTITY_UNIT_ATOM = (
     r"(?:%|％|万元|亿元|元|毫秒|分钟|小时|秒|天|周|个月|年|月|"
@@ -260,7 +262,6 @@ _FALLBACK_LIST_MARKER = re.compile(
     r"^[（(]?[一二三四五六七八九十\d]+[）).、]?$"
 )
 _FALLBACK_ORPHAN_HEADING = re.compile(r"^[、，:：]\s*[^，。；;！？!?]{1,24}$")
-_DIRECT_EXTRACT_MAX_CHARS = 500
 # 引用、对象、数字、频率与否定另有独立硬门。这里仅要求自然改写与
 # 来源谓语保留基本词面联系，避免把同义概括误判成无支持事实。
 _MIN_SUPPORTED_BIGRAM_RATIO = 0.20
@@ -2059,6 +2060,7 @@ class GroundedAnsweringService:
         atom_support_matrix: AtomSupportMatrix | None = None,
         generation_evidence_pack: GenerationEvidencePack | None = None,
         snapshot_id: str | None = None,
+        resolved_query_view: ResolvedQueryView | None = None,
         on_claim: Callable[[AnswerClaim], None] | None = None,
         cancellation: CancellationPort | None = None,
     ) -> GroundedOutcome:
@@ -2074,6 +2076,7 @@ class GroundedAnsweringService:
             atom_support_matrix: 可选的逐原子检索支持状态。
             generation_evidence_pack: 可选的有界生成准入证据包。
             snapshot_id: 请求开始时冻结的活动索引身份。
+            resolved_query_view: 业务分析前冻结的问题视图。
             on_claim: 可选的已校验完整 claim 发布回调。
             cancellation: 可选协作取消端口。
 
@@ -2094,6 +2097,7 @@ class GroundedAnsweringService:
                 atom_support_matrix=atom_support_matrix,
                 generation_evidence_pack=generation_evidence_pack,
                 snapshot_id=snapshot_id,
+                resolved_query_view=resolved_query_view,
                 analysis=analysis,
                 on_claim=on_claim,
                 cancellation=cancellation,
@@ -2325,6 +2329,7 @@ class GroundedAnsweringService:
         atom_support_matrix: AtomSupportMatrix,
         generation_evidence_pack: GenerationEvidencePack | None,
         snapshot_id: str | None,
+        resolved_query_view: ResolvedQueryView | None,
         analysis: QueryAnalysis | None,
         on_claim: Callable[[AnswerClaim], None] | None,
         cancellation: CancellationPort | None,
@@ -2344,16 +2349,20 @@ class GroundedAnsweringService:
         if generation_evidence_pack is not None:
             evidence = generation_evidence_pack.evidence
         compiled_plan: CompiledAnswerPlan | None = None
+        strict_compiled_protocol = resolved_query_view is not None
         deterministic_execution: AnswerExecutionResult | None = None
         deterministic_coverage: CompiledPlanCoverage | None = None
+        # 延迟导入以避开 retrieval.service -> grounded 的包初始化环。
+        from rag_app.application.answering.executor import (  # noqa: PLC0415
+            AnswerExecutionError,
+            GenerationFailureDisposition,
+            compiled_atom_coverage,
+            execute_compiled_tasks,
+            execute_generation_tasks,
+            render_deterministic_answer,
+        )
+
         if generation_evidence_pack is not None:
-            # 延迟导入以避开 retrieval.service -> grounded 的包初始化环。
-            from rag_app.application.answering.executor import (  # noqa: PLC0415
-                AnswerExecutionError,
-                compiled_atom_coverage,
-                execute_deterministic_tasks,
-                render_deterministic_answer,
-            )
             from rag_app.application.answering.plan_compiler import (  # noqa: PLC0415
                 AnswerPlanCompilationError,
                 compile_answer_plan,
@@ -2366,8 +2375,9 @@ class GroundedAnsweringService:
                     snapshot_id=(
                         snapshot_id or "legacy-unpinned-answer-snapshot"
                     ),
+                    resolved_query_view=resolved_query_view,
                 )
-                deterministic_execution = execute_deterministic_tasks(
+                deterministic_execution = execute_compiled_tasks(
                     compiled_plan,
                     generation_evidence_pack,
                     cancellation=cancellation,
@@ -2463,23 +2473,6 @@ class GroundedAnsweringService:
             if generation_evidence_pack is not None
             else ()
         )
-        scoped_versions = _contextual_source_versions(query_plan, evidence)
-        direct_evidence = (
-            evidence
-            if scoped_versions is None
-            else tuple(
-                item
-                for item in evidence
-                if item.document_version_id in scoped_versions
-            )
-        )
-
-        if generation_evidence_pack is not None and len(query_plan.atoms) == 1:
-            direct_evidence = _atom_validation_evidence(
-                query_plan.atoms[0].atom_id,
-                direct_evidence,
-                generation_evidence_pack.per_atom_source_certificates,
-            )
 
         def validate_source_excerpt(
             claim: AnswerClaim, atom_id: str | None = None
@@ -2551,113 +2544,6 @@ class GroundedAnsweringService:
                 return True
             return False
 
-        if (
-            generation_evidence_pack is not None
-            and not (
-                deterministic_execution and deterministic_execution.artifacts
-            )
-            and not any(
-                item.status is AtomStatus.CONTRADICTORY
-                for item in atom_support_matrix.atoms
-            )
-            and (
-                direct := _direct_extract(query_plan, direct_evidence, analysis)
-            )
-            is not None
-            and validate_source_excerpt(direct[0], query_plan.atoms[0].atom_id)
-        ):
-            claim, item = direct
-            _raise_if_cancelled(cancellation)
-            if on_claim is not None:
-                on_claim(claim)
-            return GroundedOutcome(
-                answer=f"根据资料：{claim.text} [{item.support_id}]",
-                mode="extractive",
-                reason_code="DIRECT_EXTRACT",
-                published_support_ids=(item.support_id,),
-                atom_coverage=((query_plan.atoms[0].atom_id, "SUPPORTED"),),
-                accepted_claim_count=1,
-                published_claim_count=1,
-                accepted_support_ids=(item.support_id,),
-            )
-        if (
-            generation_evidence_pack is not None
-            and len(query_plan.atoms) > 1
-            and not (
-                deterministic_execution and deterministic_execution.artifacts
-            )
-        ):
-            named_row = _safe_extractive_fallback(
-                query_plan,
-                evidence,
-                linked_ids,
-                generation_evidence_pack.complete_group_ids,
-                require_named_row=True,
-                validate_claim=validate_source_excerpt,
-                validate_atom_claim=validate_source_excerpt,
-            )
-            if named_row is not None:
-                row_answer, row_ids, row_atoms = named_row
-                row_groups = {
-                    dict(by_id[support_id].metadata).get("evidence_group_id")
-                    for support_id in row_ids
-                }
-                if (
-                    len(row_ids) > 1
-                    and len(row_groups) == 1
-                    and next(iter(row_groups))
-                    in generation_evidence_pack.complete_group_ids
-                    and all(
-                        dict(by_id[support_id].metadata).get(
-                            "evidence_group_type"
-                        )
-                        == "TABLE_ROW_GROUP"
-                        for support_id in row_ids
-                    )
-                ):
-                    row_claim = ValidatedNaturalClaim(
-                        claim_id="C1",
-                        atom_ids=tuple(sorted(row_atoms)),
-                        claim=AnswerClaim(
-                            text=row_answer,
-                            supports=tuple(
-                                ClaimSupport(
-                                    support_id=sid,
-                                    quote=by_id[sid].citation_text,
-                                )
-                                for sid in row_ids
-                            ),
-                        ),
-                    )
-                    row_coverage = []
-                    for atom in query_plan.atoms:
-                        status = AtomStatus.MISSING
-                        if atom.atom_id in row_atoms:
-                            status = AtomStatus.PARTIAL
-                            if _natural_atom_complete(
-                                atom,
-                                atom_support_matrix,
-                                (row_claim,),
-                                evidence,
-                                analysis,
-                                generation_evidence_pack=generation_evidence_pack,
-                            ):
-                                status = AtomStatus.SUPPORTED
-                        row_coverage.append((atom.atom_id, status.value))
-                    return GroundedOutcome(
-                        answer=row_answer,
-                        mode="extractive_fallback",
-                        reason_code="EXTRACTIVE_FALLBACK",
-                        published_support_ids=row_ids,
-                        atom_coverage=tuple(row_coverage),
-                        target_member_coverage=_target_coverage_records(
-                            query_plan,
-                            evidence,
-                            (row_claim,),
-                            analysis,
-                            generation_evidence_pack,
-                        ),
-                    )
         stream_claims = (
             query_plan.effort == "DIRECT"
             and len(query_plan.atoms) == 1
@@ -2717,6 +2603,7 @@ class GroundedAnsweringService:
         generated_claim_count = 0
         generation_returned = False
         reason: str | None = None
+        resource_limited_atom_ids: set[str] = set()
         repair_calls = 0
         relation_review_calls = 0
         relation_review_elapsed_ms = 0.0
@@ -2756,6 +2643,8 @@ class GroundedAnsweringService:
 
         def generate(
             repair_atom_ids: tuple[str, ...] = (),
+            *,
+            execution_atom_ids: tuple[str, ...] = (),
         ) -> AnswerDraft:
             """从准入证据中选出本次 Atom 的候选，不以发布许可过滤。"""
             # 延迟导入以避开 retrieval.service -> grounded 的包初始化环。
@@ -2765,9 +2654,17 @@ class GroundedAnsweringService:
 
             nonlocal active_request
             nonlocal generation_started
+            if repair_atom_ids and execution_atom_ids:
+                raise ValueError("生成批次不能同时是修复与初次执行。")
             if generation_started is None:
                 generation_started = monotonic()
-            requested = set(repair_atom_ids) if repair_atom_ids else eligible
+            requested = (
+                set(repair_atom_ids)
+                if repair_atom_ids
+                else set(execution_atom_ids)
+                if execution_atom_ids
+                else eligible
+            )
             available_bindings = tuple(
                 binding
                 for binding in (
@@ -3122,6 +3019,8 @@ class GroundedAnsweringService:
                 prepared_packets.append(draft.prepared_packet)
             generation_returned = True
             if draft.natural_claims and not draft.wire_claims:
+                if strict_compiled_protocol:
+                    raise ValueError("ANSWER_PLAN_LEGACY_PROTOCOL_FORBIDDEN")
                 legacy_protocol = True
                 consume_legacy(draft)
                 return
@@ -3130,6 +3029,8 @@ class GroundedAnsweringService:
                 and not draft.wire_claims
                 and not draft.wire_diagnostics
             ):
+                if strict_compiled_protocol:
+                    raise ValueError("ANSWER_PLAN_LEGACY_PROTOCOL_FORBIDDEN")
                 legacy_protocol = True
                 consume_legacy(draft)
                 return
@@ -3511,13 +3412,22 @@ class GroundedAnsweringService:
                     )
                 )
 
-        def review_pending() -> None:  # noqa: PLR0912, PLR0915
+        def review_pending(  # noqa: PLR0912, PLR0915
+            bounds: tuple[BoundClaim, ...] | None = None,
+            *,
+            generation_request: GenerationRequest | None = None,
+            sent_packet: PreparedGenerationPacket | None = None,
+            allow_split: bool = True,
+        ) -> None:
             """按真实 Claim 成本执行一个或至多两个互斥复核批次。"""
             nonlocal relation_review_calls, relation_review_elapsed_ms
             nonlocal relation_review_skip_reason, reason
-            if not pending_relations:
+            selected_bounds = (
+                tuple(pending_relations) if bounds is None else bounds
+            )
+            if not selected_bounds:
                 return
-            unique = tuple(dict.fromkeys(pending_relations))
+            unique = tuple(dict.fromkeys(selected_bounds))
 
             def observed(bound: BoundClaim, status: str, code: str) -> None:
                 relation_review_results.append(
@@ -3531,7 +3441,9 @@ class GroundedAnsweringService:
             review_method = getattr(
                 type(self.generator), "review_semantics", None
             )
-            packet = prepared_packets[0] if prepared_packets else None
+            packet = sent_packet or (
+                prepared_packets[0] if prepared_packets else None
+            )
             timeout = getattr(
                 self.generator, "supplement_timeout_seconds", None
             )
@@ -3561,7 +3473,8 @@ class GroundedAnsweringService:
                 for bound in unique:
                     observed(bound, "NOT_OBSERVED", reason)
                 return
-            if active_request is None:
+            generation_request = generation_request or active_request
+            if generation_request is None:
                 raise ValueError("语义复核缺少原生成请求。")
             atoms = {atom.atom_id: atom for atom in query_plan.atoms}
             generation_model = next(
@@ -3593,7 +3506,7 @@ class GroundedAnsweringService:
                     ),
                     read_units=tuple(
                         unit
-                        for unit in active_request.evidence_read_units
+                        for unit in generation_request.evidence_read_units
                         if unit.unit_id in selected_unit_ids
                     ),
                     sent_packet=packet,
@@ -3655,6 +3568,7 @@ class GroundedAnsweringService:
                     if (
                         review_reason == "SEMANTIC_REVIEW_INPUT_BUDGET_EXCEEDED"
                         and not transported
+                        and allow_split
                         and not split_attempted
                         and len(request.candidates) > 1
                     ):
@@ -3674,6 +3588,13 @@ class GroundedAnsweringService:
                     batch_failed = True
                     relation_review_skip_reason = review_reason
                     reason = review_reason
+                    if review_reason == (
+                        "SEMANTIC_REVIEW_INPUT_BUDGET_EXCEEDED"
+                    ):
+                        resource_limited_atom_ids.update(
+                            candidate.atom.atom_id
+                            for candidate in request.candidates
+                        )
                     for candidate in request.candidates:
                         observed(
                             candidate.claim,
@@ -3713,16 +3634,16 @@ class GroundedAnsweringService:
                         rebound = revalidate_bound_claim(
                             bound,
                             packet=packet,
-                            read_units=active_request.evidence_read_units,
-                            evidence=active_request.evidence,
+                            read_units=generation_request.evidence_read_units,
+                            evidence=generation_request.evidence,
                             allowed_unit_ids=allowed_units.get(
                                 bound.atom_id, frozenset()
                             ),
                             physical_table_facts=(
-                                active_request.physical_table_facts
+                                generation_request.physical_table_facts
                             ),
                             atom_fact_bindings=(
-                                active_request.atom_fact_bindings
+                                generation_request.atom_fact_bindings
                             ),
                             source_scope=candidate.atom.source_scope,
                         )
@@ -3766,51 +3687,124 @@ class GroundedAnsweringService:
             if supported_count == 0 and successful_batches and not batch_failed:
                 reason = "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM"
 
-        if eligible:
+        def classify_generation_failure(
+            error: RagError,
+        ) -> GenerationFailureDisposition:
+            """无副作用地判断失败能否在未传输前按任务重编排。"""
+            failed_packets = _failed_generation_packets(error)
+            failed_calls = error.provider_calls or (
+                () if error.provider_call is None else (error.provider_call,)
+            )
+            transported = any(
+                packet.evidence_level == "TRANSPORT_SENT"
+                for packet in failed_packets
+            ) or any(call.call_count for call in failed_calls)
+            raw_reason = error.code
+            if isinstance(error, ProviderInvalidResponse):
+                detailed_reason = dict(error.details).get("reason_code")
+                if isinstance(detailed_reason, str):
+                    raw_reason = detailed_reason
+            return GenerationFailureDisposition(
+                reason_code=raw_reason,
+                transported=transported,
+            )
+
+        def record_generation_failure(
+            error: RagError,
+            atom_ids: tuple[str, ...],
+            terminal: bool,
+            disposition: GenerationFailureDisposition,
+        ) -> None:
+            """保存真实失败包；只有最终失败才改变义务终态。"""
+            nonlocal attempt_linked_ids, reason
+            failed_packets = _failed_generation_packets(error)
+            failed_calls = error.provider_calls or (
+                () if error.provider_call is None else (error.provider_call,)
+            )
+            prepared_packets.extend(failed_packets)
+            calls.extend(failed_calls)
+            sent_packet = next(
+                (
+                    packet
+                    for packet in reversed(failed_packets)
+                    if packet.evidence_level == "TRANSPORT_SENT"
+                ),
+                None,
+            )
+            if sent_packet is not None:
+                attempt_linked_ids = dict(sent_packet.per_atom_support_ids)
+            if terminal:
+                reason = disposition.reason_code
+                raw_failures.extend(
+                    (atom_id, disposition.reason_code)
+                    for atom_id in atom_ids
+                    if (atom_id, disposition.reason_code) not in raw_failures
+                )
+                if disposition.reason_code == (
+                    "GENERATION_INPUT_BUDGET_EXCEEDED"
+                ):
+                    resource_limited_atom_ids.update(atom_ids)
+
+        def record_invalid_generation(atom_ids: tuple[str, ...]) -> None:
+            """把响应合同错误限定到实际执行的 G 义务。"""
+            nonlocal reason
+            reason = "GENERATION_OUTPUT_INVALID"
+            raw_failures.extend(
+                (atom_id, reason)
+                for atom_id in atom_ids
+                if (atom_id, reason) not in raw_failures
+            )
+
+        def review_latest_batch(
+            pending_start: int,
+            *,
+            allow_split: bool,
+        ) -> None:
+            """用该生成批自己的实际发送包复核其新增 Claim。"""
+            if legacy_protocol or len(pending_relations) <= pending_start:
+                return
+            if active_request is None or not prepared_packets:
+                raise ValueError("生成批次缺少可复核的实际发送包。")
+            review_pending(
+                tuple(pending_relations[pending_start:]),
+                generation_request=active_request,
+                sent_packet=prepared_packets[-1],
+                allow_split=allow_split,
+            )
+
+        scheduled_generation_atom_ids = (
+            tuple(
+                atom_id
+                for atom_id in deterministic_execution.deferred_atom_ids
+                if atom_id in eligible
+            )
+            if deterministic_execution is not None
+            else tuple(sorted(eligible))
+        )
+
+        def run_generation_batch(
+            atom_ids: tuple[str, ...],
+            allow_review_split: bool,
+        ) -> None:
+            """执行一个冻结 G 批次并只复核该批新增的真实 Claim。"""
+            pending_start = len(pending_relations)
+            consume(generate(execution_atom_ids=atom_ids))
+            review_latest_batch(
+                pending_start,
+                allow_split=allow_review_split,
+            )
+
+        if scheduled_generation_atom_ids:
             try:
                 _raise_if_cancelled(cancellation)
-                try:
-                    consume(generate())
-                except RagError as error:
-                    failed_packets = _failed_generation_packets(error)
-                    failed_calls = error.provider_calls or (
-                        ()
-                        if error.provider_call is None
-                        else (error.provider_call,)
-                    )
-                    prepared_packets.extend(failed_packets)
-                    calls.extend(failed_calls)
-                    sent_packet = next(
-                        (
-                            packet
-                            for packet in reversed(failed_packets)
-                            if packet.evidence_level == "TRANSPORT_SENT"
-                        ),
-                        None,
-                    )
-                    if sent_packet is not None:
-                        attempt_linked_ids = dict(
-                            sent_packet.per_atom_support_ids
-                        )
-                    reason = error.code
-                    raw_reason = error.code
-                    if isinstance(error, ProviderInvalidResponse):
-                        detailed_reason = dict(error.details).get("reason_code")
-                        if isinstance(detailed_reason, str):
-                            raw_reason = detailed_reason
-                            reason = detailed_reason
-                    raw_failures.extend(
-                        (atom_id, raw_reason)
-                        for atom_id in sorted(eligible)
-                        if (atom_id, raw_reason) not in raw_failures
-                    )
-                except ValueError:
-                    reason = "GENERATION_OUTPUT_INVALID"
-                    raw_failures.extend(
-                        (atom_id, reason)
-                        for atom_id in sorted(eligible)
-                        if (atom_id, reason) not in raw_failures
-                    )
+                execute_generation_tasks(
+                    scheduled_generation_atom_ids,
+                    run_batch=run_generation_batch,
+                    classify_failure=classify_generation_failure,
+                    record_failure=record_generation_failure,
+                    record_invalid=record_invalid_generation,
+                    cancellation=cancellation,
+                )
                 if legacy_protocol:
                     # 旧协议只为兼容既有离线 Provider；V9 线上路径不修补。
                     omitted = tuple(
@@ -3895,8 +3889,6 @@ class GroundedAnsweringService:
                         consume(generate(repairable))
                 else:
                     repair_skip_reason = "AUTOMATIC_GENERATION_REPAIR_DISABLED"
-                    if pending_relations:
-                        review_pending()
             except QueryCancelled as error:
                 error.provider_calls = (*calls, *error.provider_calls)
                 raise
@@ -4079,10 +4071,16 @@ class GroundedAnsweringService:
                 )
             coverage.append((atom.atom_id, final.value))
         if compiled_plan is not None and deterministic_execution is not None:
+            limited_obligation_ids = tuple(
+                obligation.obligation_id
+                for obligation in compiled_plan.obligations
+                if set(obligation.atom_ids) & resource_limited_atom_ids
+            )
             resource_limited_artifacts = (
                 _resource_limited_plan_artifacts(
                     compiled_plan,
-                    deterministic_execution.deferred_obligation_ids,
+                    limited_obligation_ids
+                    or deterministic_execution.deferred_obligation_ids,
                 )
                 if reason
                 in {
@@ -4105,7 +4103,8 @@ class GroundedAnsweringService:
                 ),
             )
             use_compiled_coverage = (
-                bool(deterministic_execution.artifacts)
+                strict_compiled_protocol
+                or bool(deterministic_execution.artifacts)
                 or any(
                     obligation.required_member_keys
                     for obligation in compiled_plan.obligations
@@ -4444,73 +4443,6 @@ def _can_repair_atom(
         and source_compatibility((item,)).compatible
         for item in evidence
     )
-
-
-def _direct_extract(
-    plan: QueryPlan,
-    evidence: tuple[EvidenceItem, ...],
-    analysis: QueryAnalysis | None,
-) -> tuple[AnswerClaim, EvidenceItem] | None:
-    """单一标量事实已有直接证书时，复制最小原句形成服务端回答。"""
-    if len(plan.atoms) != 1:
-        return None
-    atom = plan.atoms[0]
-    if atom.answer_shape not in {
-        AtomAnswerShape.FACT,
-        AtomAnswerShape.DURATION,
-        AtomAnswerShape.COUNT,
-        AtomAnswerShape.RESPONSIBLE_PARTY,
-        AtomAnswerShape.DEFINITION,
-    }:
-        return None
-    for item in evidence:
-        metadata = dict(item.metadata)
-        certificate = metadata.get("answer_support")
-        fact = item.citation_text.strip()
-        if (
-            not isinstance(certificate, dict)
-            or certificate.get("status") != "SUPPORTED"
-            or certificate.get("support_reason")
-            not in {"SOURCE_RELATION_AND_VALUE", "LINKED_SUBJECT_ATTRIBUTE"}
-            or normalize_semantic_text(
-                str(certificate.get("query_target") or "")
-            )
-            != normalize_semantic_text(atom.target)
-            or normalize_semantic_text(
-                str(certificate.get("requested_relation_or_attribute") or "")
-            )
-            != normalize_semantic_text(atom.relation)
-            or item.table_context
-            or item.source_kind is not SourceSpanKind.ORIGINAL_TEXT
-            or item.pdf_block_id is not None
-            or not item.publishable
-            or len(item.source_spans) != 1
-            or not item.source_spans[0].is_citable
-            or len(fact) > _DIRECT_EXTRACT_MAX_CHARS
-            or len(re.findall(r"[。！？.!?]", fact)) != 1
-        ):
-            continue
-        claim = AnswerClaim(
-            text=fact,
-            supports=(ClaimSupport(support_id=item.support_id, quote=fact),),
-        )
-        try:
-            _validate_natural_entailment(claim)
-            validate_grounded_draft(
-                AnswerDraft(
-                    text=fact,
-                    cited_evidence_ids=(item.support_id,),
-                    claims=(claim,),
-                    generation_mode="extractive",
-                ),
-                (item,),
-                analysis=_natural_atom_analysis(atom, analysis),
-                complete=False,
-            )
-        except ValidationFailed:
-            continue
-        return claim, item
-    return None
 
 
 def _fallback_table_row(

@@ -266,12 +266,13 @@ def _list_fixture(
     query: str = "开发团队的职责有哪些？",
     *,
     shared_member_node: bool = False,
+    second_member_text: str = "2. 负责现场调试与问题修复。",
 ) -> tuple[QueryPlan, GenerationEvidencePack, tuple[EvidenceItem, ...]]:
     """构造带 canonical 列表成员的开放生成计划。"""
     evidence = _evidence(
         "职责如下：",
         "1. 负责设计与开发。",
-        "2. 负责现场调试与问题修复。",
+        second_member_text,
     )
     if shared_member_node:
         first_span = evidence[1].source_spans[0]
@@ -424,6 +425,41 @@ def test_duplicate_schema_candidates_do_not_form_deterministic_binding() -> (
     assert plan.obligations[0].operation is AnswerOperation.OPEN_TEXT
 
 
+def test_unique_short_target_and_full_target_keep_selection_identity() -> None:
+    full_plan, full_pack, evidence = _fixture_plan("需求快验的输入是什么？")
+    short_plan = _plan("快验的输入是什么？", evidence)
+    short_plan = short_plan.model_copy(
+        update={
+            "atoms": (
+                short_plan.atoms[0].model_copy(update={"target": "快验"}),
+            ),
+        }
+    )
+    short_pack = _pack(short_plan, evidence)
+    short_pack = replace(
+        short_pack,
+        atom_fact_bindings=tuple(
+            binding.model_copy(update={"requested_target": "快验"})
+            for binding in short_pack.atom_fact_bindings
+        ),
+    )
+
+    full = compile_answer_plan(full_plan, full_pack, snapshot_id="irev-test")
+    short = compile_answer_plan(
+        short_plan,
+        short_pack,
+        snapshot_id="irev-test",
+    )
+
+    assert len(short.selections) == 1
+    assert full.selections[0].selection_digest == (
+        short.selections[0].selection_digest
+    )
+    assert full.obligations[0].required_member_keys == (
+        short.obligations[0].required_member_keys
+    )
+
+
 def test_explicit_column_variant_keeps_same_selection_identity() -> None:
     first_plan, first_pack, _ = _fixture_plan(
         "《开发中心三种工作模式》中，需求快验的输入项是什么？"
@@ -431,6 +467,20 @@ def test_explicit_column_variant_keeps_same_selection_identity() -> None:
     second_plan, second_pack, _ = _fixture_plan(
         "《开发中心三种工作模式》中，需求快验的“输入”列有哪些内容？",
         relations=("输入", "内容"),
+    )
+    second_pack = replace(
+        second_pack,
+        atom_fact_bindings=tuple(
+            binding.model_copy(
+                update={
+                    "relation_status": "UNDETERMINED",
+                    "requested_relation": "内容",
+                }
+            )
+            if binding.atom_id == "A2"
+            else binding
+            for binding in second_pack.atom_fact_bindings
+        ),
     )
 
     first = compile_answer_plan(first_plan, first_pack, snapshot_id="irev-test")
@@ -443,6 +493,8 @@ def test_explicit_column_variant_keeps_same_selection_identity() -> None:
         second.selections[0].selection_digest
     )
     assert second.obligations[0].atom_ids == ("A1", "A2")
+    assert len(second.obligations) == 1
+    assert second.physical_tasks[0].mode is AnswerTaskMode.DETERMINISTIC
 
 
 def test_explicit_field_does_not_satisfy_independent_condition_atom() -> None:
@@ -486,6 +538,43 @@ def test_explicit_field_does_not_satisfy_independent_condition_atom() -> None:
     assert tuple(item.field_label for item in plan.selections) == (
         "输入（业务团队 / 外部单位需提供）",
         "启动条件",
+    )
+
+
+def test_missing_independent_axis_is_not_absorbed_by_explicit_field() -> None:
+    query = "需求快验的输入是什么，并且启动需要什么条件？"
+    _base_plan, _base_pack, evidence = _fixture_plan(query)
+    query_plan = _plan(
+        query,
+        evidence,
+        relations=("输入", "启动条件"),
+    )
+    pack = _pack(query_plan, evidence, include_output_binding=False)
+    pack = replace(
+        pack,
+        atom_fact_bindings=tuple(
+            binding.model_copy(
+                update={
+                    "requested_relation": "启动条件",
+                    "relation_status": "UNDETERMINED",
+                }
+            )
+            if binding.atom_id == "A2"
+            else binding
+            for binding in pack.atom_fact_bindings
+        ),
+    )
+
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+
+    assert len(plan.selections) == 1
+    assert tuple(item.operation for item in plan.obligations) == (
+        AnswerOperation.FIELD_LOOKUP,
+        AnswerOperation.OPEN_TEXT,
+    )
+    assert tuple(item.atom_ids for item in plan.obligations) == (
+        ("A1",),
+        ("A2",),
     )
 
 
@@ -566,6 +655,76 @@ def test_strict_temporal_modality_is_not_erased_or_auto_satisfied() -> None:
     assert not any(item.supported for item in qualifiers)
 
 
+def test_qualifiers_stay_on_their_own_business_clause() -> None:
+    query = "需求快验的输入是什么；完成后必须提供输出什么？"
+    query_plan, pack, _ = _fixture_plan(
+        query,
+        relations=("输入", "输出"),
+    )
+    query_plan = query_plan.model_copy(
+        update={
+            "atoms": (
+                query_plan.atoms[0].model_copy(
+                    update={"original_fragment": "需求快验的输入是什么"}
+                ),
+                query_plan.atoms[1].model_copy(
+                    update={"original_fragment": "完成后必须提供输出什么"}
+                ),
+            )
+        }
+    )
+
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+
+    assert not plan.obligations[0].qualifiers
+    assert tuple(item.kind for item in plan.obligations[1].qualifiers) == (
+        AnswerQualifierKind.AFTER,
+        AnswerQualifierKind.MUST,
+    )
+
+
+def test_authority_title_words_do_not_create_answer_qualifiers() -> None:
+    query_plan, pack, _ = _fixture_plan(
+        "《开始前必须遵守规范》中，需求快验的输入是什么？"
+    )
+
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+
+    assert not plan.obligations[0].qualifiers
+
+
+def test_explicit_source_qualifier_can_close_temporal_obligation() -> None:
+    query_plan, pack, evidence = _fixture_plan(
+        "需求快验之前必须准备哪些材料？",
+        relations=("输入", "必须准备"),
+        input_status="UNDETERMINED",
+    )
+    supported_header = evidence[1].model_copy(
+        update={"citation_text": "输入（开始之前必须提供）"}
+    )
+    pack = replace(
+        pack,
+        entries=tuple(
+            replace(entry, evidence_item=supported_header)
+            if entry.support_id == supported_header.support_id
+            else entry
+            for entry in pack.entries
+        ),
+    )
+
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+    execution = execute_deterministic_tasks(plan, pack)
+    coverage = reduce_plan_coverage(plan, execution.artifacts)
+
+    assert tuple(
+        (item.kind, item.supported) for item in plan.obligations[0].qualifiers
+    ) == (
+        (AnswerQualifierKind.BEFORE, True),
+        (AnswerQualifierKind.MUST, True),
+    )
+    assert coverage.complete
+
+
 def test_qualifier_atom_reuses_base_fact_without_generation_task() -> None:
     query_plan, pack, _ = _fixture_plan(
         "需求快验之前必须准备哪些材料？",
@@ -620,6 +779,131 @@ def test_two_fields_keep_two_obligations_but_share_one_physical_task() -> None:
     task = plan.physical_tasks[0]
     row_support_id = pack.physical_table_facts[0].row_label_support_ids[0]
     assert task.dependency_support_ids.count(row_support_id) == 1
+
+
+def test_two_roles_in_different_rows_keep_disjoint_obligations() -> None:
+    base_evidence, _group = _input_table()
+    header = base_evidence[1].model_copy(
+        update={"evidence_id": "S8", "citation_text": "职责"}
+    )
+    first_role = base_evidence[3].model_copy(
+        update={"evidence_id": "S9", "citation_text": "甲角色"}
+    )
+    first_duty = base_evidence[4].model_copy(
+        update={"evidence_id": "S10", "citation_text": "负责审核"}
+    )
+    second_role = base_evidence[3].model_copy(
+        update={"evidence_id": "S11", "citation_text": "乙角色"}
+    )
+    second_duty = base_evidence[4].model_copy(
+        update={"evidence_id": "S12", "citation_text": "负责归档"}
+    )
+    evidence = (
+        header,
+        first_role,
+        first_duty,
+        second_role,
+        second_duty,
+    )
+    table_key = canonical_sha256("role-duty-table")
+    document_id = first_role.document_id
+    document_version_id = first_role.document_version_id
+    assert document_id is not None
+    assert document_version_id is not None
+    facts = tuple(
+        PhysicalTableFact(
+            fact_id=canonical_sha256((role.citation_text, duty.citation_text)),
+            table_key=table_key,
+            document_id=document_id,
+            document_version_id=document_version_id,
+            table_node_id=role.source_spans[0].node_id,
+            row_index=row_index,
+            row_label_column_index=0,
+            value_column_index=1,
+            row_label_support_ids=(role.support_id,),
+            value_support_ids=(duty.support_id,),
+            headers=(
+                PhysicalTableHeader(
+                    row_index=0,
+                    column_indexes=(1,),
+                    support_ids=(header.support_id,),
+                ),
+            ),
+        )
+        for row_index, role, duty in (
+            (1, first_role, first_duty),
+            (2, second_role, second_duty),
+        )
+    )
+    atoms = tuple(
+        QueryAtom(
+            atom_id=f"A{index}",
+            target=role.citation_text,
+            relation="职责",
+            answer_shape=AtomAnswerShape.DUTIES,
+            original_fragment="甲角色和乙角色各负责什么？",
+            source_scope=_scope(f"A{index}", evidence),
+        )
+        for index, role in enumerate((first_role, second_role), 1)
+    )
+    query_plan = make_query_plan(
+        standalone_query="甲角色和乙角色各负责什么？",
+        original_query="甲角色和乙角色各负责什么？",
+        intent="COMPOUND",
+        effort="DIRECT",
+        atoms=atoms,
+        reason_code="TEST",
+        planner_called=False,
+    )
+    pack = GenerationEvidencePack(
+        original_query=query_plan.original_query,
+        resolved_root_query=query_plan.resolved_root_query,
+        entries=tuple(
+            GenerationEvidenceEntry(
+                support_id=item.support_id,
+                evidence_item=item,
+                source_group_id=None,
+                linked_atom_ids=("A1", "A2"),
+                admission_status=EvidenceAdmissionStatus.ADMITTED,
+                hard_reject_reasons=(),
+                soft_signals=(EvidenceAdmissionReason.ACTIVE_CITABLE,),
+                rerank_rank=index,
+                source_order=index,
+            )
+            for index, item in enumerate(evidence, 1)
+        ),
+        rejected_entries=(),
+        per_atom_candidate_support_ids=tuple(
+            (atom.atom_id, tuple(item.support_id for item in evidence))
+            for atom in atoms
+        ),
+        complete_group_ids=(),
+        partial_group_ids=(),
+        missing_atom_ids=(),
+        physical_table_facts=facts,
+        atom_fact_bindings=tuple(
+            AtomFactBinding(
+                atom_id=atom.atom_id,
+                fact_id=fact.fact_id,
+                relation_status="SUPPORTED",
+                requested_target=atom.target,
+                requested_relation="职责",
+            )
+            for atom, fact in zip(atoms, facts, strict=True)
+        ),
+    )
+
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+
+    assert tuple(item.row_index for item in plan.selections) == (1, 2)
+    assert tuple(item.atom_ids for item in plan.obligations) == (
+        ("A1",),
+        ("A2",),
+    )
+    assert not (
+        set(plan.selections[0].value_support_ids)
+        & set(plan.selections[1].value_support_ids)
+    )
 
 
 def test_unresolved_explicit_source_cannot_enter_deterministic_path() -> None:
@@ -812,6 +1096,44 @@ def test_split_chunks_of_same_source_node_are_one_member() -> None:
         evidence[1].support_id,
         evidence[2].support_id,
     }
+
+
+def test_source_list_ending_with_etc_is_complete_only_for_that_source() -> None:
+    query_plan, pack, evidence = _list_fixture(
+        second_member_text="2. 负责现场调试、问题修复等。"
+    )
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+    claims = tuple(
+        ValidatedNaturalClaim(
+            claim_id=f"C{index}",
+            atom_ids=("A1",),
+            claim=AnswerClaim(
+                text=item.citation_text,
+                supports=(
+                    ClaimSupport(
+                        support_id=item.support_id,
+                        quote=item.citation_text,
+                    ),
+                ),
+            ),
+        )
+        for index, item in enumerate(evidence[1:], 1)
+    )
+
+    coverage = reduce_plan_coverage(
+        plan,
+        _generation_plan_artifacts(
+            plan,
+            claims,
+            evidence,
+            skip_claim_ids=frozenset(),
+        ),
+    )
+
+    assert coverage.complete
+    assert coverage.obligations[0].covered_member_keys == (
+        plan.obligations[0].required_member_keys
+    )
 
 
 def test_coverage_rejects_changed_plan_or_selection_identity() -> None:

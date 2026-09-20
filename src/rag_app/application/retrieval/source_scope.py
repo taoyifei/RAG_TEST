@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 
 from rag_app.application.retrieval.semantics import split_explicit_source_scope
 from rag_app.core.identifiers import canonical_sha256
@@ -47,6 +48,11 @@ _EXISTENCE = re.compile(
     r"(?:文档|文件|模板|规范|制度|手册)|目录(?:中|里)?(?:有|列出)"
 )
 _REFERENCE = re.compile(r"提到|提及|引用|参考对象|列为参考")
+_DOCUMENT_LOOKUP = re.compile(
+    r"^(?:在哪|在哪里|哪里|哪找|是否(?:存在|入库|收录)|"
+    r"有没有(?:这|该|此)?(?:份|个)?(?:文档|文件|模板|规范|制度|手册))"
+    r"[？?]?$"
+)
 _DOCUMENT_EXTENSION = re.compile(r"(?i)\.(?:docx?|pdf|xlsx?|pptx?|txt|md)$")
 _TRUSTED_ALIAS_KEYS = (
     "trusted_aliases",
@@ -60,6 +66,39 @@ _CATALOG_ONLY_KEYS = (
     "content_available",
 )
 _MIN_COMPARISON_DOCUMENTS = 2
+_MAX_QUERY_ATOMS = 4
+_SOURCE_SCOPE_KEYS = tuple(f"SOURCE_{letter}" for letter in "ABCDEFGH")
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedSourceMention:
+    """一处来源提及及其独立的文档身份许可。"""
+
+    scope_key: str
+    text: str
+    resolution: SourceResolution
+    allowed_documents: tuple[SourceDocumentIdentity, ...]
+    scope_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedSourceContext:
+    """业务分析前冻结的来源角色、身份和问题视图。"""
+
+    query_view: ResolvedQueryView
+    source_intent: SourceIntent
+    mentions: tuple[str, ...]
+    mention_scopes: tuple[ResolvedSourceMention, ...]
+    resolution: SourceResolution
+    allowed_documents: tuple[SourceDocumentIdentity, ...]
+    required_content: SourceContentRequirement
+    registry_revision: str
+    scope_digest: str
+
+    @property
+    def resolution_required(self) -> bool:
+        """返回原问是否声明了必须解析的来源权限。"""
+        return bool(self.mentions)
 
 
 def normalize_source_label(value: str) -> str:
@@ -135,56 +174,119 @@ def _mention_scope_digest(query_plan: QueryPlan) -> str | None:
     )
 
 
-def build_resolved_query_view(query_plan: QueryPlan) -> ResolvedQueryView:
-    """在业务解释前冻结来源角色、原始跨度和统一问题正文。
+def _document_set_business_query(
+    normalized: str,
+    mentions: tuple[str, ...],
+) -> str:
+    """用不含标题词义的稳定来源键替换文档集合提及。"""
+    mention_indexes = {
+        unicodedata.normalize("NFKC", mention).strip(): index
+        for index, mention in enumerate(mentions)
+        if index < len(_SOURCE_SCOPE_KEYS)
+    }
+    replacements: list[tuple[int, int, str]] = []
+    for match in _BOOK_TITLE.finditer(normalized):
+        index = mention_indexes.get(match["title"].strip())
+        if index is None:
+            continue
+        replacements.append(
+            (match.start(), match.end(), f"【{_SOURCE_SCOPE_KEYS[index]}】")
+        )
+    result = normalized
+    for start, end, replacement in reversed(replacements):
+        result = f"{result[:start]}{replacement}{result[end:]}"
+    return result
 
-    Args:
-        query_plan: 已完成活动文档身份解析的兼容查询计划。
 
-    Returns:
-        保留原文定位且只移除来源包装的统一问题视图。
-
-    """
-    original = query_plan.original_query
+def _build_query_view(  # noqa: PLR0913
+    original: str,
+    *,
+    intent: SourceIntent,
+    mentions: tuple[str, ...],
+    scope_digest: str | None,
+    mention_scope_digests: tuple[str | None, ...] = (),
+    fallback_qualifier: str | None = None,
+) -> ResolvedQueryView:
+    """只按已识别角色移除来源包装，保留所有原始跨度。"""
     normalized = unicodedata.normalize("NFKC", original)
     offsets = _normalized_offsets(original)
-    intent, mentions = _source_mentions(normalized)
-    scope_digest = _mention_scope_digest(query_plan)
     leading_source, leading_body, _body_start = split_explicit_source_scope(
         normalized
     )
-    business_query = leading_body if leading_source else normalized
-    mention_specs: list[tuple[str, SourceMentionRole]] = []
+    if intent is SourceIntent.DOCUMENT_SET:
+        business_query = _document_set_business_query(normalized, mentions)
+    elif leading_source and intent is SourceIntent.DOCUMENT_AUTHORITY:
+        business_query = leading_body
+    else:
+        business_query = normalized
+    mention_specs: list[
+        tuple[str, SourceMentionRole, str | None, str | None]
+    ] = []
     if intent is SourceIntent.MENTION_IN_SOURCE and mentions:
         owner_match = _REFERENCE_OWNER.match(normalized)
         if owner_match is not None:
             business_query = normalized[owner_match.end("source") :].lstrip(
                 " 的中里，,:："
             )
-        mention_specs.append((mentions[0], SourceMentionRole.SOURCE_OWNER))
+        mention_specs.append(
+            (
+                mentions[0],
+                SourceMentionRole.SOURCE_OWNER,
+                _SOURCE_SCOPE_KEYS[0],
+                (
+                    mention_scope_digests[0]
+                    if mention_scope_digests
+                    else scope_digest
+                ),
+            )
+        )
         mention_specs.extend(
-            (match["title"].strip(), SourceMentionRole.REFERENCED_OBJECT)
+            (
+                match["title"].strip(),
+                SourceMentionRole.REFERENCED_OBJECT,
+                None,
+                None,
+            )
             for match in _BOOK_TITLE.finditer(normalized)
         )
     elif intent in {SourceIntent.DOCUMENT_AUTHORITY, SourceIntent.DOCUMENT_SET}:
         mention_specs.extend(
-            (mention, SourceMentionRole.AUTHORITY) for mention in mentions
-        )
-    elif not mentions:
-        qualifier = next(
             (
-                atom.source_qualifier
-                for atom in query_plan.atoms
-                if atom.source_qualifier
-            ),
-            None,
+                mention,
+                SourceMentionRole.AUTHORITY,
+                _SOURCE_SCOPE_KEYS[index],
+                (
+                    mention_scope_digests[index]
+                    if index < len(mention_scope_digests)
+                    else scope_digest
+                ),
+            )
+            for index, mention in enumerate(mentions)
+            if index < len(_SOURCE_SCOPE_KEYS)
         )
-        if qualifier:
-            mention_specs.append((qualifier, SourceMentionRole.AUTHORITY))
+    else:
+        mention_specs.extend(
+            (
+                match["title"].strip(),
+                SourceMentionRole.REFERENCED_OBJECT,
+                None,
+                None,
+            )
+            for match in _BOOK_TITLE.finditer(normalized)
+        )
+        if not mention_specs and fallback_qualifier:
+            mention_specs.append(
+                (
+                    fallback_qualifier,
+                    SourceMentionRole.AUTHORITY,
+                    _SOURCE_SCOPE_KEYS[0],
+                    scope_digest,
+                )
+            )
 
     source_mentions: list[SourceMentionSpan] = []
     seen: set[tuple[int, int, SourceMentionRole]] = set()
-    for mention, role in mention_specs:
+    for mention, role, scope_key, mention_digest in mention_specs:
         span = _original_span(
             original,
             normalized,
@@ -201,11 +303,8 @@ def build_resolved_query_view(query_plan: QueryPlan) -> ResolvedQueryView:
                 role=role,
                 original_start=start,
                 original_end=end,
-                scope_digest=(
-                    scope_digest
-                    if role is not SourceMentionRole.REFERENCED_OBJECT
-                    else None
-                ),
+                scope_key=scope_key,
+                scope_digest=mention_digest,
             )
         )
     return ResolvedQueryView(
@@ -219,6 +318,35 @@ def build_resolved_query_view(query_plan: QueryPlan) -> ResolvedQueryView:
                 key=lambda item: (item.original_start, item.original_end),
             )
         ),
+    )
+
+
+def build_resolved_query_view(query_plan: QueryPlan) -> ResolvedQueryView:
+    """从已签发 QueryPlan 重建与前置阶段相同的问题视图。
+
+    Args:
+        query_plan: 已完成活动文档身份解析的兼容查询计划。
+
+    Returns:
+        保留原文定位且只移除来源包装的统一问题视图。
+
+    """
+    intent, mentions = _source_mentions(query_plan.original_query)
+    scope_digest = _mention_scope_digest(query_plan)
+    qualifier = next(
+        (
+            atom.source_qualifier
+            for atom in query_plan.atoms
+            if atom.source_qualifier
+        ),
+        None,
+    )
+    return _build_query_view(
+        query_plan.original_query,
+        intent=intent,
+        mentions=mentions,
+        scope_digest=scope_digest,
+        fallback_qualifier=qualifier,
     )
 
 
@@ -257,26 +385,37 @@ def _catalog_only(document: CatalogDocument) -> bool:
     return False
 
 
-def _source_mentions(query: str) -> tuple[SourceIntent, tuple[str, ...]]:
+def _source_mentions(  # noqa: PLR0911
+    query: str,
+) -> tuple[SourceIntent, tuple[str, ...]]:
     normalized = unicodedata.normalize("NFKC", query).strip()
-    source, _body, _offset = split_explicit_source_scope(normalized)
-    if source:
-        return SourceIntent.DOCUMENT_AUTHORITY, (source,)
-    leading = _LEADING_BOOK_AUTHORITY.match(normalized)
-    if leading is not None:
-        return SourceIntent.DOCUMENT_AUTHORITY, (leading["source"],)
-    owner = _REFERENCE_OWNER.match(normalized)
-    if owner is not None:
-        return SourceIntent.MENTION_IN_SOURCE, (owner["source"],)
     book_titles = tuple(
         dict.fromkeys(
             match["title"].strip() for match in _BOOK_TITLE.finditer(normalized)
         )
     )
+    source, body, _offset = split_explicit_source_scope(normalized)
+    if source:
+        if _DOCUMENT_LOOKUP.fullmatch(body.strip()):
+            return SourceIntent.OPEN, ()
+        body_titles = tuple(_BOOK_TITLE.finditer(body))
+        if (
+            len(book_titles) >= _MIN_COMPARISON_DOCUMENTS
+            and len(body_titles) == 1
+            and _COMPARISON.search(normalized)
+        ):
+            return SourceIntent.DOCUMENT_SET, book_titles
+        return SourceIntent.DOCUMENT_AUTHORITY, (source,)
+    owner = _REFERENCE_OWNER.match(normalized)
+    if owner is not None:
+        return SourceIntent.MENTION_IN_SOURCE, (owner["source"],)
     if len(book_titles) >= _MIN_COMPARISON_DOCUMENTS and _COMPARISON.search(
         normalized
     ):
         return SourceIntent.DOCUMENT_SET, book_titles
+    leading = _LEADING_BOOK_AUTHORITY.match(normalized)
+    if leading is not None:
+        return SourceIntent.DOCUMENT_AUTHORITY, (leading["source"],)
     return SourceIntent.OPEN, ()
 
 
@@ -358,11 +497,163 @@ def _resolve_mention(
     return SourceResolution.RESOLVED, identities
 
 
+def _resolve_mentions(
+    intent: SourceIntent,
+    mentions: tuple[str, ...],
+    documents: tuple[CatalogDocument, ...],
+) -> tuple[SourceResolution, tuple[SourceDocumentIdentity, ...]]:
+    """把请求级来源集合解析为不可跨文档借用的身份集合。"""
+    if not mentions:
+        return SourceResolution.OPEN, ()
+    if intent is not SourceIntent.DOCUMENT_SET:
+        return _resolve_mention(mentions[0], documents)
+    resolved = tuple(
+        _resolve_mention(mention, documents) for mention in mentions
+    )
+    if all(state is SourceResolution.RESOLVED for state, _ids in resolved):
+        return (
+            SourceResolution.RESOLVED,
+            tuple(
+                dict.fromkeys(
+                    identity
+                    for _state, identities in resolved
+                    for identity in identities
+                )
+            ),
+        )
+    if any(state is SourceResolution.AMBIGUOUS for state, _ids in resolved):
+        return SourceResolution.AMBIGUOUS, ()
+    if any(state is SourceResolution.CATALOG_ONLY for state, _ids in resolved):
+        return SourceResolution.CATALOG_ONLY, ()
+    return SourceResolution.UNRESOLVED, ()
+
+
+def _resolved_source_mentions(
+    intent: SourceIntent,
+    mentions: tuple[str, ...],
+    documents: tuple[CatalogDocument, ...],
+    *,
+    required_content: SourceContentRequirement,
+    registry_revision: str,
+) -> tuple[ResolvedSourceMention, ...]:
+    """为每处来源提及保留独立身份，供文档集合逐 Atom 签发。"""
+    resolved: list[ResolvedSourceMention] = []
+    for index, mention in enumerate(mentions):
+        if index >= len(_SOURCE_SCOPE_KEYS):
+            break
+        resolution, allowed_documents = _resolve_mention(mention, documents)
+        scope_key = _SOURCE_SCOPE_KEYS[index]
+        scope_digest = canonical_sha256(
+            {
+                "schema": SOURCE_SCOPE_SCHEMA_REVISION,
+                "scope_key": scope_key,
+                "source_intent": intent.value,
+                "resolution": resolution.value,
+                "allowed_documents": [
+                    item.model_dump(mode="json") for item in allowed_documents
+                ],
+                "required_content": required_content.value,
+                "mention_sha256": canonical_sha256(mention),
+                "registry_revision": registry_revision,
+            }
+        )
+        resolved.append(
+            ResolvedSourceMention(
+                scope_key=scope_key,
+                text=mention,
+                resolution=resolution,
+                allowed_documents=allowed_documents,
+                scope_digest=scope_digest,
+            )
+        )
+    return tuple(resolved)
+
+
+def query_requires_source_resolution(query: str) -> bool:
+    """判断原问是否包含必须在业务分析前解析的来源权限。"""
+    _intent, mentions = _source_mentions(query)
+    return bool(mentions)
+
+
+def resolve_query_source_context(
+    query: str,
+    documents: tuple[CatalogDocument, ...],
+    *,
+    registry_revision: str,
+) -> ResolvedSourceContext:
+    """在 QueryAnalyzer 和 Planner 前冻结来源身份及业务问题视图。"""
+    intent, mentions = _source_mentions(query)
+    required_content = _required_content(query, intent)
+    mention_scopes = _resolved_source_mentions(
+        intent,
+        mentions,
+        documents,
+        required_content=required_content,
+        registry_revision=registry_revision,
+    )
+    resolution, allowed_documents = _resolve_mentions(
+        intent, mentions, documents
+    )
+    scope_digest = canonical_sha256(
+        {
+            "schema": SOURCE_SCOPE_SCHEMA_REVISION,
+            "source_intent": intent.value,
+            "resolution": resolution.value,
+            "allowed_documents": [
+                item.model_dump(mode="json") for item in allowed_documents
+            ],
+            "required_content": required_content.value,
+            "mention_sha256": [canonical_sha256(item) for item in mentions],
+            "registry_revision": registry_revision,
+        }
+    )
+    return ResolvedSourceContext(
+        query_view=_build_query_view(
+            query,
+            intent=intent,
+            mentions=mentions,
+            scope_digest=scope_digest,
+            mention_scope_digests=(
+                tuple(item.scope_digest for item in mention_scopes)
+                if intent is SourceIntent.DOCUMENT_SET
+                else tuple(scope_digest for _mention in mentions)
+            ),
+        ),
+        source_intent=intent,
+        mentions=mentions,
+        mention_scopes=mention_scopes,
+        resolution=resolution,
+        allowed_documents=allowed_documents,
+        required_content=required_content,
+        registry_revision=registry_revision,
+        scope_digest=scope_digest,
+    )
+
+
+def _atom_source_scope_keys(atom: QueryAtom) -> tuple[str, ...]:
+    """读取 Planner 从业务视图保留下来的不透明来源键。"""
+    text = unicodedata.normalize(
+        "NFKC",
+        " ".join(
+            part
+            for part in (
+                atom.target,
+                atom.relation,
+                atom.original_fragment,
+                atom.source_qualifier,
+            )
+            if part
+        ),
+    ).casefold()
+    return tuple(key for key in _SOURCE_SCOPE_KEYS if key.casefold() in text)
+
+
 def resolve_query_plan_source_scopes(
     query_plan: QueryPlan,
     documents: tuple[CatalogDocument, ...],
     *,
     registry_revision: str,
+    root_context: ResolvedSourceContext | None = None,
 ) -> QueryPlan:
     """为 QueryPlan 的每个 Atom 签发精确文档身份许可。
 
@@ -374,14 +665,36 @@ def resolve_query_plan_source_scopes(
         query_plan: 已完成原子拆分的当前查询计划。
         documents: 当前请求可见的完整活动文档目录。
         registry_revision: 当前目录与解析策略的稳定修订身份。
+        root_context: 可选的业务分析前来源解析结果；显式来源存在时必须复用。
 
     Returns:
         携带逐 Atom ``SourceScopeDecision`` 且重新签名的 QueryPlan。
 
     """
-    root_intent, root_mentions = _source_mentions(query_plan.original_query)
-    content = _required_content(query_plan.original_query, root_intent)
-    scoped_atoms: list[QueryAtom] = []
+    if root_context is not None and (
+        root_context.query_view.original_query != query_plan.original_query
+    ):
+        raise ValueError("前置来源上下文与 QueryPlan 原问不一致。")
+    root_intent, root_mentions = (
+        (root_context.source_intent, root_context.mentions)
+        if root_context is not None
+        else _source_mentions(query_plan.original_query)
+    )
+    content = (
+        root_context.required_content
+        if root_context is not None
+        else _required_content(query_plan.original_query, root_intent)
+    )
+    atom_scope_specs: list[
+        tuple[
+            QueryAtom,
+            SourceIntent,
+            SourceResolution,
+            tuple[SourceDocumentIdentity, ...],
+            str | None,
+            SourceContentRequirement,
+        ]
+    ] = []
     for atom in query_plan.atoms:
         intent = root_intent
         mentions = root_mentions
@@ -389,61 +702,118 @@ def resolve_query_plan_source_scopes(
             intent = SourceIntent.DOCUMENT_AUTHORITY
             mentions = (atom.source_qualifier,)
         if not mentions:
-            scope = _decision(
-                atom_id=atom.atom_id,
-                source_intent=SourceIntent.OPEN,
-                resolution=SourceResolution.OPEN,
-                allowed_documents=(),
-                required_content=SourceContentRequirement.BODY,
-                mention=None,
-                registry_revision=registry_revision,
+            atom_scope_specs.append(
+                (
+                    atom,
+                    SourceIntent.OPEN,
+                    SourceResolution.OPEN,
+                    (),
+                    None,
+                    SourceContentRequirement.BODY,
+                )
             )
-        elif intent is SourceIntent.DOCUMENT_SET:
-            resolved = tuple(
-                _resolve_mention(mention, documents) for mention in mentions
+            continue
+        if intent is SourceIntent.DOCUMENT_SET:
+            resolution, _allowed = (
+                (root_context.resolution, root_context.allowed_documents)
+                if root_context is not None and root_mentions
+                else _resolve_mentions(intent, mentions, documents)
             )
-            if all(
-                state is SourceResolution.RESOLVED for state, _ids in resolved
-            ):
-                allowed = tuple(
-                    dict.fromkeys(
-                        identity
-                        for _state, identities in resolved
-                        for identity in identities
+            mention_scopes = (
+                root_context.mention_scopes
+                if root_context is not None and root_mentions
+                else _resolved_source_mentions(
+                    intent,
+                    mentions,
+                    documents,
+                    required_content=content,
+                    registry_revision=registry_revision,
+                )
+            )
+            if resolution is not SourceResolution.RESOLVED:
+                atom_scope_specs.append(
+                    (
+                        atom,
+                        intent,
+                        resolution,
+                        (),
+                        "\n".join(mentions),
+                        content,
                     )
                 )
-                resolution = SourceResolution.RESOLVED
-            else:
-                allowed = ()
-                resolution = (
-                    SourceResolution.AMBIGUOUS
-                    if any(
-                        state is SourceResolution.AMBIGUOUS
-                        for state, _ids in resolved
-                    )
-                    else SourceResolution.UNRESOLVED
-                )
-            scope = _decision(
-                atom_id=atom.atom_id,
-                source_intent=intent,
-                resolution=resolution,
-                allowed_documents=allowed,
-                required_content=content,
-                mention="\n".join(mentions),
-                registry_revision=registry_revision,
+                continue
+            keys = set(_atom_source_scope_keys(atom))
+            selected_scopes = tuple(
+                item
+                for item in mention_scopes
+                if not keys or item.scope_key in keys
             )
+            atom_scope_specs.extend(
+                (
+                    atom,
+                    intent,
+                    mention_scope.resolution,
+                    mention_scope.allowed_documents,
+                    mention_scope.text,
+                    content,
+                )
+                for mention_scope in selected_scopes
+            )
+            continue
+        if root_context is not None and root_mentions:
+            resolution = root_context.resolution
+            allowed = root_context.allowed_documents
         else:
-            resolution, allowed = _resolve_mention(mentions[0], documents)
-            scope = _decision(
-                atom_id=atom.atom_id,
-                source_intent=intent,
-                resolution=resolution,
-                allowed_documents=allowed,
-                required_content=content,
-                mention=mentions[0],
-                registry_revision=registry_revision,
+            resolution, allowed = _resolve_mentions(
+                intent,
+                mentions,
+                documents,
             )
-        scoped_atoms.append(atom.model_copy(update={"source_scope": scope}))
+        atom_scope_specs.append(
+            (
+                atom,
+                intent,
+                resolution,
+                allowed,
+                "\n".join(mentions),
+                content,
+            )
+        )
+
+    if len(atom_scope_specs) > _MAX_QUERY_ATOMS:
+        atom_scope_specs = [
+            (
+                atom,
+                root_intent,
+                SourceResolution.AMBIGUOUS,
+                (),
+                "\n".join(root_mentions),
+                content,
+            )
+            for atom in query_plan.atoms
+        ]
+    scoped_atoms: list[QueryAtom] = []
+    for index, (
+        atom,
+        intent,
+        resolution,
+        allowed,
+        mention,
+        required_content,
+    ) in enumerate(atom_scope_specs, 1):
+        atom_id = f"A{index}"
+        scope = _decision(
+            atom_id=atom_id,
+            source_intent=intent,
+            resolution=resolution,
+            allowed_documents=allowed,
+            required_content=required_content,
+            mention=mention,
+            registry_revision=registry_revision,
+        )
+        scoped_atoms.append(
+            atom.model_copy(update={"atom_id": atom_id, "source_scope": scope})
+        )
     scopes = tuple(atom.source_scope for atom in scoped_atoms)
     identity = canonical_sha256(
         {
@@ -468,11 +838,14 @@ def query_plan_requires_source_resolution(query_plan: QueryPlan) -> bool:
 
 
 __all__ = [
+    "ResolvedSourceContext",
     "build_resolved_query_view",
     "evidence_allowed_for_atom",
     "filter_identities_for_scope",
     "normalize_source_label",
     "query_plan_requires_source_resolution",
+    "query_requires_source_resolution",
     "resolve_query_plan_source_scopes",
+    "resolve_query_source_context",
     "source_identity_allowed",
 ]

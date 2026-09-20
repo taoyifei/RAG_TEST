@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import defaultdict
 from collections.abc import Iterable
 
@@ -28,6 +29,7 @@ from rag_app.core.models.answer_plan import (
     CompiledAnswerPlan,
     EvidenceSelection,
     PhysicalTask,
+    ResolvedQueryView,
 )
 from rag_app.core.models.evidence_group import EvidenceGroupKind
 from rag_app.core.models.generation_packet import stable_support_key
@@ -65,6 +67,9 @@ _QUALIFIER_PATTERNS: tuple[tuple[AnswerQualifierKind, re.Pattern[str]], ...] = (
         re.compile(r"不得|禁止|严禁"),
     ),
 )
+_BUSINESS_CLAUSE_SPLIT = re.compile(r"(?:并且|同时|以及|[，,；;。！？?!])")
+_INDEPENDENT_AXIS_JOIN = re.compile(r"(?:和|与|及|、|分别)")
+_LABEL_QUALIFIER = re.compile(r"[（(][^）)]+[）)]")
 
 
 class AnswerPlanCompilationError(ValueError):
@@ -166,6 +171,38 @@ def _qualifier_specs(query: str) -> tuple[tuple[AnswerQualifierKind, str], ...]:
     return tuple(result)
 
 
+def _atom_business_text(atom: QueryAtom, business_query: str) -> str:
+    """只在 Atom 片段属于统一业务视图时读取其限定。"""
+    fragment = unicodedata.normalize(
+        "NFKC", atom.original_fragment or ""
+    ).strip()
+    if fragment and fragment in business_query:
+        return fragment
+    return " ".join(
+        part.strip() for part in (atom.target, atom.relation) if part.strip()
+    )
+
+
+def _atom_qualifier_specs(
+    atom: QueryAtom,
+    business_query: str,
+) -> tuple[tuple[AnswerQualifierKind, str], ...]:
+    """按 Atom 自己的业务片段冻结限定，禁止跨子句传播。"""
+    return _qualifier_specs(_atom_business_text(atom, business_query))
+
+
+def _merged_qualifier_specs(
+    atoms: tuple[QueryAtom, ...],
+    business_query: str,
+) -> tuple[tuple[AnswerQualifierKind, str], ...]:
+    """合并同一物理义务内各 Atom 的限定且保持首次出现顺序。"""
+    merged: dict[AnswerQualifierKind, str] = {}
+    for atom in atoms:
+        for kind, text in _atom_qualifier_specs(atom, business_query):
+            merged.setdefault(kind, text)
+    return tuple(merged.items())
+
+
 def _qualifier_source_ids(
     kind: AnswerQualifierKind,
     fact: PhysicalTableFact,
@@ -234,46 +271,84 @@ def _binding_target_matches_fact(
     return _label_matches(binding.requested_target, target)
 
 
+def _binding_is_axis_description(
+    binding: AtomFactBinding,
+    fact: PhysicalTableFact,
+    business_query: str,
+    registry: dict[str, EvidenceItem],
+) -> bool:
+    """判断未认证 Atom 是否只是同一显式字段的问法片段。
+
+    只允许字段标签与 Planner 关系词出现在同一业务分句且二者之间没有
+    并列轴连接。这样“输入列有哪些内容”可合并，而“输入和周期”或
+    “输入，并且启动条件”仍保留独立义务。
+    """
+    field = normalize_document_label(
+        _LABEL_QUALIFIER.sub("", _header_text(fact, registry))
+    )
+    relation = normalize_document_label(binding.requested_relation)
+    if not field or not relation or field == relation:
+        return False
+    for clause in _BUSINESS_CLAUSE_SPLIT.split(business_query):
+        normalized = normalize_document_label(clause)
+        field_start = normalized.find(field)
+        relation_start = normalized.find(relation)
+        if field_start < 0 or relation_start < 0:
+            continue
+        left_start, left_length, right_start = (
+            (field_start, len(field), relation_start)
+            if field_start <= relation_start
+            else (relation_start, len(relation), field_start)
+        )
+        between = normalized[left_start + left_length : right_start]
+        if not _INDEPENDENT_AXIS_JOIN.search(between):
+            return True
+    return False
+
+
 def _select_fact_bindings(
     *,
     explicit_axes: tuple[bool, bool],
-    has_qualifiers: bool,
     supported: tuple[AtomFactBinding, ...],
     semantic: tuple[AtomFactBinding, ...],
-    same_target: tuple[AtomFactBinding, ...],
+    qualified_same_target: tuple[AtomFactBinding, ...],
+    explicit_axis_fallback: tuple[AtomFactBinding, ...],
 ) -> tuple[tuple[AtomFactBinding, ...], str]:
     """只把已证明属于当前字段的 Atom 绑定进物理事实义务。"""
     explicit_row, explicit_field = explicit_axes
     certified = tuple(dict.fromkeys((*semantic, *supported)))
-    if explicit_row and explicit_field and certified:
+    if (
+        explicit_row
+        and explicit_field
+        and (certified or explicit_axis_fallback)
+    ):
         return (
             tuple(
                 dict.fromkeys(
-                    (*certified, *(same_target if has_qualifiers else ()))
+                    (
+                        *certified,
+                        *explicit_axis_fallback,
+                    )
                 )
             ),
             "EXPLICIT_SCHEMA_AXIS",
         )
     if supported:
         return (
-            tuple(
-                dict.fromkeys(
-                    (*supported, *(same_target if has_qualifiers else ()))
-                )
-            ),
+            tuple(dict.fromkeys((*supported, *qualified_same_target))),
             "CERTIFIED_ATOM_BINDING",
         )
     if explicit_row and semantic:
         return semantic, "SEMANTIC_SCHEMA_AXIS"
-    if has_qualifiers and semantic:
+    if qualified_same_target and semantic:
         return (
-            tuple(dict.fromkeys((*semantic, *same_target))),
+            tuple(dict.fromkeys((*semantic, *qualified_same_target))),
             "QUALIFIED_BASE_FACT",
         )
     return (), ""
 
 
-def _candidate_facts(
+def _candidate_facts(  # noqa: PLR0912
     plan: QueryPlan,
     pack: GenerationEvidencePack,
     business_query: str,
@@ -287,18 +362,23 @@ def _candidate_facts(
     ...,
 ]:
     """只从真实表格 schema 绑定字段，不重新发明来源成员。"""
-    qualifiers = _qualifier_specs(business_query)
+    qualifier_atom_ids = {
+        atom.atom_id
+        for atom in plan.atoms
+        if _atom_qualifier_specs(atom, business_query)
+    }
     bindings_by_fact: dict[str, list[AtomFactBinding]] = defaultdict(list)
     for binding in pack.atom_fact_bindings:
         bindings_by_fact[binding.fact_id].append(binding)
     atoms = {atom.atom_id: atom for atom in plan.atoms}
-    raw: list[
+    candidates: list[
         tuple[
             PhysicalTableFact,
             tuple[AtomFactBinding, ...],
+            tuple[AtomFactBinding, ...],
+            tuple[AtomFactBinding, ...],
             bool,
             bool,
-            str,
         ]
     ] = []
     for fact in pack.physical_table_facts:
@@ -329,12 +409,73 @@ def _candidate_facts(
             for binding in bindings
             if _binding_target_matches_fact(binding, fact, registry)
         )
+        candidates.append(
+            (
+                fact,
+                supported,
+                semantic,
+                same_target,
+                explicit_row,
+                explicit_field,
+            )
+        )
+
+    certified_facts_by_atom: dict[str, set[str]] = defaultdict(set)
+    explicit_facts_by_atom: dict[str, set[str]] = defaultdict(set)
+    for (
+        fact,
+        supported,
+        semantic,
+        same_target,
+        has_explicit_row,
+        has_explicit_field,
+    ) in candidates:
+        for binding in dict.fromkeys((*semantic, *supported)):
+            certified_facts_by_atom[binding.atom_id].add(fact.fact_id)
+        if has_explicit_row and has_explicit_field:
+            for binding in same_target:
+                explicit_facts_by_atom[binding.atom_id].add(fact.fact_id)
+
+    raw: list[
+        tuple[
+            PhysicalTableFact,
+            tuple[AtomFactBinding, ...],
+            bool,
+            bool,
+            str,
+        ]
+    ] = []
+    for (
+        fact,
+        supported,
+        semantic,
+        same_target,
+        explicit_row,
+        explicit_field,
+    ) in candidates:
+        explicit_axis_fallback = tuple(
+            binding
+            for binding in same_target
+            if not certified_facts_by_atom[binding.atom_id]
+            and explicit_facts_by_atom[binding.atom_id] == {fact.fact_id}
+            and _binding_is_axis_description(
+                binding,
+                fact,
+                business_query,
+                registry,
+            )
+        )
+        qualified_same_target = tuple(
+            binding
+            for binding in same_target
+            if binding.atom_id in qualifier_atom_ids
+        )
         selected_bindings, basis = _select_fact_bindings(
             explicit_axes=(explicit_row, explicit_field),
-            has_qualifiers=bool(qualifiers),
             supported=supported,
             semantic=semantic,
-            same_target=same_target,
+            qualified_same_target=qualified_same_target,
+            explicit_axis_fallback=explicit_axis_fallback,
         )
         if selected_bindings:
             raw.append(
@@ -501,11 +642,12 @@ def _structured_member_scope(
     return result if result.required_member_keys else None
 
 
-def compile_answer_plan(
+def compile_answer_plan(  # noqa: PLR0915
     query_plan: QueryPlan,
     pack: GenerationEvidencePack,
     *,
     snapshot_id: str,
+    resolved_query_view: ResolvedQueryView | None = None,
 ) -> CompiledAnswerPlan:
     """把兼容查询计划和可信来源结构编译为唯一执行合同。
 
@@ -513,12 +655,15 @@ def compile_answer_plan(
         query_plan: 已签发来源身份的兼容 Root/Atom 计划。
         pack: 当前请求的有限、已授权来源和物理表格事实。
         snapshot_id: 请求开始时冻结的活动索引身份。
+        resolved_query_view: 业务分析前冻结的问题视图；兼容调用可重建。
 
     Returns:
         下游不得再次从自然语言推导 required set 的冻结计划。
 
     """
-    query_view = build_resolved_query_view(query_plan)
+    query_view = resolved_query_view or build_resolved_query_view(query_plan)
+    if query_view.original_query != query_plan.original_query:
+        raise AnswerPlanCompilationError("ANSWER_PLAN_QUERY_VIEW_MISMATCH")
     scope_digest = _source_scope_digest(query_plan)
     registry = {item.support_id: item for item in pack.evidence}
     if len(registry) != len(pack.evidence):
@@ -532,7 +677,6 @@ def compile_answer_plan(
     selections: list[EvidenceSelection] = []
     obligations: list[AnswerObligation] = []
     selected_atom_ids: set[str] = set()
-    qualifier_specs = _qualifier_specs(query_view.business_query)
     for index, (fact, bindings, basis) in enumerate(candidates, 1):
         atom_ids = tuple(dict.fromkeys(binding.atom_id for binding in bindings))
         selected_atom_ids.update(atom_ids)
@@ -553,7 +697,6 @@ def compile_answer_plan(
                 for support_id in fact.all_support_ids
             ],
             "scope": selection_scope_digest,
-            "basis": basis,
         }
         selections.append(
             EvidenceSelection(
@@ -576,6 +719,13 @@ def compile_answer_plan(
                 binding_basis=basis,
             )
         )
+        atoms = tuple(
+            atom for atom in query_plan.atoms if atom.atom_id in atom_ids
+        )
+        qualifier_specs = _merged_qualifier_specs(
+            atoms,
+            query_view.business_query,
+        )
         qualifiers: list[AnswerQualifier] = []
         for qualifier_index, (kind, text) in enumerate(qualifier_specs, 1):
             support_ids = _qualifier_source_ids(
@@ -592,9 +742,6 @@ def compile_answer_plan(
                     support_ids=support_ids,
                 )
             )
-        atoms = tuple(
-            atom for atom in query_plan.atoms if atom.atom_id in atom_ids
-        )
         obligations.append(
             AnswerObligation(
                 obligation_id=f"O{len(obligations) + 1}",
@@ -635,6 +782,10 @@ def compile_answer_plan(
                 for support_id in item.support_ids
             )
         )
+        qualifier_specs = _atom_qualifier_specs(
+            atom,
+            query_view.business_query,
+        )
         structured_qualifiers = tuple(
             AnswerQualifier(
                 qualifier_id=f"Q{index}",
@@ -667,11 +818,23 @@ def compile_answer_plan(
     for atom in query_plan.atoms:
         if atom.atom_id in selected_atom_ids:
             continue
+        open_qualifiers = tuple(
+            AnswerQualifier(
+                qualifier_id=f"Q{index}",
+                kind=kind,
+                text=text,
+            )
+            for index, (kind, text) in enumerate(
+                _atom_qualifier_specs(atom, query_view.business_query),
+                1,
+            )
+        )
         obligations.append(
             AnswerObligation(
                 obligation_id=f"O{len(obligations) + 1}",
                 operation=AnswerOperation.OPEN_TEXT,
                 atom_ids=(atom.atom_id,),
+                qualifiers=open_qualifiers,
                 source_resolved=_source_resolved(atom),
                 source_closed=False,
             )

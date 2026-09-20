@@ -29,6 +29,7 @@ from rag_app.clients.resilience import StreamCancellation
 from rag_app.core.errors import ProviderInputTooLarge, QueryCancelled
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
+    AnswerDraft,
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
@@ -44,6 +45,7 @@ from rag_app.core.models.query_plan import (
     SourceScopeDecision,
 )
 from rag_app.core.models.retrieval import NaturalClaim
+from rag_app.core.ports import GenerationRequest
 from tests.application.answering.test_evidence_binding import (
     _fixture as _table_fixture,
 )
@@ -109,6 +111,19 @@ class _BatchSplittingAdapter(OpenAICompatibleChatAdapter):
         return super().review_semantics(request)
 
 
+class _GenerationBatchSplittingAdapter(OpenAICompatibleChatAdapter):
+    """整批超预算时只允许两个互斥的逐 Atom 初次生成批。"""
+
+    def generate(self, request: GenerationRequest) -> AnswerDraft:
+        if len(request.execution_atom_ids) > 1:
+            raise ProviderInputTooLarge(
+                "synthetic actual generation batch budget rejection",
+                stage="generation.prepare",
+                code="GENERATION_INPUT_BUDGET_EXCEEDED",
+            )
+        return super().generate(request)
+
+
 class _HttpHarness:
     """保存真实发送请求，复核最多拆成两个互斥批次。"""
 
@@ -121,6 +136,7 @@ class _HttpHarness:
         statuses: tuple[str, ...] | None = None,
         fail_review_preparation: bool = False,
         force_split_review: bool = False,
+        force_split_generation: bool = False,
     ) -> None:
         self.sent: list[httpx.Request] = []
         self.claims = claims
@@ -129,7 +145,9 @@ class _HttpHarness:
         self.after_send: Callable[[int], None] | None = None
         self.append_bad_wire_item = False
         adapter_type = (
-            _BatchSplittingAdapter
+            _GenerationBatchSplittingAdapter
+            if force_split_generation
+            else _BatchSplittingAdapter
             if force_split_review
             else _PreparationFailingAdapter
             if fail_review_preparation
@@ -154,13 +172,13 @@ class _HttpHarness:
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.sent.append(request)
-        assert len(self.sent) <= 3, "生成和至多两个互斥复核批之外不得发送HTTP"
+        assert len(self.sent) <= 4, "生成和复核均最多两个互斥批次"
         body = json.loads(request.content)
         assert body["chat_template_kwargs"] == {"enable_thinking": False}
         data = json.loads(body["messages"][1]["content"])
         if self.after_send:
             self.after_send(len(self.sent))
-        if len(self.sent) == 1:
+        if "atoms" in data:
             read_units = data["read_units"]
             allowed_by_atom = {
                 atom["atom_id"]: set(atom["allowed_ref_ids"])
@@ -183,6 +201,7 @@ class _HttpHarness:
                         ],
                     }
                     for claim in self.claims
+                    if claim.atom_id in allowed_by_atom
                 ]
             }
             if self.append_bad_wire_item:
@@ -604,6 +623,32 @@ def test_two_actual_review_batches_are_disjoint() -> None:
         for body in review_bodies
     )
     assert batches == ({"C1"}, {"C2"})
+
+
+def test_two_actual_generation_batches_are_disjoint() -> None:
+    fixture = _fixture()
+    harness = _HttpHarness(
+        fixture[2],
+        force_split_generation=True,
+    )
+
+    outcome = _run(harness.adapter, fixture)
+
+    assert outcome.accepted_claim_count == 2
+    assert outcome.repair_calls == 0
+    assert outcome.relation_review_calls == 2
+    assert len(harness.sent) == 4
+    bodies = tuple(
+        json.loads(request.content)["messages"][1]["content"]
+        for request in harness.sent
+    )
+    generation_batches = tuple(
+        {item["atom_id"] for item in payload["atoms"]}
+        for body in bodies
+        if "atoms" in (payload := json.loads(body))
+    )
+    assert generation_batches == ({"A1"}, {"A2"})
+    assert not set(generation_batches[0]) & set(generation_batches[1])
 
 
 def test_hard_failure_on_a2_does_not_change_a1_repair_eligibility() -> None:

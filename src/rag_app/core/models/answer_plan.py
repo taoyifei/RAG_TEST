@@ -9,8 +9,8 @@ from pydantic import Field, StrictBool, StrictInt, model_validator
 
 from rag_app.core.models.common import FrozenModel
 
-ANSWER_PLAN_SCHEMA_REVISION = "wb08r-answer-plan-v1"
-ANSWER_PLAN_POLICY_REVISION = "wb08r-answer-plan-policy-v1"
+ANSWER_PLAN_SCHEMA_REVISION = "wb08r-answer-plan-v2"
+ANSWER_PLAN_POLICY_REVISION = "wb08r-answer-plan-policy-v2"
 
 
 class SourceMentionRole(StrEnum):
@@ -68,6 +68,7 @@ class SourceMentionSpan(FrozenModel):
     role: SourceMentionRole
     original_start: StrictInt = Field(ge=0)
     original_end: StrictInt = Field(gt=0)
+    scope_key: str | None = Field(default=None, pattern=r"^SOURCE_[A-H]$")
     scope_digest: str | None = Field(
         default=None, pattern=r"^sha256:[0-9a-f]{64}$"
     )

@@ -28,6 +28,9 @@ from rag_app.application.retrieval.generation_evidence import (
     GenerationEvidenceEntry,
     GenerationEvidencePack,
 )
+from rag_app.application.retrieval.source_scope import (
+    build_resolved_query_view,
+)
 from rag_app.core.errors import ValidationFailed
 from rag_app.core.models import (
     ConfidenceDecision,
@@ -660,7 +663,7 @@ def test_yes_no_fallback_prefers_same_source_action_sentence() -> None:
     assert "一次性正式交付验收" not in result[0]
 
 
-def test_certified_single_fact_uses_direct_extract_without_model() -> None:
+def test_compiled_open_text_fact_does_not_bypass_generation_task() -> None:
     source = _evidence("甲部门保存记录 14 天。")[0]
     certified = source.model_copy(
         update={
@@ -680,6 +683,17 @@ def test_certified_single_fact_uses_direct_extract_without_model() -> None:
     )
     plan = _plan("甲部门")
     generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                certified.citation_text,
+                "A1",
+                "S1",
+            ),
+        ),
+        plan,
+    )
 
     outcome = _answer_with_pack(
         generator,
@@ -688,9 +702,48 @@ def test_certified_single_fact_uses_direct_extract_without_model() -> None:
         ((AtomStatus.SUPPORTED, ("S1",)),),
     )
 
-    assert outcome.mode == "extractive"
-    assert outcome.answer == "根据资料：甲部门保存记录 14 天。 [S1]"
-    generator.generate.assert_not_called()
+    assert outcome.mode == "llm"
+    assert outcome.answer == "甲部门保存记录 14 天。 [S1]"
+    assert outcome.answer_plan_id is not None
+    generator.generate.assert_called_once()
+
+
+def test_strict_compiled_path_rejects_legacy_protocol_without_fallback() -> (
+    None
+):
+    evidence = _evidence("甲部门保存记录 14 天。")
+    plan = _plan("甲部门")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                evidence[0].citation_text,
+                "A1",
+                evidence[0].support_id,
+            ),
+        ),
+        plan,
+    )
+
+    outcome = GroundedAnsweringService(generator).answer(
+        plan.standalone_query,
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        query_plan=plan,
+        atom_support_matrix=_matrix(
+            plan,
+            ((AtomStatus.SUPPORTED, (evidence[0].support_id,)),),
+        ),
+        generation_evidence_pack=_pack(plan, evidence),
+        resolved_query_view=build_resolved_query_view(plan),
+    )
+
+    assert outcome.answer is None
+    assert outcome.reason_code == "GENERATION_OUTPUT_INVALID"
+    assert outcome.repair_calls == 0
+    assert outcome.extractive_fallback_reason is None
+    generator.generate.assert_called_once()
 
 
 def test_invalid_model_quote_cannot_publish_claim_and_uses_excerpt() -> None:

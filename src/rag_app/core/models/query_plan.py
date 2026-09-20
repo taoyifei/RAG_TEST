@@ -19,7 +19,7 @@ EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v2"
 GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-wire-v9"
 NATURAL_RENDERER_REVISION = "wb08r-natural-renderer-v6"
 CORRECTIVE_RETRIEVAL_REVISION = "wb08r-per-atom-correction-v2"
-SOURCE_SCOPE_SCHEMA_REVISION = "wb08r-source-scope-v1"
+SOURCE_SCOPE_SCHEMA_REVISION = "wb08r-source-scope-v2"
 _MAX_ATOMS = 4
 ReasoningEffortValue = Literal["DIRECT", "ASSISTED", "DEEP"]
 
