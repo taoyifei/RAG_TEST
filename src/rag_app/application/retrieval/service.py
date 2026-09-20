@@ -18,6 +18,11 @@ from decimal import Decimal
 from time import perf_counter
 from typing import Literal
 
+from rag_app.application.answering.field_resolution import (
+    build_field_candidates,
+    default_field_resolutions,
+    merge_field_resolutions,
+)
 from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     GroundedOutcome,
@@ -28,6 +33,7 @@ from rag_app.application.answering.source_projection import (
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlannerPort,
     AdaptivePlanOutcome,
+    FieldResolutionOutcome,
     ReasoningEffort,
     catalog_matches,
     is_navigation_query,
@@ -164,6 +170,9 @@ from rag_app.core.models import (
 from rag_app.core.models.answer_plan import (
     ANSWER_PLAN_POLICY_REVISION,
     ANSWER_PLAN_SCHEMA_REVISION,
+    FieldCandidate,
+    FieldResolution,
+    FieldResolutionStatus,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.generation_packet import (
@@ -191,6 +200,8 @@ from rag_app.core.models.query_plan import (
     AtomSupportMatrix,
     QueryAtom,
     QueryPlan,
+    SourceDocumentIdentity,
+    SourceResolution,
     fallback_query_plan,
     make_query_plan,
 )
@@ -276,6 +287,208 @@ def _source_scope_allows_query_unit(
             document_version_id=document_version_id,
         )
         for atom in query_plan.atoms
+    )
+
+
+def _allowed_documents_for_query_unit(
+    query_plan: QueryPlan,
+    unit_id: str,
+) -> tuple[SourceDocumentIdentity, ...] | None:
+    """把逐 Atom 来源合同投影为排名截断前的 Store 许可。
+
+    ``None`` 仅表示 OPEN；空元组表示拒绝全部。Root 使用各 Atom
+    已解析身份的并集，但不会把未解析范围误当成开放查询。
+    """
+    if unit_id != "ROOT":
+        atom = next(
+            (item for item in query_plan.atoms if item.atom_id == unit_id),
+            None,
+        )
+        if atom is None:
+            return ()
+        decision = atom.source_scope
+        if decision is None or decision.resolution is SourceResolution.OPEN:
+            return None
+        if decision.resolution is not SourceResolution.RESOLVED:
+            return ()
+        return decision.allowed_documents
+    decisions = tuple(atom.source_scope for atom in query_plan.atoms)
+    if any(
+        decision is None or decision.resolution is SourceResolution.OPEN
+        for decision in decisions
+    ):
+        return None
+    identities = {
+        (identity.document_id, identity.document_version_id): identity
+        for decision in decisions
+        if decision is not None
+        and decision.resolution is SourceResolution.RESOLVED
+        for identity in decision.allowed_documents
+    }
+    return tuple(identities[key] for key in sorted(identities))
+
+
+def _scope_digest_for_query_unit(query_plan: QueryPlan, unit_id: str) -> str:
+    """返回逐 Atom 或 Root 并集来源范围的稳定摘要。"""
+    if unit_id != "ROOT":
+        atom = next(
+            (item for item in query_plan.atoms if item.atom_id == unit_id),
+            None,
+        )
+        if atom is not None and atom.source_scope is not None:
+            return atom.source_scope.scope_digest
+    return canonical_sha256(
+        {
+            "unit_id": unit_id,
+            "atom_scopes": tuple(
+                (
+                    atom.atom_id,
+                    None
+                    if atom.source_scope is None
+                    else atom.source_scope.scope_digest,
+                )
+                for atom in query_plan.atoms
+            ),
+        }
+    )
+
+
+def _scope_candidate_ledger(  # noqa: PLR0913
+    query_plan: QueryPlan,
+    unit_id: str,
+    returned: tuple[ChannelHit, ...],
+    after_access: tuple[ChannelHit, ...],
+    after_scope: tuple[ChannelHit, ...],
+    *,
+    excluded_document_ids: tuple[str, ...],
+    catalog_complete: bool,
+) -> dict[str, object]:
+    """记录不含正文的来源下推与防御性复核损失。"""
+    allowed = _allowed_documents_for_query_unit(query_plan, unit_id)
+    allowed_pairs = (
+        None
+        if allowed is None
+        else {(item.document_id, item.document_version_id) for item in allowed}
+    )
+    allowed_document_ids = (
+        set() if allowed is None else {item.document_id for item in allowed}
+    )
+    excluded = set(excluded_document_ids)
+    rejected = Counter(
+        {
+            "ACL_DENIED": 0,
+            "DOCUMENT_OUT_OF_SCOPE": 0,
+            "VERSION_MISMATCH": 0,
+            "EXCLUDED_DOCUMENT": 0,
+            "MISSING_SOURCE_IDENTITY": 0,
+        }
+    )
+    access_keys = {
+        (item.chunk_id, item.document_id, item.document_version_id)
+        for item in after_access
+    }
+    scoped_keys = {
+        (item.chunk_id, item.document_id, item.document_version_id)
+        for item in after_scope
+    }
+    for item in returned:
+        identity = (item.chunk_id, item.document_id, item.document_version_id)
+        if identity in scoped_keys:
+            continue
+        if not item.document_id or not item.document_version_id:
+            rejected["MISSING_SOURCE_IDENTITY"] += 1
+        elif item.document_id in excluded:
+            rejected["EXCLUDED_DOCUMENT"] += 1
+        elif identity not in access_keys:
+            rejected["ACL_DENIED"] += 1
+        elif (
+            allowed_pairs is not None
+            and item.document_id in allowed_document_ids
+            and (item.document_id, item.document_version_id)
+            not in allowed_pairs
+        ):
+            rejected["VERSION_MISMATCH"] += 1
+        else:
+            rejected["DOCUMENT_OUT_OF_SCOPE"] += 1
+    unique_after = {item.chunk_id for item in after_scope}
+    return {
+        "scope_digest": _scope_digest_for_query_unit(query_plan, unit_id),
+        "scope_pushdown_applied": allowed is not None,
+        "allowed_document_count": 0 if allowed is None else len(allowed),
+        "catalog_complete": catalog_complete,
+        "global_prefilter_count": None,
+        "global_prefilter_count_reason": "STORE_PUSHDOWN_NO_GLOBAL_PROBE",
+        "store_returned_count": len(returned),
+        "after_access_filter_count": len(after_access),
+        "returned_before_defense_count": len(after_access),
+        "after_defense_count": len(after_scope),
+        "deduplicated_count": len(after_scope) - len(unique_after),
+        "rejected_counts": tuple(sorted(rejected.items())),
+        "allowed_identity_digests": tuple(
+            canonical_sha256(
+                {
+                    "document_id": item.document_id,
+                    "document_version_id": item.document_version_id,
+                }
+            )
+            for item in (() if allowed is None else allowed)
+        ),
+        "returned_identity_digests": tuple(
+            dict.fromkeys(
+                canonical_sha256(
+                    {
+                        "document_id": item.document_id,
+                        "document_version_id": item.document_version_id,
+                    }
+                )
+                for item in after_scope
+            )
+        ),
+    }
+
+
+def _answer_binding_cache_key(
+    base_cache_key: str,
+    query_plan: QueryPlan,
+    candidates: tuple[FieldCandidate, ...],
+    resolutions: tuple[FieldResolution, ...],
+    *,
+    schema_complete_atom_ids: frozenset[str],
+) -> str:
+    """把来源、基础字段绑定和完整要求加入最终回答缓存身份。"""
+    candidates_by_id = {item.candidate_id: item for item in candidates}
+    selected = tuple(
+        (
+            resolution.atom_id,
+            resolution.status.value,
+            tuple(
+                (
+                    candidate_id,
+                    candidate.fact_id,
+                    candidate.document_id,
+                    candidate.document_version_id,
+                    candidate.table_key,
+                    candidate.row_index,
+                    candidate.value_column_index,
+                )
+                for candidate_id in resolution.candidate_ids
+                if (candidate := candidates_by_id.get(candidate_id)) is not None
+            ),
+            resolution.query_span_start,
+            resolution.query_span_end,
+            resolution.reason_code,
+        )
+        for resolution in resolutions
+    )
+    return canonical_sha256(
+        {
+            "base_cache_key": base_cache_key,
+            "query_plan_id": query_plan.plan_id,
+            "schema_complete_atom_ids": sorted(schema_complete_atom_ids),
+            "field_bindings": selected,
+            "answer_plan_schema_revision": ANSWER_PLAN_SCHEMA_REVISION,
+            "answer_plan_policy_revision": ANSWER_PLAN_POLICY_REVISION,
+        }
     )
 
 
@@ -933,12 +1146,17 @@ class RetrievalService:
             source_context=source_context,
         )
         cache_key = cache_identity.persistent_key
-        cached = self._cache.get(cache_key)
-        if cached is not None:
+
+        def replay_cached_result(
+            cached: SearchAnswerResult,
+            *,
+            timing_name: str,
+        ) -> SearchAnswerResult:
+            """复核并投影同一冻结身份下的缓存终态。"""
             self._validate_cached_sources(cached, request, snapshot)
             self._record(trace_id, "cache", {"result": "hit"})
             self._record(trace_id, "complete", {"status": cached.status.value})
-            _finish_timing(stage_timings, "cache", stage_started)
+            _finish_timing(stage_timings, timing_name, stage_started)
             diagnostics = RetrievalDiagnostics(
                 cache_hit=True,
                 stage_timings=tuple(stage_timings),
@@ -955,8 +1173,16 @@ class RetrievalService:
                     "cache_hit": True,
                     "result_origin": "cache",
                     "generation_called_this_request": False,
-                    "interpret_called_this_request": False,
-                    "rewrite_called_this_request": False,
+                    "interpret_called_this_request": any(
+                        call.operation == "query.interpret"
+                        and call.call_count > 0
+                        for call in provider_calls
+                    ),
+                    "rewrite_called_this_request": any(
+                        call.operation == "query.rewrite"
+                        and call.call_count > 0
+                        for call in provider_calls
+                    ),
                     "diagnostics": diagnostics,
                     "diagnostics_summary": _diagnostics_summary(diagnostics),
                     "data_plane": self._query_data_plane(
@@ -980,7 +1206,24 @@ class RetrievalService:
                 _raise_if_cancelled(cancellation, provider_calls)
                 _emit_final(on_final, cached_result, provider_calls)
             return cached_result
-        self._record(trace_id, "cache", {"result": "miss"})
+
+        binding_cache_deferred = (
+            source_context.resolution is SourceResolution.RESOLVED
+        )
+        cached = None if binding_cache_deferred else self._cache.get(cache_key)
+        if cached is not None:
+            return replay_cached_result(cached, timing_name="cache")
+        self._record(
+            trace_id,
+            "cache",
+            {
+                "result": (
+                    "deferred_until_field_binding"
+                    if binding_cache_deferred
+                    else "miss"
+                )
+            },
+        )
         stage_started = _finish_timing(stage_timings, "cache", stage_started)
         if is_navigation_query(request.text):
             referenced_targets = tuple(
@@ -1018,14 +1261,22 @@ class RetrievalService:
                 return catalog_result
         adaptive = AdaptivePlanOutcome()
         adaptive_attempted = False
+        schema_field_resolution_deferred = bool(
+            self._adaptive_planner is not None
+            and effort is not ReasoningEffort.DIRECT
+            and source_context.resolution is SourceResolution.RESOLVED
+        )
         adaptive_reason = (
-            "ADAPTIVE_PLAN_NOT_NEEDED"
+            "ADAPTIVE_PLAN_DEFERRED_TO_SCHEMA"
+            if schema_field_resolution_deferred
+            else "ADAPTIVE_PLAN_NOT_NEEDED"
             if self._adaptive_planner is not None
             else "ADAPTIVE_PLAN_NOT_CONFIGURED"
         )
         if (
             self._adaptive_planner is not None
             and effort is not ReasoningEffort.DIRECT
+            and not schema_field_resolution_deferred
         ):
             _raise_if_cancelled(cancellation, provider_calls)
             adaptive = self._adaptive_planner.plan_adaptive(
@@ -1312,40 +1563,149 @@ class RetrievalService:
                 ).hexdigest(),
             },
         )
+        structure_complete_by_atom: dict[str, bool] = {}
+        structure_loader = getattr(
+            self._source, "load_document_structure", None
+        )
+        for atom in query_plan.atoms:
+            decision = atom.source_scope
+            if (
+                decision is None
+                or decision.resolution is not SourceResolution.RESOLVED
+            ):
+                continue
+            if not callable(structure_loader):
+                structure_complete_by_atom[atom.atom_id] = False
+                self._record(
+                    trace_id,
+                    "scoped_document_structure",
+                    {
+                        "atom_id": atom.atom_id,
+                        "scope_digest": decision.scope_digest,
+                        "entry_available": False,
+                        "catalog_complete": catalog_complete,
+                        "item_count": 0,
+                        "complete": False,
+                        "next_cursor": None,
+                    },
+                )
+                continue
+            structure_page = structure_loader(
+                snapshot,
+                allowed_documents=decision.allowed_documents,
+                cursor=0,
+                limit=self._policy.group_retrieval_chunk_limit,
+            )
+            structure_complete_by_atom[atom.atom_id] = bool(
+                catalog_complete and structure_page.complete
+            )
+            self._record(
+                trace_id,
+                "scoped_document_structure",
+                {
+                    "atom_id": atom.atom_id,
+                    "scope_digest": decision.scope_digest,
+                    "entry_available": True,
+                    "catalog_complete": catalog_complete,
+                    "item_count": len(structure_page.items),
+                    "complete": structure_page.complete,
+                    "next_cursor": structure_page.next_cursor,
+                    "chunk_ids": tuple(
+                        item.chunk_id for item in structure_page.items
+                    ),
+                    "identity_digests": tuple(
+                        dict.fromkeys(
+                            canonical_sha256(
+                                {
+                                    "document_id": item.document_id,
+                                    "document_version_id": (
+                                        item.document_version_id
+                                    ),
+                                }
+                            )
+                            for item in structure_page.items
+                        )
+                    ),
+                },
+            )
         top_k = dict(plan.channel_top_k)
         channel_hits: dict[str, tuple[ChannelHit, ...]] = {}
         degraded: list[str] = []
+        root_allowed_documents = _allowed_documents_for_query_unit(
+            query_plan,
+            query_plan.atoms[0].atom_id if not atom_mode else "ROOT",
+        )
+
+        def admit_single_channel(
+            channel: str,
+            returned: tuple[ChannelHit, ...],
+        ) -> tuple[ChannelHit, ...]:
+            """应用 ACL 与来源防御，并记录真实的逐层候选数量。"""
+            atom_id = query_plan.atoms[0].atom_id
+            after_access = apply_candidate_filters(returned, request)
+            after_scope = tuple(
+                hit
+                for hit in after_access
+                if hit.document_id not in snapshot.excluded_document_ids
+                and _source_scope_allows_query_unit(
+                    query_plan,
+                    atom_id,
+                    document_id=hit.document_id,
+                    document_version_id=hit.document_version_id,
+                )
+            )
+            self._record(
+                trace_id,
+                "source_scope_candidate_ledger",
+                {
+                    "unit_id": atom_id,
+                    "logical_channel": channel.split(":", 1)[0],
+                    **_scope_candidate_ledger(
+                        query_plan,
+                        atom_id,
+                        returned,
+                        after_access,
+                        after_scope,
+                        excluded_document_ids=snapshot.excluded_document_ids,
+                        catalog_complete=catalog_complete,
+                    ),
+                },
+            )
+            return after_scope
+
         if "exact" in plan.channels and not atom_mode:
             _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             try:
-                hits = apply_candidate_filters(
-                    self._exact.search(
-                        snapshot, effective_analysis, limit=top_k["exact"]
-                    ),
-                    request,
+                returned = self._exact.search(
+                    snapshot,
+                    effective_analysis,
+                    limit=top_k["exact"],
+                    allowed_documents=root_allowed_documents,
                 )
             except (ChannelRateLimited, ChannelUnavailable) as error:
                 degraded.append(error.code)
-                hits = ()
+                returned = ()
+            hits = admit_single_channel("exact", returned)
             channel_hits["exact"] = hits
             self._record(trace_id, "exact", {"hit_count": len(hits)})
             _finish_timing(stage_timings, "exact_channel", channel_started)
-        if "structural" in plan.channels and not atom_mode:
+        if (
+            "structural" in plan.channels or root_allowed_documents is not None
+        ) and not atom_mode:
             _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             try:
-                hits = apply_candidate_filters(
-                    self._structural.search(
-                        snapshot,
-                        effective_analysis,
-                        limit=top_k["structural"],
-                    ),
-                    request,
+                returned = self._structural.search(
+                    snapshot,
+                    effective_analysis,
+                    limit=top_k.get("structural", self._policy.channel_top_k),
+                    allowed_documents=root_allowed_documents,
                 )
             except (ChannelRateLimited, ChannelUnavailable) as error:
                 degraded.append(error.code)
-                hits = ()
+                returned = ()
+            hits = admit_single_channel("structural", returned)
             channel_hits["structural"] = hits
             self._record(
                 trace_id,
@@ -1362,25 +1722,23 @@ class RetrievalService:
             _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             for variant in plan.variants:
-                try:
-                    hits = apply_candidate_filters(
-                        self._lexical.search(
-                            snapshot,
-                            variant,
-                            limit=top_k["lexical"],
-                            analysis=effective_analysis,
-                        ),
-                        request,
-                    )
-                except (ChannelRateLimited, ChannelUnavailable) as error:
-                    degraded.append(error.code)
-                    hits = ()
                 name = (
                     "lexical"
                     if variant.kind == "original"
                     else f"lexical:{variant.kind}"
                 )
-                channel_hits[name] = hits
+                try:
+                    returned = self._lexical.search(
+                        snapshot,
+                        variant,
+                        limit=top_k["lexical"],
+                        analysis=effective_analysis,
+                        allowed_documents=root_allowed_documents,
+                    )
+                except (ChannelRateLimited, ChannelUnavailable) as error:
+                    degraded.append(error.code)
+                    returned = ()
+                channel_hits[name] = admit_single_channel(name, returned)
             self._record(
                 trace_id,
                 "lexical",
@@ -1414,6 +1772,7 @@ class RetrievalService:
                     or effective_analysis.normalized_query,
                     self._egress,
                     limit=top_k["dense"],
+                    allowed_documents=root_allowed_documents,
                 )
             except (DenseUnavailable, PolicyDenied) as error:
                 if plan.dense_required:
@@ -1430,8 +1789,10 @@ class RetrievalService:
                 selected_slot = dense.routed.selected_slot_id
                 selected_vector = dense.routed.vector_name
                 route_reason = dense.routed.fallback_reason
-                filtered = apply_candidate_filters(dense.hits, request)
-                channel_hits[f"dense:{selected_slot}"] = filtered
+                dense_channel = f"dense:{selected_slot}"
+                channel_hits[dense_channel] = admit_single_channel(
+                    dense_channel, dense.hits
+                )
                 route_attributes.update(
                     {
                         "attempted_slots": dense.routed.attempted_slot_ids,
@@ -1467,21 +1828,6 @@ class RetrievalService:
                 },
             )
             _finish_timing(stage_timings, "vector_channel", channel_started)
-        if not atom_mode:
-            atom_id = query_plan.atoms[0].atom_id
-            channel_hits = {
-                channel: tuple(
-                    hit
-                    for hit in hits
-                    if _source_scope_allows_query_unit(
-                        query_plan,
-                        atom_id,
-                        document_id=hit.document_id,
-                        document_version_id=hit.document_version_id,
-                    )
-                )
-                for channel, hits in channel_hits.items()
-            }
         atom_links: tuple[AtomCandidateLink, ...] = ()
         unit_fused: tuple[FusedCandidate, ...] | None = None
         unit_seed_ids: tuple[str, ...] = ()
@@ -1497,6 +1843,7 @@ class RetrievalService:
                 degraded=degraded,
                 trace_id=trace_id,
                 stage_timings=stage_timings,
+                catalog_complete=catalog_complete,
             )
             channel_hits = atom_retrieval.channels
             atom_links = atom_retrieval.links
@@ -1605,42 +1952,50 @@ class RetrievalService:
                     dense_required=request.dense_required,
                 )
                 top_k = dict(plan.channel_top_k)
-                if "structural" in plan.channels:
+                if (
+                    "structural" in plan.channels
+                    or root_allowed_documents is not None
+                ):
                     _raise_if_cancelled(cancellation, provider_calls)
                     try:
-                        structural_hits = apply_candidate_filters(
-                            self._structural.search(
-                                snapshot,
-                                effective_analysis,
-                                limit=top_k["structural"],
+                        returned = self._structural.search(
+                            snapshot,
+                            effective_analysis,
+                            limit=top_k.get(
+                                "structural",
+                                self._policy.channel_top_k,
                             ),
-                            request,
+                            allowed_documents=root_allowed_documents,
                         )
                     except (
                         ChannelRateLimited,
                         ChannelUnavailable,
                     ) as error:
                         degraded.append(error.code)
-                        structural_hits = ()
+                        returned = ()
+                    structural_hits = admit_single_channel(
+                        "structural:rewrite", returned
+                    )
                     channel_hits["structural:rewrite"] = structural_hits
                 if "lexical" in plan.channels:
                     _raise_if_cancelled(cancellation, provider_calls)
                     try:
-                        rewrite_hits = apply_candidate_filters(
-                            self._lexical.search(
-                                snapshot,
-                                rewritten.variant,
-                                limit=top_k["lexical"],
-                                analysis=effective_analysis,
-                            ),
-                            request,
+                        returned = self._lexical.search(
+                            snapshot,
+                            rewritten.variant,
+                            limit=top_k["lexical"],
+                            analysis=effective_analysis,
+                            allowed_documents=root_allowed_documents,
                         )
                     except (
                         ChannelRateLimited,
                         ChannelUnavailable,
                     ) as error:
                         degraded.append(error.code)
-                        rewrite_hits = ()
+                        returned = ()
+                    rewrite_hits = admit_single_channel(
+                        "lexical:rewrite", returned
+                    )
                     channel_hits["lexical:rewrite"] = rewrite_hits
                 if "dense" in plan.channels:
                     _raise_if_cancelled(cancellation, provider_calls)
@@ -1651,6 +2006,7 @@ class RetrievalService:
                             or effective_analysis.normalized_query,
                             self._egress,
                             limit=top_k["dense"],
+                            allowed_documents=root_allowed_documents,
                         )
                     except (DenseUnavailable, PolicyDenied) as error:
                         if plan.dense_required:
@@ -1676,8 +2032,10 @@ class RetrievalService:
                             )
                         selected_slot = rewrite_slot
                         selected_vector = rewrite_dense.routed.vector_name
-                        channel_hits[f"dense:{rewrite_slot}:rewrite"] = (
-                            apply_candidate_filters(rewrite_dense.hits, request)
+                        rewrite_channel = f"dense:{rewrite_slot}:rewrite"
+                        channel_hits[rewrite_channel] = admit_single_channel(
+                            rewrite_channel,
+                            rewrite_dense.hits,
                         )
                 selection = self._rank_and_select(
                     request=request,
@@ -1774,6 +2132,27 @@ class RetrievalService:
                     rerank_mode=reranked.mode,
                     trace_id=trace_id,
                 )
+        table_closure = self._neighbors.close_table_context(
+            snapshot,
+            generation_ranked_candidates,
+            self._policy,
+            source_qualifier=analysis.semantics.source_qualifier,
+        )
+        generation_ranked_candidates = table_closure.candidates
+        degraded.extend(table_closure.degraded_reason_codes)
+        self._record(
+            trace_id,
+            "canonical_table_closure",
+            {
+                "candidate_count": len(generation_ranked_candidates),
+                "added_chunk_ids": tuple(
+                    item.hydrated.chunk.chunk_id
+                    for item in generation_ranked_candidates
+                    if item.expansion_reason == "TABLE_CANONICAL_RELATION_UNIT"
+                ),
+                "reason_codes": table_closure.degraded_reason_codes,
+            },
+        )
         correction_elapsed_ms = (perf_counter() - correction_started) * 1000
         source_closure = self._neighbors.close_source_nodes(
             snapshot, generation_ranked_candidates, self._policy
@@ -1862,6 +2241,129 @@ class RetrievalService:
             active_revision_id=snapshot.revision.index_revision_id,
             excluded_document_ids=snapshot.excluded_document_ids,
             policy=self._policy,
+        )
+        all_field_candidates = build_field_candidates(
+            query_plan, generation_evidence_pack
+        )
+        schema_complete_atom_ids = frozenset(
+            atom_id
+            for atom_id, complete in structure_complete_by_atom.items()
+            if complete
+        )
+        field_candidates = tuple(
+            item
+            for item in all_field_candidates
+            if item.atom_id in schema_complete_atom_ids
+        )
+        field_resolutions = tuple(
+            item
+            for item in default_field_resolutions(
+                query_plan,
+                field_candidates,
+                source_context.query_view,
+            )
+            if item.atom_id in schema_complete_atom_ids
+        )
+        schema_field_resolution_active = any(
+            atom.source_scope is not None
+            and atom.source_scope.resolution is SourceResolution.RESOLVED
+            for atom in query_plan.atoms
+        )
+        field_outcome = FieldResolutionOutcome(
+            reason_code=(
+                "FIELD_SCHEMA_SCAN_INCOMPLETE"
+                if schema_field_resolution_active
+                and len(schema_complete_atom_ids) < len(query_plan.atoms)
+                else "FIELD_RESOLUTION_DEFERRED_NO_SCHEMA_CANDIDATE"
+                if schema_field_resolution_deferred
+                else "FIELD_RESOLUTION_NOT_DEFERRED"
+            )
+        )
+        unresolved_atom_ids = {
+            item.atom_id
+            for item in field_resolutions
+            if item.status is not FieldResolutionStatus.EXACT
+        }
+        resolver = getattr(self._adaptive_planner, "resolve_fields", None)
+        interpretable_candidates = tuple(
+            item
+            for item in field_candidates
+            if item.atom_id in unresolved_atom_ids
+        )
+        if (
+            schema_field_resolution_deferred
+            and interpretable_candidates
+            and callable(resolver)
+        ):
+            field_outcome = resolver(
+                request.model_copy(
+                    update={"text": source_context.query_view.business_query}
+                ),
+                interpretable_candidates,
+            )
+            provider_calls.extend(field_outcome.calls)
+            field_resolutions = merge_field_resolutions(
+                field_resolutions,
+                field_outcome.resolutions,
+                field_candidates,
+                source_context.query_view,
+            )
+        generation_evidence_pack = replace(
+            generation_evidence_pack,
+            field_candidates=field_candidates,
+            field_resolutions=field_resolutions,
+            field_resolution_active=schema_field_resolution_active,
+        )
+        self._record(
+            trace_id,
+            "field_resolution",
+            {
+                "deferred_from_pre_schema_interpret": (
+                    schema_field_resolution_deferred
+                ),
+                "candidate_count": len(field_candidates),
+                "discarded_incomplete_schema_candidate_count": (
+                    len(all_field_candidates) - len(field_candidates)
+                ),
+                "schema_complete_atom_ids": tuple(
+                    sorted(schema_complete_atom_ids)
+                ),
+                "candidate_identity_digests": tuple(
+                    canonical_sha256(
+                        {
+                            "atom_id": item.atom_id,
+                            "fact_id": item.fact_id,
+                            "document_id": item.document_id,
+                            "document_version_id": item.document_version_id,
+                            "table_key": item.table_key,
+                            "row_index": item.row_index,
+                            "value_column_index": item.value_column_index,
+                        }
+                    )
+                    for item in field_candidates
+                ),
+                "resolutions": tuple(
+                    {
+                        "atom_id": item.atom_id,
+                        "status": item.status.value,
+                        "candidate_ids": item.candidate_ids,
+                        "query_span": (
+                            item.query_span_start,
+                            item.query_span_end,
+                        ),
+                        "reason_code": item.reason_code,
+                    }
+                    for item in field_resolutions
+                ),
+                "reason_code": field_outcome.reason_code,
+                "attempted": field_outcome.attempted,
+                "failure_category": field_outcome.failure_category,
+                "latency_ms": field_outcome.latency_ms,
+                "input_tokens": field_outcome.input_tokens,
+                "output_tokens": field_outcome.output_tokens,
+                "finish_reason": field_outcome.finish_reason,
+                "transport_timeout_ms": field_outcome.transport_timeout_ms,
+            },
         )
         self._record(
             trace_id,
@@ -1956,6 +2458,42 @@ class RetrievalService:
                 ),
             },
         )
+        if binding_cache_deferred:
+            cache_key = _answer_binding_cache_key(
+                cache_key,
+                query_plan,
+                field_candidates,
+                field_resolutions,
+                schema_complete_atom_ids=schema_complete_atom_ids,
+            )
+            self._record(
+                trace_id,
+                "answer_binding_cache_identity",
+                {
+                    "cache_key": cache_key,
+                    "query_plan_id": query_plan.plan_id,
+                    "field_resolution_count": len(field_resolutions),
+                    "schema_complete_atom_ids": tuple(
+                        sorted(schema_complete_atom_ids)
+                    ),
+                    "answer_plan_schema_revision": (
+                        ANSWER_PLAN_SCHEMA_REVISION
+                    ),
+                    "answer_plan_policy_revision": (
+                        ANSWER_PLAN_POLICY_REVISION
+                    ),
+                },
+            )
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return replay_cached_result(
+                    cached, timing_name="post_binding_cache"
+                )
+            self._record(
+                trace_id,
+                "cache",
+                {"result": "post_binding_miss"},
+            )
         if self._grounded is not None:
             model_evidence_candidates = generation_evidence_pack.evidence
             evidence = _supported_generation_evidence(
@@ -2497,6 +3035,19 @@ class RetrievalService:
                     reranked.mode,
                     failure_category=reranked.failure_category,
                 )
+            )
+        if answer is None and generation_reason == "FIELD_RESOLUTION_AMBIGUOUS":
+            display_message = (
+                "问题对应多个真实来源字段，当前无法确定唯一字段。"
+                "请明确要查询的字段名称。"
+            )
+        elif (
+            answer is None
+            and generation_reason == "FIELD_RESOLUTION_RELATED_ONLY"
+        ):
+            display_message = (
+                "已找到相关来源字段，但现有依据不足以确认它与问题所问字段等义。"
+                "请明确字段名称。"
             )
         result = SearchAnswerResult(
             trace_id=trace_id,
@@ -3278,6 +3829,7 @@ class RetrievalService:
         degraded: list[str],
         trace_id: str,
         stage_timings: list[StageTiming],
+        catalog_complete: bool,
     ) -> _AtomRetrievalOutcome:
         """Root 和原子分别召回，批量嵌入后执行两级有界融合。"""
         started = perf_counter()
@@ -3321,6 +3873,7 @@ class RetrievalService:
             *,
             variant_id: str = "original",
         ) -> None:
+            after_access = apply_candidate_filters(hits, request)
             normalized_hits = tuple(
                 hit.model_copy(
                     update={
@@ -3336,7 +3889,7 @@ class RetrievalService:
                         ),
                     }
                 )
-                for hit in hits
+                for hit in after_access
                 if hit.document_id not in snapshot.excluded_document_ids
                 and _source_scope_allows_query_unit(
                     query_plan,
@@ -3346,6 +3899,23 @@ class RetrievalService:
                 )
             )
             unit_channels[unit_id][channel] = normalized_hits
+            self._record(
+                trace_id,
+                "source_scope_candidate_ledger",
+                {
+                    "unit_id": unit_id,
+                    "logical_channel": channel.split(":", 1)[0],
+                    **_scope_candidate_ledger(
+                        query_plan,
+                        unit_id,
+                        hits,
+                        after_access,
+                        normalized_hits,
+                        excluded_document_ids=(snapshot.excluded_document_ids),
+                        catalog_complete=catalog_complete,
+                    ),
+                },
+            )
             channel_items = merged.setdefault(channel, {})
             for hit in normalized_hits:
                 prior = channel_items.get(hit.chunk_id)
@@ -3353,34 +3923,33 @@ class RetrievalService:
                     channel_items[hit.chunk_id] = hit
 
         for unit in units:
+            allowed_documents = _allowed_documents_for_query_unit(
+                query_plan, unit.unit_id
+            )
             if "exact" in enabled:
                 try:
                     add(
                         unit.unit_id,
                         "exact",
-                        apply_candidate_filters(
-                            self._exact.search(
-                                snapshot,
-                                unit.analysis,
-                                limit=limit_for("exact"),
-                            ),
-                            request,
+                        self._exact.search(
+                            snapshot,
+                            unit.analysis,
+                            limit=limit_for("exact"),
+                            allowed_documents=allowed_documents,
                         ),
                     )
                 except (ChannelRateLimited, ChannelUnavailable) as error:
                     degraded.append(error.code)
-            if "structural" in enabled:
+            if "structural" in enabled or allowed_documents is not None:
                 try:
                     add(
                         unit.unit_id,
                         "structural",
-                        apply_candidate_filters(
-                            self._structural.search(
-                                snapshot,
-                                unit.analysis,
-                                limit=limit_for("structural"),
-                            ),
-                            request,
+                        self._structural.search(
+                            snapshot,
+                            unit.analysis,
+                            limit=limit_for("structural"),
+                            allowed_documents=allowed_documents,
                         ),
                     )
                 except (ChannelRateLimited, ChannelUnavailable) as error:
@@ -3412,14 +3981,12 @@ class RetrievalService:
                         add(
                             unit.unit_id,
                             channel,
-                            apply_candidate_filters(
-                                self._lexical.search(
-                                    snapshot,
-                                    variant,
-                                    limit=limit_for("lexical"),
-                                    analysis=unit.analysis,
-                                ),
-                                request,
+                            self._lexical.search(
+                                snapshot,
+                                variant,
+                                limit=limit_for("lexical"),
+                                analysis=unit.analysis,
+                                allowed_documents=allowed_documents,
                             ),
                             variant_id=variant.identity,
                         )
@@ -3435,6 +4002,12 @@ class RetrievalService:
                     tuple(unit.text for unit in units),
                     self._egress,
                     limit=limit_for("dense"),
+                    allowed_documents=tuple(
+                        _allowed_documents_for_query_unit(
+                            query_plan, unit.unit_id
+                        )
+                        for unit in units
+                    ),
                 )
             except (DenseUnavailable, PolicyDenied) as error:
                 if plan.dense_required:
@@ -3463,7 +4036,7 @@ class RetrievalService:
                     add(
                         unit.unit_id,
                         f"dense:{selected_slot}",
-                        apply_candidate_filters(dense.hits, request),
+                        dense.hits,
                     )
                 self._record(
                     trace_id,

@@ -472,10 +472,10 @@ def test_assisted_and_deep_use_one_planner(
     assert result.interpret_reason_code == "ADAPTIVE_PLAN_INVALID"
 
 
-def test_explicit_source_is_resolved_before_planner_receives_business_query(
+def test_explicit_source_defers_planner_until_schema_is_available(
     tmp_path: Path,
 ) -> None:
-    """来源标题中的数量和字段词不得进入 Analyzer 或模型 Planner。"""
+    """显式来源不得再触发一次缺少真实 schema 的前置解释。"""
     title = "开发中心三种输出工作模式"
     business_query = "这个流程咋办?"
     scope = KnowledgeBaseScope(
@@ -523,9 +523,7 @@ def test_explicit_source_is_resolved_before_planner_receives_business_query(
             )
         )
 
-    assert planner.calls == [
-        (business_query, business_query, ReasoningEffort.ASSISTED)
-    ]
+    assert planner.calls == []
 
 
 def test_explicit_source_version_change_invalidates_execution_identity(

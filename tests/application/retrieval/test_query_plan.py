@@ -14,8 +14,13 @@ from rag_app.application.retrieval.context_resolution import (
     degraded_query_plan,
     resolve_root_query,
 )
-from rag_app.core.identifiers import deterministic_id
-from rag_app.core.models import KnowledgeBaseScope, SearchRequest
+from rag_app.core.identifiers import canonical_sha256, deterministic_id
+from rag_app.core.models import (
+    FieldCandidate,
+    FieldResolutionStatus,
+    KnowledgeBaseScope,
+    SearchRequest,
+)
 from rag_app.product.grounded_runtime import ProductGroundedModel
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
 
@@ -64,6 +69,55 @@ def _planner_response(
                 else json.dumps(payload, ensure_ascii=False),
                 call=None,
                 usage=SimpleNamespace(prompt_tokens=30, completion_tokens=40),
+                finish_reason="stop",
+            )
+
+    model = object.__new__(ProductGroundedModel)
+    model._campaign_required = False  # type: ignore[assignment]
+    model.adapter = Adapter()  # type: ignore[assignment]
+    model.settings = KnowledgeBaseModelSettings()  # type: ignore[assignment]
+    return model
+
+
+def _field_candidate(
+    candidate_id: str,
+    *,
+    atom_id: str,
+    column: int,
+    field_label: str,
+) -> FieldCandidate:
+    """构造只含安全预览的真实 schema 字段候选。"""
+    return FieldCandidate(
+        candidate_id=candidate_id,
+        atom_id=atom_id,
+        fact_id=canonical_sha256(
+            {"atom_id": atom_id, "column": column, "kind": "fact"}
+        ),
+        document_id=deterministic_id("doc", "field-resolution"),
+        document_version_id=deterministic_id("dver", "field-resolution"),
+        table_key=canonical_sha256({"kind": "table"}),
+        row_index=1,
+        value_column_index=column,
+        target_label="需求快验",
+        field_label=field_label,
+        value_preview=f"{field_label}的有限预览",
+        dependency_support_ids=(f"S{column}",),
+    )
+
+
+def _field_response(
+    payload: dict[str, object],
+    observed_calls: list[dict[str, object]],
+) -> ProductGroundedModel:
+    """构造记录调用次数的一次性字段解释模型。"""
+
+    class Adapter:
+        def complete(self, *_args: object, **kwargs: object) -> object:
+            observed_calls.append(kwargs)
+            return SimpleNamespace(
+                content=json.dumps(payload, ensure_ascii=False),
+                call=None,
+                usage=SimpleNamespace(prompt_tokens=12, completion_tokens=8),
                 finish_reason="stop",
             )
 
@@ -203,3 +257,103 @@ def test_schema_failure_trace_records_only_shape_not_question_body() -> None:
         outcome.schema_fallback_detail or ""
     )
     assert "甲" not in (outcome.schema_fallback_detail or "")
+
+
+def test_field_resolution_reuses_one_interpret_call_after_schema() -> None:
+    """schema-aware 解析只调用一次并保留原问逐字跨度。"""
+    request = _request("需求快验开始前必须准备哪些材料？")
+    candidates = (
+        _field_candidate("F1", atom_id="A1", column=1, field_label="输入"),
+        _field_candidate("F2", atom_id="A1", column=2, field_label="输出"),
+    )
+    observed_calls: list[dict[str, object]] = []
+    model = _field_response(
+        {
+            "r": [
+                {
+                    "a": "A1",
+                    "s": "SUPPORTED_PARAPHRASE",
+                    "c": ["F1"],
+                    "q": "准备哪些材料",
+                }
+            ]
+        },
+        observed_calls,
+    )
+
+    outcome = model.resolve_fields(request, candidates)
+
+    assert len(observed_calls) == 1
+    assert observed_calls[0]["operation"] == "query.interpret"
+    assert outcome.reason_code == "FIELD_RESOLUTION_ACCEPTED"
+    assert outcome.resolutions[0].status is (
+        FieldResolutionStatus.SUPPORTED_PARAPHRASE
+    )
+    assert outcome.resolutions[0].candidate_ids == ("F1",)
+    start = request.text.index("准备哪些材料")
+    assert (
+        outcome.resolutions[0].query_span_start,
+        outcome.resolutions[0].query_span_end,
+    ) == (start, start + len("准备哪些材料"))
+
+
+def test_field_resolution_rejects_cross_atom_candidate_without_retry() -> None:
+    """模型不能跨 Atom 借候选，协议失败也不能发起第二次调用。"""
+    request = _request("分别说明甲和乙的输入？")
+    candidates = (
+        _field_candidate("F1", atom_id="A1", column=1, field_label="甲输入"),
+        _field_candidate("F2", atom_id="A2", column=1, field_label="乙输入"),
+    )
+    observed_calls: list[dict[str, object]] = []
+    model = _field_response(
+        {
+            "r": [
+                {
+                    "a": "A1",
+                    "s": "SUPPORTED_PARAPHRASE",
+                    "c": ["F2"],
+                    "q": "甲",
+                },
+                {
+                    "a": "A2",
+                    "s": "RELATED_FIELD",
+                    "c": ["F2"],
+                    "q": "乙",
+                },
+            ]
+        },
+        observed_calls,
+    )
+
+    outcome = model.resolve_fields(request, candidates)
+
+    assert len(observed_calls) == 1
+    assert outcome.reason_code == "FIELD_RESOLUTION_OUTPUT_INVALID"
+    assert outcome.resolutions == ()
+
+
+def test_field_resolution_rejects_non_verbatim_query_span() -> None:
+    """模型返回的解释跨度必须逐字来自当前业务问题。"""
+    request = _request("需求快验要准备什么？")
+    observed_calls: list[dict[str, object]] = []
+    model = _field_response(
+        {
+            "r": [
+                {
+                    "a": "A1",
+                    "s": "SUPPORTED_PARAPHRASE",
+                    "c": ["F1"],
+                    "q": "需要提前准备的材料",
+                }
+            ]
+        },
+        observed_calls,
+    )
+
+    outcome = model.resolve_fields(
+        request,
+        (_field_candidate("F1", atom_id="A1", column=1, field_label="输入"),),
+    )
+
+    assert len(observed_calls) == 1
+    assert outcome.reason_code == "FIELD_RESOLUTION_OUTPUT_INVALID"

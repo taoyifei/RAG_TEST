@@ -19,6 +19,7 @@ from rag_app.core.models import (
     IndexRevisionState,
     NamedVectorPoint,
     RevisionVectorSpec,
+    SourceDocumentIdentity,
     VectorPointPayload,
     vector_point_id,
 )
@@ -253,6 +254,68 @@ def test_deleted_document_is_filtered_before_vector_limit(
         assert len(hits) == 1
         assert hits[0].document_id == active.payload.document_id
         assert hits[0].rank == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "store_type", [MemoryRevisionVectorStore, QdrantRevisionVectorStore]
+)
+def test_document_version_pair_scope_is_applied_before_vector_limit(
+    store_type: type,
+) -> None:
+    """文档与版本必须按 pair 下推，不能展开成笛卡尔积。"""
+    store = store_type()
+    spec = _spec()
+    high_score = _point(spec, "scope-high", (1.0, 0.0))
+    target = _point(spec, "scope-target", (0.5, 0.5))
+    try:
+        store.create_revision(spec)
+        store.upsert_complete_points(spec, (high_score, target))
+        allowed = (
+            SourceDocumentIdentity(
+                document_id=target.payload.document_id,
+                document_version_id=target.payload.document_version_id,
+            ),
+        )
+        hits = store.search_named(
+            spec,
+            slot_id="primary",
+            vector_name="dense_primary",
+            query_vector=(1.0, 0.0),
+            limit=1,
+            allowed_documents=allowed,
+        )
+        assert [item.point_id for item in hits] == [target.point_id]
+
+        cross_pair = (
+            SourceDocumentIdentity(
+                document_id=high_score.payload.document_id,
+                document_version_id=target.payload.document_version_id,
+            ),
+        )
+        assert (
+            store.search_named(
+                spec,
+                slot_id="primary",
+                vector_name="dense_primary",
+                query_vector=(1.0, 0.0),
+                limit=2,
+                allowed_documents=cross_pair,
+            )
+            == ()
+        )
+        assert (
+            store.search_named(
+                spec,
+                slot_id="primary",
+                vector_name="dense_primary",
+                query_vector=(1.0, 0.0),
+                limit=2,
+                allowed_documents=(),
+            )
+            == ()
+        )
     finally:
         store.close()
 

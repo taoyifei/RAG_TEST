@@ -19,6 +19,7 @@ from rag_app.core.models.document import KnowledgeBaseScope
 from rag_app.core.models.generation_packet import PreparedGenerationPacket
 from rag_app.core.models.lifecycle import IndexRevisionRef
 from rag_app.core.models.provider import ProviderCall
+from rag_app.core.models.query_plan import SourceDocumentIdentity
 
 
 class SearchQuery(MetadataModel):
@@ -322,6 +323,7 @@ class VectorSearchRequest(FrozenModel):
     vector_name: str
     query_vector: tuple[StrictFloat, ...] = Field(min_length=1, repr=False)
     limit: StrictInt = Field(gt=0)
+    allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None
 
 
 class LexicalSearchRequest(FrozenModel):
@@ -330,3 +332,4 @@ class LexicalSearchRequest(FrozenModel):
     revision: IndexRevisionRef
     query: str = Field(min_length=1, repr=False)
     limit: StrictInt = Field(gt=0)
+    allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None

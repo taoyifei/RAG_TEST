@@ -196,6 +196,43 @@ class NeighborExpander:
             return ExpansionOutcome(candidates, ("NEIGHBOR_INDEX_CORRUPT",))
         return ExpansionOutcome((*candidates, *context.values()))
 
+    def close_table_context(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        candidates: tuple[RankedChunk, ...],
+        policy: RetrievalPolicy,
+        *,
+        source_qualifier: str | None = None,
+    ) -> ExpansionOutcome:
+        """从已命中的规范表格坐标有界补齐目标行和原始表头。
+
+        该闭合不依赖查询分析器选择的 ``neighbor_mode``。字段解析需要先
+        看见真实 schema，因此只要召回结果已经给出表格坐标，就使用索引
+        提供的规范关系单元读取器补齐同一物理行；读取器仍负责版本、表身份
+        和成员数量上限，不能退化为整文档扫描。
+
+        Args:
+            snapshot: 请求固定的活动索引版本。
+            candidates: 已通过排序和来源边界校验的候选。
+            policy: 表格关系单元的成员及总候选预算。
+            source_qualifier: 可选来源限定，仅用于多来源时的稳定优先级。
+
+        Returns:
+            原候选及规范表头、目标行成员；损坏或超预算时带原因码降级。
+
+        """
+        if not candidates or not _has_table_coordinates(candidates):
+            return ExpansionOutcome(candidates)
+        try:
+            return self._expand_table_context(
+                snapshot,
+                candidates,
+                policy,
+                source_qualifier=source_qualifier,
+            )
+        except IndexCorrupt:
+            return ExpansionOutcome(candidates, ("TABLE_INDEX_CORRUPT",))
+
     def close_source_nodes(
         self,
         snapshot: ActiveRevisionQuerySnapshot,

@@ -9,7 +9,13 @@ from difflib import SequenceMatcher
 from enum import StrEnum
 from typing import Protocol
 
-from rag_app.core.models import ProviderCall, QueryAnalysis, SearchRequest
+from rag_app.core.models import (
+    FieldCandidate,
+    FieldResolution,
+    ProviderCall,
+    QueryAnalysis,
+    SearchRequest,
+)
 from rag_app.core.models.query_plan import QueryAtom
 from rag_app.core.ports.evidence_source import CatalogDocument
 
@@ -89,6 +95,22 @@ class AdaptivePlanOutcome:
     planner_transport_timeout_ms: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class FieldResolutionOutcome:
+    """后移到真实 schema 之后的一次字段解释结果。"""
+
+    resolutions: tuple[FieldResolution, ...] = ()
+    calls: tuple[ProviderCall, ...] = ()
+    reason_code: str = "FIELD_RESOLUTION_NOT_NEEDED"
+    attempted: bool = False
+    failure_category: str | None = None
+    latency_ms: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    finish_reason: str | None = None
+    transport_timeout_ms: int = 0
+
+
 class AdaptivePlannerPort(Protocol):
     """复用当前回答连接的一次轻量语义规划。"""
 
@@ -99,6 +121,14 @@ class AdaptivePlannerPort(Protocol):
         effort: ReasoningEffort,
     ) -> AdaptivePlanOutcome:
         """只解释问题，不生成答案。"""
+        ...
+
+    def resolve_fields(
+        self,
+        request: SearchRequest,
+        candidates: tuple[FieldCandidate, ...],
+    ) -> FieldResolutionOutcome:
+        """在真实 schema 已知后选择短字段候选 ID。"""
         ...
 
 
@@ -258,6 +288,7 @@ def catalog_matches(
 __all__ = [
     "AdaptivePlanOutcome",
     "AdaptivePlannerPort",
+    "FieldResolutionOutcome",
     "ReasoningEffort",
     "catalog_matches",
     "is_navigation_query",

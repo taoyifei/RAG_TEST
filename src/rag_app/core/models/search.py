@@ -33,6 +33,7 @@ from rag_app.core.models.query import (
     QueryKind,
     RequestedAnswerType,
 )
+from rag_app.core.models.query_plan import SourceDocumentIdentity
 from rag_app.core.models.retrieval import EvidenceItem
 from rag_app.core.models.revisions import RevisionVectorSpec
 
@@ -225,6 +226,7 @@ class ExactSearchRequest(FrozenModel):
     identifiers: tuple[str, ...] = ()
     quoted_phrases: tuple[str, ...] = ()
     limit: StrictInt = Field(default=20, gt=0, le=100)
+    allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None
 
 
 class StructuralSearchRequest(FrozenModel):
@@ -242,6 +244,7 @@ class StructuralSearchRequest(FrozenModel):
         default=None, max_length=512, repr=False
     )
     limit: StrictInt = Field(default=20, gt=0, le=100)
+    allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None
 
 
 class RetrievalOrigin(FrozenModel):

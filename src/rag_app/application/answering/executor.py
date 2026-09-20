@@ -10,6 +10,7 @@ from rag_app.application.answering.plan_coverage import (
     CompiledPlanCoverage,
     ValidatedPlanArtifact,
 )
+from rag_app.application.answering.qualifier_evidence import evaluate_qualifier
 from rag_app.application.answering.source_projection import (
     SourceProjectionError,
     render_physical_table_fact,
@@ -23,6 +24,8 @@ from rag_app.core.models.answer_plan import (
     AnswerTaskMode,
     CompiledAnswerPlan,
     EvidenceSelection,
+    QualifierEvidenceResult,
+    QualifierStatus,
 )
 from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.retrieval import (
@@ -53,6 +56,8 @@ class DeterministicExecutionRecord:
     checked_support_ids: tuple[str, ...]
     published_member_keys: tuple[str, ...]
     satisfied_qualifier_ids: tuple[str, ...]
+    satisfied_qualifier_keys: tuple[tuple[str, str], ...]
+    qualifier_results: tuple[QualifierEvidenceResult, ...]
     claim_sha256: str
     origin: str = "DETERMINISTIC_EXECUTION"
 
@@ -177,6 +182,67 @@ def execute_compiled_tasks(
                 text = render_physical_table_fact(fact, registry)
             except SourceProjectionError as error:
                 raise AnswerExecutionError(error.failure_code) from error
+            qualifier_results = tuple(
+                evaluate_qualifier(
+                    qualifier,
+                    member_sources=tuple(
+                        (
+                            dependency.member_key,
+                            dependency.support_ids,
+                        )
+                        for dependency in obligation.member_dependencies
+                    ),
+                    registry=registry,
+                    allowed_document_pairs=frozenset(
+                        {
+                            (
+                                selection.document_id,
+                                selection.document_version_id,
+                            )
+                        }
+                    ),
+                )
+                for obligation in related_obligations
+                for qualifier in obligation.qualifiers
+            )
+            supported_results = tuple(
+                item
+                for item in qualifier_results
+                if item.status is QualifierStatus.SUPPORTED
+            )
+            qualifier_support_ids = tuple(
+                dict.fromkeys(
+                    support_id
+                    for item in supported_results
+                    for support_id in item.support_ids
+                )
+            )
+            claim_source_ids = tuple(
+                dict.fromkeys(
+                    (
+                        *(item.support_id for item in sources),
+                        *(
+                            support_id
+                            for support_id in qualifier_support_ids
+                            if support_id in registry
+                        ),
+                    )
+                )
+            )
+            claim_sources = tuple(
+                registry[support_id] for support_id in claim_source_ids
+            )
+            qualifier_quotes = tuple(
+                dict.fromkeys(
+                    registry[support_id].citation_text.strip()
+                    for support_id in qualifier_support_ids
+                    if support_id in registry
+                    and registry[support_id].citation_text.strip()
+                    and registry[support_id].citation_text.strip() not in text
+                )
+            )
+            if qualifier_quotes:
+                text += "\n来源另载：" + "；".join(qualifier_quotes) + "。"
             claim = AnswerClaim(
                 text=text,
                 supports=tuple(
@@ -184,16 +250,11 @@ def execute_compiled_tasks(
                         support_id=item.support_id,
                         quote=item.citation_text,
                     )
-                    for item in sources
+                    for item in claim_sources
                 ),
             )
-            qualifier_ids = tuple(
-                qualifier.qualifier_id
-                for obligation in related_obligations
-                for qualifier in obligation.qualifiers
-                if qualifier.supported
-                and set(qualifier.support_ids)
-                <= set(selection.dependency_support_ids)
+            qualifier_keys = tuple(
+                item.qualifier_key for item in supported_results
             )
             obligation_ids = tuple(
                 item.obligation_id for item in related_obligations
@@ -204,7 +265,11 @@ def execute_compiled_tasks(
                 obligation_ids=obligation_ids,
                 selection_digests=(selection.selection_digest,),
                 covered_member_keys=selection.member_keys,
-                satisfied_qualifier_ids=tuple(dict.fromkeys(qualifier_ids)),
+                satisfied_qualifier_ids=tuple(
+                    item[1] for item in dict.fromkeys(qualifier_keys)
+                ),
+                satisfied_qualifier_keys=tuple(dict.fromkeys(qualifier_keys)),
+                qualifier_results=qualifier_results,
                 source_closed=True,
                 origin="DETERMINISTIC_EXECUTION",
                 claim=claim,
@@ -216,13 +281,19 @@ def execute_compiled_tasks(
                     plan_id=plan.plan_id,
                     selection_digest=selection.selection_digest,
                     source_digest=canonical_sha256(
-                        tuple(stable_support_key(item) for item in sources)
+                        tuple(
+                            stable_support_key(item) for item in claim_sources
+                        )
                     ),
                     checked_support_ids=tuple(
-                        item.support_id for item in sources
+                        item.support_id for item in claim_sources
                     ),
                     published_member_keys=selection.member_keys,
                     satisfied_qualifier_ids=artifact.satisfied_qualifier_ids,
+                    satisfied_qualifier_keys=(
+                        artifact.satisfied_qualifier_keys
+                    ),
+                    qualifier_results=qualifier_results,
                     claim_sha256=canonical_sha256(claim.text),
                 )
             )
@@ -384,7 +455,7 @@ def render_deterministic_answer(
     coverage: CompiledPlanCoverage,
 ) -> str | None:
     """只组织受检事实和冻结限定缺口，不调用润色模型。"""
-    lines: list[str] = []
+    fact_lines: list[str] = []
     seen: set[tuple[str, tuple[str, ...]]] = set()
     for artifact in execution.artifacts:
         if artifact.claim is None:
@@ -399,25 +470,53 @@ def render_deterministic_answer(
         citations = " ".join(
             f"[{item.support_id}]" for item in artifact.claim.supports
         )
-        lines.append(f"{artifact.claim.text} {citations}")
-    missing_qualifiers = {
-        qualifier_id
+        fact_lines.append(f"{artifact.claim.text} {citations}")
+    missing_qualifier_keys = {
+        qualifier_key
         for item in coverage.obligations
-        for qualifier_id in item.missing_qualifier_ids
+        for qualifier_key in item.missing_qualifier_keys
     }
-    qualifier_text = tuple(
+    results = {
+        item.qualifier_key: item
+        for artifact in execution.artifacts
+        for item in artifact.qualifier_results
+    }
+    contradicted_text = tuple(
         dict.fromkeys(
             qualifier.text
             for obligation in plan.obligations
             for qualifier in obligation.qualifiers
-            if qualifier.qualifier_id in missing_qualifiers
+            if qualifier.qualifier_key in missing_qualifier_keys
+            and (result := results.get(qualifier.qualifier_key)) is not None
+            and result.status is QualifierStatus.CONTRADICTED
         )
     )
-    if qualifier_text:
-        joined = "、".join(f"“{item}”" for item in qualifier_text)
-        lines.append(
+    unresolved_text = tuple(
+        dict.fromkeys(
+            qualifier.text
+            for obligation in plan.obligations
+            for qualifier in obligation.qualifiers
+            if qualifier.qualifier_key in missing_qualifier_keys
+            and (
+                results.get(qualifier.qualifier_key) is None
+                or results[qualifier.qualifier_key].status
+                is QualifierStatus.NOT_ESTABLISHED
+            )
+        )
+    )
+    limitation_lines: list[str] = []
+    if contradicted_text:
+        joined = "、".join(f"“{item}”" for item in contradicted_text)
+        limitation_lines.append(
+            f"现有来源中的相关表述与{joined}这些限定相反，"
+            "不能据此按这些限定筛选结果。"
+        )
+    if unresolved_text:
+        joined = "、".join(f"“{item}”" for item in unresolved_text)
+        limitation_lines.append(
             f"现有来源未直接证明{joined}这些限定，因此不把它们作为结论。"
         )
+    lines = (*limitation_lines, *fact_lines)
     return "\n".join(lines) if lines else None
 
 

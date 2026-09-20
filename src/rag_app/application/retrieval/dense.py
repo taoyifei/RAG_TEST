@@ -11,6 +11,7 @@ from rag_app.core.models import (
     ChannelHit,
     QueryEmbeddingRequest,
     RoutedEmbeddingResult,
+    SourceDocumentIdentity,
 )
 from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import QueryEmbeddingPort, VectorStorePort
@@ -43,6 +44,7 @@ class DenseChannel:
         egress: EgressPolicy,
         *,
         limit: int,
+        allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None,
     ) -> DenseChannelResult:
         """返回 primary 或 standby 中恰好一个 Dense 通道。
 
@@ -51,6 +53,7 @@ class DenseChannel:
             query: 用于 QUERY role embedding 的单条文本。
             egress: 请求 scope 的默认拒绝策略。
             limit: 最大 Dense 候选数。
+            allowed_documents: 排名截断前允许的成对文档与版本身份。
 
         Returns:
             实际 route 与同一 named-vector 空间的候选。
@@ -64,7 +67,12 @@ class DenseChannel:
             ),
             egress,
         )
-        return self._search_routed(snapshot, routed, limit=limit)
+        return self._search_routed(
+            snapshot,
+            routed,
+            limit=limit,
+            allowed_documents=allowed_documents,
+        )
 
     def search_many(
         self,
@@ -73,6 +81,8 @@ class DenseChannel:
         egress: EgressPolicy,
         *,
         limit: int,
+        allowed_documents: tuple[tuple[SourceDocumentIdentity, ...] | None, ...]
+        | None = None,
     ) -> tuple[DenseChannelResult, ...]:
         """同一请求内批量嵌入并顺序查询同一 named vector。
 
@@ -81,6 +91,7 @@ class DenseChannel:
             queries: 每个 Atom 的有序检索文本。
             egress: 请求作用域的出网策略。
             limit: 每个 Atom 的最大 Dense 候选数。
+            allowed_documents: 与 queries 对齐的逐查询来源身份许可。
 
         Returns:
             与查询顺序一致且只使用一个 slot 的 Dense 结果。
@@ -88,6 +99,10 @@ class DenseChannel:
         """
         if not queries:
             raise ValueError("Dense 批量查询不能为空。")
+        if allowed_documents is not None and len(allowed_documents) != len(
+            queries
+        ):
+            raise ValueError("Dense 来源许可必须与查询逐项对齐。")
         unique_queries = tuple(dict.fromkeys(queries))
         revision = ActiveRevisionEmbeddingState(
             topology=snapshot.topology,
@@ -122,12 +137,23 @@ class DenseChannel:
         routed_by_query = dict(zip(unique_queries, routed_items, strict=True))
         seen: set[str] = set()
         results: list[DenseChannelResult] = []
-        for query in queries:
+        for index, query in enumerate(queries):
             routed = routed_by_query[query]
             if query in seen:
                 routed = replace(routed, provider_calls=())
             seen.add(query)
-            results.append(self._search_routed(snapshot, routed, limit=limit))
+            results.append(
+                self._search_routed(
+                    snapshot,
+                    routed,
+                    limit=limit,
+                    allowed_documents=(
+                        None
+                        if allowed_documents is None
+                        else allowed_documents[index]
+                    ),
+                )
+            )
         return tuple(results)
 
     def _search_routed(
@@ -136,6 +162,7 @@ class DenseChannel:
         routed: RoutedEmbeddingResult,
         *,
         limit: int,
+        allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None,
     ) -> DenseChannelResult:
         slot = snapshot.vector_spec.slot(routed.selected_slot_id)
         if slot.vector_name != routed.vector_name:
@@ -150,6 +177,7 @@ class DenseChannel:
             query_vector=routed.vector,
             limit=limit,
             excluded_document_ids=snapshot.excluded_document_ids,
+            allowed_documents=allowed_documents,
         )
         channel = f"dense:{routed.selected_slot_id}"
         return DenseChannelResult(

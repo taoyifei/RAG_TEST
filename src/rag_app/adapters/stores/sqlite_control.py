@@ -63,10 +63,15 @@ from rag_app.core.models import (
     RevisionSlotCoverage,
     RevisionValidationEvidence,
     RevisionVectorSpec,
+    SourceDocumentIdentity,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.ports import MetadataRecord
-from rag_app.core.ports.evidence_source import CatalogDocument
+from rag_app.core.ports.evidence_source import (
+    CatalogDocument,
+    DocumentStructureItem,
+    DocumentStructurePage,
+)
 
 _TERMINAL_REVISION_STATES = {
     IndexRevisionState.ACTIVE,
@@ -1887,6 +1892,78 @@ class SqliteControlStore:
                 )
             )
         return tuple(hydrated)
+
+    def load_document_structure(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        allowed_documents: tuple[SourceDocumentIdentity, ...],
+        cursor: int,
+        limit: int,
+    ) -> DocumentStructurePage:
+        """在许可身份内部、排名之前读取稳定 canonical 结构页。"""
+        if cursor < 0:
+            raise ValueError("document structure cursor 不能为负数。")
+        if not 0 < limit <= _MAX_HYDRATION_CHUNKS:
+            raise ValueError("document structure limit 必须在 1..200。")
+        if not allowed_documents:
+            return DocumentStructurePage((), None, True)
+        pair_clause = " OR ".join(
+            "(c.document_id=? AND c.document_version_id=?)"
+            for _ in allowed_documents
+        )
+        pair_parameters = tuple(
+            value
+            for identity in allowed_documents
+            for value in (
+                identity.document_id,
+                identity.document_version_id,
+            )
+        )
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            statement = (
+                "SELECT c.chunk_id, c.document_id, "  # noqa: S608
+                "c.document_version_id, c.role, c.section_id, "
+                "c.content_sha256 FROM chunks c "
+                "JOIN index_revisions r ON r.index_revision_id=c.revision_id "
+                "JOIN documents d ON d.document_id=c.document_id "
+                "WHERE c.revision_id=? AND r.project_id=? "
+                "AND r.knowledge_base_id=? AND d.deleted_at IS NULL "
+                "AND d.status='active' AND d.lifecycle_status='active' "
+                f"AND ({pair_clause}) "
+                "ORDER BY c.document_id, c.document_version_id, c.row_id "
+                "LIMIT ? OFFSET ?"
+            )
+            rows = connection.execute(
+                statement,
+                (
+                    revision.index_revision_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    *pair_parameters,
+                    limit + 1,
+                    cursor,
+                ),
+            ).fetchall()
+        has_more = len(rows) > limit
+        selected = rows[:limit]
+        items = tuple(
+            DocumentStructureItem(
+                chunk_id=str(row["chunk_id"]),
+                document_id=str(row["document_id"]),
+                document_version_id=str(row["document_version_id"]),
+                role=str(row["role"]),
+                section_id=str(row["section_id"]),
+                content_sha256=str(row["content_sha256"]),
+            )
+            for row in selected
+        )
+        return DocumentStructurePage(
+            items=items,
+            next_cursor=cursor + len(items) if has_more else None,
+            complete=not has_more,
+        )
 
     def section_chunk_ids(
         self,

@@ -2432,7 +2432,13 @@ def _evidence_item(
 def _logical_table_row(
     chunk: Chunk, span: SourceSpan
 ) -> tuple[str, int] | None:
-    """从单一逻辑行的节点映射核对当前 SourceSpan 所属表格行。"""
+    """从规范节点映射核对当前 SourceSpan 唯一所属的表格行。
+
+    一个 canonical Chunk 可以有界容纳表头和多个数据行，不能要求整个
+    Chunk 只有一个 ``row_index``。这里逐个 atom 校验节点映射，只把当前
+    SourceSpan 实际出现的唯一行身份写入证据；节点缺失、跨行复用或映射
+    畸形均保持未确定，禁止根据文本或相邻位置猜测。
+    """
     atoms = dict(chunk.metadata).get("atoms")
     if (
         chunk.role.value != "table"
@@ -2442,7 +2448,6 @@ def _logical_table_row(
     ):
         return None
     identities: set[tuple[str, int]] = set()
-    mapped_nodes: set[str] = set()
     for atom in atoms:
         metadata = atom.get("metadata") if isinstance(atom, dict) else None
         if not isinstance(metadata, dict):
@@ -2457,7 +2462,7 @@ def _logical_table_row(
             or not isinstance(mapping, dict)
         ):
             return None
-        identities.add((table_node, row_index))
+        mapped_nodes: set[str] = set()
         for values in mapping.values():
             if not isinstance(values, (list, tuple)) or any(
                 not isinstance(node_id, str) for node_id in values
@@ -2466,7 +2471,9 @@ def _logical_table_row(
             mapped_nodes.update(
                 node_id for node_id in values if isinstance(node_id, str)
             )
-    if len(identities) != 1 or span.node_id not in mapped_nodes:
+        if span.node_id in mapped_nodes:
+            identities.add((table_node, row_index))
+    if len(identities) != 1:
         return None
     return next(iter(identities))
 

@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from threading import RLock
 from time import perf_counter
-from typing import TypedDict, TypeVar
+from typing import Literal, TypedDict, TypeVar
 
 from pydantic import (
     Field,
@@ -40,6 +40,7 @@ from rag_app.application.answering.semantic_validation import (
 )
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlanOutcome,
+    FieldResolutionOutcome,
     ReasoningEffort,
 )
 from rag_app.application.retrieval.context_resolution import (
@@ -68,6 +69,9 @@ from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AnswerClaim,
     AnswerDraft,
+    FieldCandidate,
+    FieldResolution,
+    FieldResolutionStatus,
     ProviderCall,
     ProviderHealth,
     QueryAnalysis,
@@ -188,6 +192,26 @@ class _InterpretPayload(FrozenModel):
         }:
             raise ValueError("只有列举或计数问题可以返回 expected_count。")
         return self
+
+
+class _FieldResolutionChoice(FrozenModel):
+    """模型只回传短候选 ID、映射状态和逐字原问片段。"""
+
+    a: str = Field(pattern=r"^A[1-4]$")
+    s: Literal[
+        "SUPPORTED_PARAPHRASE",
+        "RELATED_FIELD",
+        "AMBIGUOUS",
+        "NOT_FOUND",
+    ]
+    c: tuple[str, ...] = Field(default=(), max_length=16)
+    q: str = Field(min_length=1, max_length=160)
+
+
+class _FieldResolutionPayload(FrozenModel):
+    """一次 schema-aware 字段解释的完整返回。"""
+
+    r: tuple[_FieldResolutionChoice, ...] = Field(min_length=1, max_length=4)
 
 
 _AdaptivePlanPayload = MinimalPlanPayload
@@ -625,6 +649,184 @@ class ProductGroundedModel:
             structured_output_mode=mode,
             schema_revision=QUERY_PLAN_SCHEMA_REVISION,
             schema_sha256=canonical_sha256(schema),
+        )
+
+    def resolve_fields(
+        self,
+        request: SearchRequest,
+        candidates: tuple[FieldCandidate, ...],
+    ) -> FieldResolutionOutcome:
+        """复用一次 ``query.interpret``，在真实 schema 后选择字段 ID。"""
+        if not candidates:
+            return FieldResolutionOutcome()
+        if len(request.text) > _MAX_REWRITE_CHARS:
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_INPUT_LIMIT",
+                failure_category="FIELD_RESOLUTION_INPUT_LIMIT",
+            )
+        atom_ids = tuple(dict.fromkeys(item.atom_id for item in candidates))
+        candidate_ids = {item.candidate_id for item in candidates}
+        schema_revision = "wb08r-field-resolution-v1"
+        schema: dict[str, object] = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["r"],
+            "properties": {
+                "r": {
+                    "type": "array",
+                    "minItems": len(atom_ids),
+                    "maxItems": len(atom_ids),
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["a", "s", "c", "q"],
+                        "properties": {
+                            "a": {"type": "string", "enum": list(atom_ids)},
+                            "s": {
+                                "type": "string",
+                                "enum": [
+                                    "SUPPORTED_PARAPHRASE",
+                                    "RELATED_FIELD",
+                                    "AMBIGUOUS",
+                                    "NOT_FOUND",
+                                ],
+                            },
+                            "c": {
+                                "type": "array",
+                                "maxItems": 16,
+                                "uniqueItems": True,
+                                "items": {
+                                    "type": "string",
+                                    "enum": sorted(candidate_ids),
+                                },
+                            },
+                            "q": {"type": "string", "minLength": 1},
+                        },
+                    },
+                }
+            },
+        }
+        messages = (
+            ChatMessage(
+                role="system",
+                content=(
+                    "只在服务端给出的真实表结构字段候选中解析用户所问的"
+                    "基础字段，不回答问题，不判断必须、先后、禁止等附加命题。"
+                    "SUPPORTED_PARAPHRASE 仅用于同一目标下可接受的等义字段；"
+                    "RELATED_FIELD 表示只能作为相关资料；多个字段仍可能成立时"
+                    "返回 AMBIGUOUS；没有候选时返回 NOT_FOUND。"
+                    "c 只填给定短 ID，q 必须逐字摘自用户问题。"
+                    "输出只包含符合 JSON Schema 的对象。"
+                ),
+            ),
+            ChatMessage(
+                role="user",
+                content=json.dumps(
+                    {
+                        "question": request.text,
+                        "candidates": [
+                            {
+                                "id": item.candidate_id,
+                                "atom": item.atom_id,
+                                "target": item.target_label,
+                                "field": item.field_label,
+                                "value_preview": item.value_preview,
+                            }
+                            for item in candidates
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+        mode = (
+            self.adapter.compatible_config.structured_output_mode
+            if isinstance(self.adapter, OpenAICompatibleChatAdapter)
+            else "none"
+        )
+        started = perf_counter()
+        timeout = self.settings.planner_transport_timeout_seconds
+        calls: tuple[ProviderCall, ...] = ()
+        try:
+            schema_args = (
+                {
+                    "json_schema": schema,
+                    "schema_revision": schema_revision,
+                }
+                if isinstance(self.adapter, OpenAICompatibleChatAdapter)
+                else {}
+            )
+            with self._scope("query.interpret"):
+                completion = self.adapter.complete(
+                    messages,
+                    operation="query.interpret",
+                    max_output_tokens=self.settings.planner_max_output_tokens,
+                    timeout_seconds=timeout,
+                    **schema_args,
+                )
+            calls = (completion.call,)
+            payload_data = (
+                json.loads(completion.content)
+                if mode != "none"
+                else extract_json_object(completion.content)
+            )
+            payload = _FieldResolutionPayload.model_validate(payload_data)
+            if tuple(dict.fromkeys(item.a for item in payload.r)) != atom_ids:
+                raise ValueError("FIELD_RESOLUTION_ATOM_SET_MISMATCH")
+            resolutions: list[FieldResolution] = []
+            candidates_by_atom = {
+                atom_id: {
+                    item.candidate_id
+                    for item in candidates
+                    if item.atom_id == atom_id
+                }
+                for atom_id in atom_ids
+            }
+            for item in payload.r:
+                if not set(item.c) <= candidates_by_atom[item.a]:
+                    raise ValueError("FIELD_RESOLUTION_CANDIDATE_OUT_OF_SCOPE")
+                span_start = request.text.find(item.q)
+                if span_start < 0:
+                    raise ValueError("FIELD_RESOLUTION_QUERY_SPAN_INVALID")
+                resolutions.append(
+                    FieldResolution(
+                        atom_id=item.a,
+                        status=FieldResolutionStatus(item.s),
+                        candidate_ids=item.c,
+                        query_span_start=span_start,
+                        query_span_end=span_start + len(item.q),
+                        reason_code="SCHEMA_AWARE_INTERPRETATION",
+                    )
+                )
+        except RagError as error:
+            return FieldResolutionOutcome(
+                calls=_error_provider_calls(error),
+                reason_code="FIELD_RESOLUTION_PROVIDER_UNAVAILABLE",
+                attempted=True,
+                failure_category=error.code,
+                latency_ms=round((perf_counter() - started) * 1000),
+                transport_timeout_ms=round(timeout * 1000),
+            )
+        except (json.JSONDecodeError, ValidationError, ValueError) as error:
+            return FieldResolutionOutcome(
+                calls=calls,
+                reason_code="FIELD_RESOLUTION_OUTPUT_INVALID",
+                attempted=True,
+                failure_category=type(error).__name__,
+                latency_ms=round((perf_counter() - started) * 1000),
+                transport_timeout_ms=round(timeout * 1000),
+            )
+        usage = getattr(completion, "usage", None)
+        return FieldResolutionOutcome(
+            resolutions=tuple(resolutions),
+            calls=calls,
+            reason_code="FIELD_RESOLUTION_ACCEPTED",
+            attempted=True,
+            latency_ms=round((perf_counter() - started) * 1000),
+            input_tokens=getattr(usage, "prompt_tokens", None),
+            output_tokens=getattr(usage, "completion_tokens", None),
+            finish_reason=getattr(completion, "finish_reason", None),
+            transport_timeout_ms=round(timeout * 1000),
         )
 
     def _plan_adaptive_once(  # noqa: PLR0913

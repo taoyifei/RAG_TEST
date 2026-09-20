@@ -11,6 +11,7 @@ from rag_app.core.models import (
     HydratedChunk,
     KnowledgeBaseScope,
     RetrievalPolicy,
+    SourceDocumentIdentity,
 )
 from rag_app.core.models.common import JsonObject
 
@@ -24,6 +25,27 @@ class CatalogDocument:
     chunk_id: str
     title: str
     metadata: JsonObject
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentStructureItem:
+    """来源范围内一个不携带正文的 canonical Chunk 身份。"""
+
+    chunk_id: str
+    document_id: str
+    document_version_id: str
+    role: str
+    section_id: str
+    content_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentStructurePage:
+    """成对来源身份下稳定分页的文档结构入口。"""
+
+    items: tuple[DocumentStructureItem, ...]
+    next_cursor: int | None
+    complete: bool
 
 
 class EvidenceSourcePort(Protocol):
@@ -75,6 +97,17 @@ class EvidenceSourcePort(Protocol):
         """读取全部有界活动目录；超过上限时返回 None，禁止部分命中。"""
         ...
 
+    def load_document_structure(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        allowed_documents: tuple[SourceDocumentIdentity, ...],
+        cursor: int,
+        limit: int,
+    ) -> DocumentStructurePage:
+        """在成对文档/版本范围内稳定读取不含正文的结构身份。"""
+        ...
+
     def section_chunk_ids(
         self,
         snapshot: ActiveRevisionQuerySnapshot,
@@ -114,4 +147,9 @@ class EvidenceSourcePort(Protocol):
         ...
 
 
-__all__ = ["CatalogDocument", "EvidenceSourcePort"]
+__all__ = [
+    "CatalogDocument",
+    "DocumentStructureItem",
+    "DocumentStructurePage",
+    "EvidenceSourcePort",
+]

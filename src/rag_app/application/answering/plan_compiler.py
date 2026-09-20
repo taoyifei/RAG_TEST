@@ -8,6 +8,13 @@ from collections import defaultdict
 from collections.abc import Iterable
 
 from rag_app.application.answering.atom_semantics import current_atom_analysis
+from rag_app.application.answering.qualifier_evidence import (
+    QualifierSpec,
+    extract_qualifier_specs,
+    qualifier_action,
+    qualifier_conditions,
+    qualifier_subject,
+)
 from rag_app.application.answering.target_coverage import (
     TargetMemberCoverage,
     target_member_coverage,
@@ -28,6 +35,9 @@ from rag_app.core.models.answer_plan import (
     AnswerTaskMode,
     CompiledAnswerPlan,
     EvidenceSelection,
+    FieldCandidate,
+    FieldResolution,
+    FieldResolutionStatus,
     PhysicalTask,
     ResolvedQueryView,
 )
@@ -45,28 +55,11 @@ from rag_app.core.models.retrieval import (
 )
 from rag_app.core.query_text import (
     normalize_document_label,
+    query_without_source_qualifier,
     table_axis_label_in_query,
 )
 from rag_app.core.source_scope import source_identity_allowed
 
-_QUALIFIER_PATTERNS: tuple[tuple[AnswerQualifierKind, re.Pattern[str]], ...] = (
-    (
-        AnswerQualifierKind.BEFORE,
-        re.compile(r"之前|开始前|事前|预先"),
-    ),
-    (
-        AnswerQualifierKind.AFTER,
-        re.compile(r"之后|完成后|结束后|事后"),
-    ),
-    (
-        AnswerQualifierKind.MUST,
-        re.compile(r"必须|应当|应该|须要|须先"),
-    ),
-    (
-        AnswerQualifierKind.PROHIBITED,
-        re.compile(r"不得|禁止|严禁"),
-    ),
-)
 _BUSINESS_CLAUSE_SPLIT = re.compile(r"(?:并且|同时|以及|[，,；;。！？?!])")
 _INDEPENDENT_AXIS_JOIN = re.compile(r"(?:和|与|及|、|分别)")
 _LABEL_QUALIFIER = re.compile(r"[（(][^）)]+[）)]")
@@ -158,26 +151,28 @@ def _label_matches(value: str, label: str) -> bool:
     )
 
 
-def _qualifier_specs(query: str) -> tuple[tuple[AnswerQualifierKind, str], ...]:
-    """仅提取需要来源单独证明的强关系限定。"""
-    result: list[tuple[AnswerQualifierKind, str]] = []
-    seen: set[AnswerQualifierKind] = set()
-    for kind, pattern in _QUALIFIER_PATTERNS:
-        match = pattern.search(query)
-        if match is None or kind in seen:
-            continue
-        seen.add(kind)
-        result.append((kind, match.group(0)))
-    return tuple(result)
-
-
-def _atom_business_text(atom: QueryAtom, business_query: str) -> str:
+def _atom_business_text(
+    atom: QueryAtom,
+    business_query: str,
+    original_query: str | None = None,
+) -> str:
     """只在 Atom 片段属于统一业务视图时读取其限定。"""
     fragment = unicodedata.normalize(
         "NFKC", atom.original_fragment or ""
     ).strip()
+    if (
+        original_query is not None
+        and fragment == unicodedata.normalize("NFKC", original_query).strip()
+    ):
+        return business_query
     if fragment and fragment in business_query:
         return fragment
+    without_source = query_without_source_qualifier(
+        fragment,
+        atom.source_qualifier,
+    )
+    if without_source:
+        return without_source
     return " ".join(
         part.strip() for part in (atom.target, atom.relation) if part.strip()
     )
@@ -186,50 +181,104 @@ def _atom_business_text(atom: QueryAtom, business_query: str) -> str:
 def _atom_qualifier_specs(
     atom: QueryAtom,
     business_query: str,
-) -> tuple[tuple[AnswerQualifierKind, str], ...]:
+    original_query: str | None = None,
+) -> tuple[QualifierSpec, ...]:
     """按 Atom 自己的业务片段冻结限定，禁止跨子句传播。"""
-    return _qualifier_specs(_atom_business_text(atom, business_query))
+    return extract_qualifier_specs(
+        _atom_business_text(atom, business_query, original_query)
+    )
 
 
 def _merged_qualifier_specs(
     atoms: tuple[QueryAtom, ...],
     business_query: str,
-) -> tuple[tuple[AnswerQualifierKind, str], ...]:
+    original_query: str,
+) -> tuple[QualifierSpec, ...]:
     """合并同一物理义务内各 Atom 的限定且保持首次出现顺序。"""
-    merged: dict[AnswerQualifierKind, str] = {}
+    merged: dict[tuple[AnswerQualifierKind, str], QualifierSpec] = {}
     for atom in atoms:
-        for kind, text in _atom_qualifier_specs(atom, business_query):
-            merged.setdefault(kind, text)
-    return tuple(merged.items())
+        for spec in _atom_qualifier_specs(atom, business_query, original_query):
+            merged.setdefault((spec.kind, spec.polarity), spec)
+    return tuple(merged.values())
 
 
-def _qualifier_source_ids(
-    kind: AnswerQualifierKind,
-    fact: PhysicalTableFact,
-    registry: dict[str, EvidenceItem],
-) -> tuple[str, ...]:
-    """限定必须在当前事实的正向依赖中逐字出现。"""
-    pattern = dict(_QUALIFIER_PATTERNS)[kind]
-    return tuple(
-        support_id
-        for support_id in fact.all_support_ids
-        if pattern.search(registry[support_id].citation_text)
+def _qualifier_query_span(
+    query_view: ResolvedQueryView,
+    text: str,
+) -> tuple[int, int] | None:
+    """在原问中定位限定词，并排除来源标题提及里的同词。"""
+    start = 0
+    while (index := query_view.original_query.find(text, start)) >= 0:
+        end = index + len(text)
+        if not any(
+            index < mention.original_end and end > mention.original_start
+            for mention in query_view.source_mentions
+        ):
+            return index, end
+        start = end
+    return None
+
+
+def _build_qualifiers(  # noqa: PLR0913
+    *,
+    obligation_id: str,
+    specs: tuple[QualifierSpec, ...],
+    atom_text: str,
+    target_label: str,
+    object_label: str | None,
+    member_refs: tuple[str, ...],
+    candidate_support_ids: tuple[str, ...],
+    structural_predicate_support_ids: tuple[str, ...],
+    query_view: ResolvedQueryView,
+) -> tuple[AnswerQualifier, ...]:
+    """只冻结命题身份和证据候选范围，执行期才判定三态。"""
+    action = qualifier_action(atom_text)
+    subject = qualifier_subject(
+        atom_text,
+        action=action,
+        event_anchor=target_label,
     )
-
-
-def _qualifier_support_ids(
-    kind: AnswerQualifierKind,
-    support_ids: Iterable[str],
-    registry: dict[str, EvidenceItem],
-) -> tuple[str, ...]:
-    """在给定正向依赖中寻找限定的逐字来源。"""
-    pattern = dict(_QUALIFIER_PATTERNS)[kind]
-    return tuple(
-        support_id
-        for support_id in dict.fromkeys(support_ids)
-        if support_id in registry
-        and pattern.search(registry[support_id].citation_text)
-    )
+    conditions = qualifier_conditions(atom_text)
+    result: list[AnswerQualifier] = []
+    for index, spec in enumerate(specs, 1):
+        span = _qualifier_query_span(query_view, spec.text)
+        result.append(
+            AnswerQualifier(
+                obligation_id=obligation_id,
+                qualifier_id=f"Q{index}",
+                kind=spec.kind,
+                text=spec.text,
+                query_span_start=None if span is None else span[0],
+                query_span_end=None if span is None else span[1],
+                subject=subject,
+                action=action,
+                target_label=target_label,
+                object_label=object_label,
+                selected_member_refs=member_refs,
+                event_anchor=(
+                    target_label
+                    if spec.kind
+                    in {
+                        AnswerQualifierKind.BEFORE,
+                        AnswerQualifierKind.AFTER,
+                    }
+                    else None
+                ),
+                polarity=spec.polarity,
+                conditions=conditions,
+                candidate_support_ids=tuple(
+                    dict.fromkeys(candidate_support_ids)
+                ),
+                structural_predicate_support_ids=tuple(
+                    support_id
+                    for support_id in dict.fromkeys(
+                        structural_predicate_support_ids
+                    )
+                    if support_id in candidate_support_ids
+                ),
+            )
+        )
+    return tuple(result)
 
 
 def _fact_complete(
@@ -365,7 +414,7 @@ def _candidate_facts(  # noqa: PLR0912
     qualifier_atom_ids = {
         atom.atom_id
         for atom in plan.atoms
-        if _atom_qualifier_specs(atom, business_query)
+        if _atom_qualifier_specs(atom, business_query, plan.original_query)
     }
     bindings_by_fact: dict[str, list[AtomFactBinding]] = defaultdict(list)
     for binding in pack.atom_fact_bindings:
@@ -642,6 +691,92 @@ def _structured_member_scope(
     return result if result.required_member_keys else None
 
 
+def _resolved_field_facts(
+    pack: GenerationEvidencePack,
+) -> tuple[
+    tuple[
+        PhysicalTableFact,
+        tuple[str, ...],
+        str,
+        FieldCandidate,
+        FieldResolution,
+    ],
+    ...,
+]:
+    """只消费冻结字段解析，不再读取旧 relation_status 决定基础事实。"""
+    candidates = {item.candidate_id: item for item in pack.field_candidates}
+    facts = {item.fact_id: item for item in pack.physical_table_facts}
+    selected: dict[
+        str,
+        tuple[
+            PhysicalTableFact,
+            list[str],
+            str,
+            FieldCandidate,
+            FieldResolution,
+        ],
+    ] = {}
+    for resolution in pack.field_resolutions:
+        if resolution.status not in {
+            FieldResolutionStatus.EXACT,
+            FieldResolutionStatus.SUPPORTED_PARAPHRASE,
+        }:
+            continue
+        candidate = candidates.get(resolution.candidate_ids[0])
+        if candidate is None or candidate.atom_id != resolution.atom_id:
+            raise AnswerPlanCompilationError(
+                "FIELD_RESOLUTION_CANDIDATE_INVALID"
+            )
+        fact = facts.get(candidate.fact_id)
+        if fact is None:
+            raise AnswerPlanCompilationError("FIELD_RESOLUTION_FACT_MISSING")
+        if (
+            candidate.document_id != fact.document_id
+            or candidate.document_version_id != fact.document_version_id
+            or candidate.table_key != fact.table_key
+            or candidate.row_index != fact.row_index
+            or candidate.value_column_index != fact.value_column_index
+            or candidate.dependency_support_ids != fact.all_support_ids
+        ):
+            raise AnswerPlanCompilationError(
+                "FIELD_RESOLUTION_IDENTITY_MISMATCH"
+            )
+        basis = (
+            "FIELD_EXACT_SCHEMA"
+            if resolution.status is FieldResolutionStatus.EXACT
+            else "FIELD_SUPPORTED_PARAPHRASE"
+        )
+        existing = selected.get(fact.fact_id)
+        if existing is None:
+            selected[fact.fact_id] = (
+                fact,
+                [resolution.atom_id],
+                basis,
+                candidate,
+                resolution,
+            )
+        else:
+            existing[1].append(resolution.atom_id)
+    return tuple(
+        (
+            fact,
+            tuple(dict.fromkeys(atom_ids)),
+            basis,
+            candidate,
+            resolution,
+        )
+        for fact, atom_ids, basis, candidate, resolution in sorted(
+            selected.values(),
+            key=lambda item: (
+                item[0].document_version_id,
+                item[0].table_key,
+                item[0].row_index,
+                item[0].value_column_index,
+            ),
+        )
+    )
+
+
 def compile_answer_plan(  # noqa: PLR0915
     query_plan: QueryPlan,
     pack: GenerationEvidencePack,
@@ -668,17 +803,39 @@ def compile_answer_plan(  # noqa: PLR0915
     registry = {item.support_id: item for item in pack.evidence}
     if len(registry) != len(pack.evidence):
         raise AnswerPlanCompilationError("ANSWER_PLAN_DUPLICATE_SUPPORT_ID")
-    candidates = _candidate_facts(
-        query_plan,
-        pack,
-        query_view.business_query,
-        registry,
+    candidates = (
+        _resolved_field_facts(pack)
+        if (
+            pack.field_resolution_active
+            or pack.field_candidates
+            or pack.field_resolutions
+        )
+        else tuple(
+            (
+                fact,
+                tuple(dict.fromkeys(item.atom_id for item in bindings)),
+                basis,
+                None,
+                None,
+            )
+            for fact, bindings, basis in _candidate_facts(
+                query_plan,
+                pack,
+                query_view.business_query,
+                registry,
+            )
+        )
     )
     selections: list[EvidenceSelection] = []
     obligations: list[AnswerObligation] = []
     selected_atom_ids: set[str] = set()
-    for index, (fact, bindings, basis) in enumerate(candidates, 1):
-        atom_ids = tuple(dict.fromkeys(binding.atom_id for binding in bindings))
+    for index, (
+        fact,
+        atom_ids,
+        basis,
+        field_candidate,
+        field_resolution,
+    ) in enumerate(candidates, 1):
         selected_atom_ids.update(atom_ids)
         selection_id = f"S{index}"
         selection_scope_digest = _selection_scope_digest(
@@ -717,6 +874,31 @@ def compile_answer_plan(  # noqa: PLR0915
                 dependency_support_ids=fact.all_support_ids,
                 scope_digest=selection_scope_digest,
                 binding_basis=basis,
+                field_candidate_id=(
+                    None
+                    if field_candidate is None
+                    else field_candidate.candidate_id
+                ),
+                field_resolution_status=(
+                    FieldResolutionStatus.EXACT
+                    if field_resolution is None
+                    else field_resolution.status
+                ),
+                field_resolution_reason=(
+                    "LEGACY_COMPATIBILITY_BINDING"
+                    if field_resolution is None
+                    else field_resolution.reason_code
+                ),
+                field_query_span=(
+                    None
+                    if field_resolution is None
+                    or field_resolution.query_span_start is None
+                    or field_resolution.query_span_end is None
+                    else (
+                        field_resolution.query_span_start,
+                        field_resolution.query_span_end,
+                    )
+                ),
             )
         )
         atoms = tuple(
@@ -725,26 +907,41 @@ def compile_answer_plan(  # noqa: PLR0915
         qualifier_specs = _merged_qualifier_specs(
             atoms,
             query_view.business_query,
+            query_view.original_query,
         )
-        qualifiers: list[AnswerQualifier] = []
-        for qualifier_index, (kind, text) in enumerate(qualifier_specs, 1):
-            support_ids = _qualifier_source_ids(
-                kind,
-                fact,
-                registry,
-            )
-            qualifiers.append(
-                AnswerQualifier(
-                    qualifier_id=f"Q{qualifier_index}",
-                    kind=kind,
-                    text=text,
-                    supported=bool(support_ids),
-                    support_ids=support_ids,
+        obligation_id = f"O{len(obligations) + 1}"
+        qualifier_support_ids = tuple(
+            dict.fromkeys(
+                support_id
+                for atom_id in atom_ids
+                for support_id in dict(pack.per_atom_candidate_support_ids).get(
+                    atom_id, ()
                 )
             )
+        )
+        atom_text = " ".join(
+            _atom_business_text(
+                atom,
+                query_view.business_query,
+                query_view.original_query,
+            )
+            for atom in atoms
+        )
+        target_label = _ordered_text(fact.row_label_support_ids, registry)
+        qualifiers = _build_qualifiers(
+            obligation_id=obligation_id,
+            specs=qualifier_specs,
+            atom_text=atom_text,
+            target_label=target_label,
+            object_label=_header_text(fact, registry),
+            member_refs=(fact.fact_id,),
+            candidate_support_ids=qualifier_support_ids,
+            structural_predicate_support_ids=fact.header_support_ids,
+            query_view=query_view,
+        )
         obligations.append(
             AnswerObligation(
-                obligation_id=f"O{len(obligations) + 1}",
+                obligation_id=obligation_id,
                 operation=AnswerOperation.FIELD_LOOKUP,
                 atom_ids=atom_ids,
                 selection_ids=(selection_id,),
@@ -755,7 +952,7 @@ def compile_answer_plan(  # noqa: PLR0915
                         support_ids=fact.value_support_ids,
                     ),
                 ),
-                qualifiers=tuple(qualifiers),
+                qualifiers=qualifiers,
                 source_resolved=all(_source_resolved(atom) for atom in atoms),
                 source_closed=True,
             )
@@ -785,26 +982,31 @@ def compile_answer_plan(  # noqa: PLR0915
         qualifier_specs = _atom_qualifier_specs(
             atom,
             query_view.business_query,
+            query_view.original_query,
         )
-        structured_qualifiers = tuple(
-            AnswerQualifier(
-                qualifier_id=f"Q{index}",
-                kind=kind,
-                text=text,
-                supported=bool(
-                    support_ids := _qualifier_support_ids(
-                        kind,
-                        dependency_ids,
-                        registry,
-                    )
-                ),
-                support_ids=support_ids,
-            )
-            for index, (kind, text) in enumerate(qualifier_specs, 1)
+        obligation_id = f"O{len(obligations) + 1}"
+        atom_text = _atom_business_text(
+            atom,
+            query_view.business_query,
+            query_view.original_query,
+        )
+        qualifier_support_ids = tuple(
+            dict(pack.per_atom_candidate_support_ids).get(atom.atom_id, ())
+        )
+        structured_qualifiers = _build_qualifiers(
+            obligation_id=obligation_id,
+            specs=qualifier_specs,
+            atom_text=atom_text,
+            target_label=atom.target,
+            object_label=None,
+            member_refs=tuple(item.member_key for item in dependencies),
+            candidate_support_ids=qualifier_support_ids or dependency_ids,
+            structural_predicate_support_ids=(),
+            query_view=query_view,
         )
         obligations.append(
             AnswerObligation(
-                obligation_id=f"O{len(obligations) + 1}",
+                obligation_id=obligation_id,
                 operation=AnswerOperation.OPEN_TEXT,
                 atom_ids=(atom.atom_id,),
                 required_member_keys=member_scope.required_member_keys,
@@ -818,20 +1020,32 @@ def compile_answer_plan(  # noqa: PLR0915
     for atom in query_plan.atoms:
         if atom.atom_id in selected_atom_ids:
             continue
-        open_qualifiers = tuple(
-            AnswerQualifier(
-                qualifier_id=f"Q{index}",
-                kind=kind,
-                text=text,
-            )
-            for index, (kind, text) in enumerate(
-                _atom_qualifier_specs(atom, query_view.business_query),
-                1,
-            )
+        obligation_id = f"O{len(obligations) + 1}"
+        atom_text = _atom_business_text(
+            atom,
+            query_view.business_query,
+            query_view.original_query,
+        )
+        open_qualifiers = _build_qualifiers(
+            obligation_id=obligation_id,
+            specs=_atom_qualifier_specs(
+                atom,
+                query_view.business_query,
+                query_view.original_query,
+            ),
+            atom_text=atom_text,
+            target_label=atom.target,
+            object_label=None,
+            member_refs=(),
+            candidate_support_ids=tuple(
+                dict(pack.per_atom_candidate_support_ids).get(atom.atom_id, ())
+            ),
+            structural_predicate_support_ids=(),
+            query_view=query_view,
         )
         obligations.append(
             AnswerObligation(
-                obligation_id=f"O{len(obligations) + 1}",
+                obligation_id=obligation_id,
                 operation=AnswerOperation.OPEN_TEXT,
                 atom_ids=(atom.atom_id,),
                 qualifiers=open_qualifiers,

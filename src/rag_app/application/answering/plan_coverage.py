@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rag_app.core.models import AnswerClaim
-from rag_app.core.models.answer_plan import CompiledAnswerPlan
+from rag_app.core.models.answer_plan import (
+    CompiledAnswerPlan,
+    QualifierEvidenceResult,
+    QualifierStatus,
+)
 
 
 class AnswerPlanContractError(ValueError):
@@ -29,6 +33,8 @@ class ValidatedPlanArtifact:
     satisfied_qualifier_ids: tuple[str, ...]
     source_closed: bool
     origin: Literal["DETERMINISTIC_EXECUTION", "GROUNDED_GENERATION"]
+    satisfied_qualifier_keys: tuple[tuple[str, str], ...] = ()
+    qualifier_results: tuple[QualifierEvidenceResult, ...] = ()
     claim: AnswerClaim | None = None
     resource_limited: bool = False
 
@@ -39,6 +45,8 @@ class ValidatedPlanArtifact:
             self.selection_digests,
             self.covered_member_keys,
             self.satisfied_qualifier_ids,
+            self.satisfied_qualifier_keys,
+            tuple(item.qualifier_key for item in self.qualifier_results),
         )
         if not self.artifact_id or any(
             len(values) != len(set(values)) for values in collections
@@ -46,6 +54,22 @@ class ValidatedPlanArtifact:
             raise AnswerPlanContractError("ANSWER_ARTIFACT_IDENTITY_INVALID")
         if (self.claim is None) == (not self.resource_limited):
             raise AnswerPlanContractError("ANSWER_ARTIFACT_TERMINAL_INVALID")
+        if (
+            self.satisfied_qualifier_keys
+            and tuple(item[1] for item in self.satisfied_qualifier_keys)
+            != self.satisfied_qualifier_ids
+        ):
+            raise AnswerPlanContractError("ANSWER_QUALIFIER_KEY_INVALID")
+        supported = {
+            item.qualifier_key
+            for item in self.qualifier_results
+            if item.status is QualifierStatus.SUPPORTED
+        }
+        if (
+            self.qualifier_results
+            and not set(self.satisfied_qualifier_keys) <= supported
+        ):
+            raise AnswerPlanContractError("ANSWER_QUALIFIER_RESULT_INVALID")
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +82,8 @@ class ObligationCoverage:
     missing_member_keys: tuple[str, ...]
     satisfied_qualifier_ids: tuple[str, ...]
     missing_qualifier_ids: tuple[str, ...]
+    satisfied_qualifier_keys: tuple[tuple[str, str], ...]
+    missing_qualifier_keys: tuple[tuple[str, str], ...]
     source_closed: bool
 
 
@@ -76,7 +102,7 @@ class CompiledPlanCoverage:
         )
 
 
-def reduce_plan_coverage(
+def reduce_plan_coverage(  # noqa: PLR0912
     plan: CompiledAnswerPlan,
     artifacts: tuple[ValidatedPlanArtifact, ...],
 ) -> CompiledPlanCoverage:
@@ -115,11 +141,27 @@ def reduce_plan_coverage(
         if not set(artifact.covered_member_keys) <= expected_members:
             raise AnswerPlanContractError("ANSWER_MEMBER_IDENTITY_CHANGED")
         expected_qualifiers = {
-            qualifier.qualifier_id
+            qualifier.qualifier_key
             for obligation_id in artifact.obligation_ids
             for qualifier in obligations[obligation_id].qualifiers
         }
-        if not set(artifact.satisfied_qualifier_ids) <= expected_qualifiers:
+        artifact_keys = (
+            set(artifact.satisfied_qualifier_keys)
+            if artifact.satisfied_qualifier_keys
+            else {
+                (artifact.obligation_ids[0], qualifier_id)
+                for qualifier_id in artifact.satisfied_qualifier_ids
+            }
+            if len(artifact.obligation_ids) == 1
+            else set()
+        )
+        if not artifact_keys <= expected_qualifiers:
+            raise AnswerPlanContractError("ANSWER_QUALIFIER_IDENTITY_CHANGED")
+        if any(
+            result.qualifier_key not in expected_qualifiers
+            or result.obligation_id not in artifact.obligation_ids
+            for result in artifact.qualifier_results
+        ):
             raise AnswerPlanContractError("ANSWER_QUALIFIER_IDENTITY_CHANGED")
         required_selection = any(
             obligations[obligation_id].selection_ids
@@ -148,19 +190,26 @@ def reduce_plan_coverage(
         missing_members = tuple(
             member for member in required if member not in covered
         )
-        satisfied = {
-            qualifier_id
+        satisfied_keys = {
+            qualifier_key
             for artifact in related
-            for qualifier_id in artifact.satisfied_qualifier_ids
+            for qualifier_key in (
+                artifact.satisfied_qualifier_keys
+                or tuple(
+                    (obligation.obligation_id, qualifier_id)
+                    for qualifier_id in artifact.satisfied_qualifier_ids
+                )
+            )
         }
-        required_qualifiers = tuple(
-            qualifier.qualifier_id for qualifier in obligation.qualifiers
+        required_qualifier_keys = tuple(
+            qualifier.qualifier_key for qualifier in obligation.qualifiers
         )
-        missing_qualifiers = tuple(
-            qualifier_id
-            for qualifier_id in required_qualifiers
-            if qualifier_id not in satisfied
+        missing_qualifier_keys = tuple(
+            qualifier_key
+            for qualifier_key in required_qualifier_keys
+            if qualifier_key not in satisfied_keys
         )
+        missing_qualifiers = tuple(item[1] for item in missing_qualifier_keys)
         source_closed = obligation.source_closed or any(
             artifact.source_closed for artifact in related
         )
@@ -199,11 +248,17 @@ def reduce_plan_coverage(
                 ),
                 missing_member_keys=missing_members,
                 satisfied_qualifier_ids=tuple(
-                    qualifier_id
-                    for qualifier_id in required_qualifiers
-                    if qualifier_id in satisfied
+                    qualifier_key[1]
+                    for qualifier_key in required_qualifier_keys
+                    if qualifier_key in satisfied_keys
                 ),
                 missing_qualifier_ids=missing_qualifiers,
+                satisfied_qualifier_keys=tuple(
+                    qualifier_key
+                    for qualifier_key in required_qualifier_keys
+                    if qualifier_key in satisfied_keys
+                ),
+                missing_qualifier_keys=missing_qualifier_keys,
                 source_closed=source_closed,
             )
         )

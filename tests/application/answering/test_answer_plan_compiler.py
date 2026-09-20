@@ -12,6 +12,11 @@ from rag_app.application.answering.executor import (
     execute_deterministic_tasks,
     render_deterministic_answer,
 )
+from rag_app.application.answering.field_resolution import (
+    build_field_candidates,
+    default_field_resolutions,
+    merge_field_resolutions,
+)
 from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     _generation_plan_artifacts,
@@ -25,6 +30,7 @@ from rag_app.application.answering.plan_coverage import (
     ValidatedPlanArtifact,
     reduce_plan_coverage,
 )
+from rag_app.application.answering.qualifier_evidence import evaluate_qualifier
 from rag_app.application.retrieval.generation_evidence import (
     EvidenceAdmissionReason,
     EvidenceAdmissionStatus,
@@ -48,6 +54,9 @@ from rag_app.core.models.answer_plan import (
     AnswerOperation,
     AnswerQualifierKind,
     AnswerTaskMode,
+    FieldResolution,
+    FieldResolutionStatus,
+    QualifierStatus,
     SourceMentionRole,
 )
 from rag_app.core.models.query_plan import (
@@ -260,6 +269,43 @@ def _fixture_plan(
     evidence, _group = _input_table()
     plan = _plan(query, evidence, relations=relations, resolved=resolved)
     return plan, _pack(plan, evidence, input_status=input_status), evidence
+
+
+def _resolve_input_candidate(
+    plan: QueryPlan,
+    pack: GenerationEvidencePack,
+    *,
+    query_span: str,
+) -> GenerationEvidencePack:
+    """模拟一次 schema-aware interpret，只选择真实输入字段短 ID。"""
+    query_view = build_resolved_query_view(plan)
+    candidates = build_field_candidates(plan, pack)
+    defaults = default_field_resolutions(plan, candidates, query_view)
+    assert defaults[0].status is FieldResolutionStatus.AMBIGUOUS
+    input_candidate = next(
+        item for item in candidates if item.field_label.startswith("输入")
+    )
+    start = plan.original_query.index(query_span)
+    resolved = merge_field_resolutions(
+        defaults,
+        (
+            FieldResolution(
+                atom_id="A1",
+                status=FieldResolutionStatus.SUPPORTED_PARAPHRASE,
+                candidate_ids=(input_candidate.candidate_id,),
+                query_span_start=start,
+                query_span_end=start + len(query_span),
+                reason_code="SCHEMA_AWARE_INTERPRETATION",
+            ),
+        ),
+        candidates,
+        query_view,
+    )
+    return replace(
+        pack,
+        field_candidates=candidates,
+        field_resolutions=resolved,
+    )
 
 
 def _list_fixture(
@@ -645,6 +691,8 @@ def test_strict_temporal_modality_is_not_erased_or_auto_satisfied() -> None:
     )
 
     plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+    execution = execute_deterministic_tasks(plan, pack)
+    coverage = reduce_plan_coverage(plan, execution.artifacts)
 
     assert len(plan.selections) == 1
     qualifiers = plan.obligations[0].qualifiers
@@ -652,7 +700,15 @@ def test_strict_temporal_modality_is_not_erased_or_auto_satisfied() -> None:
         AnswerQualifierKind.BEFORE,
         AnswerQualifierKind.MUST,
     )
-    assert not any(item.supported for item in qualifiers)
+    assert tuple(
+        result.status
+        for artifact in execution.artifacts
+        for result in artifact.qualifier_results
+    ) == (
+        QualifierStatus.NOT_ESTABLISHED,
+        QualifierStatus.NOT_ESTABLISHED,
+    )
+    assert coverage.obligations[0].status == "PARTIAL"
 
 
 def test_qualifiers_stay_on_their_own_business_clause() -> None:
@@ -700,7 +756,7 @@ def test_explicit_source_qualifier_can_close_temporal_obligation() -> None:
         input_status="UNDETERMINED",
     )
     supported_header = evidence[1].model_copy(
-        update={"citation_text": "输入（开始之前必须提供）"}
+        update={"citation_text": "输入（开始前必须准备）"}
     )
     pack = replace(
         pack,
@@ -717,12 +773,250 @@ def test_explicit_source_qualifier_can_close_temporal_obligation() -> None:
     coverage = reduce_plan_coverage(plan, execution.artifacts)
 
     assert tuple(
-        (item.kind, item.supported) for item in plan.obligations[0].qualifiers
+        result.status
+        for artifact in execution.artifacts
+        for result in artifact.qualifier_results
     ) == (
-        (AnswerQualifierKind.BEFORE, True),
-        (AnswerQualifierKind.MUST, True),
+        QualifierStatus.SUPPORTED,
+        QualifierStatus.SUPPORTED,
     )
     assert coverage.complete
+
+
+def test_same_words_with_other_action_do_not_prove_qualifier() -> None:
+    query_plan, pack, evidence = _fixture_plan(
+        "需求快验之前必须准备哪些材料？",
+        relations=("输入", "必须准备"),
+        input_status="UNDETERMINED",
+    )
+    wrong_action_header = evidence[1].model_copy(
+        update={"citation_text": "输入（开始之前必须提供）"}
+    )
+    pack = replace(
+        pack,
+        entries=tuple(
+            replace(entry, evidence_item=wrong_action_header)
+            if entry.support_id == wrong_action_header.support_id
+            else entry
+            for entry in pack.entries
+        ),
+    )
+
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+    execution = execute_deterministic_tasks(plan, pack)
+    coverage = reduce_plan_coverage(plan, execution.artifacts)
+
+    assert all(
+        result.status is QualifierStatus.NOT_ESTABLISHED
+        for artifact in execution.artifacts
+        for result in artifact.qualifier_results
+    )
+    assert coverage.obligations[0].status == "PARTIAL"
+
+
+@pytest.mark.parametrize(
+    ("header_text", "as_title"),
+    (
+        ("输入（其他流程开始前必须准备）", False),
+        ("输入（负责人在开始前必须准备）", False),
+        ("输入（开始前不必准备）", False),
+        ("输入（开始前必须准备）", True),
+    ),
+)
+def test_qualifier_proof_rejects_other_event_subject_negation_and_title(
+    header_text: str,
+    as_title: bool,
+) -> None:
+    query_plan, pack, evidence = _fixture_plan(
+        "需求快验之前必须准备哪些材料？",
+        relations=("输入", "必须准备"),
+        input_status="UNDETERMINED",
+    )
+    updates: dict[str, object] = {"citation_text": header_text}
+    if as_title:
+        updates["heading_path"] = (header_text,)
+    unsafe_header = evidence[1].model_copy(update=updates)
+    pack = replace(
+        pack,
+        entries=tuple(
+            replace(entry, evidence_item=unsafe_header)
+            if entry.support_id == unsafe_header.support_id
+            else entry
+            for entry in pack.entries
+        ),
+    )
+
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+    execution = execute_deterministic_tasks(plan, pack)
+    coverage = reduce_plan_coverage(plan, execution.artifacts)
+
+    assert not any(
+        result.status is QualifierStatus.SUPPORTED
+        for artifact in execution.artifacts
+        for result in artifact.qualifier_results
+    )
+    assert coverage.obligations[0].status == "PARTIAL"
+
+
+def test_schema_field_binding_is_independent_from_strict_qualifiers() -> None:
+    neutral_query = "《开发中心三种工作模式》中，需求快验需要准备哪些材料？"
+    neutral_plan, neutral_pack, _ = _fixture_plan(
+        neutral_query,
+        relations=("准备",),
+        input_status="UNDETERMINED",
+    )
+    assert all(
+        binding.relation_status == "UNDETERMINED"
+        for binding in neutral_pack.atom_fact_bindings
+    )
+    neutral_pack = _resolve_input_candidate(
+        neutral_plan,
+        neutral_pack,
+        query_span="准备哪些材料",
+    )
+    neutral = compile_answer_plan(
+        neutral_plan,
+        neutral_pack,
+        snapshot_id="irev-test",
+    )
+
+    strict_query = (
+        "《开发中心三种工作模式》中，需求快验开始前必须准备哪些材料？"
+    )
+    strict_plan, strict_pack, _ = _fixture_plan(
+        strict_query,
+        relations=("准备",),
+        input_status="UNDETERMINED",
+    )
+    strict_pack = _resolve_input_candidate(
+        strict_plan,
+        strict_pack,
+        query_span="准备哪些材料",
+    )
+    strict = compile_answer_plan(
+        strict_plan,
+        strict_pack,
+        snapshot_id="irev-test",
+    )
+    execution = execute_deterministic_tasks(strict, strict_pack)
+    coverage = reduce_plan_coverage(strict, execution.artifacts)
+    answer = render_deterministic_answer(strict, execution, coverage)
+
+    assert neutral.selections[0].field_label.startswith("输入")
+    assert strict.selections[0].fact_id == neutral.selections[0].fact_id
+    assert strict.selections[0].selection_digest == (
+        neutral.selections[0].selection_digest
+    )
+    assert strict.obligations[0].qualifiers
+    assert coverage.obligations[0].status == "PARTIAL"
+    assert answer is not None
+    assert answer.startswith("现有来源未直接证明")
+    assert "需求功能点描述" in answer
+    assert "验收标准" in answer
+    assert "开始前必须准备" not in answer
+
+
+def test_schema_field_selection_does_not_require_legacy_fact_binding() -> None:
+    """新字段解析不能在编译阶段重新依赖旧关系绑定。"""
+    query = "《开发中心三种工作模式》中，需求快验准备哪些材料？"
+    query_plan, pack, _ = _fixture_plan(
+        query,
+        relations=("准备",),
+        input_status="UNDETERMINED",
+    )
+    resolved_pack = _resolve_input_candidate(
+        query_plan,
+        pack,
+        query_span="准备哪些材料",
+    )
+    selected_candidate_id = resolved_pack.field_resolutions[0].candidate_ids[0]
+    selected_fact_id = next(
+        item.fact_id
+        for item in resolved_pack.field_candidates
+        if item.candidate_id == selected_candidate_id
+    )
+    without_legacy_binding = replace(
+        resolved_pack,
+        atom_fact_bindings=tuple(
+            item
+            for item in resolved_pack.atom_fact_bindings
+            if not (item.atom_id == "A1" and item.fact_id == selected_fact_id)
+        ),
+    )
+
+    plan = compile_answer_plan(
+        query_plan,
+        without_legacy_binding,
+        snapshot_id="irev-test",
+    )
+
+    assert len(plan.selections) == 1
+    assert plan.selections[0].fact_id == selected_fact_id
+    assert plan.obligations[0].atom_ids == ("A1",)
+
+
+def test_partial_member_proof_does_not_upgrade_whole_qualifier() -> None:
+    query_plan, pack, evidence = _list_fixture(
+        "开发团队开始前必须准备哪些职责？"
+    )
+    proof = evidence[0].model_copy(
+        update={
+            "evidence_id": "QUALIFIER_PARTIAL_PROOF",
+            "citation_text": ("开发团队开始前必须准备1. 负责设计与开发。"),
+            "heading_path": ("正文",),
+        }
+    )
+    proof_entry = replace(
+        pack.entries[0],
+        support_id=proof.support_id,
+        evidence_item=proof,
+        source_group_id=None,
+        rerank_rank=len(pack.entries) + 1,
+        source_order=len(pack.entries) + 1,
+    )
+    pack = replace(
+        pack,
+        entries=(*pack.entries, proof_entry),
+        per_atom_candidate_support_ids=(
+            (
+                "A1",
+                (
+                    *dict(pack.per_atom_candidate_support_ids)["A1"],
+                    proof.support_id,
+                ),
+            ),
+        ),
+    )
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+    obligation = plan.obligations[0]
+    registry = {item.support_id: item for item in pack.evidence}
+    first = evidence[0]
+    assert first.document_id is not None
+    assert first.document_version_id is not None
+    results = tuple(
+        evaluate_qualifier(
+            qualifier,
+            member_sources=tuple(
+                (dependency.member_key, dependency.support_ids)
+                for dependency in obligation.member_dependencies
+            ),
+            registry=registry,
+            allowed_document_pairs=frozenset(
+                {(first.document_id, first.document_version_id)}
+            ),
+        )
+        for qualifier in obligation.qualifiers
+    )
+
+    assert results
+    assert all(
+        result.status is QualifierStatus.NOT_ESTABLISHED for result in results
+    )
+    assert tuple(len(result.covered_member_keys) for result in results) == (
+        1,
+        1,
+    )
+    assert len(obligation.required_member_keys) == 2
 
 
 def test_qualifier_atom_reuses_base_fact_without_generation_task() -> None:

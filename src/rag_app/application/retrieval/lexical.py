@@ -12,6 +12,7 @@ from rag_app.core.models import (
     QuerySemantics,
     QueryVariant,
     RequestedAnswerType,
+    SourceDocumentIdentity,
 )
 from rag_app.core.ports import LexicalStorePort
 
@@ -116,6 +117,7 @@ class LexicalChannel:
         *,
         limit: int,
         analysis: QueryAnalysis | None = None,
+        allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None,
     ) -> tuple[ChannelHit, ...]:
         """返回不携带正文的 FTS5 候选。
 
@@ -124,6 +126,7 @@ class LexicalChannel:
             variant: 原始或唯一 normalized 变体。
             limit: 最大候选数。
             analysis: 当前已接受改写后的共享分析。
+            allowed_documents: 排名截断前允许的成对文档与版本身份。
 
         Returns:
             绑定变体通道名的 FTS5 身份候选。
@@ -134,6 +137,7 @@ class LexicalChannel:
                 revision=snapshot.revision,
                 query=variant.text,
                 limit=limit,
+                allowed_documents=allowed_documents,
             )
         )
         normalized_terms = question_search_terms(
@@ -146,6 +150,7 @@ class LexicalChannel:
                     revision=snapshot.revision,
                     query=normalized_terms,
                     limit=limit,
+                    allowed_documents=allowed_documents,
                 )
             )
             # 原问前列直接命中优先；补充对象词只填充剩余窗口。

@@ -28,6 +28,8 @@ from rag_app.core.models import (
     EvidenceGroup,
     EvidenceItem,
     EvidenceReadUnit,
+    FieldCandidate,
+    FieldResolution,
     PhysicalTableFact,
     PhysicalTableHeader,
     RankedChunk,
@@ -57,7 +59,7 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v16"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v17"
 _MIN_TABLE_FACT_COLUMNS = 2
 _TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
@@ -148,6 +150,9 @@ class GenerationEvidencePack:
     reading_unit_reason_codes: tuple[str, ...] = ()
     physical_table_facts: tuple[PhysicalTableFact, ...] = ()
     atom_fact_bindings: tuple[AtomFactBinding, ...] = ()
+    field_candidates: tuple[FieldCandidate, ...] = ()
+    field_resolutions: tuple[FieldResolution, ...] = ()
+    field_resolution_active: bool = False
 
     @property
     def evidence(self) -> tuple[EvidenceItem, ...]:
@@ -1209,6 +1214,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
                     for column in _reading_header_columns(
                         item, candidate_by_id[item.chunk_id]
                     )
+                    if column != _TABLE_ROW_LABEL_COLUMN
                 }
                 columns = (
                     requested_columns | {0} if requested_columns else set()
@@ -1530,6 +1536,76 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             for keys in member_keys_by_atom.values():
                 if item_key in keys:
                     keys.add(sibling_key)
+    # 已获准文档中的目标行一旦由规范行名确认，直接从同一有界 canonical
+    # 表结构补齐该行全部竞争字段和真实表头。字段选择稍后由 schema-aware
+    # resolver 完成；这里不读取旧 relation_status，也不按最高分预选一列。
+    schema_rows: dict[
+        tuple[tuple[object, ...], int],
+        list[tuple[RankedChunk, EvidenceItem, int]],
+    ] = defaultdict(list)
+    schema_headers: dict[
+        tuple[object, ...], list[tuple[RankedChunk, EvidenceItem]]
+    ] = defaultdict(list)
+    for candidate in candidate_by_id.values():
+        chunk = candidate.hydrated.chunk
+        if chunk.role is not ChunkRole.TABLE:
+            continue
+        for span in chunk.source_spans:
+            if not span.is_citable or span.is_repeated:
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ].strip()
+            if not quote:
+                continue
+            item = _evidence_item(candidate, span, quote, "S0")
+            cell = _reading_table_identity(item)
+            if cell is None:
+                continue
+            table, row, column = cell
+            if _reading_header(item, candidate):
+                schema_headers[table].append((candidate, item))
+            else:
+                schema_rows[table, row].append((candidate, item, column))
+    for (table, _row), row_items in sorted(schema_rows.items(), key=repr):
+        labels = tuple(
+            item
+            for _candidate, item, column in row_items
+            if column == _TABLE_ROW_LABEL_COLUMN
+        )
+        if not labels:
+            continue
+        label = " ".join(item.citation_text for item in labels)
+        matched_atoms = tuple(
+            atom
+            for atom in query_plan.atoms
+            if _reading_label_score(atom.target, label)[0]
+        )
+        if not matched_atoms and not named_table_label_in_query(
+            query_plan.resolved_root_query, label
+        ):
+            continue
+        value_columns = {
+            column
+            for _candidate, _item, column in row_items
+            if column != _TABLE_ROW_LABEL_COLUMN
+        }
+        selected_schema_items = [
+            (candidate, item) for candidate, item, _column in row_items
+        ]
+        selected_schema_items.extend(
+            (candidate, item)
+            for candidate, item in schema_headers.get(table, ())
+            if _reading_header_columns(item, candidate) & value_columns
+        )
+        for _candidate, item in selected_schema_items:
+            key = _identity(item)
+            candidates.setdefault(key, item)
+            root_keys.add(key)
+            for atom in matched_atoms:
+                atom_keys.add(key)
+                member_keys_by_atom.setdefault(atom.atom_id, set()).add(key)
+
     # 表格行名和职责主体可能已进入 Rerank 池，却被旧证据装配配额丢弃。
     # 只从同一个有界池恢复逐字命中的原文单元格，再走统一硬边界与预算。
     exact_table_keys: list[tuple[object, ...]] = []
@@ -1549,7 +1625,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             path = span.structural_path
             if not any(part.startswith("tbl:") for part in path):
                 continue
-            column = next(
+            span_column = next(
                 (
                     int(part[3:])
                     for part in path
@@ -1557,20 +1633,20 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                 ),
                 None,
             )
-            if column is None:
+            if span_column is None:
                 continue
             quote = chunk.citation_text[
                 span.chunk_start_char : span.chunk_end_char
             ].strip()
             if not quote:
                 continue
-            named = column == 0 and named_table_label_in_query(
+            named = span_column == 0 and named_table_label_in_query(
                 query_plan.resolved_root_query, quote
             )
             subject_atoms = tuple(
                 atom
                 for atom in query_plan.atoms
-                if column > 0
+                if span_column > 0
                 and atom.answer_shape in duty_shapes
                 and (
                     (

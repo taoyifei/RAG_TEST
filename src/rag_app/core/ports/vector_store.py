@@ -10,6 +10,7 @@ from rag_app.core.models import (
     NamedVectorPoint,
     RevisionVectorSpec,
     SearchHit,
+    SourceDocumentIdentity,
     VectorRevisionInventory,
     VectorRevisionValidation,
     VectorSearchRequest,
@@ -101,6 +102,7 @@ class VectorStorePort(Protocol):
         query_vector: tuple[float, ...],
         limit: int,
         excluded_document_ids: tuple[str, ...] = (),
+        allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None,
     ) -> tuple[VectorSearchResult, ...]:
         """拒绝 slot/vector name 交叉并执行精确空间查询。
 
@@ -111,6 +113,8 @@ class VectorStorePort(Protocol):
             query_vector: 与 slot 同维度的向量。
             limit: 最大命中数。
             excluded_document_ids: 排名截断前排除的已删除文档。
+            allowed_documents: 排名截断前允许的成对文档与版本身份；
+                空元组拒绝全部。
 
         Returns:
             分数降序且稳定 tie-break 的命中。

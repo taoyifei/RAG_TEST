@@ -36,6 +36,7 @@ from rag_app.application.answering.plan_coverage import (
     ValidatedPlanArtifact,
     reduce_plan_coverage,
 )
+from rag_app.application.answering.qualifier_evidence import evaluate_qualifier
 from rag_app.application.answering.request_relation import (
     RequestRelationStatus,
     RequestRelationUndetermined,
@@ -74,10 +75,12 @@ from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
+    FieldResolutionStatus,
     GroundedWireDiagnostic,
     OcrVerificationState,
     PhysicalTableFact,
     ProviderCall,
+    QualifierStatus,
     QueryAnalysis,
     RequestedAnswerType,
 )
@@ -468,6 +471,8 @@ def _compiled_coverage_records(
                 "missing_member_keys": item.missing_member_keys,
                 "satisfied_qualifier_ids": item.satisfied_qualifier_ids,
                 "missing_qualifier_ids": item.missing_qualifier_ids,
+                "satisfied_qualifier_keys": item.satisfied_qualifier_keys,
+                "missing_qualifier_keys": item.missing_qualifier_keys,
                 "source_closed": item.source_closed,
             }
         )
@@ -493,6 +498,30 @@ def _compiled_plan_records(
             "selection_digests": tuple(
                 item.selection_digest for item in plan.selections
             ),
+            "field_resolutions": tuple(
+                (
+                    item.selection_digest,
+                    item.field_candidate_id,
+                    item.field_resolution_status.value,
+                    item.field_resolution_reason,
+                    item.field_query_span,
+                )
+                for item in plan.selections
+            ),
+            "qualifier_requirements": tuple(
+                (
+                    *qualifier.qualifier_key,
+                    qualifier.kind.value,
+                    qualifier.subject,
+                    qualifier.action,
+                    qualifier.selected_member_refs,
+                    qualifier.event_anchor,
+                    qualifier.polarity,
+                    qualifier.conditions,
+                )
+                for obligation in plan.obligations
+                for qualifier in obligation.qualifiers
+            ),
             "task_modes": tuple(
                 item.mode.value for item in plan.physical_tasks
             ),
@@ -509,6 +538,22 @@ def _compiled_plan_records(
                 "checked_support_ids": record.checked_support_ids,
                 "published_member_keys": record.published_member_keys,
                 "satisfied_qualifier_ids": record.satisfied_qualifier_ids,
+                "satisfied_qualifier_keys": (record.satisfied_qualifier_keys),
+                "qualifier_results": tuple(
+                    (
+                        *result.qualifier_key,
+                        result.status.value,
+                        result.covered_member_keys,
+                        result.locator_support_ids,
+                        tuple(
+                            reference.support_id
+                            for reference in result.proof_references
+                        ),
+                        result.source_conditions,
+                        result.reason_code,
+                    )
+                    for result in record.qualifier_results
+                ),
                 "claim_sha256": record.claim_sha256,
             }
         )
@@ -553,20 +598,43 @@ def _generation_plan_artifacts(
                 for support_id in dependency.support_ids
             )
         )
-        satisfied_qualifiers = tuple(
-            qualifier.qualifier_id
+        allowed_pairs = frozenset(
+            (
+                evidence_item.document_id,
+                evidence_item.document_version_id,
+            )
             for qualifier in obligation.qualifiers
-            if qualifier.supported
-            and qualifier.support_ids
-            and set(qualifier.support_ids) <= registry.keys()
+            for support_id in qualifier.candidate_support_ids
+            if (evidence_item := registry.get(support_id)) is not None
+            and evidence_item.document_id is not None
+            and evidence_item.document_version_id is not None
+        )
+        qualifier_results = tuple(
+            evaluate_qualifier(
+                qualifier,
+                member_sources=tuple(
+                    (dependency.member_key, dependency.support_ids)
+                    for dependency in obligation.member_dependencies
+                ),
+                registry=registry,
+                allowed_document_pairs=allowed_pairs,
+            )
+            for qualifier in obligation.qualifiers
+        )
+        satisfied_qualifier_keys = tuple(
+            result.qualifier_key
+            for result in qualifier_results
+            if result.status is QualifierStatus.SUPPORTED
+            and result.support_ids
+            and set(result.support_ids) <= registry.keys()
             and all(
                 _source_fact_content_covered(
                     registry[support_id], answer_claims
                 )
-                for support_id in qualifier.support_ids
+                for support_id in result.support_ids
             )
         )
-        for index, item in enumerate(related):
+        for index, validated_claim in enumerate(related):
             artifacts.append(
                 ValidatedPlanArtifact(
                     artifact_id=f"G{len(artifacts) + 1}",
@@ -575,11 +643,20 @@ def _generation_plan_artifacts(
                     selection_digests=(),
                     covered_member_keys=(covered_members if index == 0 else ()),
                     satisfied_qualifier_ids=(
-                        satisfied_qualifiers if index == 0 else ()
+                        tuple(
+                            qualifier_key[1]
+                            for qualifier_key in satisfied_qualifier_keys
+                        )
+                        if index == 0
+                        else ()
                     ),
-                    source_closed=item.relation_complete,
+                    satisfied_qualifier_keys=(
+                        satisfied_qualifier_keys if index == 0 else ()
+                    ),
+                    qualifier_results=(qualifier_results if index == 0 else ()),
+                    source_closed=validated_claim.relation_complete,
                     origin="GROUNDED_GENERATION",
-                    claim=item.claim,
+                    claim=validated_claim.claim,
                 )
             )
     return tuple(artifacts)
@@ -2570,6 +2647,37 @@ class GroundedAnsweringService:
                 for atom_id in obligation.atom_ids
             }
             eligible &= deferred_atoms
+        blocked_field_atom_ids: set[str] = set()
+        field_resolution_reason: str | None = None
+        if (
+            generation_evidence_pack is not None
+            and generation_evidence_pack.field_resolution_active
+        ):
+            candidate_atom_ids = {
+                item.atom_id
+                for item in generation_evidence_pack.field_candidates
+            }
+            blocked_resolutions = tuple(
+                item
+                for item in generation_evidence_pack.field_resolutions
+                if item.atom_id in candidate_atom_ids
+                and item.status
+                in {
+                    FieldResolutionStatus.AMBIGUOUS,
+                    FieldResolutionStatus.RELATED_FIELD,
+                }
+            )
+            blocked_field_atom_ids = {
+                item.atom_id for item in blocked_resolutions
+            }
+            eligible -= blocked_field_atom_ids
+            if any(
+                item.status is FieldResolutionStatus.AMBIGUOUS
+                for item in blocked_resolutions
+            ):
+                field_resolution_reason = "FIELD_RESOLUTION_AMBIGUOUS"
+            elif blocked_resolutions:
+                field_resolution_reason = "FIELD_RESOLUTION_RELATED_ONLY"
         calls: list[ProviderCall] = []
         deterministic_claim_ids: set[str] = set()
         accepted: list[ValidatedNaturalClaim] = []
@@ -2602,7 +2710,7 @@ class GroundedAnsweringService:
         rejected_atoms: Counter[str] = Counter()
         generated_claim_count = 0
         generation_returned = False
-        reason: str | None = None
+        reason: str | None = field_resolution_reason
         resource_limited_atom_ids: set[str] = set()
         repair_calls = 0
         relation_review_calls = 0
