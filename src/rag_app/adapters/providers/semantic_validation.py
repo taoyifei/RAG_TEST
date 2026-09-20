@@ -40,6 +40,7 @@ _SYSTEM = (
     "兄弟章节、其他表格行或其他候选。全部支持且答题才supported；来源"
     "明确冲突时contradicted；仅相关、缺要素、对象或文档不符、无法确定时"
     "unknown。等义表达可以supported，动作相似不能代替对象或角色。"
+    "table_fact只证明行列值；‘输入/结果’不自动证明之前/之后或必须。"
     "literal_table_fragment只按text字面判断，不推断隐藏行列或角色。"
     "只输出JSON结果，不输出"
     "解释、推理、引用正文或新增字段。"

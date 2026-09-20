@@ -50,7 +50,7 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v12"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v13"
 _MIN_TABLE_FACT_COLUMNS = 2
 _TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
@@ -324,14 +324,39 @@ def project_evidence_read_units(
             for item in items
         )
 
-    for item in evidence:
-        if item.support_id in physical_support_ids:
-            continue
-        table_fragment = item.table_locator is not None or any(
+    def is_table_fragment(item: EvidenceItem) -> bool:
+        return item.table_locator is not None or any(
             part.startswith("tbl:")
             for span in item.source_spans
             for part in span.structural_path
         )
+
+    grouped_items: list[list[EvidenceItem]] = []
+    table_group_indexes: dict[tuple[object, ...], int] = {}
+    for item in evidence:
+        if item.support_id in physical_support_ids:
+            continue
+        cell = table_cell_coordinate(item)
+        if is_table_fragment(item) and cell is not None:
+            table_group_key = (
+                item.source_identity_scope,
+                item.document_version_id,
+                item.chunk_id,
+                item.table_locator,
+                cell[0],
+                cell[1],
+            )
+            group_index = table_group_indexes.get(table_group_key)
+            if group_index is not None:
+                grouped_items[group_index].append(item)
+                continue
+            table_group_indexes[table_group_key] = len(grouped_items)
+        grouped_items.append([item])
+
+    for raw_items in grouped_items:
+        items = tuple(raw_items)
+        item = items[0]
+        table_fragment = is_table_fragment(item)
         metadata = dict(item.metadata)
         group_type = metadata.get("evidence_group_type")
         kind: Literal["paragraph", "list_item", "table_fact", "catalog_entry"]
@@ -356,7 +381,11 @@ def project_evidence_read_units(
             EvidenceReadUnit(
                 unit_id=f"E{len(units) + 1}",
                 kind=kind,
-                text=item.citation_text,
+                text="\n".join(
+                    dict.fromkeys(
+                        source.citation_text.strip() for source in items
+                    )
+                ),
                 source_context=freeze_json_object(
                     {
                         key: value
@@ -364,8 +393,8 @@ def project_evidence_read_units(
                         if value not in (None, "", ())
                     }
                 ),
-                support_ids=(item.support_id,),
-                source_complete=source_complete((item,)),
+                support_ids=tuple(source.support_id for source in items),
+                source_complete=source_complete(items),
             )
         )
     for fact in complete_facts:

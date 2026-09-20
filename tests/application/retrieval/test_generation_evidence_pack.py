@@ -918,6 +918,59 @@ def test_literal_table_fragment_is_readable_without_relation_inference() -> (
     }
 
 
+def test_same_table_row_fragments_share_one_literal_read_unit() -> None:
+    """同一物理表格行合并传输，但仍只声明逐字证据。"""
+    first_text = "需求快验"
+    second_text = "输入（业务团队）"
+    source = f"{first_text}\n{second_text}"
+    candidate = make_ranked_chunk(42, source, role=ChunkRole.TABLE)
+    span = candidate.hydrated.chunk.source_spans[0]
+    second_start = len(first_text) + 1
+
+    def table_span(column: int, start: int, end: int) -> SourceSpan:
+        path = ("body", "tbl:2", "tr:3", f"tc:{column}", "p:1")
+        return span.model_copy(
+            update={
+                "structural_path": path,
+                "chunk_start_char": start,
+                "chunk_end_char": end,
+                "source_start_char": start,
+                "source_end_char": end,
+                "source_anchor": span.source_anchor.model_copy(
+                    update={"structural_path": path}
+                ),
+            }
+        )
+
+    first = _evidence_item(
+        candidate,
+        table_span(0, 0, len(first_text)),
+        first_text,
+        "S1",
+    )
+    second = _evidence_item(
+        candidate,
+        table_span(1, second_start, len(source)),
+        second_text,
+        "S2",
+    )
+
+    units = project_evidence_read_units((first, second))
+
+    assert len(units) == 1
+    assert units[0].kind == "paragraph"
+    assert units[0].text == source
+    assert units[0].support_ids == ("S1", "S2")
+    assert units[0].source_complete is True
+    assert dict(units[0].source_context) == {
+        "source_label": first.source_label,
+        "heading_path": [],
+        "table_locator": first.table_locator,
+        "structure_scope": "literal_table_fragment",
+        "table_relation_complete": False,
+    }
+
+
 def test_direct_single_value_literal_contradiction_is_hard_rejected() -> None:
     candidate, evidence = _item(1, "检修记录应在5天内归档。")
     evidence = evidence.model_copy(
