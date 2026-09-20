@@ -10,7 +10,7 @@
   "branch": "codex/wb-08r-adaptive-rag",
   "audit_base_sha": "c5a48da749d5feea43b40d95360dec406a19625e",
   "source_head_sha": "69057baeeda69751d1736d40a882a1cf1fe5c802",
-  "report_commit_sha": null,
+  "report_commit_sha": "7729151500e2d8cfc516f00f334e91676aa2eb2e",
   "source_commits": [
     {
       "sha": "b064b77c32a9b0df47b1daf2f7162f41e4cd36a8",
