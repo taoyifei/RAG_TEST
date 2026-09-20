@@ -49,10 +49,22 @@ def _ordered_texts(
         raise SourceProjectionError("PROJECTION_SOURCE_MISSING") from error
 
 
-def _table_fact_text(
+def render_physical_table_fact(
     fact: PhysicalTableFact, registry: dict[str, EvidenceItem]
 ) -> str:
-    """只按真实行名、规范表头和值形成关系中性的表格陈述。"""
+    """只按真实行名、规范表头和值形成关系中性的表格陈述。
+
+    Args:
+        fact: 已由解析器坐标闭合的单个表格事实。
+        registry: 当前请求已授权来源的 Support ID 映射。
+
+    Returns:
+        不增加时序、义务或因果关系的最终事实文本。
+
+    Raises:
+        SourceProjectionError: 来源身份或必要行列表达不闭合。
+
+    """
     if any(
         registry[support_id].document_id != fact.document_id
         or registry[support_id].document_version_id != fact.document_version_id
@@ -166,7 +178,8 @@ def project_bound_claim(  # noqa: PLR0913
                 "PROJECTION_TABLE_FACT_MISSING"
             ) from error
         texts = tuple(
-            _table_fact_text(fact, registry) for fact in selected_facts
+            render_physical_table_fact(fact, registry)
+            for fact in selected_facts
         )
         binding_states = {
             binding.fact_id: binding.relation_status
@@ -267,4 +280,5 @@ __all__ = [
     "SOURCE_PROJECTION_REVISION",
     "SourceProjectionError",
     "project_bound_claim",
+    "render_physical_table_fact",
 ]

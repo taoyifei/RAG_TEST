@@ -158,6 +158,10 @@ from rag_app.core.models import (
     SourceSpan,
     StageTiming,
 )
+from rag_app.core.models.answer_plan import (
+    ANSWER_PLAN_POLICY_REVISION,
+    ANSWER_PLAN_SCHEMA_REVISION,
+)
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.generation_packet import (
     EVIDENCE_IDENTITY_REVISION,
@@ -534,7 +538,9 @@ class RetrievalService:
                 ),
                 "source_scope_revision": SOURCE_SCOPE_SCHEMA_REVISION,
                 "source_projection_revision": SOURCE_PROJECTION_REVISION,
-                "answer_pipeline_revision": ("wb08r-wire-binding-semantic-v2"),
+                "answer_plan_schema_revision": ANSWER_PLAN_SCHEMA_REVISION,
+                "answer_plan_policy_revision": ANSWER_PLAN_POLICY_REVISION,
+                "answer_pipeline_revision": "wb08r-compiled-answer-plan-v1",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -1991,6 +1997,7 @@ class RetrievalService:
                     query_plan=query_plan,
                     atom_support_matrix=atom_matrix,
                     generation_evidence_pack=generation_evidence_pack,
+                    snapshot_id=snapshot.revision.index_revision_id,
                     on_claim=None if on_claim is None else publish_claim,
                     cancellation=cancellation,
                 )
@@ -2055,6 +2062,14 @@ class RetrievalService:
                         ),
                         "source_projection_records": (
                             generated.source_projection_records
+                        ),
+                        "answer_plan_id": generated.answer_plan_id,
+                        "answer_plan_revision": (
+                            generated.answer_plan_revision
+                        ),
+                        "answer_plan_records": generated.answer_plan_records,
+                        "answer_plan_coverage": (
+                            generated.answer_plan_coverage
                         ),
                         "extractive_fallback_reason": (
                             generated.extractive_fallback_reason
@@ -3004,7 +3019,9 @@ class RetrievalService:
                 ),
                 "source_scope_revision": SOURCE_SCOPE_SCHEMA_REVISION,
                 "source_projection_revision": SOURCE_PROJECTION_REVISION,
-                "answer_pipeline_revision": ("wb08r-wire-binding-semantic-v2"),
+                "answer_plan_schema_revision": ANSWER_PLAN_SCHEMA_REVISION,
+                "answer_plan_policy_revision": ANSWER_PLAN_POLICY_REVISION,
+                "answer_pipeline_revision": "wb08r-compiled-answer-plan-v1",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }

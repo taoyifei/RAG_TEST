@@ -162,14 +162,17 @@ def test_path_table_coordinates_project_without_scalar_coordinates() -> None:
         for item in request.evidence
     )
     payload = json.loads(_natural_messages(request)[1].content)
-    cells = {
-        item["text"]: item["source_structure"]["table_cell"]
-        for item in payload["evidence"]
+    units = payload["read_units"]
+    assert [item["text"] for item in units] == ["上限温度", "白桦泵\n82 ℃"]
+    assert all(
+        item["source_context"]["structure_scope"] == "literal_table_fragment"
+        and item["source_context"]["table_relation_complete"] is False
+        for item in units
+    )
+    assert {item["source_context"]["table_locator"] for item in units} == {
+        "group-1"
     }
-    assert cells["上限温度"]["row"] == 0
-    assert cells["白桦泵"]["row"] == cells["82 ℃"]["row"] == 2
-    assert cells["上限温度"]["column"] == cells["82 ℃"]["column"] == 2
-    assert len({cell["table_key"] for cell in cells.values()}) == 1
+    assert all("table_cell" not in item["source_context"] for item in units)
 
 
 @pytest.mark.parametrize("repair", [False, True])
@@ -195,13 +198,19 @@ def test_transport_body_has_authoritative_packet(
     packet = getattr(draft, "prepared_packet", None)
     assert packet is not None
     sent = json.loads(payloads[0]["messages"][1]["content"])
-    assert packet.sent_support_ids == tuple(
-        item["support_id"] for item in sent["evidence"]
+    assert packet.sent_read_unit_ids == tuple(
+        item["unit_id"] for item in sent["read_units"]
     )
-    assert packet.per_atom_support_ids == tuple(
-        (atom["atom_id"], tuple(atom["allowed_support_ids"]))
+    assert packet.per_atom_read_unit_ids == tuple(
+        (atom["atom_id"], tuple(atom["allowed_ref_ids"]))
         for atom in sent["atoms"]
     )
+    bound_keys = {
+        key for _unit_id, keys in packet.read_unit_bindings for key in keys
+    }
+    assert set(packet.sent_support_ids) == {
+        alias for alias, key in packet.alias_to_support_key if key in bound_keys
+    }
     assert packet.evidence_level == "TRANSPORT_SENT"
     assert packet.messages_sha256
     assert packet.messages_sha256 == canonical_sha256(payloads[0]["messages"])
@@ -310,11 +319,10 @@ def test_old_s1_protection_still_selects_source_a_after_alias_reorder() -> None:
     sent = json.loads(
         _natural_messages(request, max_input_tokens=budget)[1].content
     )
-    assert [
-        (item["support_id"], item["text"]) for item in sent["evidence"]
-    ] == [
-        ("S2", source_a.citation_text),
+    assert [item["text"] for item in sent["read_units"]] == [
+        source_a.citation_text
     ]
+    assert sent["atoms"][0]["allowed_ref_ids"] == ["E1"]
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -519,9 +527,7 @@ def test_forged_complete_group_never_reaches_model_as_complete() -> None:
         }
     )
     payload = json.loads(_natural_messages(request)[1].content)
-    assert all(
-        not item["evidence_group"]["complete"] for item in payload["evidence"]
-    )
+    assert "evidence_group" not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_internal_packet_fields_do_not_expand_public_serialization() -> None:

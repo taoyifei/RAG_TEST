@@ -7,6 +7,12 @@ import unicodedata
 
 from rag_app.application.retrieval.semantics import split_explicit_source_scope
 from rag_app.core.identifiers import canonical_sha256
+from rag_app.core.models.answer_plan import (
+    NormalizedOffsetSpan,
+    ResolvedQueryView,
+    SourceMentionRole,
+    SourceMentionSpan,
+)
 from rag_app.core.models.query_plan import (
     QUERY_PLAN_SCHEMA_REVISION,
     SOURCE_SCOPE_SCHEMA_REVISION,
@@ -30,7 +36,7 @@ _LEADING_BOOK_AUTHORITY = re.compile(
     r"(?:的|中|里|规定|要求|所述|指出)"
 )
 _REFERENCE_OWNER = re.compile(
-    r"^\s*(?P<source>[^，。！？?《》]{2,80}?"
+    r"^\s*(?P<source>[^，。！？?《》]{1,80}?"
     r"(?:文档|规范|制度|手册|方案|模板|指引))"
     r"(?:中|里)?(?:有没有|是否|可否)?(?:提到|提及|引用|列出)"
 )
@@ -71,6 +77,149 @@ def normalize_source_label(value: str) -> str:
     normalized = normalized.replace("\\", "/").rsplit("/", 1)[-1]
     normalized = _DOCUMENT_EXTENSION.sub("", normalized).strip()
     return "".join(normalized.casefold().split())
+
+
+def _normalized_offsets(value: str) -> tuple[NormalizedOffsetSpan, ...]:
+    """保留 NFKC 文本边界到每个原始字符的可逆定位信息。"""
+    prefix_lengths = tuple(
+        len(unicodedata.normalize("NFKC", value[:index]))
+        for index in range(len(value) + 1)
+    )
+    return tuple(
+        NormalizedOffsetSpan(
+            original_start=index,
+            original_end=index + 1,
+            normalized_start=prefix_lengths[index],
+            normalized_end=prefix_lengths[index + 1],
+        )
+        for index in range(len(value))
+    )
+
+
+def _original_span(
+    original: str,
+    normalized: str,
+    offsets: tuple[NormalizedOffsetSpan, ...],
+    mention: str,
+) -> tuple[int, int] | None:
+    """在原文中定位来源标签，兼容全角和兼容字符。"""
+    direct = original.find(mention)
+    if direct >= 0:
+        return direct, direct + len(mention)
+    normalized_mention = unicodedata.normalize("NFKC", mention)
+    normalized_start = normalized.find(normalized_mention)
+    if normalized_start < 0:
+        return None
+    normalized_end = normalized_start + len(normalized_mention)
+    covered = tuple(
+        item
+        for item in offsets
+        if item.normalized_end > normalized_start
+        and item.normalized_start < normalized_end
+    )
+    if not covered:
+        return None
+    return covered[0].original_start, covered[-1].original_end
+
+
+def _mention_scope_digest(query_plan: QueryPlan) -> str | None:
+    """读取当前请求已签发的来源范围摘要，不重新解析身份。"""
+    return next(
+        (
+            atom.source_scope.scope_digest
+            for atom in query_plan.atoms
+            if atom.source_scope is not None
+            and atom.source_scope.resolution is not SourceResolution.OPEN
+        ),
+        None,
+    )
+
+
+def build_resolved_query_view(query_plan: QueryPlan) -> ResolvedQueryView:
+    """在业务解释前冻结来源角色、原始跨度和统一问题正文。
+
+    Args:
+        query_plan: 已完成活动文档身份解析的兼容查询计划。
+
+    Returns:
+        保留原文定位且只移除来源包装的统一问题视图。
+
+    """
+    original = query_plan.original_query
+    normalized = unicodedata.normalize("NFKC", original)
+    offsets = _normalized_offsets(original)
+    intent, mentions = _source_mentions(normalized)
+    scope_digest = _mention_scope_digest(query_plan)
+    leading_source, leading_body, _body_start = split_explicit_source_scope(
+        normalized
+    )
+    business_query = leading_body if leading_source else normalized
+    mention_specs: list[tuple[str, SourceMentionRole]] = []
+    if intent is SourceIntent.MENTION_IN_SOURCE and mentions:
+        owner_match = _REFERENCE_OWNER.match(normalized)
+        if owner_match is not None:
+            business_query = normalized[owner_match.end("source") :].lstrip(
+                " 的中里，,:："
+            )
+        mention_specs.append((mentions[0], SourceMentionRole.SOURCE_OWNER))
+        mention_specs.extend(
+            (match["title"].strip(), SourceMentionRole.REFERENCED_OBJECT)
+            for match in _BOOK_TITLE.finditer(normalized)
+        )
+    elif intent in {SourceIntent.DOCUMENT_AUTHORITY, SourceIntent.DOCUMENT_SET}:
+        mention_specs.extend(
+            (mention, SourceMentionRole.AUTHORITY) for mention in mentions
+        )
+    elif not mentions:
+        qualifier = next(
+            (
+                atom.source_qualifier
+                for atom in query_plan.atoms
+                if atom.source_qualifier
+            ),
+            None,
+        )
+        if qualifier:
+            mention_specs.append((qualifier, SourceMentionRole.AUTHORITY))
+
+    source_mentions: list[SourceMentionSpan] = []
+    seen: set[tuple[int, int, SourceMentionRole]] = set()
+    for mention, role in mention_specs:
+        span = _original_span(
+            original,
+            normalized,
+            offsets,
+            mention,
+        )
+        if span is None or (*span, role) in seen:
+            continue
+        seen.add((*span, role))
+        start, end = span
+        source_mentions.append(
+            SourceMentionSpan(
+                text=original[start:end],
+                role=role,
+                original_start=start,
+                original_end=end,
+                scope_digest=(
+                    scope_digest
+                    if role is not SourceMentionRole.REFERENCED_OBJECT
+                    else None
+                ),
+            )
+        )
+    return ResolvedQueryView(
+        original_query=original,
+        normalized_query=normalized,
+        business_query=business_query.strip() or normalized.strip(),
+        normalized_offsets=offsets,
+        source_mentions=tuple(
+            sorted(
+                source_mentions,
+                key=lambda item: (item.original_start, item.original_end),
+            )
+        ),
+    )
 
 
 def _document_labels(document: CatalogDocument) -> frozenset[str]:
@@ -319,6 +468,7 @@ def query_plan_requires_source_resolution(query_plan: QueryPlan) -> bool:
 
 
 __all__ = [
+    "build_resolved_query_view",
     "evidence_allowed_for_atom",
     "filter_identities_for_scope",
     "normalize_source_label",

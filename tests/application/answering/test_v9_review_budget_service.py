@@ -94,10 +94,25 @@ class _PreparationFailingAdapter(OpenAICompatibleChatAdapter):
         )
 
 
-class _HttpHarness:
-    """保存真实发送请求，第二次响应只能是一次批量语义复核。"""
+class _BatchSplittingAdapter(OpenAICompatibleChatAdapter):
+    """只允许单 Claim 复核，用于证明两批互斥且不重复自审。"""
 
-    def __init__(
+    def review_semantics(
+        self, request: SemanticValidationRequest
+    ) -> SemanticValidationResponse:
+        if len(request.candidates) > 1:
+            raise ProviderInputTooLarge(
+                "synthetic actual batch budget rejection",
+                stage="generation.semantic_review",
+                code="SEMANTIC_REVIEW_INPUT_BUDGET_EXCEEDED",
+            )
+        return super().review_semantics(request)
+
+
+class _HttpHarness:
+    """保存真实发送请求，复核最多拆成两个互斥批次。"""
+
+    def __init__(  # noqa: PLR0913
         self,
         claims: tuple[NaturalClaim, ...],
         *,
@@ -105,6 +120,7 @@ class _HttpHarness:
         failure: str | None = None,
         statuses: tuple[str, ...] | None = None,
         fail_review_preparation: bool = False,
+        force_split_review: bool = False,
     ) -> None:
         self.sent: list[httpx.Request] = []
         self.claims = claims
@@ -113,7 +129,9 @@ class _HttpHarness:
         self.after_send: Callable[[int], None] | None = None
         self.append_bad_wire_item = False
         adapter_type = (
-            _PreparationFailingAdapter
+            _BatchSplittingAdapter
+            if force_split_review
+            else _PreparationFailingAdapter
             if fail_review_preparation
             else OpenAICompatibleChatAdapter
         )
@@ -136,7 +154,7 @@ class _HttpHarness:
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.sent.append(request)
-        assert len(self.sent) <= 2, "generation和唯一补充之外不得发送第三次HTTP"
+        assert len(self.sent) <= 3, "生成和至多两个互斥复核批之外不得发送HTTP"
         body = json.loads(request.content)
         assert body["chat_template_kwargs"] == {"enable_thinking": False}
         data = json.loads(body["messages"][1]["content"])
@@ -529,8 +547,8 @@ def test_review_preparation_failure_does_not_consume_repair_slot() -> None:
     assert len(outcome.prepared_packets) == 1
 
 
-def test_generation_output_is_reserved_for_later_semantic_review() -> None:
-    """生成发送前即压低输出上限，保证同一证据仍能进入批量复核。"""
+def test_generation_budget_depends_only_on_actual_generation_packet() -> None:
+    """生成预算不再为尚未出现的假想 Claim 反向裁剪。"""
     fixture = _fixture()
     harness = _HttpHarness(fixture[2], max_input_tokens=4000)
 
@@ -540,23 +558,52 @@ def test_generation_output_is_reserved_for_later_semantic_review() -> None:
     assert len(harness.sent) == 2
     first_body = json.loads(harness.sent[0].content)
     first_reserved = outcome.prepared_packets[0].reserved_output_tokens
-    assert 128 <= first_body["max_tokens"] == first_reserved < 1536
+    assert first_body["max_tokens"] == first_reserved == 1536
     assert outcome.prepared_packets[1].estimated_input_tokens <= 4000
+    review_body = json.loads(
+        json.loads(harness.sent[1].content)["messages"][1]["content"]
+    )
+    assert [item["atom_id"] for item in review_body["tasks"]] == [
+        "A1",
+        "A2",
+    ]
+    assert all(
+        "question" not in candidate for candidate in review_body["candidates"]
+    )
 
 
-def test_impossible_semantic_preflight_sends_no_generation_http() -> None:
-    """共同证据规模无法容纳复核时，在任何模型发送前明确拒绝。"""
+def test_actual_claims_replace_fixed_semantic_preflight_shells() -> None:
+    """只用真实 Claim 构造复核，不再因固定 24 条空壳阻断生成。"""
     fixture = _fixture()
     harness = _HttpHarness(fixture[2], max_input_tokens=3800)
 
     outcome = _run(harness.adapter, fixture)
 
-    assert outcome.answer is None
-    assert outcome.reason_code == ("SEMANTIC_REVIEW_PREFLIGHT_BUDGET_EXCEEDED")
-    assert harness.sent == []
-    assert outcome.relation_review_calls == outcome.repair_calls == 0
-    assert len(outcome.prepared_packets) == 1
-    assert outcome.prepared_packets[0].evidence_level == "PREPARATION_REJECTED"
+    assert outcome.answer is not None
+    assert outcome.accepted_claim_count == 2
+    assert len(harness.sent) == 2
+    assert outcome.relation_review_calls == 1
+    assert outcome.repair_calls == 0
+
+
+def test_two_actual_review_batches_are_disjoint() -> None:
+    fixture = _fixture()
+    harness = _HttpHarness(fixture[2], force_split_review=True)
+
+    outcome = _run(harness.adapter, fixture)
+
+    assert outcome.accepted_claim_count == 2
+    assert outcome.relation_review_calls == 2
+    assert len(harness.sent) == 3
+    review_bodies = tuple(
+        json.loads(request.content)["messages"][1]["content"]
+        for request in harness.sent[1:]
+    )
+    batches = tuple(
+        {item["claim_id"] for item in json.loads(body)["candidates"]}
+        for body in review_bodies
+    )
+    assert batches == ({"C1"}, {"C2"})
 
 
 def test_hard_failure_on_a2_does_not_change_a1_repair_eligibility() -> None:

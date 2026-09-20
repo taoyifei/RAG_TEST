@@ -38,6 +38,7 @@ class GenerationRequest(FrozenModel):
     query_plan: QueryPlan | None = None
     atom_support_matrix: AtomSupportMatrix | None = None
     per_atom_candidate_support_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    execution_atom_ids: tuple[str, ...] = ()
     repair_atom_ids: tuple[str, ...] = ()
     accepted_claim_ids: tuple[str, ...] = ()
     request_id: str = Field(default_factory=lambda: uuid4().hex, exclude=True)
@@ -91,6 +92,14 @@ class GenerationRequest(FrozenModel):
                 raise ValueError("支持矩阵必须与计划 Atom 一一对应。")
             if not set(self.repair_atom_ids) <= atom_ids:
                 raise ValueError("局部修复只允许计划中的 Atom。")
+            if (
+                len(self.execution_atom_ids)
+                != len(set(self.execution_atom_ids))
+                or not set(self.execution_atom_ids) <= atom_ids
+            ):
+                raise ValueError("执行范围只允许计划中的无重复 Atom。")
+            if self.repair_atom_ids and self.execution_atom_ids:
+                raise ValueError("初次执行范围与局部修复范围不能同时存在。")
             linked_atoms = [
                 atom_id for atom_id, _ in self.per_atom_candidate_support_ids
             ]
@@ -106,6 +115,7 @@ class GenerationRequest(FrozenModel):
                 raise ValueError("逐原子候选必须来自本次无重复 Evidence。")
         elif (
             self.repair_atom_ids
+            or self.execution_atom_ids
             or self.accepted_claim_ids
             or self.per_atom_candidate_support_ids
             or self.priority_source_units

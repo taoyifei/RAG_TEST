@@ -335,13 +335,19 @@ def test_full_answer_service_publishes_selected_physical_fact() -> None:
     assert "图纸基线、材料清单" in outcome.answer
     assert outcome.accepted_claim_count == outcome.published_claim_count == 1
     assert set(outcome.accepted_support_ids) == set(fact.all_support_ids)
-    assert outcome.relation_review_calls == 1
+    assert outcome.reason_code == "DETERMINISTIC_ANSWER_PLAN"
+    assert outcome.relation_review_calls == 0
+    assert outcome.relation_review_skip_reason == "DETERMINISTIC_EXECUTION"
     assert outcome.repair_calls == 0
-    assert len(outcome.calls) == len(outcome.prepared_packets) == 2
+    assert not outcome.calls
+    assert not outcome.prepared_packets
+    assert not sent_bodies
 
 
-def test_response_contract_failure_does_not_retry_generation() -> None:
-    """真实发送后的根协议失败直接终止，不用补生成掩盖缺陷。"""
+def test_deterministic_fact_does_not_depend_on_model_response_contract() -> (
+    None
+):
+    """源结构事实不发送模型请求，因此模型坏响应不能影响发布。"""
     plan = _fact_plan()
     pack = _pack(plan, _sources())
     sent_bodies: list[dict[str, object]] = []
@@ -397,10 +403,11 @@ def test_response_contract_failure_does_not_retry_generation() -> None:
         generation_evidence_pack=pack,
     )
 
-    assert outcome.answer is None
+    assert outcome.answer is not None
+    assert "图纸基线、材料清单" in outcome.answer
     assert outcome.repair_calls == 0
-    assert outcome.repair_skip_reason == "AUTOMATIC_GENERATION_REPAIR_DISABLED"
-    assert outcome.accepted_claim_count == outcome.published_claim_count == 0
-    assert outcome.reason_code == "GENERATION_JSON_DECODE_FAILED"
-    assert len(outcome.calls) == len(outcome.prepared_packets) == 1
-    assert len(sent_bodies) == 1
+    assert outcome.accepted_claim_count == outcome.published_claim_count == 1
+    assert outcome.reason_code == "DETERMINISTIC_ANSWER_PLAN"
+    assert not outcome.calls
+    assert not outcome.prepared_packets
+    assert not sent_bodies

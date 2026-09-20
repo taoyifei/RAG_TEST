@@ -30,6 +30,12 @@ from rag_app.application.answering.ocr_guard import (
     claim_pdf_visual_evidence,
     critical_ocr_atoms,
 )
+from rag_app.application.answering.plan_coverage import (
+    AnswerPlanContractError,
+    CompiledPlanCoverage,
+    ValidatedPlanArtifact,
+    reduce_plan_coverage,
+)
 from rag_app.application.answering.request_relation import (
     RequestRelationStatus,
     RequestRelationUndetermined,
@@ -50,7 +56,9 @@ from rag_app.application.answering.source_projection import (
     SourceProjectionError,
     project_bound_claim,
 )
-from rag_app.application.answering.target_coverage import target_member_coverage
+from rag_app.application.answering.target_coverage import (
+    target_member_coverage,
+)
 from rag_app.core.errors import (
     ProviderInvalidResponse,
     QueryCancelled,
@@ -122,9 +130,11 @@ from rag_app.core.source_compatibility import (
 from rag_app.core.source_scope import evidence_allowed_for_atom
 
 if TYPE_CHECKING:
+    from rag_app.application.answering.executor import AnswerExecutionResult
     from rag_app.application.retrieval.generation_evidence import (
         GenerationEvidencePack,
     )
+    from rag_app.core.models.answer_plan import CompiledAnswerPlan
 
 _QUANTITY_UNIT_ATOM = (
     r"(?:%|％|万元|亿元|元|毫秒|分钟|小时|秒|天|周|个月|年|月|"
@@ -435,6 +445,163 @@ class GroundedOutcome:
     recovery_results: tuple[tuple[str, str, str], ...] = ()
     wire_diagnostics: tuple[GroundedWireDiagnostic, ...] = ()
     source_projection_records: tuple[JsonObject, ...] = ()
+    answer_plan_id: str | None = None
+    answer_plan_revision: str | None = None
+    answer_plan_records: tuple[JsonObject, ...] = ()
+    answer_plan_coverage: tuple[JsonObject, ...] = ()
+
+
+def _compiled_coverage_records(
+    coverage: CompiledPlanCoverage,
+) -> tuple[JsonObject, ...]:
+    """把纯覆盖结果投影为不含正文的 SAFE 诊断。"""
+    return tuple(
+        freeze_json_object(
+            {
+                "obligation_id": item.obligation_id,
+                "status": item.status,
+                "covered_member_keys": item.covered_member_keys,
+                "missing_member_keys": item.missing_member_keys,
+                "satisfied_qualifier_ids": item.satisfied_qualifier_ids,
+                "missing_qualifier_ids": item.missing_qualifier_ids,
+                "source_closed": item.source_closed,
+            }
+        )
+        for item in coverage.obligations
+    )
+
+
+def _compiled_plan_records(
+    plan: CompiledAnswerPlan,
+    execution: AnswerExecutionResult,
+) -> tuple[JsonObject, ...]:
+    """记录冻结图和确定性执行身份，不记录问题、来源或答案正文。"""
+    compiled = freeze_json_object(
+        {
+            "event": "ANSWER_PLAN_COMPILED",
+            "plan_id": plan.plan_id,
+            "snapshot_id": plan.snapshot_id,
+            "schema_revision": plan.schema_revision,
+            "policy_revision": plan.policy_revision,
+            "obligation_ids": tuple(
+                item.obligation_id for item in plan.obligations
+            ),
+            "selection_digests": tuple(
+                item.selection_digest for item in plan.selections
+            ),
+            "task_modes": tuple(
+                item.mode.value for item in plan.physical_tasks
+            ),
+        }
+    )
+    executed = tuple(
+        freeze_json_object(
+            {
+                "event": record.origin,
+                "task_id": record.task_id,
+                "plan_id": record.plan_id,
+                "selection_digest": record.selection_digest,
+                "source_digest": record.source_digest,
+                "checked_support_ids": record.checked_support_ids,
+                "published_member_keys": record.published_member_keys,
+                "satisfied_qualifier_ids": record.satisfied_qualifier_ids,
+                "claim_sha256": record.claim_sha256,
+            }
+        )
+        for record in execution.records
+    )
+    return (compiled, *executed)
+
+
+def _generation_plan_artifacts(
+    plan: CompiledAnswerPlan,
+    claims: tuple[ValidatedNaturalClaim, ...],
+    evidence: tuple[EvidenceItem, ...],
+    *,
+    skip_claim_ids: frozenset[str],
+) -> tuple[ValidatedPlanArtifact, ...]:
+    """把已完成旧硬门的 G 路径事实绑定回冻结开放义务。"""
+    registry = {item.support_id: item for item in evidence}
+    artifacts: list[ValidatedPlanArtifact] = []
+    usable_claims = tuple(
+        item for item in claims if item.claim_id not in skip_claim_ids
+    )
+    for obligation in plan.obligations:
+        if obligation.selection_ids:
+            continue
+        related = tuple(
+            item
+            for item in usable_claims
+            if set(obligation.atom_ids) & set(item.atom_ids)
+        )
+        if not related:
+            continue
+        answer_claims = tuple(item.claim for item in related)
+        covered_members = tuple(
+            dependency.member_key
+            for dependency in obligation.member_dependencies
+            if dependency.support_ids
+            and set(dependency.support_ids) <= registry.keys()
+            and all(
+                _source_fact_content_covered(
+                    registry[support_id], answer_claims
+                )
+                for support_id in dependency.support_ids
+            )
+        )
+        satisfied_qualifiers = tuple(
+            qualifier.qualifier_id
+            for qualifier in obligation.qualifiers
+            if qualifier.supported
+            and qualifier.support_ids
+            and set(qualifier.support_ids) <= registry.keys()
+            and all(
+                _source_fact_content_covered(
+                    registry[support_id], answer_claims
+                )
+                for support_id in qualifier.support_ids
+            )
+        )
+        for index, item in enumerate(related):
+            artifacts.append(
+                ValidatedPlanArtifact(
+                    artifact_id=f"G{len(artifacts) + 1}",
+                    plan_id=plan.plan_id,
+                    obligation_ids=(obligation.obligation_id,),
+                    selection_digests=(),
+                    covered_member_keys=(covered_members if index == 0 else ()),
+                    satisfied_qualifier_ids=(
+                        satisfied_qualifiers if index == 0 else ()
+                    ),
+                    source_closed=item.relation_complete,
+                    origin="GROUNDED_GENERATION",
+                    claim=item.claim,
+                )
+            )
+    return tuple(artifacts)
+
+
+def _resource_limited_plan_artifacts(
+    plan: CompiledAnswerPlan,
+    obligation_ids: tuple[str, ...],
+) -> tuple[ValidatedPlanArtifact, ...]:
+    """把真实输入预算失败标成资源终态，不伪装资料不足。"""
+    known = {item.obligation_id for item in plan.obligations}
+    return tuple(
+        ValidatedPlanArtifact(
+            artifact_id=f"R{index}",
+            plan_id=plan.plan_id,
+            obligation_ids=(obligation_id,),
+            selection_digests=(),
+            covered_member_keys=(),
+            satisfied_qualifier_ids=(),
+            source_closed=False,
+            origin="GROUNDED_GENERATION",
+            resource_limited=True,
+        )
+        for index, obligation_id in enumerate(obligation_ids, 1)
+        if obligation_id in known
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1881,6 +2048,7 @@ class GroundedAnsweringService:
         query_plan: QueryPlan | None = None,
         atom_support_matrix: AtomSupportMatrix | None = None,
         generation_evidence_pack: GenerationEvidencePack | None = None,
+        snapshot_id: str | None = None,
         on_claim: Callable[[AnswerClaim], None] | None = None,
         cancellation: CancellationPort | None = None,
     ) -> GroundedOutcome:
@@ -1895,6 +2063,7 @@ class GroundedAnsweringService:
             query_plan: 可选的本次类型化事实原子计划。
             atom_support_matrix: 可选的逐原子检索支持状态。
             generation_evidence_pack: 可选的有界生成准入证据包。
+            snapshot_id: 请求开始时冻结的活动索引身份。
             on_claim: 可选的已校验完整 claim 发布回调。
             cancellation: 可选协作取消端口。
 
@@ -1914,6 +2083,7 @@ class GroundedAnsweringService:
                 query_plan=query_plan,
                 atom_support_matrix=atom_support_matrix,
                 generation_evidence_pack=generation_evidence_pack,
+                snapshot_id=snapshot_id,
                 analysis=analysis,
                 on_claim=on_claim,
                 cancellation=cancellation,
@@ -2144,6 +2314,7 @@ class GroundedAnsweringService:
         query_plan: QueryPlan,
         atom_support_matrix: AtomSupportMatrix,
         generation_evidence_pack: GenerationEvidencePack | None,
+        snapshot_id: str | None,
         analysis: QueryAnalysis | None,
         on_claim: Callable[[AnswerClaim], None] | None,
         cancellation: CancellationPort | None,
@@ -2162,6 +2333,115 @@ class GroundedAnsweringService:
             raise ValueError("逐原子支持矩阵与 QueryPlan 不一致。")
         if generation_evidence_pack is not None:
             evidence = generation_evidence_pack.evidence
+        compiled_plan: CompiledAnswerPlan | None = None
+        deterministic_execution: AnswerExecutionResult | None = None
+        deterministic_coverage: CompiledPlanCoverage | None = None
+        if generation_evidence_pack is not None:
+            # 延迟导入以避开 retrieval.service -> grounded 的包初始化环。
+            from rag_app.application.answering.executor import (  # noqa: PLC0415
+                AnswerExecutionError,
+                compiled_atom_coverage,
+                execute_deterministic_tasks,
+                render_deterministic_answer,
+            )
+            from rag_app.application.answering.plan_compiler import (  # noqa: PLC0415
+                AnswerPlanCompilationError,
+                compile_answer_plan,
+            )
+
+            try:
+                compiled_plan = compile_answer_plan(
+                    query_plan,
+                    generation_evidence_pack,
+                    snapshot_id=(
+                        snapshot_id or "legacy-unpinned-answer-snapshot"
+                    ),
+                )
+                deterministic_execution = execute_deterministic_tasks(
+                    compiled_plan,
+                    generation_evidence_pack,
+                    cancellation=cancellation,
+                )
+                deterministic_coverage = reduce_plan_coverage(
+                    compiled_plan,
+                    deterministic_execution.artifacts,
+                )
+            except (
+                AnswerExecutionError,
+                AnswerPlanCompilationError,
+                AnswerPlanContractError,
+            ) as error:
+                return GroundedOutcome(
+                    None,
+                    "none",
+                    reason_code=error.failure_code,
+                )
+            if not deterministic_execution.deferred_obligation_ids:
+                answer = render_deterministic_answer(
+                    compiled_plan,
+                    deterministic_execution,
+                    deterministic_coverage,
+                )
+                published_claims = tuple(
+                    artifact.claim
+                    for artifact in deterministic_execution.artifacts
+                    if artifact.claim is not None
+                )
+                if answer is None:
+                    return GroundedOutcome(
+                        None,
+                        "none",
+                        reason_code="ANSWER_PLAN_NO_PUBLISHABLE_ARTIFACT",
+                        answer_plan_id=compiled_plan.plan_id,
+                        answer_plan_revision=compiled_plan.schema_revision,
+                        answer_plan_records=_compiled_plan_records(
+                            compiled_plan,
+                            deterministic_execution,
+                        ),
+                        answer_plan_coverage=_compiled_coverage_records(
+                            deterministic_coverage
+                        ),
+                    )
+                for claim in published_claims:
+                    _raise_if_cancelled(cancellation)
+                    if on_claim is not None:
+                        on_claim(claim)
+                support_ids = tuple(
+                    dict.fromkeys(
+                        support.support_id
+                        for claim in published_claims
+                        for support in claim.supports
+                    )
+                )
+                coverage_records = _compiled_coverage_records(
+                    deterministic_coverage
+                )
+                return GroundedOutcome(
+                    answer=answer,
+                    mode="extractive",
+                    reason_code=(
+                        "DETERMINISTIC_ANSWER_PLAN"
+                        if deterministic_coverage.complete
+                        else "LIMITED_ANSWER"
+                    ),
+                    published_support_ids=support_ids,
+                    atom_coverage=compiled_atom_coverage(
+                        compiled_plan,
+                        deterministic_coverage,
+                    ),
+                    relation_review_skip_reason="DETERMINISTIC_EXECUTION",
+                    target_member_coverage=coverage_records,
+                    accepted_claim_count=len(published_claims),
+                    published_claim_count=len(published_claims),
+                    accepted_support_ids=support_ids,
+                    answer_plan_id=compiled_plan.plan_id,
+                    answer_plan_revision=compiled_plan.schema_revision,
+                    answer_plan_records=_compiled_plan_records(
+                        compiled_plan,
+                        deterministic_execution,
+                    ),
+                    answer_plan_coverage=coverage_records,
+                )
         linked_ids = (
             dict(generation_evidence_pack.per_atom_candidate_support_ids)
             if generation_evidence_pack is not None
@@ -2263,6 +2543,9 @@ class GroundedAnsweringService:
 
         if (
             generation_evidence_pack is not None
+            and not (
+                deterministic_execution and deterministic_execution.artifacts
+            )
             and not any(
                 item.status is AtomStatus.CONTRADICTORY
                 for item in atom_support_matrix.atoms
@@ -2287,7 +2570,13 @@ class GroundedAnsweringService:
                 published_claim_count=1,
                 accepted_support_ids=(item.support_id,),
             )
-        if generation_evidence_pack is not None and len(query_plan.atoms) > 1:
+        if (
+            generation_evidence_pack is not None
+            and len(query_plan.atoms) > 1
+            and not (
+                deterministic_execution and deterministic_execution.artifacts
+            )
+        ):
             named_row = _safe_extractive_fallback(
                 query_plan,
                 evidence,
@@ -2376,8 +2665,42 @@ class GroundedAnsweringService:
             and atom_support_matrix.for_atom(atom.atom_id).status
             is not AtomStatus.CONTRADICTORY
         }
+        if compiled_plan is not None and deterministic_execution is not None:
+            deferred_atoms = {
+                atom_id
+                for obligation in compiled_plan.obligations
+                if obligation.obligation_id
+                in deterministic_execution.deferred_obligation_ids
+                for atom_id in obligation.atom_ids
+            }
+            eligible &= deferred_atoms
         calls: list[ProviderCall] = []
+        deterministic_claim_ids: set[str] = set()
         accepted: list[ValidatedNaturalClaim] = []
+        if compiled_plan is not None and deterministic_execution is not None:
+            obligations = {
+                item.obligation_id: item for item in compiled_plan.obligations
+            }
+            for artifact in deterministic_execution.artifacts:
+                if artifact.claim is None:
+                    continue
+                atom_ids = tuple(
+                    dict.fromkeys(
+                        atom_id
+                        for obligation_id in artifact.obligation_ids
+                        for atom_id in obligations[obligation_id].atom_ids
+                    )
+                )
+                claim_id = f"C{len(accepted) + 1}"
+                deterministic_claim_ids.add(claim_id)
+                accepted.append(
+                    ValidatedNaturalClaim(
+                        claim_id=claim_id,
+                        atom_ids=atom_ids,
+                        claim=artifact.claim,
+                        render_origin="deterministic_execution",
+                    )
+                )
         claim_rejections: Counter[str] = Counter()
         claim_rejection_diagnostics: list[ClaimRejectionDiagnostic] = []
         rejected_atoms: Counter[str] = Counter()
@@ -2532,6 +2855,9 @@ class GroundedAnsweringService:
                 query_plan=query_plan,
                 atom_support_matrix=atom_support_matrix,
                 per_atom_candidate_support_ids=per_atom_candidate_ids,
+                execution_atom_ids=(
+                    tuple(sorted(requested)) if not repair_atom_ids else ()
+                ),
                 repair_atom_ids=repair_atom_ids,
                 accepted_claim_ids=tuple(item.claim_id for item in accepted),
                 trusted_source_groups=trusted_groups,
@@ -3176,7 +3502,7 @@ class GroundedAnsweringService:
                 )
 
         def review_pending() -> None:  # noqa: PLR0912, PLR0915
-            """对全部绑定事实执行一次批量语义判定。"""
+            """按真实 Claim 成本执行一个或至多两个互斥复核批次。"""
             nonlocal relation_review_calls, relation_review_elapsed_ms
             nonlocal relation_review_skip_reason, reason
             if not pending_relations:
@@ -3225,145 +3551,209 @@ class GroundedAnsweringService:
                 for bound in unique:
                     observed(bound, "NOT_OBSERVED", reason)
                 return
-            atoms = {atom.atom_id: atom for atom in query_plan.atoms}
-            selected_unit_ids = {
-                unit_id
-                for bound in unique
-                for unit_id in bound.selected_unit_ids
-            }
             if active_request is None:
                 raise ValueError("语义复核缺少原生成请求。")
-            request = SemanticValidationRequest(
-                original_query=query_plan.original_query,
-                candidates=tuple(
-                    SemanticValidationCandidate(
-                        claim=bound, atom=atoms[bound.atom_id]
-                    )
-                    for bound in unique
+            atoms = {atom.atom_id: atom for atom in query_plan.atoms}
+            generation_model = next(
+                (
+                    call.model
+                    for call in reversed(calls)
+                    if call.operation == "generation"
                 ),
-                read_units=tuple(
-                    unit
-                    for unit in active_request.evidence_read_units
-                    if unit.unit_id in selected_unit_ids
-                ),
-                sent_packet=packet,
-                request_id=request_id,
-                attempt_id=uuid4().hex,
-                deadline_monotonic=deadline,
-                generation_model=next(
-                    (
-                        call.model
-                        for call in reversed(calls)
-                        if call.operation == "generation"
-                    ),
-                    None,
-                ),
+                None,
             )
-            _raise_if_cancelled(cancellation)
-            relation_review_skip_reason = None
-            started = monotonic()
-            try:
-                response = review_method(self.generator, request)
-            except (RagError, ValueError) as error:
-                review_reason = (
-                    dict(error.details).get("reason_code")
-                    if isinstance(error, ProviderInvalidResponse)
-                    else error.code
-                    if isinstance(error, RagError)
-                    else "SEMANTIC_REVIEW_PROVIDER_ERROR"
-                )
-                if not isinstance(review_reason, str):
-                    review_reason = "SEMANTIC_REVIEW_PROVIDER_ERROR"
-                relation_review_skip_reason = review_reason
-                reason = review_reason
-                if isinstance(error, RagError):
-                    failed_packets = _failed_generation_packets(error)
-                    failed_calls = error.provider_calls or (
-                        ()
-                        if error.provider_call is None
-                        else (error.provider_call,)
-                    )
-                    prepared_packets.extend(failed_packets)
-                    calls.extend(failed_calls)
-                    relation_review_calls = int(
-                        any(
-                            item.evidence_level == "TRANSPORT_SENT"
-                            for item in failed_packets
+
+            def build_request(
+                bounds: tuple[BoundClaim, ...],
+            ) -> SemanticValidationRequest:
+                """为当前互斥事实集仅装入其真实选择的阅读单元。"""
+                selected_unit_ids = {
+                    unit_id
+                    for bound in bounds
+                    for unit_id in bound.selected_unit_ids
+                }
+                return SemanticValidationRequest(
+                    original_query=query_plan.original_query,
+                    candidates=tuple(
+                        SemanticValidationCandidate(
+                            claim=bound,
+                            atom=atoms[bound.atom_id],
                         )
-                        or any(call.call_count for call in failed_calls)
-                    )
-                for candidate in request.candidates:
-                    observed(candidate.claim, "NOT_OBSERVED", review_reason)
-                return
-            finally:
-                relation_review_elapsed_ms = (monotonic() - started) * 1000
-            if not isinstance(response, SemanticValidationResponse):
-                raise ValueError("语义复核没有返回严格协议。")
-            relation_review_calls = 1
-            calls.append(response.call)
-            prepared_packets.append(response.prepared_packet)
-            _raise_if_cancelled(cancellation)
-            if response.prepared_packet.evidence_level != "TRANSPORT_SENT":
-                raise ValueError("语义复核缺少实际发送证据。")
-            by_claim = {
-                candidate.claim.claim_id: candidate
-                for candidate in request.candidates
-            }
+                        for bound in bounds
+                    ),
+                    read_units=tuple(
+                        unit
+                        for unit in active_request.evidence_read_units
+                        if unit.unit_id in selected_unit_ids
+                    ),
+                    sent_packet=packet,
+                    request_id=request_id,
+                    attempt_id=uuid4().hex,
+                    deadline_monotonic=deadline,
+                    generation_model=generation_model,
+                )
+
             allowed_units = {
                 atom_id: frozenset(unit_ids)
                 for atom_id, unit_ids in packet.per_atom_read_unit_ids
             }
-            results = normalized_semantic_results(
-                SemanticValidationPayload(results=response.results), request
-            )
             supported_count = 0
-            for result in results:
-                candidate = by_claim[result.claim_id]
-                bound = candidate.claim.with_semantic_status(result.status)
-                if result.status != "supported":
-                    rejected_atoms[bound.atom_id] += 1
-                    claim_rejections[f"SEMANTIC_{result.status.upper()}"] += 1
-                    observed(bound, result.status, "MODEL_NOT_SUPPORTED")
-                    continue
+            successful_batches = 0
+            batch_failed = False
+            split_attempted = False
+            requests = [build_request(unique)]
+            relation_review_skip_reason = None
+            started = monotonic()
+            index = 0
+            while index < len(requests):
+                request = requests[index]
+                _raise_if_cancelled(cancellation)
                 try:
-                    rebound = revalidate_bound_claim(
-                        bound,
-                        packet=packet,
-                        read_units=active_request.evidence_read_units,
-                        evidence=active_request.evidence,
-                        allowed_unit_ids=allowed_units.get(
-                            bound.atom_id, frozenset()
-                        ),
-                        physical_table_facts=active_request.physical_table_facts,
-                        atom_fact_bindings=active_request.atom_fact_bindings,
-                        source_scope=candidate.atom.source_scope,
+                    response = review_method(self.generator, request)
+                except (RagError, ValueError) as error:
+                    review_reason = (
+                        dict(error.details).get("reason_code")
+                        if isinstance(error, ProviderInvalidResponse)
+                        else error.code
+                        if isinstance(error, RagError)
+                        else "SEMANTIC_REVIEW_PROVIDER_ERROR"
                     )
-                except EvidenceBindingError:
-                    observed(
-                        bound, result.status, "HARD_BINDING_REVALIDATION_FAILED"
+                    if not isinstance(review_reason, str):
+                        review_reason = "SEMANTIC_REVIEW_PROVIDER_ERROR"
+                    failed_packets = (
+                        _failed_generation_packets(error)
+                        if isinstance(error, RagError)
+                        else ()
                     )
-                    raise ValueError("语义通过后的来源身份重验失败。") from None
-                observed(bound, result.status, "SEMANTIC_REVIEW_VALIDATED")
-                supported_count += 1
-                accepted.append(
-                    ValidatedNaturalClaim(
-                        claim_id=rebound.claim_id,
-                        atom_ids=(rebound.atom_id,),
-                        claim=rebound.answer_claim,
-                        render_origin=rebound.render_origin,
-                        selected_assertion_ids=(rebound.selected_assertion_ids),
-                        relation_complete=rebound.relation_complete,
-                        relation_gap_reason=rebound.relation_gap_reason,
+                    failed_calls = (
+                        error.provider_calls
+                        or (
+                            ()
+                            if error.provider_call is None
+                            else (error.provider_call,)
+                        )
+                        if isinstance(error, RagError)
+                        else ()
                     )
+                    prepared_packets.extend(failed_packets)
+                    calls.extend(failed_calls)
+                    transported = any(
+                        item.evidence_level == "TRANSPORT_SENT"
+                        for item in failed_packets
+                    ) or any(call.call_count for call in failed_calls)
+                    relation_review_calls += int(transported)
+                    if (
+                        review_reason == "SEMANTIC_REVIEW_INPUT_BUDGET_EXCEEDED"
+                        and not transported
+                        and not split_attempted
+                        and len(request.candidates) > 1
+                    ):
+                        midpoint = (len(request.candidates) + 1) // 2
+                        left = tuple(
+                            item.claim for item in request.candidates[:midpoint]
+                        )
+                        right = tuple(
+                            item.claim for item in request.candidates[midpoint:]
+                        )
+                        requests = [build_request(left), build_request(right)]
+                        split_attempted = True
+                        relation_review_skip_reason = None
+                        reason = None
+                        index = 0
+                        continue
+                    batch_failed = True
+                    relation_review_skip_reason = review_reason
+                    reason = review_reason
+                    for candidate in request.candidates:
+                        observed(
+                            candidate.claim,
+                            "NOT_OBSERVED",
+                            review_reason,
+                        )
+                    index += 1
+                    continue
+                if not isinstance(response, SemanticValidationResponse):
+                    raise ValueError("语义复核没有返回严格协议。")
+                successful_batches += 1
+                relation_review_calls += 1
+                calls.append(response.call)
+                prepared_packets.append(response.prepared_packet)
+                _raise_if_cancelled(cancellation)
+                if response.prepared_packet.evidence_level != "TRANSPORT_SENT":
+                    raise ValueError("语义复核缺少实际发送证据。")
+                by_claim = {
+                    candidate.claim.claim_id: candidate
+                    for candidate in request.candidates
+                }
+                results = normalized_semantic_results(
+                    SemanticValidationPayload(results=response.results),
+                    request,
                 )
-                recovery_results.append(
-                    (
-                        rebound.atom_id,
-                        "SEMANTIC_REVIEW_REQUIRED",
+                for result in results:
+                    candidate = by_claim[result.claim_id]
+                    bound = candidate.claim.with_semantic_status(result.status)
+                    if result.status != "supported":
+                        rejected_atoms[bound.atom_id] += 1
+                        claim_rejections[
+                            f"SEMANTIC_{result.status.upper()}"
+                        ] += 1
+                        observed(bound, result.status, "MODEL_NOT_SUPPORTED")
+                        continue
+                    try:
+                        rebound = revalidate_bound_claim(
+                            bound,
+                            packet=packet,
+                            read_units=active_request.evidence_read_units,
+                            evidence=active_request.evidence,
+                            allowed_unit_ids=allowed_units.get(
+                                bound.atom_id, frozenset()
+                            ),
+                            physical_table_facts=(
+                                active_request.physical_table_facts
+                            ),
+                            atom_fact_bindings=(
+                                active_request.atom_fact_bindings
+                            ),
+                            source_scope=candidate.atom.source_scope,
+                        )
+                    except EvidenceBindingError:
+                        observed(
+                            bound,
+                            result.status,
+                            "HARD_BINDING_REVALIDATION_FAILED",
+                        )
+                        raise ValueError(
+                            "语义通过后的来源身份重验失败。"
+                        ) from None
+                    observed(
+                        bound,
+                        result.status,
                         "SEMANTIC_REVIEW_VALIDATED",
                     )
-                )
-            if supported_count == 0:
+                    supported_count += 1
+                    accepted.append(
+                        ValidatedNaturalClaim(
+                            claim_id=rebound.claim_id,
+                            atom_ids=(rebound.atom_id,),
+                            claim=rebound.answer_claim,
+                            render_origin=rebound.render_origin,
+                            selected_assertion_ids=(
+                                rebound.selected_assertion_ids
+                            ),
+                            relation_complete=rebound.relation_complete,
+                            relation_gap_reason=rebound.relation_gap_reason,
+                        )
+                    )
+                    recovery_results.append(
+                        (
+                            rebound.atom_id,
+                            "SEMANTIC_REVIEW_REQUIRED",
+                            "SEMANTIC_REVIEW_VALIDATED",
+                        )
+                    )
+                index += 1
+            relation_review_elapsed_ms = (monotonic() - started) * 1000
+            if supported_count == 0 and successful_batches and not batch_failed:
                 reason = "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM"
 
         if eligible:
@@ -3603,6 +3993,8 @@ class GroundedAnsweringService:
         covered = {atom_id for item in accepted for atom_id in item.atom_ids}
         coverage: list[tuple[str, str]] = []
         missing: dict[str, MissingAtomReason] = {}
+        final_plan_coverage: CompiledPlanCoverage | None = None
+        use_compiled_coverage = False
         generation_gap_count = 0
         false_limited_detected = False
         for atom in query_plan.atoms:
@@ -3676,6 +4068,74 @@ class GroundedAnsweringService:
                     else MissingAtomReason.GENERATION_INCOMPLETE
                 )
             coverage.append((atom.atom_id, final.value))
+        if compiled_plan is not None and deterministic_execution is not None:
+            resource_limited_artifacts = (
+                _resource_limited_plan_artifacts(
+                    compiled_plan,
+                    deterministic_execution.deferred_obligation_ids,
+                )
+                if reason
+                in {
+                    "GENERATION_INPUT_BUDGET_EXCEEDED",
+                    "SEMANTIC_REVIEW_INPUT_BUDGET_EXCEEDED",
+                }
+                else ()
+            )
+            final_plan_coverage = reduce_plan_coverage(
+                compiled_plan,
+                (
+                    *deterministic_execution.artifacts,
+                    *_generation_plan_artifacts(
+                        compiled_plan,
+                        tuple(accepted),
+                        evidence,
+                        skip_claim_ids=frozenset(deterministic_claim_ids),
+                    ),
+                    *resource_limited_artifacts,
+                ),
+            )
+            use_compiled_coverage = (
+                bool(deterministic_execution.artifacts)
+                or any(
+                    obligation.required_member_keys
+                    for obligation in compiled_plan.obligations
+                )
+                or all(
+                    atom.answer_shape is AtomAnswerShape.FACT
+                    for atom in query_plan.atoms
+                )
+            )
+            if use_compiled_coverage:
+                coverage = list(
+                    compiled_atom_coverage(
+                        compiled_plan,
+                        final_plan_coverage,
+                    )
+                )
+                coverage_by_obligation = {
+                    item.obligation_id: item
+                    for item in final_plan_coverage.obligations
+                }
+                missing = {
+                    atom_id: (
+                        MissingAtomReason.EVIDENCE_NOT_DIRECT
+                        if any(
+                            not item.relation_complete
+                            for item in accepted
+                            if atom_id in item.atom_ids
+                        )
+                        or any(
+                            coverage_by_obligation[
+                                obligation.obligation_id
+                            ].missing_qualifier_ids
+                            for obligation in compiled_plan.obligations
+                            if atom_id in obligation.atom_ids
+                        )
+                        else MissingAtomReason.GENERATION_INCOMPLETE
+                    )
+                    for atom_id, status in coverage
+                    if status != AtomStatus.SUPPORTED.value
+                }
         answer = render_natural_answer(
             query_plan,
             atom_support_matrix,
@@ -3683,12 +4143,25 @@ class GroundedAnsweringService:
             evidence,
             missing_atoms=missing,
         )
-        target_records = _target_coverage_records(
-            query_plan,
-            evidence,
-            tuple(accepted),
-            analysis,
-            generation_evidence_pack,
+        if final_plan_coverage is not None and use_compiled_coverage:
+            target_records = _compiled_coverage_records(final_plan_coverage)
+        else:
+            target_records = _target_coverage_records(
+                query_plan,
+                evidence,
+                tuple(accepted),
+                analysis,
+                generation_evidence_pack,
+            )
+        answer_plan_records = (
+            _compiled_plan_records(compiled_plan, deterministic_execution)
+            if compiled_plan is not None and deterministic_execution is not None
+            else ()
+        )
+        answer_plan_coverage = (
+            _compiled_coverage_records(final_plan_coverage)
+            if final_plan_coverage is not None
+            else ()
         )
         accepted_support_ids = tuple(
             dict.fromkeys(
@@ -3730,6 +4203,16 @@ class GroundedAnsweringService:
                 source_projection_records=(
                     finalized_source_projection_records()
                 ),
+                answer_plan_id=(
+                    compiled_plan.plan_id if compiled_plan is not None else None
+                ),
+                answer_plan_revision=(
+                    compiled_plan.schema_revision
+                    if compiled_plan is not None
+                    else None
+                ),
+                answer_plan_records=answer_plan_records,
+                answer_plan_coverage=answer_plan_coverage,
             )
         published = list(accepted_support_ids)
         for matrix_atom in atom_support_matrix.atoms:
@@ -3769,7 +4252,16 @@ class GroundedAnsweringService:
         )
         return GroundedOutcome(
             answer=answer,
-            mode="llm" if eligible else "none",
+            mode=(
+                "llm"
+                if any(
+                    item.claim_id not in deterministic_claim_ids
+                    for item in accepted
+                )
+                else "extractive"
+                if deterministic_claim_ids
+                else "none"
+            ),
             calls=tuple(calls),
             reason_code="CONTRADICTORY_EVIDENCE"
             if has_conflict
@@ -3804,6 +4296,16 @@ class GroundedAnsweringService:
             recovery_results=tuple(recovery_results),
             wire_diagnostics=tuple(wire_diagnostics),
             source_projection_records=finalized_source_projection_records(),
+            answer_plan_id=(
+                compiled_plan.plan_id if compiled_plan is not None else None
+            ),
+            answer_plan_revision=(
+                compiled_plan.schema_revision
+                if compiled_plan is not None
+                else None
+            ),
+            answer_plan_records=answer_plan_records,
+            answer_plan_coverage=answer_plan_coverage,
         )
 
 

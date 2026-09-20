@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AnswerClaim,
     EvidenceGroup,
@@ -38,6 +39,7 @@ class TargetMemberCoverage:
     required_member_keys: tuple[str, ...] = ()
     covered_member_keys: tuple[str, ...] = ()
     missing_member_keys: tuple[str, ...] = ()
+    member_support_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     selected_group_ids: tuple[str, ...] = ()
     source_complete: bool = False
     reason_codes: tuple[str, ...] = ()
@@ -75,8 +77,9 @@ def target_member_coverage(  # noqa: PLR0913
         稳定成员身份、缺项及来源闭合诊断；不作任何模型调用。
 
     """
-    required: dict[str, EvidenceItem] = {}
-    covered: set[str] = set()
+    required: dict[str, dict[str, EvidenceItem]] = {}
+    fragment_covered: dict[str, dict[str, bool]] = {}
+    member_support_ids: dict[str, list[str]] = {}
     selected: list[str] = []
     reasons: list[str] = []
     source_complete = True
@@ -108,21 +111,36 @@ def target_member_coverage(  # noqa: PLR0913
             source_complete = False
             reasons.append("TARGET_STRUCTURE_INCOMPLETE")
         for member in facts:
-            key = stable_support_key(member)
-            required[key] = member
+            key = _member_key(member)
+            fragment_key = stable_support_key(member)
+            required.setdefault(key, {})[fragment_key] = member
             member_group = _project_group(group, (member,))
             supporting = tuple(
                 item
                 for item in available
                 if source_group_contains(item, member_group)
             )
-            if source_group_covered(supporting, member_group) and all(
+            support_ids = member_support_ids.setdefault(key, [])
+            support_ids.extend(item.support_id for item in supporting)
+            is_covered = source_group_covered(supporting, member_group) and all(
                 fact_covered(item, claims) for item in supporting
-            ):
-                covered.add(key)
+            )
+            fragment_states = fragment_covered.setdefault(key, {})
+            fragment_states[fragment_key] = (
+                fragment_states.get(fragment_key, False) or is_covered
+            )
     if not required:
         reasons.append("TARGET_MEMBER_SET_UNPROVED")
         source_complete = False
+    covered = {
+        key
+        for key, members in required.items()
+        if members
+        and all(
+            fragment_covered.get(key, {}).get(fragment_key, False)
+            for fragment_key in members
+        )
+    }
     missing = tuple(key for key in required if key not in covered)
     if missing:
         reasons.append("TARGET_MEMBERS_NOT_ANSWERED")
@@ -130,9 +148,33 @@ def target_member_coverage(  # noqa: PLR0913
         required_member_keys=tuple(required),
         covered_member_keys=tuple(key for key in required if key in covered),
         missing_member_keys=missing,
+        member_support_ids=tuple(
+            (key, tuple(dict.fromkeys(member_support_ids.get(key, ()))))
+            for key in required
+        ),
         selected_group_ids=tuple(dict.fromkeys(selected)),
         source_complete=source_complete,
         reason_codes=tuple(dict.fromkeys(reasons)),
+    )
+
+
+def _member_key(item: EvidenceItem) -> str:
+    """按规范来源节点合并同一业务成员的多个 chunk 片段。"""
+    node_ids = tuple(
+        dict.fromkeys(
+            span.node_id
+            for span in item.source_spans
+            if span.node_id is not None
+        )
+    )
+    if not node_ids:
+        return stable_support_key(item)
+    return canonical_sha256(
+        {
+            "document_id": item.document_id,
+            "document_version_id": item.document_version_id,
+            "node_ids": node_ids,
+        }
     )
 
 
@@ -207,6 +249,11 @@ def _target_members(
     if not owns_target:
         return None
     facts = tuple(member for member in members if member not in intros)
+    if semantics.ordinal is not None:
+        index = semantics.ordinal - 1
+        if index >= len(facts):
+            return None
+        facts = (facts[index],)
     return (facts, intros) if facts else None
 
 
