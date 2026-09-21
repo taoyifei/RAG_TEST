@@ -1,0 +1,68 @@
+{
+  "schema_version": "wb08r-prep-selection-v1",
+  "frozen_at_utc": "2026-09-21T07:49:06Z",
+  "frozen_from_revision": "c2934e0031e47fa97bcd168c34630207b4982234",
+  "dataset_revision": "wanshitong-v2-20260917",
+  "source_files": [
+    {
+      "path": "evaluation/wanshitong/v2/formal-54.ndjson",
+      "sha256": "19f785acdde997ee4ce53aefcb461fa16854c05176c1c1d02e12bc51b16b582f"
+    },
+    {
+      "path": "evaluation/wanshitong/v2/natural-60.ndjson",
+      "sha256": "07c92c95d4bf695394104f688e72941ef0724172836edc392823c277954d9807"
+    },
+    {
+      "path": "evaluation/wanshitong/v2/adversarial-30.ndjson",
+      "sha256": "0b7c95d773329b741d9984f7053fc648e596e31f8c0d7b7fa05947bac8687e7b"
+    },
+    {
+      "path": "evaluation/wanshitong/v2/dataset-manifest.json",
+      "sha256": "4b76d9f6da30dde3f67926f69b9bf2024276a5285076d95a95d2273548db46f9"
+    }
+  ],
+  "demo20": [
+    {"case_id": "WB08R-F-037", "category": "direct_fact", "question_sha256": "687eb2b944f9607ac701ea277ef1a18fd1e383e0d8fe6a2a2025fd61e53abfc5"},
+    {"case_id": "WB08R-F-040", "category": "direct_fact", "question_sha256": "ac239a7d063933101ef006ce21f7289caa441795747f941da00f4e495b23b5a2"},
+    {"case_id": "WB08R-F-039", "category": "direct_fact", "question_sha256": "eba5d3687f9ee29cd0e182875e2a5af5661e518e4684a41960c1cee03d1db91e"},
+    {"case_id": "WB08R-F-043", "category": "direct_fact", "question_sha256": "e4cbc9c3a5a84a3e62257841f0ca2cc0e714cdd20eff253e4f0e68113a15a5e3"},
+    {"case_id": "WB08R-F-045", "category": "direct_fact", "question_sha256": "1a7ce730b17422ca92aed8a67805710e947fa03ffc1c00a98e22d081f2df2854"},
+    {"case_id": "WB08R-F-047", "category": "direct_fact", "question_sha256": "cc6842d3cb951653671401fa9ec367ac729c36cb4ab30abfa4a6ef1b77271222"},
+    {"case_id": "WB08R-F-015", "category": "table", "question_sha256": "4c52a4f4674dc8d0fff177a87f43b320603b8d907b3d94a5c269317617e6d642"},
+    {"case_id": "WB08R-F-017", "category": "table", "question_sha256": "29cdf8cc9134211e1ad6118aaf7c95bb81d0af11eb8bed1d91bf2ce0b9f9e0c8"},
+    {"case_id": "WB08R-N-057", "category": "table", "question_sha256": "514d17c4fd33e302aeffe59119fe6d8e005a06edfe927a17f01f882d4ecc5119"},
+    {"case_id": "WB08R-N-060", "category": "table", "question_sha256": "abb6b1f1cd8535295fc2ac8de921a734f90c18f6eeb0c04128db0a7f4beb032b"},
+    {"case_id": "WB08R-N-001", "category": "natural_rewrite", "question_sha256": "7fa8e242cdccd227a2abe2ce9cdc857a86b902067d90ba49364d6acaa81869e8"},
+    {"case_id": "WB08R-N-003", "category": "natural_rewrite", "question_sha256": "1e9a819a521b9b7a395d4ba50d8430a33f350a85c0046b2776e5c5015fa23f87"},
+    {"case_id": "WB08R-N-006", "category": "natural_rewrite", "question_sha256": "b5afc02ceabbcfa79a2f0b9c1fb951100d754ad827b714378fa33bc2134d1b85"},
+    {"case_id": "WB08R-N-011", "category": "natural_rewrite", "question_sha256": "5216e36e0f08b2d1da0a68e4f9daf61a898d6fb95dc0547151e1d58325b84099"},
+    {"case_id": "WB08R-N-043", "category": "multi_or_compound", "question_sha256": "2621c01bcea62d0b3512e7c422bc60d945e1c0bcbbcd86e718b5a18206034227"},
+    {"case_id": "WB08R-N-056", "category": "multi_or_compound", "question_sha256": "2858144b153c45ec63bd8eb92bf21209b2cfae3506f2e0528eb2c138a3f20f05"},
+    {"case_id": "WB08R-N-059", "category": "multi_or_compound", "question_sha256": "6925f33be3af0df7a64b89c46789920aa3cd223317207ee87b1502404da87eb2"},
+    {"case_id": "WB08R-F-024", "category": "no_evidence_or_clarify", "question_sha256": "eb8247b1d25bfb76324181be9920fdd1f7671c26d7d9dd19985ff284329c6a74"},
+    {"case_id": "WB08R-A-001", "category": "no_evidence_or_clarify", "question_sha256": "562e06f94e1c4db4ae9f7e5bdc132ac1e198296f38cda115b972544ba378aa0d"},
+    {"case_id": "WB08R-A-025", "category": "no_evidence_or_clarify", "question_sha256": "a5f6b6e0c2099f8a172e413f48cdf750a8244a93c944c9f62cf7122525b8b274"}
+  ],
+  "smoke12": [
+    {"case_id": "WB08R-F-037", "coverage": "deterministic_lookup"},
+    {"case_id": "WB08R-F-040", "coverage": "deterministic_lookup"},
+    {"case_id": "WB08R-N-001", "coverage": "natural_body"},
+    {"case_id": "WB08R-N-003", "coverage": "natural_body"},
+    {"case_id": "WB08R-F-015", "coverage": "explicit_source_contract"},
+    {"case_id": "WB08R-F-048", "coverage": "explicit_source_contract"},
+    {"case_id": "WB08R-N-056", "coverage": "missing_subquestion_guard"},
+    {"case_id": "WB08R-N-059", "coverage": "missing_subquestion_guard"},
+    {"case_id": "WB08R-F-024", "coverage": "true_no_evidence"},
+    {"case_id": "WB08R-A-001", "coverage": "true_no_evidence"},
+    {"case_id": "WB08R-N-043", "coverage": "follow_up"},
+    {"case_id": "WB08R-N-044", "coverage": "follow_up"}
+  ],
+  "targeted_replay6": [
+    "WB08R-F-048",
+    "WB08R-F-015",
+    "WB08R-N-001",
+    "WB08R-N-043",
+    "WB08R-A-001",
+    "WB08R-A-025"
+  ]
+}
