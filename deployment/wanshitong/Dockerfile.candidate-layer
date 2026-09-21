@@ -14,7 +14,10 @@ COPY --chown=root:root layer/site-packages/rag_app/ \
 COPY --chown=root:root layer/site-packages/docx_rag-0.1.0.dist-info/ \
     /usr/local/lib/python3.11/site-packages/docx_rag-0.1.0.dist-info/
 
-RUN python -c \
+RUN chmod -R u=rwX,go=rX \
+    /usr/local/lib/python3.11/site-packages/rag_app \
+    /usr/local/lib/python3.11/site-packages/docx_rag-0.1.0.dist-info \
+    && python -c \
     'import sys; from rag_app._build_revision import SOURCE_REVISION; sys.exit(0 if SOURCE_REVISION == sys.argv[1] else 1)' \
     "${VCS_REF}" \
     && python -c \
@@ -24,9 +27,13 @@ RUN python -c \
     "${VCS_REF}" \
     && chown rag:rag \
     /app/compatibility-manifest.json \
-    /app/product-assets.json \
-    && rag-app product-asset-selfcheck --expected-revision "${VCS_REF}"
+    /app/product-assets.json
 
 LABEL org.opencontainers.image.revision="${VCS_REF}"
 
 USER rag:rag
+
+RUN python -c \
+    'import sys; from rag_app._build_revision import SOURCE_REVISION; sys.exit(0 if SOURCE_REVISION == sys.argv[1] else 1)' \
+    "${VCS_REF}" \
+    && rag-app product-asset-selfcheck --expected-revision "${VCS_REF}"
