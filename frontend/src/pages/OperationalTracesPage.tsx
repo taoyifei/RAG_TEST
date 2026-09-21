@@ -20,6 +20,24 @@ const INITIAL_DECISION_LIMIT = 160;
 
 type TraceTab = "waterfall" | "funnel" | "providers" | "artifacts";
 
+interface DepartmentShadowView {
+  routeRevision?: string;
+  profileRevision?: string;
+  top1DepartmentKey?: string;
+  top1ScoreBucket?: string;
+  top2DepartmentKey?: string;
+  top2ScoreBucket?: string;
+  confidence: string;
+  recommendedScope: string;
+  actualScopeKind: string;
+  citedDepartmentKeys: string[];
+  departmentFilterApplied: boolean;
+  embeddingReused: boolean;
+  extraProviderCalls: number;
+  status: string;
+  reasonCodes: string[];
+}
+
 export interface OperationalTraceServices {
   list: (
     filters: OperationalTraceFilters,
@@ -659,6 +677,9 @@ export function TraceDetailPanel({
           )}
         </div>
       )}
+      {detail.trace.kind !== "ingestion" && (
+        <DepartmentShadowPanel detail={detail} />
+      )}
       <div className="trace-tabs" role="tablist" aria-label="Trace 详情视图">
         {(
           [
@@ -813,6 +834,88 @@ export function TraceDetailPanel({
   );
 }
 
+function DepartmentShadowPanel({ detail }: { detail: OperationalTraceDetail }) {
+  const observation = departmentShadowObservation(detail);
+  return (
+    <section
+      className="department-shadow-panel"
+      aria-labelledby="department-shadow-title"
+    >
+      <div className="department-shadow-heading">
+        <div>
+          <span className="eyebrow">只读观察</span>
+          <h3 id="department-shadow-title">部门影子路由</h3>
+        </div>
+        {observation ? (
+          <StatusBadge value={observation.status} />
+        ) : (
+          <StatusBadge value="未采集" />
+        )}
+      </div>
+      {!observation ? (
+        <p className="department-shadow-empty">
+          未采集。这通常表示旧 Trace，或本次查询未启用部门影子路由。
+        </p>
+      ) : (
+        <>
+          <p className="department-shadow-notice">
+            {observation.departmentFilterApplied
+              ? "Trace 报告已应用部门过滤，请立即核查配置。"
+              : "实际检索未使用部门过滤；建议只用于管理员事后评估。"}
+          </p>
+          <dl className="department-shadow-grid">
+            <dt>建议 / 置信</dt>
+            <dd>
+              {formatRecommendedScope(observation.recommendedScope)} ·{" "}
+              {formatConfidence(observation.confidence)}
+            </dd>
+            <dt>Top 1</dt>
+            <dd>
+              {formatDepartmentCandidate(
+                observation.top1DepartmentKey,
+                observation.top1ScoreBucket,
+              )}
+            </dd>
+            <dt>Top 2</dt>
+            <dd>
+              {formatDepartmentCandidate(
+                observation.top2DepartmentKey,
+                observation.top2ScoreBucket,
+              )}
+            </dd>
+            <dt>实际 SourceScope</dt>
+            <dd>{formatActualScope(observation.actualScopeKind)}</dd>
+            <dt>最终引用部门</dt>
+            <dd>
+              {observation.citedDepartmentKeys.length
+                ? observation.citedDepartmentKeys.join("、")
+                : "无"}
+            </dd>
+            <dt>已有向量 / 新增调用</dt>
+            <dd>
+              {observation.embeddingReused ? "已复用" : "未复用"} ·{" "}
+              {observation.extraProviderCalls} 次
+            </dd>
+            <dt>Profile / Route</dt>
+            <dd>
+              <code>{observation.profileRevision ?? "—"}</code>
+              <small>{observation.routeRevision ?? "—"}</small>
+            </dd>
+            <dt>原因</dt>
+            <dd className="department-shadow-reasons">
+              {observation.reasonCodes.length
+                ? observation.reasonCodes.map((reason) => (
+                    <code key={reason}>{reason}</code>
+                  ))
+                : "—"}
+            </dd>
+          </dl>
+        </>
+      )}
+    </section>
+  );
+}
+
 function Waterfall({
   rootDuration,
   spans,
@@ -872,6 +975,103 @@ function Waterfall({
       })}
       {!spans.length && <p>没有可显示的 Span；旧记录仅保留平面事件。</p>}
     </div>
+  );
+}
+
+function departmentShadowObservation(
+  detail: OperationalTraceDetail,
+): DepartmentShadowView | undefined {
+  const current = [...detail.spans]
+    .reverse()
+    .find((span) => span.name === "retrieval.department_route_shadow");
+  const legacy = [...(detail.legacy_flat_events ?? [])]
+    .reverse()
+    .find((event) => event.event_name === "retrieval.department_route_shadow");
+  const attributes = current?.attributes ?? legacy?.attributes;
+  if (!isRecord(attributes)) return undefined;
+  return {
+    routeRevision: stringValue(attributes.route_revision),
+    profileRevision: stringValue(attributes.profile_revision),
+    top1DepartmentKey: stringValue(attributes.top1_department_key),
+    top1ScoreBucket: stringValue(attributes.top1_score_bucket),
+    top2DepartmentKey: stringValue(attributes.top2_department_key),
+    top2ScoreBucket: stringValue(attributes.top2_score_bucket),
+    confidence: stringValue(attributes.confidence) ?? "UNKNOWN",
+    recommendedScope: stringValue(attributes.recommended_scope) ?? "UNKNOWN",
+    actualScopeKind: stringValue(attributes.actual_scope_kind) ?? "UNKNOWN",
+    citedDepartmentKeys: stringArray(attributes.final_cited_department_keys),
+    departmentFilterApplied: attributes.department_filter_applied === true,
+    embeddingReused: attributes.embedding_reused === true,
+    extraProviderCalls:
+      typeof attributes.extra_provider_calls === "number"
+        ? attributes.extra_provider_calls
+        : 0,
+    status: stringValue(attributes.status) ?? "UNKNOWN",
+    reasonCodes: stringArray(attributes.reason_codes),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function formatRecommendedScope(value: string): string {
+  return (
+    {
+      TOP1: "优先 Top 1 部门",
+      TOP2: "优先 Top 2 部门",
+      GLOBAL: "全局（不加部门过滤）",
+    }[value] ?? value
+  );
+}
+
+function formatConfidence(value: string): string {
+  return (
+    {
+      HIGH: "高置信",
+      MEDIUM: "中置信",
+      LOW: "低置信",
+    }[value] ?? value
+  );
+}
+
+function formatDepartmentCandidate(
+  departmentKey?: string,
+  scoreBucket?: string,
+): string {
+  if (!departmentKey) return "—";
+  const bucket = scoreBucket
+    ? ({
+        EXPLICIT: "显式唯一部门",
+        EXPLICIT_SOURCE: "显式来源部门",
+        GE_0_50: "高分段",
+        "0_30_TO_0_49": "中分段",
+        LT_0_30: "低分段",
+        ZERO: "零重合",
+      }[scoreBucket] ?? scoreBucket)
+    : "未分段";
+  return `${departmentKey} · ${bucket}`;
+}
+
+function formatActualScope(value: string): string {
+  return (
+    {
+      OPEN: "开放 SourceScope（仍受权限与活动版本限制）",
+      SOURCE_RESOLVED: "显式文档范围（已解析）",
+      SOURCE_CATALOG_ONLY: "显式文档范围（仅目录）",
+      SOURCE_AMBIGUOUS: "显式来源有歧义",
+      SOURCE_UNRESOLVED: "显式来源未解析",
+    }[value] ?? value
   );
 }
 

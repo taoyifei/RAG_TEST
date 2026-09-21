@@ -1284,6 +1284,75 @@ label:has(input[type="checkbox"]) {
 .trace-detail h2 {
   overflow-wrap: anywhere;
 }
+.department-shadow-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #b8d7d2;
+  border-radius: 8px;
+  background: #f3fbf9;
+}
+.department-shadow-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.department-shadow-heading h3 {
+  margin: 3px 0 0;
+  font-size: 18px;
+}
+.department-shadow-empty,
+.department-shadow-notice {
+  margin: 0;
+  color: var(--muted);
+}
+.department-shadow-notice {
+  padding: 10px 12px;
+  border-left: 3px solid var(--teal);
+  background: rgb(255 255 255 / 72%);
+}
+.department-shadow-grid {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 9px 16px;
+  margin: 0;
+}
+.department-shadow-grid dt {
+  color: var(--muted);
+}
+.department-shadow-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 620;
+}
+.department-shadow-grid dd small,
+.department-shadow-grid dd > code {
+  display: block;
+}
+.department-shadow-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.department-shadow-reasons code {
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #e3f2ef;
+  font-size: 11px;
+}
+@media (max-width: 560px) {
+  .department-shadow-heading {
+    align-items: flex-start;
+  }
+  .department-shadow-grid {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .department-shadow-grid dd {
+    margin-bottom: 9px;
+  }
+}
 .trace-tabs {
   display: flex;
   gap: 6px;
