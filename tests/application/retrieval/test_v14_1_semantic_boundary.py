@@ -12,6 +12,9 @@ from rag_app.application.retrieval.adaptive import (
     FieldResolutionExecutionState,
     FieldResolutionOutcome,
 )
+from rag_app.application.retrieval.service import (
+    _combine_field_resolution_outcomes,
+)
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.composition.p07_runtime import build_p07_runtime
 from rag_app.core.identifiers import canonical_sha256, deterministic_id
@@ -23,6 +26,7 @@ from rag_app.core.models import (
     FieldResolution,
     FieldResolutionStatus,
     KnowledgeBaseScope,
+    ProviderCall,
     ResolvedQueryView,
     SearchRequest,
     SourceDocumentIdentity,
@@ -36,6 +40,71 @@ _PROFILE = Path("configs/profiles/dev-p06-memory.json")
 _MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+
+
+def test_field_resolution_batch_keeps_success_when_another_atom_fails() -> None:
+    """批次终态暴露首个系统失败，但不能丢弃已验证的 Atom。"""
+    success = FieldResolutionOutcome(
+        resolutions=(
+            FieldResolution(
+                atom_id="A1",
+                status=FieldResolutionStatus.SUPPORTED_PARAPHRASE,
+                candidate_ids=("F1",),
+                query_view_digest=canonical_sha256("query-view"),
+                reason_code="SCHEMA_AWARE_INTERPRETATION_V2",
+            ),
+        ),
+        calls=(
+            ProviderCall(
+                provider_id="unit",
+                operation="query.interpret",
+                call_count=1,
+                retry_count=0,
+                elapsed_ms=10,
+            ),
+        ),
+        execution_state=FieldResolutionExecutionState.SUCCEEDED,
+        reason_code="FIELD_RESOLUTION_ACCEPTED",
+        attempted=True,
+        input_tokens=100,
+        output_tokens=20,
+        finish_reason="stop",
+        contract_sha256=canonical_sha256("contract-a1"),
+    )
+    failed = FieldResolutionOutcome(
+        calls=(
+            ProviderCall(
+                provider_id="unit",
+                operation="query.interpret",
+                call_count=1,
+                retry_count=0,
+                elapsed_ms=12,
+            ),
+        ),
+        execution_state=FieldResolutionExecutionState.TRANSPORT_FAILED,
+        reason_code="FIELD_RESOLUTION_PROVIDER_UNAVAILABLE",
+        attempted=True,
+        failure_category="READ_TIMEOUT",
+        response_content_sha256=canonical_sha256("invalid-response"),
+        invalid_atom_id="A2",
+    )
+
+    combined = _combine_field_resolution_outcomes(
+        [("A1", success), ("A2", failed)],
+        latency_ms=25,
+    )
+
+    assert combined.resolutions == success.resolutions
+    assert combined.execution_state is (
+        FieldResolutionExecutionState.TRANSPORT_FAILED
+    )
+    assert combined.reason_code == "FIELD_RESOLUTION_PROVIDER_UNAVAILABLE"
+    assert combined.failure_category == "READ_TIMEOUT"
+    assert sum(call.call_count for call in combined.calls) == 2
+    assert combined.invalid_atom_id == "A2"
+    assert combined.response_content_sha256 == canonical_sha256(
+        "invalid-response"
+    )
 
 
 def _paragraph(text: str) -> str:
@@ -108,8 +177,9 @@ def test_explicit_source_defers_interpret_until_real_schema_exists(
             *,
             query_view: ResolvedQueryView,
             atoms: tuple[QueryAtom, ...],
+            timeout_seconds: float | None = None,
         ) -> FieldResolutionOutcome:
-            del atoms
+            del atoms, timeout_seconds
             self.field_calls += 1
             self.questions.append(request.text)
             self.candidates = candidates
@@ -263,8 +333,9 @@ def test_incomplete_structure_never_claims_field_not_found(
             *,
             query_view: ResolvedQueryView,
             atoms: tuple[QueryAtom, ...],
+            timeout_seconds: float | None = None,
         ) -> FieldResolutionOutcome:
-            del query_view, atoms
+            del query_view, atoms, timeout_seconds
             self.field_calls += 1
             raise AssertionError("不完整 schema 不应进入确定性字段解释")
 
@@ -353,8 +424,9 @@ def test_ambiguous_schema_fields_do_not_fall_through_to_generation(
             *,
             query_view: ResolvedQueryView,
             atoms: tuple[QueryAtom, ...],
+            timeout_seconds: float | None = None,
         ) -> FieldResolutionOutcome:
-            del atoms
+            del atoms, timeout_seconds
             self.field_calls += 1
             start = request.text.index("准备哪些材料")
             return FieldResolutionOutcome(
@@ -443,8 +515,9 @@ def test_field_provider_failure_is_not_rewritten_as_semantic_ambiguity(
             *,
             query_view: ResolvedQueryView,
             atoms: tuple[QueryAtom, ...],
+            timeout_seconds: float | None = None,
         ) -> FieldResolutionOutcome:
-            del query_view, atoms
+            del query_view, atoms, timeout_seconds
             self.field_calls += 1
             return FieldResolutionOutcome(
                 reason_code="FIELD_RESOLUTION_PROVIDER_UNAVAILABLE",

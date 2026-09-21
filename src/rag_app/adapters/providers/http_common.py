@@ -1047,6 +1047,56 @@ class ProviderHttpClient:
             self._observe(completed_call)
         return completed_call
 
+    def record_private_response_contract_failure(
+        self,
+        *,
+        operation: str,
+        path: str,
+        request_payload: object,
+        response_content: str,
+        reason_code: str,
+    ) -> str | None:
+        """在显式私有诊断中保存 HTTP 200 后的业务合同失败。
+
+        Args:
+            operation: 当前 Provider 操作。
+            path: 已发送的固定相对路径。
+            request_payload: 实际请求 body；仅写入私有目录。
+            response_content: 模型返回的原始 ``message.content``。
+            reason_code: 本地业务合同拒绝原因。
+
+        Returns:
+            未启用时返回空，否则返回 ``WRITTEN`` 或 ``WRITE_FAILED``。
+
+        """
+        recorder = self._private_diagnostic_recorder
+        if recorder is None:
+            return None
+        request_id = uuid.uuid4().hex
+        attempt_id = f"{request_id}-response-contract"
+        try:
+            recorder.record(
+                PrivateHttpDiagnostic(
+                    request_id=request_id,
+                    attempt_id=attempt_id,
+                    operation=operation,
+                    method="POST",
+                    endpoint=self._base_url + path,
+                    request_headers={},
+                    request_payload={
+                        "request": request_payload,
+                        "response_contract_failure": reason_code,
+                    },
+                    response_status=200,
+                    response_headers={"content-type": "application/json"},
+                    response_body=response_content.encode("utf-8"),
+                    response_truncated=False,
+                )
+            )
+        except Exception:
+            return "WRITE_FAILED"
+        return "WRITTEN"
+
     def close(self) -> None:
         """幂等关闭连接池。
 

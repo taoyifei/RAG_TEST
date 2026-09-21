@@ -32,8 +32,20 @@ _MAX_QUERY_FRAGMENT = 160
 class FieldResolutionWireError(ValueError):
     """只携带稳定原因码的字段 Wire 合同失败。"""
 
-    def __init__(self, reason_code: str) -> None:
+    def __init__(
+        self,
+        reason_code: str,
+        *,
+        atom_id: str | None = None,
+        status: str | None = None,
+        candidate_count: int | None = None,
+        query_fragment_length: int | None = None,
+    ) -> None:
         self.reason_code = reason_code
+        self.atom_id = atom_id
+        self.status = status
+        self.candidate_count = candidate_count
+        self.query_fragment_length = query_fragment_length
         super().__init__(reason_code)
 
 
@@ -334,7 +346,11 @@ def validate_field_response(
             )
         except ValueError:
             raise FieldResolutionWireError(
-                "FIELD_RESPONSE_STATUS_COMBINATION_INVALID"
+                "FIELD_RESPONSE_STATUS_COMBINATION_INVALID",
+                atom_id=atom_id,
+                status=choice.s,
+                candidate_count=len(choice.c),
+                query_fragment_length=len(choice.q),
             ) from None
     return tuple(resolutions)
 

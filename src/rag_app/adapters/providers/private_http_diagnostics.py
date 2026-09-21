@@ -30,7 +30,7 @@ _SECRET_HEADERS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class PrivateHttpDiagnostic:
-    """一次失败请求的有界私有诊断输入。"""
+    """一次传输失败或响应合同失败的有界私有诊断输入。"""
 
     request_id: str
     attempt_id: str

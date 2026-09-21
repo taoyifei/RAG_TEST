@@ -7,7 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from rag_app.application.retrieval.adaptive import ReasoningEffort
+from rag_app.application.retrieval.adaptive import (
+    FieldResolutionExecutionState,
+    ReasoningEffort,
+)
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.context_resolution import (
     build_input_spans,
@@ -328,8 +331,8 @@ def test_field_resolution_reuses_one_interpret_call_after_schema() -> None:
     ) == (start, start + len("准备哪些材料"))
 
 
-def test_field_resolution_rejects_cross_atom_candidate_without_retry() -> None:
-    """模型不能跨 Atom 借候选，协议失败也不能发起第二次调用。"""
+def test_field_resolution_rejects_multi_atom_single_http() -> None:
+    """单次 HTTP 只资格化一个 Atom，多 Atom 必须由应用层分包。"""
     request = _request("分别说明甲和乙的输入？")
     candidates = (
         _field_candidate("F1", atom_id="A1", column=1, field_label="甲输入"),
@@ -361,8 +364,11 @@ def test_field_resolution_rejects_cross_atom_candidate_without_retry() -> None:
         request, candidates, query_view=query_view, atoms=atoms
     )
 
-    assert len(observed_calls) == 1
-    assert outcome.reason_code == "FIELD_RESOLUTION_OUTPUT_INVALID"
+    assert observed_calls == []
+    assert outcome.reason_code == "FIELD_RESOLUTION_CAPABILITY_UNQUALIFIED"
+    assert outcome.execution_state is (
+        FieldResolutionExecutionState.REQUEST_REJECTED
+    )
     assert outcome.resolutions == ()
 
 

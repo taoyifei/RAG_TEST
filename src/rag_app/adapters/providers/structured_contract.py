@@ -233,7 +233,9 @@ def wb08r_structured_output_profile(  # noqa: PLR0913
         StructuredSchemaFamilyQualification(
             schema_revision=revision,
             max_schema_bytes=262_144,
-            max_atoms=4 if revision == "wb08r-field-resolution-v2" else None,
+            # 字段协议的逻辑请求仍可包含四个 Atom，但一次真实 HTTP
+            # 只资格化一个 Atom；组合与部分失败隔离由应用层负责。
+            max_atoms=1 if revision == "wb08r-field-resolution-v2" else None,
             max_candidates_per_atom=(
                 16 if revision == "wb08r-field-resolution-v2" else None
             ),

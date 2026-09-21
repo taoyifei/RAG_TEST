@@ -565,6 +565,34 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             request_diagnostics=request_diagnostics,
         )
 
+    def record_private_response_contract_failure(  # noqa: PLR0913
+        self,
+        messages: tuple[ChatMessage, ...],
+        *,
+        operation: Literal["generation", "query.interpret", "query.rewrite"],
+        max_output_tokens: int,
+        json_schema: Mapping[str, object],
+        schema_revision: str,
+        response_content: str,
+        reason_code: str,
+    ) -> str | None:
+        """把成功 HTTP 后的本地合同失败写入已启用的私有诊断。"""
+        payload = openai_compatible_chat_payload(
+            messages,
+            self._compatible_config,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=self._compatible_config.disable_thinking,
+            json_schema=json_schema,
+            schema_revision=schema_revision,
+        )
+        return self._http.record_private_response_contract_failure(
+            operation=operation,
+            path=_CHAT_COMPLETIONS_PATH,
+            request_payload=payload,
+            response_content=response_content,
+            reason_code=reason_code,
+        )
+
     def complete_stream(
         self,
         messages: tuple[ChatMessage, ...],

@@ -127,6 +127,13 @@ class FieldResolutionOutcome:
     schema_sha256: str | None = None
     contract_sha256: str | None = None
     capability_profile_sha256: str | None = None
+    response_content_sha256: str | None = None
+    response_content_length: int | None = None
+    invalid_atom_id: str | None = None
+    invalid_status: str | None = None
+    invalid_candidate_count: int | None = None
+    invalid_query_fragment_length: int | None = None
+    private_diagnostic_status: str | None = None
 
 
 class AdaptivePlannerPort(Protocol):
@@ -148,8 +155,14 @@ class AdaptivePlannerPort(Protocol):
         *,
         query_view: ResolvedQueryView,
         atoms: tuple[QueryAtom, ...],
+        timeout_seconds: float | None = None,
     ) -> FieldResolutionOutcome:
         """在真实 schema 已知后选择短字段候选 ID。"""
+        ...
+
+    @property
+    def field_resolution_total_deadline_seconds(self) -> float:
+        """返回一个逻辑请求全部字段小包共享的总时限。"""
         ...
 
 

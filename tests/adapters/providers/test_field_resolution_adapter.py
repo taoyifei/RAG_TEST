@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Callable
+from pathlib import Path
 
 import httpx
 
@@ -16,6 +18,9 @@ from rag_app.adapters.providers.http_common import ProviderHttpClient
 from rag_app.adapters.providers.openai_compatible import (
     OpenAICompatibleChatAdapter,
     OpenAICompatibleChatConfig,
+)
+from rag_app.adapters.providers.private_http_diagnostics import (
+    PrivateProviderDiagnosticRecorder,
 )
 from rag_app.adapters.providers.structured_contract import (
     StructuredOutputCapabilityProfile,
@@ -112,6 +117,7 @@ def _model(
     *,
     profile: StructuredOutputCapabilityProfile | None = None,
     qualified: bool = True,
+    private_directory: Path | None = None,
 ) -> ProductGroundedModel:
     capability = profile or (_profile() if qualified else None)
     adapter = OpenAICompatibleChatAdapter(
@@ -129,6 +135,11 @@ def _model(
             max_attempts=3,
             allow_http=True,
             use_budget_transport=False,
+            private_diagnostic_recorder=(
+                None
+                if private_directory is None
+                else PrivateProviderDiagnosticRecorder(private_directory)
+            ),
         ),
         api_key_resolver=lambda: "unit-secret",
     )
@@ -215,6 +226,13 @@ def test_actual_adapter_sends_exact_rendered_schema_and_fixed_mode() -> None:
             "strict": True,
         },
     }
+    messages = body["messages"]
+    assert isinstance(messages, list)
+    system_prompt = messages[0]["content"]
+    assert "问题未说明起止" in system_prompt
+    assert "返回 AMBIGUOUS 并同时选择二者" in system_prompt
+    assert "只有责任人语义对应" in system_prompt
+    assert "不能因措辞不同返回 AMBIGUOUS" in system_prompt
     assert outcome.execution_state is FieldResolutionExecutionState.SUCCEEDED
     assert outcome.contract_sha256 == contract.contract_sha256
     assert outcome.capability_profile_sha256 == profile.profile_sha256
@@ -318,11 +336,80 @@ def test_unqualified_actual_adapter_fails_before_http() -> None:
     assert outcome.reason_code == "FIELD_RESOLUTION_CAPABILITY_UNQUALIFIED"
 
 
+def test_invalid_success_body_keeps_safe_trace_and_private_raw_body(
+    tmp_path: Path,
+) -> None:
+    private_directory = tmp_path / "private"
+    private_directory.mkdir(mode=0o700)
+    content = json.dumps(
+        {
+            "r": [
+                {
+                    "a": "A1",
+                    "s": "NOT_FOUND",
+                    "c": ["F1"],
+                    "q": "准备哪些材料",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_chat_response(content))
+
+    model = _model(handler, private_directory=private_directory)
+    request, query_view, atoms, candidates = _context()
+    outcome = model.resolve_fields(
+        request,
+        candidates,
+        query_view=query_view,
+        atoms=atoms,
+    )
+    model.adapter.close()
+
+    assert outcome.execution_state is (
+        FieldResolutionExecutionState.OUTPUT_INVALID
+    )
+    assert outcome.failure_category == (
+        "FIELD_RESPONSE_STATUS_COMBINATION_INVALID"
+    )
+    assert outcome.response_content_sha256 == canonical_sha256(content)
+    assert outcome.response_content_length == len(content)
+    assert outcome.invalid_atom_id == "A1"
+    assert outcome.invalid_status == "NOT_FOUND"
+    assert outcome.invalid_candidate_count == 1
+    assert outcome.invalid_query_fragment_length == len("准备哪些材料")
+    assert outcome.private_diagnostic_status == "WRITTEN"
+    assert content not in repr(outcome)
+    files = tuple(private_directory.glob("provider-http-private-*.json"))
+    assert len(files) == 1
+    assert files[0].stat().st_mode & 0o777 == 0o600
+    private_record = json.loads(files[0].read_text(encoding="utf-8"))
+    private_request = base64.b64decode(
+        private_record["request_payload_base64"]
+    ).decode("utf-8")
+    private_response = base64.b64decode(
+        private_record["response_body_base64"]
+    ).decode("utf-8")
+    assert "FIELD_RESPONSE_STATUS_COMBINATION_INVALID" in private_request
+    assert "NOT_FOUND" in private_response
+    assert "准备哪些材料" in private_response
+
+
 def test_max_shape_has_explicit_non_planner_output_budget() -> None:
     """离线仅验证合同上界；部署 tokenizer 资格由真实 D3 单独签发。"""
     profile = _profile(output_tokens=1024)
     assert profile.field_resolution_output_tokens == 1024
     assert profile.field_resolution_output_tokens != 160
     assert (
-        KnowledgeBaseModelSettings().field_resolution_max_output_tokens == 1280
+        KnowledgeBaseModelSettings().field_resolution_max_output_tokens == 512
+    )
+    assert (
+        KnowledgeBaseModelSettings().field_resolution_transport_timeout_seconds
+        == 12.0
+    )
+    assert (
+        KnowledgeBaseModelSettings().field_resolution_total_deadline_seconds
+        == 15.0
     )

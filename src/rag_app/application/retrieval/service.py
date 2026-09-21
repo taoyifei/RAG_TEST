@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from time import perf_counter
-from typing import Literal
+from typing import Literal, cast
 
 from rag_app.application.answering.field_resolution import (
     build_field_candidates,
@@ -2288,6 +2288,7 @@ class RetrievalService:
                 else "FIELD_RESOLUTION_NOT_DEFERRED"
             )
         )
+        field_attempts: list[tuple[str, FieldResolutionOutcome]] = []
         unresolved_atom_ids = {
             item.atom_id
             for item in field_resolutions
@@ -2302,49 +2303,104 @@ class RetrievalService:
         interpretable_atom_ids = {
             item.atom_id for item in interpretable_candidates
         }
+        pending_field_atom_ids = (
+            set(interpretable_atom_ids)
+            if schema_field_resolution_deferred and interpretable_candidates
+            else set()
+        )
+        validated_field_atom_ids: set[str] = set()
         if (
             schema_field_resolution_deferred
             and interpretable_candidates
             and callable(resolver)
         ):
-            field_outcome = resolver(
-                request.model_copy(
-                    update={"text": source_context.query_view.business_query}
-                ),
-                interpretable_candidates,
-                query_view=source_context.query_view,
-                atoms=tuple(
-                    atom
-                    for atom in query_plan.atoms
-                    if atom.atom_id in interpretable_atom_ids
-                ),
+            total_timeout = float(
+                getattr(
+                    self._adaptive_planner,
+                    "field_resolution_total_deadline_seconds",
+                    15.0,
+                )
             )
-            provider_calls.extend(field_outcome.calls)
-            if (
-                field_outcome.execution_state
-                is FieldResolutionExecutionState.SUCCEEDED
-            ):
+            field_deadline = perf_counter() + total_timeout
+            field_stage_started = perf_counter()
+            for atom in query_plan.atoms:
+                if atom.atom_id not in interpretable_atom_ids:
+                    continue
+                _raise_if_cancelled(cancellation, provider_calls)
+                remaining = field_deadline - perf_counter()
+                atom_candidates = tuple(
+                    item
+                    for item in interpretable_candidates
+                    if item.atom_id == atom.atom_id
+                )
+                if remaining <= 0:
+                    outcome = FieldResolutionOutcome(
+                        reason_code=(
+                            "FIELD_RESOLUTION_TOTAL_DEADLINE_EXCEEDED"
+                        ),
+                        failure_category=(
+                            "FIELD_RESOLUTION_TOTAL_DEADLINE_EXCEEDED"
+                        ),
+                        execution_state=(
+                            FieldResolutionExecutionState.TRANSPORT_FAILED
+                        ),
+                    )
+                else:
+                    outcome = resolver(
+                        request.model_copy(
+                            update={
+                                "text": source_context.query_view.business_query
+                            }
+                        ),
+                        atom_candidates,
+                        query_view=source_context.query_view,
+                        atoms=(atom,),
+                        timeout_seconds=remaining,
+                    )
+                if (
+                    outcome.execution_state
+                    is FieldResolutionExecutionState.SUCCEEDED
+                    and (
+                        len(outcome.resolutions) != 1
+                        or outcome.resolutions[0].atom_id != atom.atom_id
+                    )
+                ):
+                    outcome = replace(
+                        outcome,
+                        resolutions=(),
+                        execution_state=(
+                            FieldResolutionExecutionState.OUTPUT_INVALID
+                        ),
+                        reason_code="FIELD_RESOLUTION_OUTPUT_INVALID",
+                        failure_category=(
+                            "FIELD_RESOLUTION_ATOM_RESULT_MISSING"
+                        ),
+                    )
+                field_attempts.append((atom.atom_id, outcome))
+                if (
+                    outcome.execution_state
+                    is not FieldResolutionExecutionState.SUCCEEDED
+                ):
+                    continue
                 field_resolutions = merge_field_resolutions(
                     field_resolutions,
-                    field_outcome.resolutions,
+                    outcome.resolutions,
                     field_candidates,
                     source_context.query_view,
                 )
-        field_resolution_pending_atom_ids = (
-            tuple(sorted(interpretable_atom_ids))
-            if schema_field_resolution_deferred
-            and interpretable_candidates
-            and field_outcome.execution_state
-            is not FieldResolutionExecutionState.SUCCEEDED
-            else ()
+                pending_field_atom_ids.discard(atom.atom_id)
+                validated_field_atom_ids.update(
+                    item.atom_id for item in outcome.resolutions
+                )
+            field_outcome = _combine_field_resolution_outcomes(
+                field_attempts,
+                latency_ms=round((perf_counter() - field_stage_started) * 1000),
+            )
+            provider_calls.extend(field_outcome.calls)
+        field_resolution_pending_atom_ids = tuple(
+            sorted(pending_field_atom_ids)
         )
         field_resolution_system_failed = bool(field_resolution_pending_atom_ids)
-        validated_field_atom_ids = (
-            {item.atom_id for item in field_outcome.resolutions}
-            if field_outcome.execution_state
-            is FieldResolutionExecutionState.SUCCEEDED
-            else set()
-        )
         generation_evidence_pack = replace(
             generation_evidence_pack,
             field_candidates=field_candidates,
@@ -2430,10 +2486,43 @@ class RetrievalService:
                 "failure_category": field_outcome.failure_category,
                 "execution_state": field_outcome.execution_state.value,
                 "semantic_resolutions_consumed": (
-                    field_outcome.execution_state
-                    is FieldResolutionExecutionState.SUCCEEDED
+                    bool(validated_field_atom_ids)
                 ),
                 "pending_atom_ids": field_resolution_pending_atom_ids,
+                "attempts": tuple(
+                    {
+                        "atom_id": atom_id,
+                        "attempted": outcome.attempted,
+                        "execution_state": outcome.execution_state.value,
+                        "reason_code": outcome.reason_code,
+                        "failure_category": outcome.failure_category,
+                        "latency_ms": outcome.latency_ms,
+                        "input_tokens": outcome.input_tokens,
+                        "output_tokens": outcome.output_tokens,
+                        "finish_reason": outcome.finish_reason,
+                        "transport_timeout_ms": outcome.transport_timeout_ms,
+                        "schema_sha256": outcome.schema_sha256,
+                        "contract_sha256": outcome.contract_sha256,
+                        "response_content_sha256": (
+                            outcome.response_content_sha256
+                        ),
+                        "response_content_length": (
+                            outcome.response_content_length
+                        ),
+                        "invalid_atom_id": outcome.invalid_atom_id,
+                        "invalid_status": outcome.invalid_status,
+                        "invalid_candidate_count": (
+                            outcome.invalid_candidate_count
+                        ),
+                        "invalid_query_fragment_length": (
+                            outcome.invalid_query_fragment_length
+                        ),
+                        "private_diagnostic_status": (
+                            outcome.private_diagnostic_status
+                        ),
+                    }
+                    for atom_id, outcome in field_attempts
+                ),
                 "schema_revision": field_outcome.schema_revision,
                 "schema_sha256": field_outcome.schema_sha256,
                 "contract_sha256": field_outcome.contract_sha256,
@@ -2445,6 +2534,23 @@ class RetrievalService:
                 "output_tokens": field_outcome.output_tokens,
                 "finish_reason": field_outcome.finish_reason,
                 "transport_timeout_ms": field_outcome.transport_timeout_ms,
+                "response_content_sha256": (
+                    field_outcome.response_content_sha256
+                ),
+                "response_content_length": (
+                    field_outcome.response_content_length
+                ),
+                "invalid_atom_id": field_outcome.invalid_atom_id,
+                "invalid_status": field_outcome.invalid_status,
+                "invalid_candidate_count": (
+                    field_outcome.invalid_candidate_count
+                ),
+                "invalid_query_fragment_length": (
+                    field_outcome.invalid_query_fragment_length
+                ),
+                "private_diagnostic_status": (
+                    field_outcome.private_diagnostic_status
+                ),
             },
         )
         self._record(
@@ -5663,6 +5769,131 @@ def _finish_timing(
         StageTiming(stage=stage, elapsed_ms=(finished - started) * 1000.0)
     )
     return finished
+
+
+def _combine_field_resolution_outcomes(
+    attempts: list[tuple[str, FieldResolutionOutcome]],
+    *,
+    latency_ms: int,
+) -> FieldResolutionOutcome:
+    """合并逐 Atom 结果，同时保留每个成功并暴露首个失败。"""
+    failures = tuple(
+        outcome
+        for _atom_id, outcome in attempts
+        if outcome.execution_state
+        is not FieldResolutionExecutionState.SUCCEEDED
+    )
+    first_failure = failures[0] if failures else None
+
+    def summed(name: Literal["input_tokens", "output_tokens"]) -> int | None:
+        values = tuple(
+            cast(int | None, getattr(outcome, name))
+            for _atom_id, outcome in attempts
+        )
+        if any(value is None for value in values):
+            return None
+        return sum(value for value in values if value is not None)
+
+    def shared(name: str) -> str | None:
+        values = tuple(
+            dict.fromkeys(
+                value
+                for _atom_id, outcome in attempts
+                if (value := cast(str | None, getattr(outcome, name)))
+                is not None
+            )
+        )
+        return values[0] if len(values) == 1 else None
+
+    def combined_digest(name: str) -> str | None:
+        values = tuple(
+            (atom_id, value)
+            for atom_id, outcome in attempts
+            if (value := cast(str | None, getattr(outcome, name))) is not None
+        )
+        if not values:
+            return None
+        if len(values) == 1:
+            return values[0][1]
+        return canonical_sha256(
+            {
+                "revision": "wb08r-field-resolution-batch-v1",
+                "kind": name,
+                "atoms": values,
+            }
+        )
+
+    return FieldResolutionOutcome(
+        resolutions=tuple(
+            resolution
+            for _atom_id, outcome in attempts
+            if outcome.execution_state
+            is FieldResolutionExecutionState.SUCCEEDED
+            for resolution in outcome.resolutions
+        ),
+        calls=tuple(
+            call for _atom_id, outcome in attempts for call in outcome.calls
+        ),
+        execution_state=(
+            first_failure.execution_state
+            if first_failure is not None
+            else FieldResolutionExecutionState.SUCCEEDED
+        ),
+        reason_code=(
+            first_failure.reason_code
+            if first_failure is not None
+            else "FIELD_RESOLUTION_ACCEPTED"
+        ),
+        attempted=any(outcome.attempted for _atom_id, outcome in attempts),
+        failure_category=(
+            first_failure.failure_category
+            if first_failure is not None
+            else None
+        ),
+        latency_ms=latency_ms,
+        input_tokens=summed("input_tokens"),
+        output_tokens=summed("output_tokens"),
+        finish_reason=(shared("finish_reason") if not failures else None),
+        transport_timeout_ms=max(
+            (outcome.transport_timeout_ms for _atom_id, outcome in attempts),
+            default=0,
+        ),
+        schema_revision=shared("schema_revision"),
+        schema_sha256=combined_digest("schema_sha256"),
+        contract_sha256=combined_digest("contract_sha256"),
+        capability_profile_sha256=shared("capability_profile_sha256"),
+        response_content_sha256=(
+            first_failure.response_content_sha256
+            if first_failure is not None
+            else None
+        ),
+        response_content_length=(
+            first_failure.response_content_length
+            if first_failure is not None
+            else None
+        ),
+        invalid_atom_id=(
+            first_failure.invalid_atom_id if first_failure is not None else None
+        ),
+        invalid_status=(
+            first_failure.invalid_status if first_failure is not None else None
+        ),
+        invalid_candidate_count=(
+            first_failure.invalid_candidate_count
+            if first_failure is not None
+            else None
+        ),
+        invalid_query_fragment_length=(
+            first_failure.invalid_query_fragment_length
+            if first_failure is not None
+            else None
+        ),
+        private_diagnostic_status=(
+            first_failure.private_diagnostic_status
+            if first_failure is not None
+            else None
+        ),
+    )
 
 
 def _raise_if_cancelled(

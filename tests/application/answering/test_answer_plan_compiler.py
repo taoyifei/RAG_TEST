@@ -54,6 +54,7 @@ from rag_app.core.models.answer_plan import (
     AnswerOperation,
     AnswerQualifierKind,
     AnswerTaskMode,
+    FieldCandidate,
     FieldResolution,
     FieldResolutionStatus,
     QualifierStatus,
@@ -312,6 +313,75 @@ def _resolve_input_candidate(
         pack,
         field_candidates=candidates,
         field_resolutions=resolved,
+    )
+
+
+def test_default_field_resolution_uses_each_atom_fragment() -> None:
+    """多子问只读取各自片段，不能让另一 Atom 的字段词串入。"""
+    query = "甲任务需要什么输入，乙任务产生什么输出？"
+    plan = make_query_plan(
+        standalone_query=query,
+        original_query=query,
+        intent="FACT",
+        effort="DIRECT",
+        atoms=(
+            QueryAtom(
+                atom_id="A1",
+                target="甲任务",
+                relation="输入",
+                answer_shape=AtomAnswerShape.FACT,
+                original_fragment="甲任务需要什么输入",
+            ),
+            QueryAtom(
+                atom_id="A2",
+                target="乙任务",
+                relation="输出",
+                answer_shape=AtomAnswerShape.FACT,
+                original_fragment="乙任务产生什么输出",
+            ),
+        ),
+        reason_code="TEST",
+        planner_called=False,
+    )
+    candidates = tuple(
+        FieldCandidate(
+            candidate_id=f"F{index}",
+            atom_id=atom_id,
+            fact_id=canonical_sha256((atom_id, field_label)),
+            document_id=f"doc_{index:032x}",
+            document_version_id=f"dver_{index:032x}",
+            table_key=canonical_sha256(("table", atom_id)),
+            row_index=1,
+            value_column_index=column,
+            target_label=target,
+            field_label=field_label,
+            value_preview=value,
+            dependency_support_ids=(f"support-{index}",),
+        )
+        for index, (atom_id, target, field_label, value, column) in enumerate(
+            (
+                ("A1", "甲任务", "输入", "甲输入", 1),
+                ("A1", "甲任务", "输出", "甲输出", 2),
+                ("A2", "乙任务", "输入", "乙输入", 1),
+                ("A2", "乙任务", "输出", "乙输出", 2),
+            ),
+            1,
+        )
+    )
+
+    resolutions = default_field_resolutions(
+        plan,
+        candidates,
+        build_resolved_query_view(plan),
+    )
+
+    assert tuple(item.status for item in resolutions) == (
+        FieldResolutionStatus.EXACT,
+        FieldResolutionStatus.EXACT,
+    )
+    assert tuple(item.candidate_ids for item in resolutions) == (
+        ("F1",),
+        ("F4",),
     )
 
 
@@ -1611,6 +1681,18 @@ def test_field_provider_failure_keeps_independent_deterministic_fact() -> None:
     query_plan, pack, _ = _fixture_plan(
         "需求快验的输入是什么，并概述背景。",
         relations=("输入", "背景"),
+    )
+    query_plan = query_plan.model_copy(
+        update={
+            "atoms": (
+                query_plan.atoms[0].model_copy(
+                    update={"original_fragment": "需求快验的输入是什么"}
+                ),
+                query_plan.atoms[1].model_copy(
+                    update={"original_fragment": "概述背景"}
+                ),
+            )
+        }
     )
     query_view = build_resolved_query_view(query_plan)
     field_candidates = build_field_candidates(query_plan, pack)

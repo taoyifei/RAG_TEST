@@ -54,7 +54,13 @@ class KnowledgeBaseModelSettings(FrozenModel):
     )
     structured_output_allow_unique_items: StrictBool | None = None
     field_resolution_max_output_tokens: StrictInt = Field(
-        default=1280, ge=32, le=1536
+        default=512, ge=32, le=1536
+    )
+    field_resolution_transport_timeout_seconds: float = Field(
+        default=12.0, gt=0.0, le=30.0
+    )
+    field_resolution_total_deadline_seconds: float = Field(
+        default=15.0, gt=0.0, le=30.0
     )
     planner_transport_timeout_seconds: float = Field(
         default=8.0, gt=0.0, le=30.0
@@ -80,6 +86,11 @@ class KnowledgeBaseModelSettings(FrozenModel):
     def _paired_references(  # noqa: PLR0912
         self,
     ) -> KnowledgeBaseModelSettings:
+        if (
+            self.field_resolution_total_deadline_seconds
+            < self.field_resolution_transport_timeout_seconds
+        ):
+            raise ValueError("字段解析总时限不得小于单次传输时限。")
         if self.planner_slo_target_ms > self.planner_hard_ceiling_ms:
             raise ValueError("Planner SLO 不得超过硬时延上限。")
         if self.disable_thinking and not self.disable_thinking_supported:
@@ -163,7 +174,9 @@ class KnowledgeBaseModelSettings(FrozenModel):
             ),
             mode=self.structured_output_mode,
             grammar_backend=str(self.structured_output_grammar_backend),
-            deadline_ms=round(self.planner_transport_timeout_seconds * 1000),
+            deadline_ms=round(
+                self.field_resolution_transport_timeout_seconds * 1000
+            ),
             field_resolution_output_tokens=(
                 self.field_resolution_max_output_tokens
             ),

@@ -45,7 +45,9 @@ def test_internal_model_settings_normalize_primary_contracts() -> None:
     assert not settings.llm_disable_thinking_supported
     assert not settings.llm_disable_thinking
     assert settings.llm_structured_output_mode == "none"
-    assert settings.llm_field_resolution_max_output_tokens == 1280
+    assert settings.llm_field_resolution_max_output_tokens == 512
+    assert settings.llm_field_resolution_timeout_seconds == 12.0
+    assert settings.llm_field_resolution_total_deadline_seconds == 15.0
 
 
 def test_internal_settings_require_explicit_structured_output_mode() -> None:
@@ -105,6 +107,25 @@ def test_internal_settings_require_explicit_thinking_strategy() -> None:
     environment = _environment()
     environment["RAG_WANSHITONG_LLM_DISABLE_THINKING"] = "true"
     with pytest.raises(ValueError, match="必须确认 LLM 端点支持"):
+        InternalModelSettings.from_environment(environment)
+
+
+def test_internal_settings_validate_field_resolution_deadlines() -> None:
+    environment = _environment()
+    environment["RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS"] = "9.5"
+    environment[
+        "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS"
+    ] = "10"
+
+    settings = InternalModelSettings.from_environment(environment)
+
+    assert settings.llm_field_resolution_timeout_seconds == 9.5
+    assert settings.llm_field_resolution_total_deadline_seconds == 10.0
+
+    environment[
+        "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS"
+    ] = "9"
+    with pytest.raises(ValueError, match="总时限不得小于单次传输时限"):
         InternalModelSettings.from_environment(environment)
 
 

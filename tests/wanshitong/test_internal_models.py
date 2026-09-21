@@ -234,6 +234,18 @@ def test_internal_model_configurator_updates_verified_thinking_capability(
         assert (
             harness.runtime.models.get(
                 first.knowledge_base_id
+            ).field_resolution_transport_timeout_seconds
+            == 12.0
+        )
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
+            ).field_resolution_total_deadline_seconds
+            == 15.0
+        )
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
             ).structured_output_allow_unique_items
             is False
         )

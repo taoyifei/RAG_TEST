@@ -56,6 +56,12 @@ _LLM_STRUCTURED_ALLOW_UNIQUE_ITEMS = (
 _LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS = (
     "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS"
 )
+_LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS = (
+    "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS"
+)
+_LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS = (
+    "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS"
+)
 _CREDENTIAL_ENV_SUFFIX = "_CREDENTIAL_ENV"
 _API_KEY_FILE_SUFFIX = "_API_KEY_FILE"
 _ENVIRONMENT_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,127}$")
@@ -132,7 +138,9 @@ class InternalModelSettings:
     llm_structured_grammar_backend: str | None = None
     llm_structured_qualification_evidence_sha256: str | None = None
     llm_structured_allow_unique_items: bool | None = None
-    llm_field_resolution_max_output_tokens: int = 1280
+    llm_field_resolution_max_output_tokens: int = 512
+    llm_field_resolution_timeout_seconds: float = 12.0
+    llm_field_resolution_total_deadline_seconds: float = 15.0
     embedding_credential: InternalCredentialSettings = field(
         default_factory=InternalCredentialSettings
     )
@@ -211,9 +219,24 @@ class InternalModelSettings:
                 _LLM_STRUCTURED_ALLOW_UNIQUE_ITEMS,
             ),
             llm_field_resolution_max_output_tokens=_bounded_positive_int(
-                source.get(_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS, "1280"),
+                source.get(_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS, "512"),
                 _LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS,
                 maximum=1536,
+            ),
+            llm_field_resolution_timeout_seconds=_bounded_positive_float(
+                source.get(_LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS, "12"),
+                _LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS,
+                maximum=30.0,
+            ),
+            llm_field_resolution_total_deadline_seconds=(
+                _bounded_positive_float(
+                    source.get(
+                        _LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS,
+                        "15",
+                    ),
+                    _LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS,
+                    maximum=30.0,
+                )
             ),
             embedding_credential=_credential(source, "EMBEDDING"),
             reranker_credential=_credential(source, "RERANKER"),
@@ -279,6 +302,11 @@ class InternalModelSettings:
             self.llm_structured_allow_unique_items is None
         ):
             raise ValueError("结构化输出模式必须配置完整能力合同。")
+        if (
+            self.llm_field_resolution_total_deadline_seconds
+            < self.llm_field_resolution_timeout_seconds
+        ):
+            raise ValueError("字段解析总时限不得小于单次传输时限。")
 
 
 def _base_url(environment: Mapping[str, str], key: str) -> str:
@@ -307,6 +335,16 @@ def _bounded_positive_int(value: str, key: str, *, maximum: int) -> int:
     parsed = _positive_int(value, key)
     if parsed > maximum:
         raise ValueError(f"{key} 不能超过 {maximum}。")
+    return parsed
+
+
+def _bounded_positive_float(value: str, key: str, *, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except ValueError:
+        raise ValueError(f"{key} 必须为正数。") from None
+    if not 0 < parsed <= maximum:
+        raise ValueError(f"{key} 必须大于 0 且不能超过 {maximum:g}。")
     return parsed
 
 

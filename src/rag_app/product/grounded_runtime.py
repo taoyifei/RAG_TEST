@@ -318,6 +318,11 @@ class ProductGroundedModel:
             adapter.supplement_timeout_seconds for adapter in self.adapters
         )
 
+    @property
+    def field_resolution_total_deadline_seconds(self) -> float:
+        """返回一个逻辑请求全部字段小包共享的总时限。"""
+        return self.settings.field_resolution_total_deadline_seconds
+
     def review_relations(
         self, request: RelationReviewRequest
     ) -> RelationReviewResponse:
@@ -651,13 +656,14 @@ class ProductGroundedModel:
             schema_sha256=canonical_sha256(schema),
         )
 
-    def resolve_fields(  # noqa: PLR0911
+    def resolve_fields(  # noqa: PLR0911, PLR0912
         self,
         request: SearchRequest,
         candidates: tuple[FieldCandidate, ...],
         *,
         query_view: ResolvedQueryView,
         atoms: tuple[QueryAtom, ...],
+        timeout_seconds: float | None = None,
     ) -> FieldResolutionOutcome:
         """从单一字段合同发送并验证一次 ``query.interpret``。"""
         if not candidates:
@@ -701,7 +707,8 @@ class ProductGroundedModel:
                 mode="response_format",
                 grammar_backend="domain-unit-test",
                 deadline_ms=round(
-                    self.settings.planner_transport_timeout_seconds * 1000
+                    self.settings.field_resolution_transport_timeout_seconds
+                    * 1000
                 ),
                 field_resolution_output_tokens=(
                     self.settings.field_resolution_max_output_tokens
@@ -735,9 +742,18 @@ class ProductGroundedModel:
         system = (
             "只在服务端给出的真实表结构字段候选中解析用户所问的"
             "基础字段，不回答问题，不判断必须、先后、禁止等附加命题。"
-            "SUPPORTED_PARAPHRASE 仅用于同一目标下可接受的等义字段；"
-            "RELATED_FIELD 表示只能作为相关资料；多个字段仍可能成立时"
-            "返回 AMBIGUOUS；没有候选时返回 NOT_FOUND。"
+            "每个 Atom 独立判断：SUPPORTED_PARAPHRASE 必须且只能选择一个"
+            "可确认的等义字段；RELATED_FIELD 必须且只能选择一个只能作为"
+            "相关资料的字段；AMBIGUOUS 仅在至少两个字段都可能回答同一"
+            "子问且无法唯一判断时使用；NOT_FOUND 表示已给出的非空候选"
+            "中没有字段对应当前子问，此时 c 必须为空。候选有两个不等于"
+            "语义上必然歧义。例如问联系电话、候选只有办理部门和材料名称"
+            "时返回 NOT_FOUND；问提交资料且只有申报材料语义对应时只选择"
+            "该字段并返回 SUPPORTED_PARAPHRASE；若只问办理时间，候选同时"
+            "包含开始时间和结束时间且问题未说明起止，两者都可能回答，必须"
+            "返回 AMBIGUOUS 并同时选择二者；若问由谁牵头且候选中只有"
+            "责任人语义对应，必须返回 SUPPORTED_PARAPHRASE 并只选择该"
+            "字段，不能因措辞不同返回 AMBIGUOUS。"
             "c 只填当前 Atom 给定的短 ID，不能返回 EXACT；"
             "q 必须逐字摘自当前 Atom 的用户问题片段。"
             "输出只包含符合字段合同的 JSON 对象。"
@@ -761,25 +777,54 @@ class ProductGroundedModel:
             ),
         )
         started = perf_counter()
-        timeout = self.settings.planner_transport_timeout_seconds
+        configured_timeout = (
+            self.settings.field_resolution_transport_timeout_seconds
+        )
+        timeout = (
+            configured_timeout
+            if timeout_seconds is None
+            else min(configured_timeout, timeout_seconds)
+        )
+        if timeout <= 0:
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_TOTAL_DEADLINE_EXCEEDED",
+                failure_category="FIELD_RESOLUTION_TOTAL_DEADLINE_EXCEEDED",
+                execution_state=(
+                    FieldResolutionExecutionState.TRANSPORT_FAILED
+                ),
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                schema_sha256=schema_sha256,
+                contract_sha256=contract.contract_sha256,
+                capability_profile_sha256=profile.profile_sha256,
+            )
         calls: tuple[ProviderCall, ...] = ()
         try:
-            schema_args = (
-                {
-                    "json_schema": schema,
-                    "schema_revision": FIELD_RESOLUTION_SCHEMA_REVISION,
-                }
-                if actual_adapter
-                else {}
-            )
             with self._scope("query.interpret"):
-                completion = self.adapter.complete(
-                    messages,
-                    operation="query.interpret",
-                    max_output_tokens=(profile.field_resolution_output_tokens),
-                    timeout_seconds=timeout,
-                    **schema_args,
-                )
+                if compatible_adapter is not None:
+                    completion = compatible_adapter.complete(
+                        messages,
+                        operation="query.interpret",
+                        max_output_tokens=(
+                            profile.field_resolution_output_tokens
+                        ),
+                        timeout_seconds=timeout,
+                        request_label=(
+                            "field-resolution:"
+                            f"{contract.atoms[0].atom_id}:"
+                            f"{contract.contract_sha256[-12:]}"
+                        ),
+                        json_schema=schema,
+                        schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                    )
+                else:
+                    completion = self.adapter.complete(
+                        messages,
+                        operation="query.interpret",
+                        max_output_tokens=(
+                            profile.field_resolution_output_tokens
+                        ),
+                        timeout_seconds=timeout,
+                    )
             calls = (
                 ()
                 if getattr(completion, "call", None) is None
@@ -812,6 +857,20 @@ class ProductGroundedModel:
                 capability_profile_sha256=profile.profile_sha256,
             )
         except FieldResolutionWireError as error:
+            usage = getattr(completion, "usage", None)
+            private_status = (
+                compatible_adapter.record_private_response_contract_failure(
+                    messages,
+                    operation="query.interpret",
+                    max_output_tokens=profile.field_resolution_output_tokens,
+                    json_schema=schema,
+                    schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                    response_content=completion.content,
+                    reason_code=error.reason_code,
+                )
+                if compatible_adapter is not None
+                else None
+            )
             return FieldResolutionOutcome(
                 calls=calls,
                 reason_code="FIELD_RESOLUTION_OUTPUT_INVALID",
@@ -819,11 +878,21 @@ class ProductGroundedModel:
                 failure_category=error.reason_code,
                 execution_state=FieldResolutionExecutionState.OUTPUT_INVALID,
                 latency_ms=round((perf_counter() - started) * 1000),
+                input_tokens=getattr(usage, "prompt_tokens", None),
+                output_tokens=getattr(usage, "completion_tokens", None),
+                finish_reason=getattr(completion, "finish_reason", None),
                 transport_timeout_ms=round(timeout * 1000),
                 schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
                 schema_sha256=schema_sha256,
                 contract_sha256=contract.contract_sha256,
                 capability_profile_sha256=profile.profile_sha256,
+                response_content_sha256=canonical_sha256(completion.content),
+                response_content_length=len(completion.content),
+                invalid_atom_id=error.atom_id,
+                invalid_status=error.status,
+                invalid_candidate_count=error.candidate_count,
+                invalid_query_fragment_length=error.query_fragment_length,
+                private_diagnostic_status=private_status,
             )
         usage = getattr(completion, "usage", None)
         return FieldResolutionOutcome(

@@ -13,16 +13,27 @@ from rag_app.application.answering.grounded import (
 from rag_app.application.retrieval.evidence import (
     _table_intersection_certificate,
 )
+from rag_app.application.retrieval.source_scope import (
+    build_resolved_query_view,
+)
 from rag_app.core.errors import ValidationFailed
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AnswerClaim,
+    AtomFactBinding,
     ClaimSupport,
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
+    PhysicalTableFact,
+    PhysicalTableHeader,
     QueryAnalysis,
     QuerySemantics,
     RequestedAnswerType,
+)
+from rag_app.core.models.answer_plan import (
+    FieldResolution,
+    FieldResolutionStatus,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.evidence_group import EvidenceGroup
@@ -31,6 +42,11 @@ from rag_app.core.models.query_plan import (
     AtomStatus,
     QueryAtom,
     QueryPlan,
+    SourceContentRequirement,
+    SourceDocumentIdentity,
+    SourceIntent,
+    SourceResolution,
+    SourceScopeDecision,
     make_query_plan,
 )
 from rag_app.core.models.retrieval import NaturalClaim
@@ -197,6 +213,12 @@ def test_canonical_intersection_excerpt_preserves_all_three_supports(
 
 def test_certified_excerpt_keeps_each_atom_source_scope() -> None:
     """A2 的正确来源不能让继承另一根来源限制的 A1 也算已回答。"""
+    from rag_app.application.answering.field_resolution import (  # noqa: PLC0415
+        build_field_candidates,
+        default_field_resolutions,
+        merge_field_resolutions,
+    )
+
     plan, evidence, group = _certified_case(None)
     group = group.model_copy(update={"display_name": "乙手册"})
     evidence = tuple(
@@ -205,16 +227,128 @@ def test_certified_excerpt_keeps_each_atom_source_scope() -> None:
         )
         for item in evidence
     )
-    first = plan.atoms[0]
-    second = first.model_copy(
-        update={"atom_id": "A2", "source_qualifier": "乙手册"}
+    actual = evidence[0]
+    assert actual.document_id is not None
+    assert actual.document_version_id is not None
+    query = "甲手册中的开发团队交付成果，以及乙手册中的开发团队交付成果？"
+    first = plan.atoms[0].model_copy(
+        update={
+            "source_qualifier": "甲手册",
+            "original_fragment": "甲手册中的开发团队交付成果",
+            "source_scope": SourceScopeDecision(
+                atom_id="A1",
+                source_intent=SourceIntent.DOCUMENT_AUTHORITY,
+                resolution=SourceResolution.RESOLVED,
+                allowed_documents=(
+                    SourceDocumentIdentity(
+                        document_id=f"doc_{'a' * 32}",
+                        document_version_id=f"dver_{'b' * 32}",
+                    ),
+                ),
+                required_content=SourceContentRequirement.BODY,
+                mention_sha256=canonical_sha256("甲手册"),
+                registry_revision="unit-v1",
+                scope_digest=canonical_sha256("甲手册范围"),
+            ),
+        }
     )
-    plan = plan.model_copy(update={"atoms": (first, second)})
+    second = first.model_copy(
+        update={
+            "atom_id": "A2",
+            "source_qualifier": "乙手册",
+            "original_fragment": "乙手册中的开发团队交付成果",
+            "source_scope": SourceScopeDecision(
+                atom_id="A2",
+                source_intent=SourceIntent.DOCUMENT_AUTHORITY,
+                resolution=SourceResolution.RESOLVED,
+                allowed_documents=(
+                    SourceDocumentIdentity(
+                        document_id=actual.document_id,
+                        document_version_id=actual.document_version_id,
+                    ),
+                ),
+                required_content=SourceContentRequirement.BODY,
+                mention_sha256=canonical_sha256("乙手册"),
+                registry_revision="unit-v1",
+                scope_digest=canonical_sha256("乙手册范围"),
+            ),
+        }
+    )
+    plan = make_query_plan(
+        standalone_query=query,
+        original_query=query,
+        intent="FACT",
+        effort="DIRECT",
+        atoms=(first, second),
+        reason_code="SYNTHETIC",
+        planner_called=False,
+    )
     ids = tuple(item.support_id for item in evidence)
+    fact = PhysicalTableFact(
+        fact_id=canonical_sha256("乙手册开发团队交付成果"),
+        table_key=canonical_sha256("乙手册交付成果表"),
+        document_id=actual.document_id,
+        document_version_id=actual.document_version_id,
+        table_node_id=actual.source_spans[0].node_id,
+        row_index=1,
+        row_label_column_index=0,
+        value_column_index=2,
+        row_label_support_ids=(evidence[0].support_id,),
+        value_support_ids=(evidence[2].support_id,),
+        headers=(
+            PhysicalTableHeader(
+                row_index=0,
+                column_indexes=(2,),
+                support_ids=(evidence[1].support_id,),
+            ),
+        ),
+    )
     pack = replace(
         _pack(plan, evidence),
         trusted_source_groups=(group,),
         complete_group_ids=(group.group_id,),
+        physical_table_facts=(fact,),
+        atom_fact_bindings=(
+            AtomFactBinding(
+                atom_id="A2",
+                fact_id=fact.fact_id,
+                relation_status="SUPPORTED",
+                requested_target="开发团队",
+                requested_relation="交付成果",
+            ),
+        ),
+    )
+    field_candidates = build_field_candidates(plan, pack)
+    query_view = build_resolved_query_view(plan)
+    defaults = default_field_resolutions(
+        plan,
+        field_candidates,
+        query_view,
+    )
+    a2_candidate = next(
+        item for item in field_candidates if item.atom_id == "A2"
+    )
+    field_resolutions = merge_field_resolutions(
+        defaults,
+        (
+            FieldResolution(
+                atom_id="A2",
+                status=FieldResolutionStatus.SUPPORTED_PARAPHRASE,
+                candidate_ids=(a2_candidate.candidate_id,),
+                query_view_digest=canonical_sha256(
+                    query_view.model_dump(mode="json")
+                ),
+                reason_code="TEST_MODEL_VALIDATED_FIELD",
+            ),
+        ),
+        field_candidates,
+        query_view,
+    )
+    pack = replace(
+        pack,
+        field_candidates=field_candidates,
+        field_resolutions=field_resolutions,
+        field_resolution_active=True,
     )
     generator = Mock()
     outcome = GroundedAnsweringService(generator).answer(
@@ -227,13 +361,12 @@ def test_certified_excerpt_keeps_each_atom_source_scope() -> None:
         ),
         generation_evidence_pack=pack,
         analysis=QueryAnalysis(
-            original_query=plan.original_query,
-            normalized_query=plan.original_query,
+            original_query=query,
+            normalized_query=query,
             conversation_fingerprint="sha256:" + "0" * 64,
             semantics=QuerySemantics(
                 target="开发团队",
                 relation="交付成果",
-                source_qualifier="甲手册",
             ),
         ),
     )
@@ -241,4 +374,7 @@ def test_certified_excerpt_keeps_each_atom_source_scope() -> None:
     assert dict(outcome.atom_coverage)["A2"] == "SUPPORTED"
     assert outcome.answer is not None
     assert outcome.answer.count("测试报告") == 1
-    generator.generate.assert_not_called()
+    assert generator.generate.call_count == 1
+    request = generator.generate.call_args.args[0]
+    assert request.execution_atom_ids == ("A1",)
+    assert dict(request.per_atom_candidate_support_ids).keys() == {"A1"}

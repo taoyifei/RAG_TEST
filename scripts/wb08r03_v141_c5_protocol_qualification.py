@@ -14,7 +14,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -41,6 +41,10 @@ from rag_app.adapters.providers.structured_contract import (
     StructuredSchemaFamilyQualification,
     wb08r_structured_output_profile,
 )
+from rag_app.application.answering.field_resolution import (
+    default_field_resolutions,
+    merge_field_resolutions,
+)
 from rag_app.application.retrieval.adaptive import (
     FieldResolutionExecutionState,
     FieldResolutionOutcome,
@@ -62,7 +66,12 @@ from rag_app.core.models import (
     ResolvedQueryView,
     SearchRequest,
 )
-from rag_app.core.models.query_plan import AtomAnswerShape, QueryAtom
+from rag_app.core.models.query_plan import (
+    AtomAnswerShape,
+    QueryAtom,
+    QueryPlan,
+    make_query_plan,
+)
 from rag_app.product.grounded_runtime import ProductGroundedModel
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
 from rag_app.wanshitong.internal_model_settings import (
@@ -115,10 +124,21 @@ class PreparedCase:
     case: QualificationCase
     request: SearchRequest
     query_view: ResolvedQueryView
+    query_plan: QueryPlan
     atoms: tuple[QueryAtom, ...]
     candidates: tuple[FieldCandidate, ...]
     identities_by_candidate_id: dict[str, str]
     contract: FieldResolutionContract
+
+
+@dataclass(frozen=True, slots=True)
+class QualifiedProbe:
+    """一个实际逐 Atom HTTP 小包及其结果。"""
+
+    atom_id: str
+    contract: FieldResolutionContract
+    schema: dict[str, object]
+    outcome: FieldResolutionOutcome
 
 
 def _candidate(
@@ -196,7 +216,7 @@ def _qualification_cases() -> tuple[QualificationCase, ...]:
                     _candidate("a_input", "输入", "甲合成输入"),
                     _candidate("a_output", "输出", "甲合成输出"),
                 ),
-                expected_status=FieldResolutionStatus.SUPPORTED_PARAPHRASE,
+                expected_status=FieldResolutionStatus.EXACT,
                 expected_candidate_identities=("a_input",),
             ),
             AtomSpec(
@@ -208,24 +228,32 @@ def _qualification_cases() -> tuple[QualificationCase, ...]:
                     _candidate("b_input", "输入", "乙合成输入"),
                     _candidate("b_output", "输出", "乙合成输出"),
                 ),
-                expected_status=FieldResolutionStatus.SUPPORTED_PARAPHRASE,
+                expected_status=FieldResolutionStatus.EXACT,
                 expected_candidate_identities=("b_output",),
             ),
         ),
     )
     max_atoms: list[AtomSpec] = []
     fragments = (
-        ("A1", "甲任务", "输入字段", "甲任务的输入字段是什么"),
-        ("A2", "乙任务", "输出字段", "乙任务的输出字段是什么"),
-        ("A3", "丙任务", "负责人字段", "丙任务的负责人字段是什么"),
-        ("A4", "丁任务", "办理时限字段", "丁任务的办理时限字段是什么"),
+        ("A1", "甲任务", "要交哪些材料", "甲任务要交哪些材料", "申报材料"),
+        ("A2", "乙任务", "最后产出什么", "乙任务最后产出什么", "成果物"),
+        ("A3", "丙任务", "由谁牵头", "丙任务由谁牵头", "责任人"),
+        ("A4", "丁任务", "多久办结", "丁任务一般多久办结", "办理时限"),
     )
-    for atom_index, (atom_id, target, relation, fragment) in enumerate(
-        fragments, start=1
-    ):
+    for atom_index, (
+        atom_id,
+        target,
+        relation,
+        fragment,
+        expected_field,
+    ) in enumerate(fragments, start=1):
         expected_identity = f"a{atom_index}_expected"
         candidates = (
-            _candidate(expected_identity, relation, f"{target}合成真值"),
+            _candidate(
+                expected_identity,
+                expected_field,
+                f"{target}合成真值",
+            ),
             *tuple(
                 _candidate(
                     f"a{atom_index}_distractor_{index:02d}",
@@ -249,8 +277,8 @@ def _qualification_cases() -> tuple[QualificationCase, ...]:
     maximum = QualificationCase(
         case_id="MAX_SHAPE",
         question=(
-            "甲任务的输入字段是什么，乙任务的输出字段是什么，"
-            "丙任务的负责人字段是什么，丁任务的办理时限字段是什么？"
+            "甲任务要交哪些材料，乙任务最后产出什么，"
+            "丙任务由谁牵头，丁任务一般多久办结？"
         ),
         atoms=tuple(max_atoms),
     )
@@ -277,6 +305,15 @@ def _prepare_case(case: QualificationCase) -> PreparedCase:
             original_fragment=atom.fragment,
         )
         for atom in case.atoms
+    )
+    query_plan = make_query_plan(
+        standalone_query=query_view.business_query,
+        original_query=query_view.original_query,
+        intent="FACT",
+        effort="DIRECT",
+        atoms=atoms,
+        reason_code="C5_PROTOCOL_QUALIFICATION",
+        planner_called=False,
     )
     candidates: list[FieldCandidate] = []
     identities: dict[str, str] = {}
@@ -322,6 +359,7 @@ def _prepare_case(case: QualificationCase) -> PreparedCase:
         case=case,
         request=request,
         query_view=query_view,
+        query_plan=query_plan,
         atoms=atoms,
         candidates=candidate_tuple,
         identities_by_candidate_id=identities,
@@ -408,7 +446,7 @@ def _profile(
         ),
         mode=settings.llm_structured_output_mode,
         grammar_backend=str(settings.llm_structured_grammar_backend),
-        deadline_ms=8000,
+        deadline_ms=round(settings.llm_field_resolution_timeout_seconds * 1000),
         field_resolution_output_tokens=output_tokens,
         qualification_evidence_sha256=str(
             settings.llm_structured_qualification_evidence_sha256
@@ -529,8 +567,9 @@ def _original_diagnostic_outcome(
     """经真实 Adapter 只发送一次旧 v1 请求，不消费其语义内容。"""
     started = perf_counter()
     timeout = 8.0
+    adapter = cast(OpenAICompatibleChatAdapter, model.adapter)
     try:
-        completion = model.adapter.complete(
+        completion = adapter.complete(
             _original_messages(prepared),
             operation="query.interpret",
             max_output_tokens=_ORIGINAL_OUTPUT_TOKENS,
@@ -634,14 +673,215 @@ def _model(
         field_resolution_max_output_tokens=(
             profile.field_resolution_output_tokens
         ),
+        field_resolution_transport_timeout_seconds=(
+            settings.llm_field_resolution_timeout_seconds
+        ),
+        field_resolution_total_deadline_seconds=(
+            settings.llm_field_resolution_total_deadline_seconds
+        ),
     )
     return model
+
+
+def _qualified_case_outcome(
+    model: ProductGroundedModel,
+    prepared: PreparedCase,
+    profile: StructuredOutputCapabilityProfile,
+) -> tuple[FieldResolutionOutcome, tuple[QualifiedProbe, ...]]:
+    """按产品路径先做局部精确选择，再逐 Atom 发送完整候选。"""
+    resolutions = default_field_resolutions(
+        prepared.query_plan,
+        prepared.candidates,
+        prepared.query_view,
+    )
+    exact_atom_ids = {
+        item.atom_id
+        for item in resolutions
+        if item.status is FieldResolutionStatus.EXACT
+    }
+    probes: list[QualifiedProbe] = []
+    started = perf_counter()
+    deadline = started + model.field_resolution_total_deadline_seconds
+    for atom in prepared.atoms:
+        if atom.atom_id in exact_atom_ids:
+            continue
+        candidates = tuple(
+            item for item in prepared.candidates if item.atom_id == atom.atom_id
+        )
+        contract = build_field_resolution_contract(
+            FieldResolutionContractContext(
+                query_view=prepared.query_view,
+                atoms=(atom,),
+                candidates=candidates,
+            )
+        )
+        schema = render_wire_schema(contract, profile)
+        remaining = deadline - perf_counter()
+        if remaining <= 0:
+            outcome = FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_TOTAL_DEADLINE_EXCEEDED",
+                failure_category=("FIELD_RESOLUTION_TOTAL_DEADLINE_EXCEEDED"),
+                execution_state=(
+                    FieldResolutionExecutionState.TRANSPORT_FAILED
+                ),
+                schema_revision=contract.schema_revision,
+                schema_sha256=canonical_sha256(schema),
+                contract_sha256=contract.contract_sha256,
+                capability_profile_sha256=profile.profile_sha256,
+            )
+        else:
+            outcome = model.resolve_fields(
+                prepared.request,
+                candidates,
+                query_view=prepared.query_view,
+                atoms=(atom,),
+                timeout_seconds=remaining,
+            )
+        probes.append(
+            QualifiedProbe(
+                atom_id=atom.atom_id,
+                contract=contract,
+                schema=schema,
+                outcome=outcome,
+            )
+        )
+        if outcome.execution_state is FieldResolutionExecutionState.SUCCEEDED:
+            resolutions = merge_field_resolutions(
+                resolutions,
+                outcome.resolutions,
+                prepared.candidates,
+                prepared.query_view,
+            )
+    failures = tuple(
+        probe.outcome
+        for probe in probes
+        if probe.outcome.execution_state
+        is not FieldResolutionExecutionState.SUCCEEDED
+    )
+    first_failure = failures[0] if failures else None
+    outcomes = tuple(probe.outcome for probe in probes)
+
+    def token_sum(name: Literal["input_tokens", "output_tokens"]) -> int | None:
+        values = tuple(
+            cast(int | None, getattr(outcome, name)) for outcome in outcomes
+        )
+        if not values or any(value is None for value in values):
+            return None
+        return sum(value for value in values if value is not None)
+
+    finish_reasons = {
+        outcome.finish_reason
+        for outcome in outcomes
+        if outcome.finish_reason is not None
+    }
+    finish_reason = (
+        next(iter(finish_reasons))
+        if len(finish_reasons) == 1
+        and all(outcome.finish_reason is not None for outcome in outcomes)
+        else None
+    )
+    calls = tuple(call for outcome in outcomes for call in outcome.calls)
+    return (
+        FieldResolutionOutcome(
+            resolutions=resolutions,
+            calls=calls,
+            execution_state=(
+                first_failure.execution_state
+                if first_failure is not None
+                else FieldResolutionExecutionState.SUCCEEDED
+            ),
+            reason_code=(
+                first_failure.reason_code
+                if first_failure is not None
+                else "FIELD_RESOLUTION_ACCEPTED"
+                if probes
+                else "FIELD_RESOLUTION_LOCAL_EXACT"
+            ),
+            attempted=any(outcome.attempted for outcome in outcomes),
+            failure_category=(
+                first_failure.failure_category
+                if first_failure is not None
+                else None
+            ),
+            latency_ms=round((perf_counter() - started) * 1000),
+            input_tokens=token_sum("input_tokens"),
+            output_tokens=token_sum("output_tokens"),
+            finish_reason=finish_reason,
+            transport_timeout_ms=max(
+                (outcome.transport_timeout_ms for outcome in outcomes),
+                default=0,
+            ),
+            schema_revision=(
+                outcomes[0].schema_revision
+                if outcomes
+                and len({outcome.schema_revision for outcome in outcomes}) == 1
+                else None
+            ),
+            schema_sha256=(
+                canonical_sha256(
+                    tuple(
+                        (probe.atom_id, probe.outcome.schema_sha256)
+                        for probe in probes
+                    )
+                )
+                if probes
+                else None
+            ),
+            contract_sha256=(
+                canonical_sha256(
+                    tuple(
+                        (probe.atom_id, probe.contract.contract_sha256)
+                        for probe in probes
+                    )
+                )
+                if probes
+                else None
+            ),
+            capability_profile_sha256=profile.profile_sha256,
+            response_content_sha256=(
+                first_failure.response_content_sha256
+                if first_failure is not None
+                else None
+            ),
+            response_content_length=(
+                first_failure.response_content_length
+                if first_failure is not None
+                else None
+            ),
+            invalid_atom_id=(
+                first_failure.invalid_atom_id
+                if first_failure is not None
+                else None
+            ),
+            invalid_status=(
+                first_failure.invalid_status
+                if first_failure is not None
+                else None
+            ),
+            invalid_candidate_count=(
+                first_failure.invalid_candidate_count
+                if first_failure is not None
+                else None
+            ),
+            invalid_query_fragment_length=(
+                first_failure.invalid_query_fragment_length
+                if first_failure is not None
+                else None
+            ),
+            private_diagnostic_status=(
+                first_failure.private_diagnostic_status
+                if first_failure is not None
+                else None
+            ),
+        ),
+        tuple(probes),
+    )
 
 
 def _outcome_record(
     prepared: PreparedCase,
     outcome: FieldResolutionOutcome,
-    schema: dict[str, object],
+    schema_identity: object,
     profile: StructuredOutputCapabilityProfile,
 ) -> dict[str, object]:
     resolutions = [
@@ -679,8 +919,10 @@ def _outcome_record(
         "input_tokens": outcome.input_tokens,
         "output_tokens": outcome.output_tokens,
         "schema_revision": outcome.schema_revision,
-        "schema_sha256": canonical_sha256(schema),
-        "contract_sha256": prepared.contract.contract_sha256,
+        "schema_sha256": canonical_sha256(schema_identity),
+        "contract_sha256": (
+            outcome.contract_sha256 or prepared.contract.contract_sha256
+        ),
         "capability_profile_sha256": profile.profile_sha256,
         "grammar_backend_fingerprint": profile.grammar_backend_fingerprint,
         "resolutions": resolutions,
@@ -697,26 +939,39 @@ def _outcome_record(
     }
 
 
-def _case_passes(
+def _case_passes(  # noqa: PLR0912
     prepared: PreparedCase,
     outcome: FieldResolutionOutcome,
     profile: StructuredOutputCapabilityProfile,
 ) -> tuple[bool, tuple[str, ...]]:
     failures: list[str] = []
+    defaults = default_field_resolutions(
+        prepared.query_plan,
+        prepared.candidates,
+        prepared.query_view,
+    )
+    expected_request_count = sum(
+        item.status is not FieldResolutionStatus.EXACT for item in defaults
+    )
     if outcome.execution_state is not FieldResolutionExecutionState.SUCCEEDED:
         failures.append("EXECUTION_NOT_SUCCEEDED")
-    if (
-        not outcome.attempted
-        or len(outcome.calls) != 1
-        or sum(call.call_count for call in outcome.calls) != 1
-    ):
-        failures.append("REQUEST_COUNT_NOT_ONE")
-    if outcome.finish_reason != "stop":
-        failures.append("FINISH_REASON_NOT_STOP")
-    if outcome.output_tokens is None or (
-        outcome.output_tokens > profile.field_resolution_output_tokens
-    ):
-        failures.append("OUTPUT_USAGE_INVALID")
+    actual_request_count = sum(call.call_count for call in outcome.calls)
+    if actual_request_count != expected_request_count:
+        failures.append("REQUEST_COUNT_MISMATCH")
+    if expected_request_count:
+        if (
+            not outcome.attempted
+            or len(outcome.calls) != expected_request_count
+        ):
+            failures.append("ATTEMPT_LEDGER_MISMATCH")
+        if outcome.finish_reason != "stop":
+            failures.append("FINISH_REASON_NOT_STOP")
+        if outcome.output_tokens is None or outcome.output_tokens > (
+            profile.field_resolution_output_tokens * expected_request_count
+        ):
+            failures.append("OUTPUT_USAGE_INVALID")
+    elif outcome.attempted or outcome.calls:
+        failures.append("LOCAL_EXACT_CALLED_PROVIDER")
     actual = {item.atom_id: item for item in outcome.resolutions}
     if set(actual) != {item.atom_id for item in prepared.case.atoms}:
         failures.append("ATOM_SET_MISMATCH")
@@ -732,7 +987,7 @@ def _case_passes(
             failures.append(f"{expected.atom_id}_STATUS_MISMATCH")
         if identities != set(expected.expected_candidate_identities):
             failures.append(f"{expected.atom_id}_CANDIDATE_MISMATCH")
-        if (
+        if resolution.status is not FieldResolutionStatus.EXACT and (
             resolution.query_span_start is None
             or resolution.query_span_end is None
             or resolution.query_fragment is None
@@ -843,6 +1098,7 @@ def run(  # noqa: PLR0915
     try:
         for case in cases:
             prepared = _prepare_case(case)
+            probes: tuple[QualifiedProbe, ...] = ()
             if diagnostic_phase:
                 schema = _original_wire_schema(
                     prepared, allow_unique_items=allow_unique_items
@@ -850,23 +1106,64 @@ def run(  # noqa: PLR0915
                 outcome = _original_diagnostic_outcome(
                     model, prepared, schema, profile
                 )
+                adapter = cast(OpenAICompatibleChatAdapter, model.adapter)
                 final_http_payload = openai_compatible_chat_payload(
                     _original_messages(prepared),
-                    model.adapter.compatible_config,
+                    adapter.compatible_config,
                     max_output_tokens=_ORIGINAL_OUTPUT_TOKENS,
                     json_schema=schema,
                     schema_revision=_ORIGINAL_SCHEMA_REVISION,
                 )
+                schema_identity: object = schema
             else:
-                schema = render_wire_schema(prepared.contract, profile)
-                outcome = model.resolve_fields(
-                    prepared.request,
-                    prepared.candidates,
-                    query_view=prepared.query_view,
-                    atoms=prepared.atoms,
+                outcome, probes = _qualified_case_outcome(
+                    model,
+                    prepared,
+                    profile,
+                )
+                schema_identity = tuple(
+                    (probe.atom_id, canonical_sha256(probe.schema))
+                    for probe in probes
                 )
                 final_http_payload = None
-            record = _outcome_record(prepared, outcome, schema, profile)
+            record = _outcome_record(
+                prepared,
+                outcome,
+                schema_identity,
+                profile,
+            )
+            record["atom_attempts"] = [
+                {
+                    "atom_id": probe.atom_id,
+                    "candidate_count": len(probe.contract.candidates),
+                    "execution_state": probe.outcome.execution_state.value,
+                    "reason_code": probe.outcome.reason_code,
+                    "failure_category": probe.outcome.failure_category,
+                    "request_count": sum(
+                        call.call_count for call in probe.outcome.calls
+                    ),
+                    "latency_ms": probe.outcome.latency_ms,
+                    "input_tokens": probe.outcome.input_tokens,
+                    "output_tokens": probe.outcome.output_tokens,
+                    "finish_reason": probe.outcome.finish_reason,
+                    "response_content_sha256": (
+                        probe.outcome.response_content_sha256
+                    ),
+                    "response_content_length": (
+                        probe.outcome.response_content_length
+                    ),
+                    "invalid_status": probe.outcome.invalid_status,
+                    "invalid_candidate_count": (
+                        probe.outcome.invalid_candidate_count
+                    ),
+                    "private_diagnostic_status": (
+                        probe.outcome.private_diagnostic_status
+                    ),
+                    "schema_sha256": canonical_sha256(probe.schema),
+                    "contract_sha256": probe.contract.contract_sha256,
+                }
+                for probe in probes
+            ]
             request_count += sum(call.call_count for call in outcome.calls)
             if phase == "qualified":
                 passed, failures = _case_passes(prepared, outcome, profile)
@@ -891,9 +1188,25 @@ def run(  # noqa: PLR0915
                     "request_payload": (
                         final_http_payload
                         if final_http_payload is not None
-                        else request_payload(prepared.contract)
+                        else [
+                            {
+                                "atom_id": probe.atom_id,
+                                "payload": request_payload(probe.contract),
+                            }
+                            for probe in probes
+                        ]
                     ),
-                    "wire_schema": schema,
+                    "wire_schema": (
+                        schema
+                        if diagnostic_phase
+                        else [
+                            {
+                                "atom_id": probe.atom_id,
+                                "schema": probe.schema,
+                            }
+                            for probe in probes
+                        ]
+                    ),
                 }
             )
     finally:
@@ -904,7 +1217,7 @@ def run(  # noqa: PLR0915
         for item in safe_records
     )
     manifest: dict[str, object] = {
-        "schema_version": "wb08r03-v141-c5-protocol-qualification-v1",
+        "schema_version": "wb08r03-v141-c5-protocol-qualification-v2",
         "phase": phase,
         "gate_kind": "DIAGNOSTIC" if diagnostic_phase else "QUALIFICATION",
         "passed": passed,

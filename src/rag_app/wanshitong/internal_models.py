@@ -169,6 +169,12 @@ class InternalModelConfigurator:
                     "field_resolution_max_output_tokens": (
                         desired_models.field_resolution_max_output_tokens
                     ),
+                    "field_resolution_transport_timeout_seconds": (
+                        desired_models.field_resolution_transport_timeout_seconds
+                    ),
+                    "field_resolution_total_deadline_seconds": (
+                        desired_models.field_resolution_total_deadline_seconds
+                    ),
                 }
             )
             == desired_models
@@ -630,6 +636,12 @@ class InternalModelConfigurator:
                 ),
                 "field_resolution_max_output_tokens": (
                     settings.llm_field_resolution_max_output_tokens
+                ),
+                "field_resolution_transport_timeout_seconds": (
+                    settings.llm_field_resolution_timeout_seconds
+                ),
+                "field_resolution_total_deadline_seconds": (
+                    settings.llm_field_resolution_total_deadline_seconds
                 ),
             }
         )

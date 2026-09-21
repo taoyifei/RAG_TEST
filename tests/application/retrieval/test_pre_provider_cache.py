@@ -9,6 +9,7 @@ from rag_app.composition.p07_runtime import build_p07_runtime
 from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
     BaseResultCacheKey,
+    ConfidenceStatus,
     DocumentRef,
     KnowledgeBaseScope,
     SearchRequest,
@@ -69,6 +70,12 @@ def test_cache_hit_precedes_query_embedding_and_reranker(
             text="ABC-123",
         )
         first = runtime.retrieval.search_and_answer(request)
+        assert first.status is ConfidenceStatus.ANSWERABLE
+        assert first.answer is not None
+        assert first.generation_reason_code not in {
+            "GENERATION_CLAIMS_INVALID",
+            "ANSWER_PLAN_LEGACY_PROTOCOL_FORBIDDEN",
+        }
 
         def forbidden(*args: object, **kwargs: object) -> None:
             del args, kwargs

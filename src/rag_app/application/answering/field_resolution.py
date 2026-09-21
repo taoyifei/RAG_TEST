@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import unicodedata
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
-from rag_app.application.retrieval.generation_evidence import (
-    GenerationEvidencePack,
-)
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models.answer_plan import (
     FieldCandidate,
@@ -15,7 +13,7 @@ from rag_app.core.models.answer_plan import (
     FieldResolutionStatus,
     ResolvedQueryView,
 )
-from rag_app.core.models.query_plan import QueryPlan
+from rag_app.core.models.query_plan import QueryAtom, QueryPlan
 from rag_app.core.models.retrieval import (
     EvidenceItem,
     PhysicalTableFact,
@@ -25,6 +23,11 @@ from rag_app.core.query_text import (
     table_axis_label_in_query,
 )
 from rag_app.core.source_scope import source_identity_allowed
+
+if TYPE_CHECKING:
+    from rag_app.application.retrieval.generation_evidence import (
+        GenerationEvidencePack,
+    )
 
 
 def _ordered_text(
@@ -123,25 +126,33 @@ def build_field_candidates(
 
 
 def _default_resolution(
-    atom_id: str,
+    atom: QueryAtom,
     candidates: tuple[FieldCandidate, ...],
     query_view: ResolvedQueryView,
+    *,
+    atom_count: int,
+    fragment_is_unique: bool,
 ) -> FieldResolution:
     """先冻结可形式验证的精确轴；其余不猜等义。"""
     query_view_digest = canonical_sha256(query_view.model_dump(mode="json"))
+    question_fragment = _trusted_atom_question(
+        atom,
+        query_view,
+        atom_count=atom_count,
+        fragment_is_unique=fragment_is_unique,
+    )
     exact = tuple(
         item
         for item in candidates
-        if table_axis_label_in_query(
-            query_view.business_query, item.target_label
-        )
-        and table_axis_label_in_query(
-            query_view.business_query, item.field_label
-        )
+        # 候选在构造时已经绑定当前 Atom 的目标与来源范围。这里仅允许
+        # 当前 Atom 的唯一受信片段授予字段轴 EXACT，避免整句中的其它
+        # 子问把“输入”和“输出”同时串入本 Atom。
+        if question_fragment is not None
+        and table_axis_label_in_query(question_fragment, item.field_label)
     )
     if len(exact) == 1:
         return FieldResolution(
-            atom_id=atom_id,
+            atom_id=atom.atom_id,
             status=FieldResolutionStatus.EXACT,
             candidate_ids=(exact[0].candidate_id,),
             query_view_digest=query_view_digest,
@@ -149,7 +160,7 @@ def _default_resolution(
         )
     if len(exact) > 1:
         return FieldResolution(
-            atom_id=atom_id,
+            atom_id=atom.atom_id,
             status=FieldResolutionStatus.AMBIGUOUS,
             candidate_ids=tuple(item.candidate_id for item in exact),
             query_view_digest=query_view_digest,
@@ -157,7 +168,7 @@ def _default_resolution(
         )
     if len(candidates) == 1:
         return FieldResolution(
-            atom_id=atom_id,
+            atom_id=atom.atom_id,
             status=FieldResolutionStatus.RELATED_FIELD,
             candidate_ids=(candidates[0].candidate_id,),
             query_view_digest=query_view_digest,
@@ -165,18 +176,37 @@ def _default_resolution(
         )
     if candidates:
         return FieldResolution(
-            atom_id=atom_id,
+            atom_id=atom.atom_id,
             status=FieldResolutionStatus.AMBIGUOUS,
             candidate_ids=tuple(item.candidate_id for item in candidates),
             query_view_digest=query_view_digest,
             reason_code="SCHEMA_FIELDS_REQUIRE_INTERPRETATION",
         )
     return FieldResolution(
-        atom_id=atom_id,
+        atom_id=atom.atom_id,
         status=FieldResolutionStatus.NOT_FOUND,
         query_view_digest=query_view_digest,
         reason_code="NO_SCHEMA_FIELD_FOR_TARGET",
     )
+
+
+def _trusted_atom_question(
+    atom: QueryAtom,
+    query_view: ResolvedQueryView,
+    *,
+    atom_count: int,
+    fragment_is_unique: bool,
+) -> str | None:
+    """返回只属于当前 Atom 的唯一问题片段。"""
+    if atom_count == 1:
+        return query_view.business_query
+    fragment = atom.original_fragment
+    if not fragment or not fragment_is_unique:
+        return None
+    first = query_view.business_query.find(fragment)
+    if first < 0 or query_view.business_query.find(fragment, first + 1) >= 0:
+        return None
+    return fragment
 
 
 def default_field_resolutions(
@@ -190,9 +220,18 @@ def default_field_resolutions(
         by_atom[candidate.atom_id].append(candidate)
     return tuple(
         _default_resolution(
-            atom.atom_id,
+            atom,
             tuple(by_atom.get(atom.atom_id, ())),
             query_view,
+            atom_count=len(query_plan.atoms),
+            fragment_is_unique=(
+                atom.original_fragment is not None
+                and sum(
+                    item.original_fragment == atom.original_fragment
+                    for item in query_plan.atoms
+                )
+                == 1
+            ),
         )
         for atom in query_plan.atoms
     )
