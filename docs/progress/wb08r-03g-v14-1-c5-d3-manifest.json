@@ -12,7 +12,7 @@
   "plan_sha256": "645e206a66e107f6cb5cd6cd82eed50f1d98c9964a92d8bc75818d7549df0c9f",
   "implementation_base_sha": "de251f0324b82d8c406a81a616f405629e839c96",
   "tested_source_sha": "4c981fa4c8579c98c2881bee1106b57f749d19e6",
-  "report_commit_sha": null,
+  "report_commit_sha": "35ae7435cdd33326c0fbace9738a9f4e9193704a",
   "source_commits": [
     {
       "sha": "d074bde6790448dae9a91113371e6f3fffcbaa56",
@@ -136,9 +136,21 @@
     "vllm_log_excerpt_sha256": "0b877a31ee179dd68664af43c578d08fed6a8ecb4a9780b19677190d1a5517fb"
   },
   "local_analysis_bundle": {
-    "status": "TO_BE_ASSEMBLED_AFTER_REPORT_COMMIT",
-    "directory": null,
-    "archive": null,
-    "archive_sha256": null
+    "status": "ASSEMBLED_AND_INTEGRITY_VERIFIED",
+    "directory": "C:\\Users\\jerry\\Desktop\\湾研院\\湾事通\\WB08R03_V14_1_C5_D3_P0_分析证据_4c981fa",
+    "directory_file_count": 25,
+    "directory_total_bytes": 4600938,
+    "integrity_manifest_sha256": "09b338de6842015d7c6e317b471c92875c8a0866f9db5fd5c0fa7eea33c17eb8",
+    "integrity_entries_verified": 24,
+    "integrity_failures": 0,
+    "archive": "C:\\Users\\jerry\\Desktop\\湾研院\\湾事通\\WB08R03_V14_1_C5_D3_P0_分析证据_4c981fa.zip",
+    "archive_size_bytes": 4306454,
+    "archive_entry_count": 25,
+    "archive_sha256": "19525c30594fbdce07dcc9ec2404629a4219c945d2b3363e7d8248e247566075",
+    "archive_hash_sidecar": "C:\\Users\\jerry\\Desktop\\湾研院\\湾事通\\WB08R03_V14_1_C5_D3_P0_分析证据_4c981fa.zip.sha256",
+    "contains_private_business_text": true,
+    "contains_secrets": false,
+    "tracked_in_git": false,
+    "self_reference_note": "ARCHIVE_CONTAINS_PRE_FINAL_METADATA_MANIFEST; EXTERNAL_SHA256_SIDECAR_IS_AUTHORITATIVE_FOR_ARCHIVE"
   }
 }

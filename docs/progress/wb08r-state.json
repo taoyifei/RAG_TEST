@@ -17,7 +17,7 @@
   "candidate_runtime_source_revision": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_runtime_tree_hash": null,
   "candidate_product_asset_manifest_sha256": "927660b0864b710719c8af4d6911e22087c63baef1587f783d3c895482b09f72",
-  "phase_report_sha": "8a6cadda74d8d680bf344a08e9e682b61b5ab6a4",
+  "phase_report_sha": "35ae7435cdd33326c0fbace9738a9f4e9193704a",
   "current_report": "docs/progress/wb08r-03g-v14-1-c5-d3-report.md",
   "current_manifest": "docs/progress/wb08r-03g-v14-1-c5-d3-manifest.json",
   "current_p0_issues": "docs/progress/wb08r-03g-v14-1-c5-d3-p0-issues.md",
@@ -314,7 +314,7 @@
     "phase_status": "PAUSED",
     "plan_sha256": "645e206a66e107f6cb5cd6cd82eed50f1d98c9964a92d8bc75818d7549df0c9f",
     "tested_source_sha": "4c981fa4c8579c98c2881bee1106b57f749d19e6",
-    "report_commit_sha": null,
+    "report_commit_sha": "35ae7435cdd33326c0fbace9738a9f4e9193704a",
     "diagnostic_ab": "PASSED_OLD_400_UNIQUE_ITEMS_OBSERVED_TRANSFERRED_REQUEST_HTTP_200",
     "diagnostic_chat_requests": 2,
     "d3": "FAILED_1_OF_5",
@@ -344,7 +344,8 @@
     "manifest": "docs/progress/wb08r-03g-v14-1-c5-d3-manifest.json",
     "p0_issues": "docs/progress/wb08r-03g-v14-1-c5-d3-p0-issues.md",
     "safe_evidence": "docs/progress/wb08r-03g-v14-1-c5-d3-evidence.safe.json",
-    "local_analysis_bundle": null
+    "local_analysis_bundle": "C:\\Users\\jerry\\Desktop\\湾研院\\湾事通\\WB08R03_V14_1_C5_D3_P0_分析证据_4c981fa",
+    "local_analysis_archive_sha256": "19525c30594fbdce07dcc9ec2404629a4219c945d2b3363e7d8248e247566075"
   },
   "wb08r03r2_verification": {
     "candidate_code_sha": "8337bdbc73c721744cf63e36127925bf7064beb6",
