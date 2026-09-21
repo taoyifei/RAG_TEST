@@ -497,6 +497,28 @@ def build_department_profiles(
     )
 
 
+def department_profile_embedding_text(profile: DepartmentProfile) -> str:
+    """生成离线部门向量使用的稳定文本，不包含文档正文或评测答案。
+
+    Args:
+        profile: 已从活动文档元数据构建的 lexical Profile。
+
+    Returns:
+        只含部门名、分类、标题、代表标题和主题词的规范 JSON 文本。
+
+    """
+    return canonical_json(
+        {
+            "department_name": profile.department_name,
+            "aliases": profile.aliases,
+            "category_paths": profile.category_paths,
+            "document_titles": profile.document_titles,
+            "representative_headings": profile.representative_headings,
+            "topic_keys": profile.topic_keys,
+        }
+    )
+
+
 def _source_document(
     row: Mapping[str, object],
 ) -> DepartmentProfileSourceDocument:
@@ -563,4 +585,5 @@ __all__ = [
     "DepartmentProfileSourceSnapshot",
     "DepartmentProfileStore",
     "build_department_profiles",
+    "department_profile_embedding_text",
 ]

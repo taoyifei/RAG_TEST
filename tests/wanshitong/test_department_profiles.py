@@ -19,6 +19,7 @@ from rag_app.wanshitong.department_profiles import (
     DepartmentProfileSourceSnapshot,
     DepartmentProfileStore,
     build_department_profiles,
+    department_profile_embedding_text,
 )
 
 _PROJECT_ID = "prj_" + "1" * 32
@@ -191,6 +192,35 @@ def test_invalid_vector_build_does_not_replace_valid_profile(
         )
         == original
     )
+
+
+def test_embedding_text_contains_only_stable_profile_metadata() -> None:
+    snapshot = _snapshot(
+        (
+            _document(
+                "4",
+                department_key="research",
+                department_name="科研部",
+                title="科研项目管理办法",
+            ),
+        )
+    )
+    profile = build_department_profiles(snapshot, built_at=_BUILT_AT).profiles[
+        0
+    ]
+
+    payload = json.loads(department_profile_embedding_text(profile))
+
+    assert payload == {
+        "aliases": [],
+        "category_paths": [["制度"]],
+        "department_name": "科研部",
+        "document_titles": ["科研项目管理办法"],
+        "representative_headings": [],
+        "topic_keys": ["流程"],
+    }
+    assert "document_ids" not in payload
+    assert "vector" not in payload
 
 
 def test_source_reader_binds_version_metadata_to_active_revision(
