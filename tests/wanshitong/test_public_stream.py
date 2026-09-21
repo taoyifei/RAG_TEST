@@ -130,6 +130,44 @@ def test_public_final_contains_only_answer_and_citation_dto() -> None:
     }
 
 
+def test_public_final_projects_validation_notice_as_user_message() -> None:
+    result = synthetic_answer(_TRACE_ID).model_copy(
+        update={
+            "display_message": (
+                "已找到相关资料，但本次答案生成或核验未完成。你可以稍后重试。"
+            )
+        }
+    )
+
+    final = render_public_final(result)
+
+    assert final["user_message"] == result.display_message
+    assert "display_message" not in final
+
+
+def test_public_projection_preserves_only_final_user_message() -> None:
+    internal = {
+        "protocol": "rag-answer-sse-v1",
+        "type": "final",
+        "trace_id": _TRACE_ID,
+        "sequence": 1,
+        "status": "INSUFFICIENT_EVIDENCE",
+        "reason_code": "INSUFFICIENT_EVIDENCE",
+        "answer": None,
+        "user_message": "本次答案核验未完成，请稍后重试。",
+        "display_message": "内部字段不应出现",
+        "citations": [],
+    }
+
+    projected = next(
+        iter(project_public_stream(iter([_sse("final", internal)])))
+    )
+    payload = _payload(projected)
+
+    assert payload["user_message"] == "本次答案核验未完成，请稍后重试。"
+    assert "display_message" not in payload
+
+
 def test_projection_passes_heartbeat_and_closes_upstream() -> None:
     closed = False
 

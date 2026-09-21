@@ -261,6 +261,36 @@ _CONFLICT_QUANTITY = re.compile(
     r"万元|亿元|元|人|次|个|件|项)"
 )
 _MAX_SCALAR_DIRECT_CANDIDATES = 12
+_GENERATION_INCOMPLETE_PREFIXES = (
+    "GENERATION_JSON_",
+    "GENERATION_WIRE_SCHEMA",
+    "EVIDENCE_BINDING_",
+)
+_GENERATION_INCOMPLETE_REASONS = frozenset(
+    {
+        "GENERATION_CLAIMS_INVALID",
+        "GENERATION_INCOMPLETE",
+        "GENERATION_ITEMS_REJECTED",
+        "GENERATION_OUTPUT_INVALID",
+        "GENERATION_PACKET_IDENTITY_MISMATCH",
+        "GENERATION_REPAIR_DISABLED",
+        "SEMANTIC_REVIEW_DEADLINE_EXHAUSTED",
+        "SEMANTIC_REVIEW_NOT_AVAILABLE",
+        "SEMANTIC_REVIEW_RESPONSE_INVALID",
+    }
+)
+_GENERATION_INCOMPLETE_MESSAGE = (
+    "已找到相关资料，但本次答案生成或核验未完成。你可以稍后重试。"
+)
+
+
+def _generation_incomplete_reason(reason: str | None) -> bool:
+    """识别已取得资料但生成或本地校验没有形成可发布终态的原因。"""
+    normalized = (reason or "").upper()
+    return (
+        normalized in _GENERATION_INCOMPLETE_REASONS
+        or normalized.startswith(_GENERATION_INCOMPLETE_PREFIXES)
+    )
 
 
 def _source_scope_allows_query_unit(
@@ -3186,6 +3216,11 @@ class RetrievalService:
         display_message = None
         if query_plan.needs_clarification:
             display_message = query_plan.clarification_question
+        generation_incomplete = (
+            answer is None and _generation_incomplete_reason(generation_reason)
+        )
+        if generation_incomplete:
+            display_message = _GENERATION_INCOMPLETE_MESSAGE
         if (
             request.include_related_content
             and answer is None
@@ -3208,24 +3243,8 @@ class RetrievalService:
                 revision_id=snapshot.revision.index_revision_id,
                 rerank_mode=reranked.mode,
             )
-            generation_incomplete = bool(
-                generation_reason
-                and generation_reason != "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM"
-                and any(
-                    marker in generation_reason
-                    for marker in (
-                        "GENERATION_JSON_DECODE",
-                        "GENERATION_WIRE_SCHEMA",
-                        "GENERATION_ITEMS_REJECTED",
-                        "GENERATION_OUTPUT_INVALID",
-                        "EVIDENCE_BINDING_",
-                        "SEMANTIC_REVIEW_",
-                    )
-                )
-            )
             display_message = (
-                "已找到相关资料，但本次答案生成或核验未完成。"
-                "你可以稍后重试，下面内容仅供查阅。"
+                f"{_GENERATION_INCOMPLETE_MESSAGE}下面内容仅供查阅。"
                 if generation_incomplete
                 else related_display_message(
                     related_contents,
@@ -3958,6 +3977,8 @@ class RetrievalService:
 
         """
         if result.result_origin != "fresh":
+            return
+        if _generation_incomplete_reason(result.generation_reason_code):
             return
         if result.rerank_execution_mode == "catalog_fast_path":
             return
@@ -6103,6 +6124,10 @@ def _model_capability_status(  # noqa: PLR0911
     blocker = _configured_generation_blocker(context)
     for candidate in dict.fromkeys((reason, blocker)):
         normalized = (candidate or "").upper()
+        if _generation_incomplete_reason(normalized):
+            # HTTP 已成功返回或尚未发起复核，但最终输出未通过应用校验；
+            # 这不是 Provider outage，由最终回答语义安全拒答。
+            continue
         if normalized == "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM":
             # 语义复核已正常完成，只是没有事实取得发布许可。
             # 这是证据不足的业务结果，不是 Provider 故障。
@@ -6139,6 +6164,7 @@ def _model_capability_status(  # noqa: PLR0911
                 "BUSINESS_AUTHORIZATION",
                 "BUSINESS_SOURCE",
                 "BUSINESS_MODEL_OPERATION",
+                "MODEL_IDENTITY_REQUIRED",
             )
         ):
             return (
@@ -6152,13 +6178,7 @@ def _model_capability_status(  # noqa: PLR0911
                 "PROVIDER_INVALID_RESPONSE",
                 "PROVIDER_RATE_LIMITED",
                 "PROVIDER_TIMEOUT",
-                "GENERATION_JSON_INVALID",
-                "GENERATION_JSON_DECODE",
-                "GENERATION_WIRE_SCHEMA",
-                "GENERATION_ITEMS_REJECTED",
-                "GENERATION_OUTPUT_INVALID",
-                "EVIDENCE_BINDING_",
-                "SEMANTIC_REVIEW_",
+                "SEMANTIC_REVIEW_PROVIDER_ERROR",
                 "HTTP_429",
                 "CONNECT_TIMEOUT",
                 "READ_TIMEOUT",

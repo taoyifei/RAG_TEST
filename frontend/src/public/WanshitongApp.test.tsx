@@ -439,6 +439,31 @@ describe("湾事通公共应用", () => {
     expect(screen.queryByText(/已核验来源（/)).not.toBeInTheDocument();
   });
 
+  it("校验未完成时展示服务端重试提示而非资料不足文案", async () => {
+    installFetch(
+      streamResponse([
+        event("final", 0, {
+          status: "INSUFFICIENT_EVIDENCE",
+          answer: null,
+          user_message:
+            "已找到相关资料，但本次答案生成或核验未完成。你可以稍后重试。",
+          citations: [],
+        }),
+      ]),
+    );
+    await openHome();
+    await ask();
+
+    expect(
+      await screen.findByText(
+        "已找到相关资料，但本次答案生成或核验未完成。你可以稍后重试。",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("暂未在内部资料中找到足以回答这个问题的内容。"),
+    ).not.toBeInTheDocument();
+  });
+
   it("兼容 WB-03 未携带 user_message 的空答案 final", async () => {
     installFetch(
       streamResponse([

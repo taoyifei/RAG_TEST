@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from rag_app.application.answering.grounded import GroundedOutcome
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.composition.p07_runtime import P07Runtime, build_p07_runtime
 from rag_app.core.errors import (
@@ -21,6 +22,7 @@ from rag_app.core.models import (
     ConfidenceStatus,
     DocumentRef,
     KnowledgeBaseScope,
+    ProviderCall,
     SearchAnswerResult,
     SearchRequest,
 )
@@ -286,6 +288,53 @@ def test_rerank_failure_keeps_lexical_answer_and_is_not_cached(
     assert recovered.status is ConfidenceStatus.ANSWERABLE
     assert not recovered.cache_hit
     assert recovered.rerank_execution_mode != degraded.rerank_execution_mode
+
+
+@pytest.mark.usefixtures("lexical_candidates")
+def test_validation_incomplete_has_public_notice_and_no_negative_cache(
+    runtime: P07Runtime,
+) -> None:
+    """Provider 成功但复核超时应保持原原因、提示重试且禁止负缓存。"""
+    assert runtime.retrieval._grounded is not None
+    outcome = GroundedOutcome(
+        None,
+        "none",
+        calls=(
+            ProviderCall(
+                provider_id="openai-compatible",
+                operation="generation",
+                call_count=1,
+                retry_count=0,
+                elapsed_ms=1,
+                reason_code="OK",
+                status_category="SUCCESS",
+            ),
+        ),
+        reason_code="SEMANTIC_REVIEW_DEADLINE_EXHAUSTED",
+    )
+    request = _request("个人信息更正申请由谁受理？")
+    with patch.object(
+        runtime.retrieval._grounded,
+        "answer",
+        return_value=outcome,
+    ):
+        result = runtime.retrieval.search_and_answer(request)
+
+    assert result.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+    assert result.generation_reason_code == (
+        "SEMANTIC_REVIEW_DEADLINE_EXHAUSTED"
+    )
+    assert result.display_message == (
+        "已找到相关资料，但本次答案生成或核验未完成。你可以稍后重试。"
+    )
+    assert result.related_contents == ()
+    assert runtime.cache.get(result.cache_key) is None
+
+    # 即便未来不再把原因同步进 degraded，显式 guard 仍禁止负缓存。
+    runtime.retrieval.commit_result_cache(
+        result.model_copy(update={"degraded_reason_codes": ()})
+    )
+    assert runtime.cache.get(result.cache_key) is None
 
 
 def test_real_failure_category_controls_notice_without_changing_refusal(

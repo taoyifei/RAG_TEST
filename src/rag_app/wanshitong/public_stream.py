@@ -49,6 +49,7 @@ _PUBLIC_EVENT_FIELDS = {
         "status",
         "reason_code",
         "answer",
+        "user_message",
         "citations",
     ),
 }
@@ -64,7 +65,7 @@ def render_public_final(result: SearchAnswerResult) -> dict[str, object]:
         不含 Scope、Revision、分数、向量或 Provider 的公开 Final。
 
     """
-    return {
+    final: dict[str, object] = {
         "trace_id": result.trace_id,
         "status": result.status.value,
         "reason_code": result.reason_code,
@@ -77,6 +78,9 @@ def render_public_final(result: SearchAnswerResult) -> dict[str, object]:
             ),
         ],
     }
+    if result.display_message is not None:
+        final["user_message"] = result.display_message
+    return final
 
 
 def project_public_stream(frames: Iterator[bytes]) -> Iterator[bytes]:

@@ -503,12 +503,41 @@ def test_expired_outer_deadline_prevents_review_and_publication() -> None:
     assert outcome.relation_review_skip_reason == (
         "SEMANTIC_REVIEW_DEADLINE_EXHAUSTED"
     )
+    assert outcome.reason_code == "SEMANTIC_REVIEW_DEADLINE_EXHAUSTED"
     assert len(harness.sent) == len(outcome.prepared_packets) == 1
+    assert len(outcome.calls) == 1
+    assert outcome.calls[0].status_category == "SUCCESS"
+    assert outcome.calls[0].reason_code == "OK"
 
 
-@pytest.mark.parametrize("failure", ["json", "contract", "transport"])
+@pytest.mark.parametrize(
+    ("failure", "reason_code", "status_category", "call_reason"),
+    (
+        (
+            "json",
+            "SEMANTIC_REVIEW_RESPONSE_INVALID",
+            "RESPONSE_CONTRACT",
+            "SEMANTIC_REVIEW_RESPONSE_INVALID",
+        ),
+        (
+            "contract",
+            "SEMANTIC_REVIEW_RESPONSE_INVALID",
+            "RESPONSE_CONTRACT",
+            "SEMANTIC_REVIEW_RESPONSE_INVALID",
+        ),
+        (
+            "transport",
+            "PROVIDER_UNAVAILABLE",
+            "TRANSIENT",
+            "HTTP_TRANSPORT",
+        ),
+    ),
+)
 def test_failed_review_records_attempt_but_never_publishes(
     failure: str,
+    reason_code: str,
+    status_category: str,
+    call_reason: str,
 ) -> None:
     fixture = _fixture()
     harness = _HttpHarness(fixture[2], failure=failure)
@@ -519,6 +548,9 @@ def test_failed_review_records_attempt_but_never_publishes(
     assert outcome.repair_calls == 0
     assert len(harness.sent) == len(outcome.prepared_packets) == 2
     assert sum(call.call_count for call in outcome.calls) == 2
+    assert outcome.reason_code == reason_code
+    assert outcome.calls[-1].status_category == status_category
+    assert outcome.calls[-1].reason_code == call_reason
 
 
 @pytest.mark.parametrize("failure", ["json", "contract", "transport"])
