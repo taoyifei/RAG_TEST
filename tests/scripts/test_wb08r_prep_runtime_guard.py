@@ -84,6 +84,7 @@ def _container(*, candidate: bool) -> dict[str, object]:
     root = "/candidate" if candidate else "/baseline"
     network_settings = {
         "internal": {
+            "NetworkID": "a" * 64,
             "Aliases": (
                 ["wanshitong-prep-candidate-app", "app"]
                 if candidate
@@ -91,6 +92,7 @@ def _container(*, candidate: bool) -> dict[str, object]:
             )
         },
         "egress": {
+            "NetworkID": "b" * 64,
             "Aliases": (
                 ["wanshitong-prep-candidate-app", "app"]
                 if candidate
@@ -255,6 +257,29 @@ def test_created_candidate_rejects_old_network_alias(tmp_path: Path) -> None:
     assert report["unclassified_changes"][0]["field_path"] == (
         "container.networks.internal.aliases"
     )
+
+
+def test_created_candidate_normalizes_prestart_network_id_key(
+    tmp_path: Path,
+) -> None:
+    candidate_value = _container(candidate=True)
+    networks = candidate_value["NetworkSettings"]["Networks"]
+    internal = networks.pop("internal")
+    internal["NetworkID"] = ""
+    networks["a" * 64] = internal
+    baseline, candidate, image = _inputs(tmp_path, [candidate_value])
+
+    report = guard.compare_runtime(
+        stage="created_container",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+    )
+
+    assert report["ready"] is True
+    assert report["semantic_mismatches"] == []
 
 
 def test_write_candidate_environment_is_private_and_uses_baseline(

@@ -382,8 +382,24 @@ def _rendered_networks(
     }
 
 
-def _created_networks(container: dict[str, Any]) -> set[str]:
-    return set(container["NetworkSettings"]["Networks"])
+def _created_networks(
+    container: dict[str, Any],
+    *,
+    baseline: dict[str, Any] | None = None,
+) -> set[str]:
+    names = set(container["NetworkSettings"]["Networks"])
+    if baseline is None:
+        return names
+    baseline_networks = baseline["NetworkSettings"]["Networks"]
+    names_by_id: dict[str, str] = {}
+    for name, settings in baseline_networks.items():
+        network_id = str(settings.get("NetworkID", ""))
+        if not network_id:
+            continue
+        if network_id in names_by_id:
+            raise ValueError("BASELINE_NETWORK_ID_DUPLICATED")
+        names_by_id[network_id] = str(name)
+    return {names_by_id.get(name, name) for name in names}
 
 
 def _baseline_networks(container: dict[str, Any]) -> set[str]:
@@ -577,7 +593,7 @@ def _compare_created_runtime(
     report.compare(
         "container.networks",
         sorted(_baseline_networks(baseline)),
-        sorted(_created_networks(candidate)),
+        sorted(_created_networks(candidate, baseline=baseline)),
         "创建后容器没有精确连接既有网络。",
     )
     for key in ("User", "WorkingDir", "Entrypoint", "Cmd", "Healthcheck"):
