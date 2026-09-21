@@ -1,6 +1,134 @@
-# WB-08R 准备阶段 P0 收尾报告
+# WB-08R 准备阶段 P0 恢复与收尾报告
 
-## 结论
+## 当前结论（部署收敛与收尾）
+
+本轮最终状态为 **PREP_READY / QUALITY_STATUS=KNOWN_ISSUES /
+NOT_PRODUCTION_RELEASED**。
+
+`WB08R-PREP-P0-01` 所记录的部署复现阻塞已经按恢复方案消除。候选部署描述在
+rendered、created、running 三个阶段均无缺失键、语义差异、挂载差异或未分类
+差异；8289 候选完成 Replay6 和 Smoke12 的请求、final、Trace 账目。F017、N060
+的历史拒答以及 N003、N059 的来源质量问题继续作为质量债，不冒充全绿，也不阻断
+进入 04 影子路由。
+
+当前可以进入 **04 影子路由阶段**。本结论不是生产发布授权：60:8288、54:18288
+和稳定标签均未改变，后续仍须先在 8289 完成人工试用，并取得用户明确授权，才能
+讨论替换生产。
+
+## 当前交付身份
+
+| 对象 | 当前值 | 说明 |
+| --- | --- | --- |
+| 候选应用镜像 | `rag-test-wanshitong:wb08r-prep-f97aca5a6548` | image ID `sha256:1c0a92e3a61e743df4cd7886170d769a575125cdd814151a7ef3578474326f79` |
+| 候选应用源码 | `f97aca5a65481eada07ce7631fc98d9414092e55` | 后续提交只修部署守卫/等待逻辑及本报告，没有改应用运行源码 |
+| 部署与运行守卫 | `4f682eed4366b0c3d7b6756e3fd6a8d0b09ea225` | 修正健康等待；当前容器没有为该修正重启 |
+| 产品资产 | 37 个文件，1,107,812 bytes | manifest SHA-256 `68a3556944e55cd1b5c4bb30c7ef29166d356d3e0fc778dceb57a5e503fbbfe72` |
+| 候选容器 | `wanshitong-prep-candidate-app` | ID `ee9c883ad4c20d36fcfdbad9617df69e76c186dc5efe492b16427987bf15e415` |
+| 候选数据根 | `/data/tyf/wanshitong-wb08r-prep-f97aca5a6548` | 与生产挂载源无交集 |
+
+候选容器当前为 running/healthy，`restart_count=0`，live/ready 均为 200。旧 8289
+容器 `67e240a2fa0845135b648342a09880ffd7d55abf274b149c7a84ee089b7e778b`
+保持 stopped，原镜像、数据和配置均保留为唯一回滚点。
+
+## 配置、数据与启动门禁
+
+- app-only `compose.candidate.yaml` 只管理候选应用，使用已核对的 external 网络，
+  不创建、重启或接管 Qdrant；共享 Qdrant 只读使用。
+- rendered、created、running 三层守卫均为 `ready=true`；
+  `missing_required_keys`、`semantic_mismatches`、`mount_mismatches` 和
+  `unclassified_changes` 均为空。
+- 旧 8289 实际环境有 52 个有效应用键。服务器历史 Compose 少声明的 14 个键和
+  `/private-diagnostics` 挂载已经在版本化候选合同中显式复现；共同键值无差异。
+- 主库和 Trace 库通过运行中 SQLite Backup API 克隆，不复制活动 WAL：
+  `universal-rag.sqlite3` 为 1,362,415,616 bytes，SHA-256
+  `389766bb623da5c4a82eae2c99f1a49b6673be787c7644078d4c5b61819be5ce4`；
+  `product-traces.sqlite3` 为 344,653,824 bytes，SHA-256
+  `ff999c35f2c38a225ba544601f7e88c83584dd0a92a1967d90ec66e7d103dd965`；
+  两库 `quick_check` 均通过。
+- 80 个 blob 共 11,588,578 bytes，tree digest
+  `18fe6f6c93fbbd5780d3b14ddd28d464e3c046eef74353d41a7de21c06096609c`。
+- 以实际运行用户完成 `/data`、`/logs`、`/private-diagnostics` 写入探针并清理探针
+  文件；模型设置仍为唯一有效 revision，测试前后安全摘要一致。
+
+首次正式启动时，端点已 ready，但 Docker 首次 health tick 尚未落为 healthy，旧
+启动包装脚本因此返回假失败；容器随后原地健康，`restart_count` 始终为 0，旧 8289
+也保持停止。该控制面等待缺陷已在 `4f682ee` 修正，没有为修正重启或重发应用请求。
+
+## 真实小集合账目
+
+### Replay6
+
+- 6/6 使用冻结 Case，6/6 恰好一个 final 和一个 terminal；
+- 6/6 trace_id 有效且 Trace 可读；重试数均为 0；
+- F015、F048、N054、N056 为 `ANSWERABLE`；F017、N060 为历史
+  `INSUFFICIENT_EVIDENCE` 质量债；
+- F048 命中预期来源，3 个 accepted claim / 3 个 published claim；
+- 输出 SHA-256 `91b8595387d9e2f138f6309390620720e812e3ce7937ade909dae7eb9bb5538e4`；
+  review SHA-256 `19c8bf4b8f6bf3f72905a2d84c577316e7477ef1ef545b6ee02c80e148711cabb`。
+
+### Smoke12
+
+- 12/12 使用冻结 Case，12/12 恰好一个 final 和一个 terminal；
+- 12/12 trace_id 有效且 Trace 可读；`error_code` 均为空，重试数均为 0；
+- F024、F034、A001 为安全拒答；F037、F040、F048、N043、N044 为来源合同
+  已确认的正常回答；F049、N001 待人工真值复核；
+- N003、N059 为已登记的来源质量问题，不是系统/配置失败；
+- F048 再次命中预期来源，3 个 accepted claim / 3 个 published claim；
+- 输出 SHA-256 `aceb5d41b1e90d9742c3b74a02a64d459e4152085dd5a981ab95814f19466775c`；
+  review SHA-256 `3746366ec06efb1fe4411fcc22eb5552696661349625ab5d3227f4a191f55ed7a`。
+
+Replay6 与 Smoke12 没有虚构去重：实际执行 18 次 Case 请求，另有 N043、N044
+两次 setup 请求。查询历史由 2,325 增至 2,345，增量 20；Trace 事件由 79,887
+增至 80,886，增量 999。
+
+通用自然题 runner 对子集输出 `CASE_SET_MISMATCH`，因为它默认期待完整 Natural36；
+这不是本方案冻结 Replay6/Smoke12 的功能失败。F017、N060、N003、N059 的质量
+判定按题保留，未把 Trace 合同通过写成答案质量全通过。
+
+## 离线验证、SSO 与生产保护
+
+本轮实际执行的本地相关门禁：
+
+- Python 相关测试：132 passed，1 warning；
+- 前端 `WanshitongApp.test.tsx`：22 passed；
+- Ruff、Bash 语法和 `git diff --check`：通过。
+
+本机没有安装 ShellCheck，因此未宣称 ShellCheck 通过。没有运行无关全库测试、
+Full96、生产业务请求或真实 SSO 联调。
+
+SSO 清单已纠正为 CAS Ticket v1.3，当前为
+`REGISTRATION_INPUTS_PENDING`。外部地址、client、secret 安全注入来源和测试账号
+尚待提供；按方案不阻断 04，但不能标记 `AUTH_READY`。
+
+生产保护复核结果：
+
+- 60:8288 仍为容器
+  `7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e`、镜像
+  `sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306`，
+  启动时间仍为 `2026-09-17T01:45:12.001523599Z`，running/healthy，live/ready 200；
+- 54:18288 转发进程仍为 PID `3147532`，启动时间仍为
+  `2026-09-17 10:08:21 +0800`，目标仍为 60:8288，live/ready 200；
+- `wanshitong-stable-20260921` 继续指向
+  `746b030d0b63c937d9a17817596c0533f17eb966`，没有移动。
+
+## 当前证据与清理
+
+私有证据目录为：
+`/data/tyf/wanshitong-wb08r01/artifacts/wb08r-prep-recovery-e77ed0c-private/`。
+目录权限为 0700，37 个证据文件均为 0600；安全 manifest 内容 SHA-256 为
+`62574dbd56d37e278330223149580ba4ea1a28cf2271c9237fdb85b795580e2af`。
+
+已删除两轮失败候选镜像及新增层、对应过期 release 目录、60 上的中转归档和临时
+守卫文件；本地临时构建目录已删除，本地候选镜像数为 0。没有执行全局 prune，
+没有删除 volume。当前候选镜像/目录、旧 8289 回滚镜像/数据和生产镜像均保留。
+原十个本地 Trace 文件未删除，整个 Trace 结果目录继续由 `.gitignore` 忽略。
+
+---
+
+以下内容保留首次失败批次的原始 P0 结论和三次修正证据，不能把历史失败改写为
+未发生；其中“当前”“最终”等表述均以该历史批次结束时为准。
+
+## 历史 P0 结论（保留）
 
 本轮最终状态为 **P0_RECORDED / NOT_PREP_READY / NOT_PRODUCTION_RELEASED**。
 

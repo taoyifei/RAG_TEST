@@ -1,108 +1,267 @@
 {
-  "schema_version": "wb08r-prep-p0-v1",
-  "status": "P0_RECORDED",
-  "prep_ready": false,
+  "schema_version": "wb08r-prep-p0-v2",
+  "status": "PREP_READY",
+  "prep_ready": true,
+  "quality_status": "KNOWN_ISSUES",
+  "phase_04_entry_ready": true,
   "production_released": false,
-  "p0": {
-    "id": "WB08R-PREP-P0-01",
-    "reason": "CANDIDATE_RUNTIME_CONFIGURATION_PARITY_FAILED",
-    "repair_attempts": 3,
-    "attempt_limit_reached": true,
-    "final_preflight": "RUNTIME_ENV_PREFLIGHT_FAILED"
-  },
+  "production_publish_allowed": false,
   "branch": "codex/wb-08r-adaptive-rag",
-  "built_source_revision": "114907583ac7a11b655263679ba0c6a17e29b9d4",
-  "implementation_commits": [
-    "61cb709030befb9efd98ce227f5b4d8e99cadde0",
-    "2c7baad845c2949c8b4d55cb3d94a91d6e737e17",
-    "521f3c5552c14c363965525bb48ba38a48263edc",
-    "114907583ac7a11b655263679ba0c6a17e29b9d4"
+  "runtime_application_revision": "f97aca5a65481eada07ce7631fc98d9414092e55",
+  "control_plane_revision": "4f682eed4366b0c3d7b6756e3fd6a8d0b09ea225",
+  "stable_tag": {
+    "name": "wanshitong-stable-20260921",
+    "target": "746b030d0b63c937d9a17817596c0533f17eb966",
+    "moved": false
+  },
+  "recovery_implementation_commits": [
+    "ba140f23489f08bb12a5a0a85295a265dd40a729",
+    "539e403666b86c0745a9e8397b7663c3ae93f8de",
+    "3fe7a9ddec2a4af2868a753eb4baf4929e45e835",
+    "ef5eeb8cdd19477fd4db0ea283662d9d0dcc657a",
+    "c99ab7897ba5b6e342a95bd8c108003f14463a8d",
+    "f97aca5a65481eada07ce7631fc98d9414092e55",
+    "1f9c948f3fd7aed5a6505706ee99439ccc566e15",
+    "4f682eed4366b0c3d7b6756e3fd6a8d0b09ea225"
   ],
-  "offline_verification": {
-    "provider_schema_pytest": "43 passed",
-    "terminal_attribution_pytest": "36 passed",
-    "related_service_full_file": "16 passed",
-    "frontend_wanshitong_app": "22 passed",
-    "ruff": "PASSED",
-    "targeted_mypy": "PASSED",
-    "eslint": "PASSED",
-    "typescript": "PASSED"
-  },
-  "temporary_candidate": {
-    "image": "rag-test-wanshitong:wb08r-prep-1149075",
-    "image_id": "sha256:e9c80c085c535768474d2eb06ae0ed171b0e23d731b0c462501bb229e48f4461",
-    "asset_manifest_sha256": "d0df393a8b50605620f92c14bbd744ab9219bf2736c1e55a4832fec9ec3ff72a7",
-    "compatibility_manifest_sha256": "9ca7476e0d2649d8193c0ec5c54ab965fa5c47e9e243176a0113eb4d9122867af",
-    "removed": true
-  },
-  "replay6": {
-    "acceptance_status": "DIAGNOSTIC_ONLY_RUNTIME_CONFIG_NOT_EQUIVALENT",
-    "business_request_count": 6,
-    "trace_contract_passed": 6,
-    "behavior_and_source_passed": 4,
-    "behavior_and_source_failed": [
-      "WB08R-F-017",
-      "WB08R-N-060"
-    ],
-    "f048_status": "ANSWERABLE",
-    "f048_expected_source_match": true,
-    "smoke12": "NOT_RUN_MANDATORY_RUNTIME_GATE_FAILED"
-  },
-  "restored_runtime": {
-    "candidate_8289": {
-      "container_id": "67e240a2fa0845135b648342a09880ffd7d55abf274b149c7a84ee089b7e778b",
-      "image_id": "sha256:8da303c05f71e770be10f8845c0d336ad0feeb72839eb5a1baa6ae9de27cb9c1",
-      "live": 200,
-      "ready": 200,
-      "health": "healthy"
+  "recovery": {
+    "deployment": {
+      "candidate_image": "rag-test-wanshitong:wb08r-prep-f97aca5a6548",
+      "candidate_image_id": "sha256:1c0a92e3a61e743df4cd7886170d769a575125cdd814151a7ef3578474326f79",
+      "asset_file_count": 37,
+      "asset_bytes": 1107812,
+      "asset_manifest_sha256": "68a3556944e55cd1b5c4bb30c7ef29166d356d3e0fc778dceb57a5e503fbbfe72",
+      "candidate_container": {
+        "name": "wanshitong-prep-candidate-app",
+        "container_id": "ee9c883ad4c20d36fcfdbad9617df69e76c186dc5efe492b16427987bf15e415",
+        "state": "running",
+        "health": "healthy",
+        "restart_count": 0,
+        "started_at": "2026-09-21T10:25:45.006325487Z",
+        "live": 200,
+        "ready": 200
+      },
+      "rollback_container": {
+        "container_id": "67e240a2fa0845135b648342a09880ffd7d55abf274b149c7a84ee089b7e778b",
+        "image_id": "sha256:8da303c05f71e770be10f8845c0d336ad0feeb72839eb5a1baa6ae9de27cb9c1",
+        "state": "exited",
+        "image_data_and_config_preserved": true
+      },
+      "candidate_data_root": "/data/tyf/wanshitong-wb08r-prep-f97aca5a6548",
+      "production_mount_overlap": false,
+      "shared_qdrant_access": "READ_ONLY",
+      "startup_wrapper_false_negative": {
+        "observed": true,
+        "application_restart_performed": false,
+        "fixed_in_revision": "4f682eed4366b0c3d7b6756e3fd6a8d0b09ea225"
+      }
     },
-    "production_60_8288": {
-      "container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
-      "image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306",
-      "started_at": "2026-09-17T01:45:12.001523599Z",
-      "live": 200,
-      "ready": 200,
-      "modified": false
+    "configuration_gates": {
+      "effective_application_env_key_count": 52,
+      "historical_server_compose_missing_key_count": 14,
+      "historical_server_compose_missing_private_diagnostics_mount": true,
+      "common_value_mismatch_count": 0,
+      "rendered_spec": {
+        "ready": true,
+        "missing_required_keys": [],
+        "semantic_mismatches": [],
+        "mount_mismatches": [],
+        "unclassified_changes": []
+      },
+      "created_container": {
+        "ready": true,
+        "missing_required_keys": [],
+        "semantic_mismatches": [],
+        "mount_mismatches": [],
+        "unclassified_changes": []
+      },
+      "running_container": {
+        "ready": true,
+        "missing_required_keys": [],
+        "semantic_mismatches": [],
+        "mount_mismatches": [],
+        "unclassified_changes": []
+      }
     },
-    "production_54_18288": {
-      "forward_pid": 3147532,
-      "target": "10.242.180.60:8288",
-      "live": 200,
-      "ready": 200,
-      "modified": false
+    "data_clone": {
+      "method": "SQLITE_BACKUP_API",
+      "universal_database": {
+        "bytes": 1362415616,
+        "sha256": "389766bb623da5c4a82eae2c99f1a49b6673be787c7644078d4c5b61819be5ce4",
+        "quick_check": "ok"
+      },
+      "product_trace_database": {
+        "bytes": 344653824,
+        "sha256": "ff999c35f2c38a225ba544601f7e88c83584dd0a92a1967d90ec66e7d103dd965",
+        "quick_check": "ok"
+      },
+      "blob_count": 80,
+      "blob_bytes": 11588578,
+      "blob_tree_digest": "18fe6f6c93fbbd5780d3b14ddd28d464e3c046eef74353d41a7de21c06096609c",
+      "runtime_write_probes_passed": [
+        "/data",
+        "/logs",
+        "/private-diagnostics"
+      ],
+      "runtime_write_probe_files_removed": true,
+      "active_model_setting_revision_count": 1,
+      "model_settings_safe_hash_unchanged": true
+    },
+    "real_validation": {
+      "replay6": {
+        "acceptance_status": "PASSED_WITH_KNOWN_QUALITY_ISSUES",
+        "frozen_case_count": 6,
+        "final_count_exact": 6,
+        "terminal_count_exact": 6,
+        "valid_trace_id_count": 6,
+        "readable_trace_count": 6,
+        "retry_count": 0,
+        "answerable_cases": [
+          "WB08R-F-015",
+          "WB08R-F-048",
+          "WB08R-N-054",
+          "WB08R-N-056"
+        ],
+        "historical_quality_debt_cases": [
+          "WB08R-F-017",
+          "WB08R-N-060"
+        ],
+        "f048_expected_source_match": true,
+        "f048_accepted_claims": 3,
+        "f048_published_claims": 3,
+        "output_sha256": "91b8595387d9e2f138f6309390620720e812e3ce7937ade909dae7eb9bb5538e4",
+        "review_sha256": "19c8bf4b8f6bf3f72905a2d84c577316e7477ef1ef545b6ee02c80e148711cabb"
+      },
+      "smoke12": {
+        "acceptance_status": "PASSED_WITH_KNOWN_QUALITY_ISSUES",
+        "frozen_case_count": 12,
+        "final_count_exact": 12,
+        "terminal_count_exact": 12,
+        "valid_trace_id_count": 12,
+        "readable_trace_count": 12,
+        "null_error_code_count": 12,
+        "retry_count": 0,
+        "safe_refusal_cases": [
+          "WB08R-F-024",
+          "WB08R-F-034",
+          "WB08R-A-001"
+        ],
+        "confirmed_source_contract_cases": [
+          "WB08R-F-037",
+          "WB08R-F-040",
+          "WB08R-F-048",
+          "WB08R-N-043",
+          "WB08R-N-044"
+        ],
+        "pending_human_truth_review_cases": [
+          "WB08R-F-049",
+          "WB08R-N-001"
+        ],
+        "known_source_quality_debt_cases": [
+          "WB08R-N-003",
+          "WB08R-N-059"
+        ],
+        "f048_expected_source_match": true,
+        "f048_accepted_claims": 3,
+        "f048_published_claims": 3,
+        "output_sha256": "aceb5d41b1e90d9742c3b74a02a64d459e4152085dd5a981ab95814f19466775c",
+        "review_sha256": "3746366ec06efb1fe4411fcc22eb5552696661349625ab5d3227f4a191f55ed7a"
+      },
+      "request_accounting": {
+        "case_requests": 18,
+        "setup_requests": 2,
+        "setup_cases": [
+          "WB08R-N-043",
+          "WB08R-N-044"
+        ],
+        "query_history_before": 2325,
+        "query_history_after": 2345,
+        "query_history_delta": 20,
+        "trace_event_rows_before": 79887,
+        "trace_event_rows_after": 80886,
+        "trace_event_rows_delta": 999,
+        "deduplicated_case_requests": 0
+      },
+      "generic_runner_subset_note": "CASE_SET_MISMATCH_EXPECTED_FOR_FROZEN_SUBSETS"
+    },
+    "offline_verification": {
+      "relevant_python_pytest": "132 passed, 1 warning",
+      "frontend_wanshitong_app": "22 passed",
+      "ruff": "PASSED",
+      "bash_syntax": "PASSED",
+      "git_diff_check": "PASSED",
+      "shellcheck": "NOT_RUN_NOT_INSTALLED",
+      "unrelated_full_suite": "NOT_RUN_OUT_OF_SCOPE",
+      "full96": "NOT_RUN_OUT_OF_SCOPE"
+    },
+    "sso": {
+      "protocol": "CAS_TICKET_V1_3",
+      "status": "REGISTRATION_INPUTS_PENDING",
+      "auth_ready": false,
+      "blocks_phase_04": false
+    },
+    "production_protection": {
+      "production_60_8288": {
+        "container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
+        "image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306",
+        "started_at": "2026-09-17T01:45:12.001523599Z",
+        "state": "running",
+        "health": "healthy",
+        "live": 200,
+        "ready": 200,
+        "modified": false
+      },
+      "production_54_18288": {
+        "forward_pid": 3147532,
+        "forward_started_at": "2026-09-17 10:08:21 +0800",
+        "target": "10.242.180.60:8288",
+        "live": 200,
+        "ready": 200,
+        "modified": false
+      }
+    },
+    "evidence": {
+      "server_directory": "/data/tyf/wanshitong-wb08r01/artifacts/wb08r-prep-recovery-e77ed0c-private",
+      "directory_mode": "0700",
+      "file_count": 37,
+      "file_mode": "0600",
+      "manifest_content_sha256": "62574dbd56d37e278330223149580ba4ea1a28cf2271c9237fdb85b795580e2af"
+    },
+    "cleanup": {
+      "failed_server_candidate_images_removed": 2,
+      "expired_server_release_directories_removed": 2,
+      "server_transfer_archives_removed": true,
+      "server_temporary_guard_removed": true,
+      "local_temporary_build_directories_removed": true,
+      "local_candidate_image_count": 0,
+      "current_candidate_image_preserved": true,
+      "rollback_image_data_and_config_preserved": true,
+      "production_image_preserved": true,
+      "volumes_removed": false,
+      "global_prune_used": false,
+      "original_trace_files_preserved": 10,
+      "trace_results_directory_ignored": true
     }
   },
-  "evidence": {
-    "server_directory": "/data/tyf/wanshitong-wb08r01/artifacts/wb08r-prep-1149075-p0",
-    "files": [
-      {
-        "name": "replay6-safe.ndjson",
-        "bytes": 24456,
-        "sha256": "13e1b6eb01b4d0d0677f2a1df7f64c76f6bae1432dd08c84b2677584c239494b"
-      },
-      {
-        "name": "replay6-safe-audited.ndjson",
-        "bytes": 9672,
-        "sha256": "4cb5fc64d9c83b7031bfedbdd6d01755da2979695710cc4f97ba782042c636be"
-      },
-      {
-        "name": "replay6-review.private.ndjson",
-        "bytes": 16144,
-        "sha256": "a58678aea2517cf2b74456f088285f5b54eb7b4d70f257066f1908f5ac1ef41c"
-      }
-    ]
-  },
-  "cleanup": {
-    "failed_candidate_container_removed": true,
-    "failed_candidate_image_removed": true,
-    "server_build_directory_removed": true,
-    "server60_transfer_archive_removed": true,
-    "server54_transfer_archive_removed": true,
-    "local_transfer_archive_removed": true,
-    "local_images_created": 0,
-    "volumes_removed": false,
-    "global_prune_used": false,
-    "original_trace_files_preserved": 10,
-    "trace_results_directory_ignored": true
+  "historical_p0": {
+    "status": "P0_RECORDED",
+    "prep_ready": false,
+    "production_released": false,
+    "p0": {
+      "id": "WB08R-PREP-P0-01",
+      "reason": "CANDIDATE_RUNTIME_CONFIGURATION_PARITY_FAILED",
+      "repair_attempts": 3,
+      "attempt_limit_reached": true,
+      "final_preflight": "RUNTIME_ENV_PREFLIGHT_FAILED"
+    },
+    "built_source_revision": "114907583ac7a11b655263679ba0c6a17e29b9d4",
+    "temporary_candidate": {
+      "image": "rag-test-wanshitong:wb08r-prep-1149075",
+      "image_id": "sha256:e9c80c085c535768474d2eb06ae0ed171b0e23d731b0c462501bb229e48f4461",
+      "removed": true
+    },
+    "replay6_acceptance_status": "DIAGNOSTIC_ONLY_RUNTIME_CONFIG_NOT_EQUIVALENT",
+    "smoke12": "NOT_RUN_MANDATORY_RUNTIME_GATE_FAILED",
+    "evidence_directory": "/data/tyf/wanshitong-wb08r01/artifacts/wb08r-prep-1149075-p0"
   }
 }
