@@ -9,7 +9,7 @@
   ],
   "current_phase": "WB08R-03",
   "phase_status": "FAILED",
-  "implementation_status": "wb08r03g_v14_1_failed_paused_on_field_resolution_provider_http_400",
+  "implementation_status": "wb08r03g_v14_1_c5_d3_protocol_qualification_failed_paused",
   "wb08r03r2_phase_start_sha": "399cf2184c4b3f47f6f4b274c4333913f610f1d2",
   "candidate_code_sha": "bd00c56f15aa86cfbe875b1700c72b7a23d9d5da",
   "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
@@ -18,9 +18,9 @@
   "candidate_runtime_tree_hash": null,
   "candidate_product_asset_manifest_sha256": "927660b0864b710719c8af4d6911e22087c63baef1587f783d3c895482b09f72",
   "phase_report_sha": "8a6cadda74d8d680bf344a08e9e682b61b5ab6a4",
-  "current_report": "docs/progress/wb08r-03g-v14-1-report.md",
-  "current_manifest": "docs/progress/wb08r-03g-v14-1-manifest.json",
-  "current_p0_issues": "docs/progress/wb08r-03g-v14-1-p0-issues.md",
+  "current_report": "docs/progress/wb08r-03g-v14-1-c5-d3-report.md",
+  "current_manifest": "docs/progress/wb08r-03g-v14-1-c5-d3-manifest.json",
+  "current_p0_issues": "docs/progress/wb08r-03g-v14-1-c5-d3-p0-issues.md",
   "runtime_relevant_diff_after_candidate": false,
   "implementation_microphases": {
     "R0_stream_terminal": "IMPLEMENTED",
@@ -36,7 +36,8 @@
     "03G_V12_wire_binding_and_semantic_convergence": "FAILED_FROZEN_AT_THREE_REPAIR_ROUND_LIMIT",
     "03G_V13_deterministic_source_and_table_relation": "FAILED_FROZEN_AT_THREE_REPAIR_ROUND_LIMIT",
     "03G_V14_unified_answer_plan": "FAILED_PAUSED_ON_STRICT_FIVE_CASE_NEW_P0",
-    "03G_V14_1_scope_and_semantic_boundary": "FAILED_PAUSED_ON_NEW_PROVIDER_INPUT_CONTRACT_P0"
+    "03G_V14_1_scope_and_semantic_boundary": "FAILED_PAUSED_ON_NEW_PROVIDER_INPUT_CONTRACT_P0",
+    "03G_V14_1_C5_protocol_convergence": "FAILED_PAUSED_ON_D3_NEW_P0_NO_CANDIDATE_DEPLOYED"
   },
   "verification_gates": {
     "V13-Targeted-P0": {
@@ -90,38 +91,58 @@
       ],
       "dominant_failure": "FIELD_RESOLUTION_PROVIDER_HTTP_400"
     },
+    "V14.1-C5-D3-Protocol": {
+      "status": "FAILED",
+      "tested_source_sha": "4c981fa4c8579c98c2881bee1106b57f749d19e6",
+      "diagnostic_chat_requests": 2,
+      "qualification_cases": 5,
+      "qualification_chat_requests": 4,
+      "provider_retry_count": 0,
+      "passed_cases": [
+        "AMBIGUOUS"
+      ],
+      "failed_cases": [
+        "PARAPHRASE_TRANSPORT_TIMEOUT",
+        "NOT_FOUND_OUTPUT_INVALID",
+        "TWO_ATOMS_SEMANTIC_MISMATCH",
+        "MAX_SHAPE_INPUT_BUDGET"
+      ],
+      "business_requests": 0,
+      "candidate_built": false,
+      "candidate_deployed": false
+    },
     "Preflight-16": {
       "status": "NOT_RUN",
-      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0"
+      "reason": "V14_1_C5_D3_PROTOCOL_QUALIFICATION_FAILED"
     },
     "A_EvidencePack-12": {
       "status": "NOT_RUN",
-      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_D3_PROTOCOL_QUALIFICATION_FAILED",
       "same_version_pass": false
     },
     "B_CoreAnswer-16": {
       "status": "NOT_RUN",
-      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_D3_PROTOCOL_QUALIFICATION_FAILED",
       "same_version_pass": false
     },
     "C_Failed-24": {
       "status": "NOT_RUN",
-      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_D3_PROTOCOL_QUALIFICATION_FAILED",
       "same_version_pass": false
     },
     "D_Natural-36": {
       "status": "NOT_RUN",
-      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_D3_PROTOCOL_QUALIFICATION_FAILED",
       "same_version_pass": false
     },
     "E_Full-96": {
       "status": "NOT_RUN",
-      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_D3_PROTOCOL_QUALIFICATION_FAILED",
       "same_version_pass": false
     },
     "F_Concurrency-4": {
       "status": "NOT_RUN",
-      "reason": "V14_1_C5_STRICT_FIVE_CASE_NEW_P0",
+      "reason": "V14_1_C5_D3_PROTOCOL_QUALIFICATION_FAILED",
       "same_version_pass": false
     }
   },
@@ -287,6 +308,43 @@
     "report": "docs/progress/wb08r-03g-v14-1-report.md",
     "manifest": "docs/progress/wb08r-03g-v14-1-manifest.json",
     "p0_issues": "docs/progress/wb08r-03g-v14-1-p0-issues.md"
+  },
+  "wb08r03g_v14_1_c5_d3_verification": {
+    "status": "FAILED",
+    "phase_status": "PAUSED",
+    "plan_sha256": "645e206a66e107f6cb5cd6cd82eed50f1d98c9964a92d8bc75818d7549df0c9f",
+    "tested_source_sha": "4c981fa4c8579c98c2881bee1106b57f749d19e6",
+    "report_commit_sha": null,
+    "diagnostic_ab": "PASSED_OLD_400_UNIQUE_ITEMS_OBSERVED_TRANSFERRED_REQUEST_HTTP_200",
+    "diagnostic_chat_requests": 2,
+    "d3": "FAILED_1_OF_5",
+    "d3_chat_requests": 4,
+    "provider_retry_count": 0,
+    "p0_ids": [
+      "P0_V141_C5_D3_PARAPHRASE_TRANSPORT_TIMEOUT",
+      "P0_V141_C5_D3_NOT_FOUND_OUTPUT_INVALID",
+      "P0_V141_C5_D3_TWO_ATOMS_SEMANTIC_MISMATCH",
+      "P0_V141_C5_D3_MAX_SHAPE_INPUT_BUDGET"
+    ],
+    "question_answering_related_pytest": "565 passed, 1 deselected, 1 warning",
+    "final_targeted_pytest": "55 passed, 1 warning",
+    "static_checks": "PASSED_RUFF_FORMAT_MYPY_407_COMPOSE_DIFF_CHECK",
+    "business_five_case": "NOT_RUN_D3_FAILED",
+    "preflight_16": "NOT_RUN_D3_FAILED",
+    "A_to_F": "NOT_RUN_D3_FAILED",
+    "unrelated_tests": "NOT_RUN_BY_USER_INSTRUCTION",
+    "candidate_built": false,
+    "candidate_deployed": false,
+    "final_8289": "BASELINE_BD00C56_HEALTHY_200",
+    "production_modified": false,
+    "production_8288_health": 200,
+    "production_18288_health": 200,
+    "cleanup_complete": true,
+    "report": "docs/progress/wb08r-03g-v14-1-c5-d3-report.md",
+    "manifest": "docs/progress/wb08r-03g-v14-1-c5-d3-manifest.json",
+    "p0_issues": "docs/progress/wb08r-03g-v14-1-c5-d3-p0-issues.md",
+    "safe_evidence": "docs/progress/wb08r-03g-v14-1-c5-d3-evidence.safe.json",
+    "local_analysis_bundle": null
   },
   "wb08r03r2_verification": {
     "candidate_code_sha": "8337bdbc73c721744cf63e36127925bf7064beb6",

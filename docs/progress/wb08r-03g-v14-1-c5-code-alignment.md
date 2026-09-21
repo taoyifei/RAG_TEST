@@ -1,6 +1,6 @@
 # WB08R-03 V14.1 C5 代码一致性检查
 
-## 结论
+## 真实测试前结论
 
 截至真实服务测试前，本工作树已经按
 `V14_1_C5_协议接入收敛与03验收实施方案.md` 完成 A1、B、C、D1、D2
@@ -34,7 +34,7 @@
 | C3 终态/缓存 | 无可发布事实的字段系统失败映射现有系统失败终态；独立 EXACT 安全事实可以部分发布，缺失原因是 SYSTEM_DEPENDENCY_FAILED；系统失败不读写语义结果缓存；cache key 绑定合同/profile/执行状态 | 通过 |
 | D1 本地合同 | 覆盖正例、重复 Atom、重复候选、跨 Atom、未知 ID、错误 q、重复键、非法组合、截断、额外字段及 uniqueItems 移交后的接收集约束 | 通过 |
 | D2 实际 Adapter + MockTransport | 使用真实 `OpenAICompatibleChatAdapter`，核对最终 HTTP body、固定 mode、schema、输出预算、400 安全诊断和单次请求 | 通过 |
-| D3 真实协议资格 | 五个安全合成 case，按字段身份而非 F1 顺序验真，同时检查状态、Atom、q 锚点、finish reason、token usage 和调用数 | 脚本通过，尚未实测 |
+| D3 真实协议资格 | 五个安全合成 case，按字段身份而非 F1 顺序验真，同时检查状态、Atom、q 锚点、finish reason、token usage 和调用数 | 已实测，1/5 通过，资格失败并停线 |
 
 ## 现场只读身份与资格定义
 
@@ -88,3 +88,20 @@
 模型/tokenizer、chat template、结构化输出 mode/grammar backend，以及部署
 tokenizer 对三种合法输出形状的 token 上界。任何与任务书实现无关的新故障，
 均停止继续修复，保存安全/私有 Trace、记录 P0、回滚并精确清理 8289 候选。
+
+## 真实测试后的状态
+
+上述条件满足后才执行了受控 A/B 与 D3：
+
+- A/B 精确证明当前服务拒绝 `uniqueItems`，且只删除该 keyword 后接受相同重建请求；
+  唯一性仍由本地合同严格验证。
+- D3 的 `AMBIGUOUS` 通过；`PARAPHRASE` 超时，`NOT_FOUND` 输出状态组合非法，
+  `TWO_ATOMS` 发生语义错配，`MAX_SHAPE` 在 6144 输入门禁前失败。
+- 严格实现后出现新问题，故没有继续改产品代码、没有重试、没有执行业务五题，也没有
+  构建或部署候选镜像。
+
+最终状态、可观察边界和证据索引见：
+
+- `docs/progress/wb08r-03g-v14-1-c5-d3-report.md`
+- `docs/progress/wb08r-03g-v14-1-c5-d3-p0-issues.md`
+- `docs/progress/wb08r-03g-v14-1-c5-d3-manifest.json`
