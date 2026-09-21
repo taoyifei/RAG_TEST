@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from rag_app.core.models.retrieval import EvidenceItem
 
 EVIDENCE_IDENTITY_REVISION = "wb08r-source-key-v1"
-PREPARED_PACKET_REVISION = "wb08r-prepared-packet-v4"
+PREPARED_PACKET_REVISION = "wb08r-prepared-packet-v5"
 GENERATION_BUDGET_REVISION = "wb08r-generation-budget-v3"
 _SHA256_TEXT_LENGTH = len("sha256:") + 64
 
@@ -141,6 +141,9 @@ class PreparedGenerationPacket(FrozenModel):
     evidence_identity_revision: str = EVIDENCE_IDENTITY_REVISION
     budget_revision: str = GENERATION_BUDGET_REVISION
     schema_revision: str
+    schema_sha256: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
     evidence_level: Literal[
         "PREPARATION_REJECTED", "TRANSPORT_PREPARED", "TRANSPORT_SENT"
     ]

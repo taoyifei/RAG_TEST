@@ -2,15 +2,57 @@
 
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from rag_app.adapters.providers.grounded_wire import (
     GroundedWireError,
+    grounded_wire_schema,
     parse_grounded_wire,
 )
 
 _ATOMS = frozenset({"A1", "A2"})
 _REFS = {"A1": frozenset({"E1", "E2"}), "A2": frozenset({"E3"})}
+
+
+def _schema_atom_enum(schema: dict[str, object]) -> list[str]:
+    claim = schema["$defs"]["GroundedWireClaim"]  # type: ignore[index]
+    properties = claim["properties"]  # type: ignore[index]
+    return properties["atom_id"]["enum"]  # type: ignore[index,return-value]
+
+
+def test_request_scoped_schema_mutates_ref_target_without_shared_state() -> (
+    None
+):
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        schemas = tuple(
+            executor.map(
+                grounded_wire_schema,
+                (("A1",), ("A1", "A3"), ("A2", "A4")),
+            )
+        )
+
+    assert [_schema_atom_enum(schema) for schema in schemas] == [
+        ["A1"],
+        ["A1", "A3"],
+        ["A2", "A4"],
+    ]
+    assert schemas[0]["properties"]["claims"]["items"] == {  # type: ignore[index]
+        "$ref": "#/$defs/GroundedWireClaim"
+    }
+    _schema_atom_enum(schemas[0]).append("A4")
+    assert _schema_atom_enum(grounded_wire_schema(("A1",))) == ["A1"]
+    assert "uniqueItems" not in json.dumps(schemas, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("atom_ids", [(), ("A5",), ("A1", "A5")])
+def test_request_scoped_schema_rejects_invalid_atom_set(
+    atom_ids: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match="Atom 集合无效"):
+        grounded_wire_schema(atom_ids)
 
 
 def test_complete_json_fence_is_the_only_tolerated_wrapper() -> None:

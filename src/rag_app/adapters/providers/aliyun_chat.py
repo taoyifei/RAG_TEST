@@ -23,7 +23,7 @@ from rag_app.adapters.providers.generation_packet import (
 )
 from rag_app.adapters.providers.grounded_wire import (
     GroundedWireError,
-    GroundedWirePayload,
+    grounded_wire_schema,
     parse_grounded_wire,
 )
 from rag_app.adapters.providers.http_common import (
@@ -1059,6 +1059,26 @@ def _continuous_source_unit(
     return {candidate.support_id for candidate in units}
 
 
+def _natural_atom_ids(request: GenerationRequest) -> tuple[str, ...]:
+    """返回本次自然生成真实发送且保持 QueryPlan 顺序的 Atom。"""
+    plan = request.query_plan
+    if plan is None:
+        return ()
+    requested_ids = (
+        set(request.repair_atom_ids)
+        if request.repair_atom_ids
+        else set(request.execution_atom_ids)
+        if request.execution_atom_ids
+        else {atom.atom_id for atom in plan.atoms}
+    )
+    atom_ids = tuple(
+        atom.atom_id for atom in plan.atoms if atom.atom_id in requested_ids
+    )
+    if not atom_ids:
+        raise ValueError("自然生成没有可发送的 Atom。")
+    return atom_ids
+
+
 def _priority_reading_units(
     request: GenerationRequest,
     candidates: tuple[EvidenceItem, ...],
@@ -1079,11 +1099,7 @@ def _priority_reading_units(
     """
     if request.query_plan is None:
         return []
-    requested_ids = (
-        set(request.repair_atom_ids)
-        or set(request.execution_atom_ids)
-        or {atom.atom_id for atom in request.query_plan.atoms}
-    )
+    requested_ids = set(_natural_atom_ids(request))
     by_key = {stable_support_key(item): item for item in candidates}
     admitted_ids = {item.support_id for item in candidates}
     units: list[tuple[str, set[str]]] = []
@@ -1127,13 +1143,7 @@ def _prepare_natural_messages(  # noqa: PLR0915
     matrix = request.atom_support_matrix
     if plan is None or matrix is None:
         raise ValueError("自然生成缺少 QueryPlan 或支持矩阵。")
-    requested_ids = (
-        set(request.repair_atom_ids)
-        if request.repair_atom_ids
-        else set(request.execution_atom_ids)
-        if request.execution_atom_ids
-        else {atom.atom_id for atom in plan.atoms}
-    )
+    requested_ids = set(_natural_atom_ids(request))
     atoms = tuple(atom for atom in plan.atoms if atom.atom_id in requested_ids)
     linked_ids = _natural_allowance(request)
     admitted_ids = {item.support_id for item in request.evidence}
@@ -1456,13 +1466,14 @@ def _atom_source_contexts(
     return tuple(contexts)
 
 
-def _prepared_packet(
+def _prepared_packet(  # noqa: PLR0913
     request: GenerationRequest,
     prepared: _PreparedMessages,
     *,
     max_input_tokens: int,
     max_output_tokens: int,
     schema_tokens: int,
+    schema_sha256: str | None,
 ) -> tuple[GenerationRequest, PreparedGenerationPacket]:
     """从最终消息构建权威 registry，并把后续引用校验限制到真实发送集。"""
     sent_ids = {item.support_id for item in prepared.evidence}
@@ -1546,9 +1557,15 @@ def _prepared_packet(
         request_id=request.request_id,
         attempt_id=request.attempt_id,
         packet_id=canonical_sha256(
-            (request.request_id, request.attempt_id, messages_hash)
+            (
+                request.request_id,
+                request.attempt_id,
+                messages_hash,
+                schema_sha256,
+            )
         ),
         schema_revision=GROUNDED_CLAIM_SCHEMA_REVISION,
+        schema_sha256=schema_sha256,
         evidence_level=(
             "PREPARATION_REJECTED"
             if prepared.input_budget_exceeded
@@ -2225,22 +2242,35 @@ class AliyunChatAdapter:
         messages: tuple[ChatMessage, ...],
         *,
         max_output_tokens: int,
+        json_schema: Mapping[str, object],
     ) -> ChatCompletion:
         """默认兼容 Provider 用一次普通 JSON 请求生成自然 Claim。"""
+        del json_schema
         return self.complete(messages, max_output_tokens=max_output_tokens)
 
-    def _natural_schema_tokens(self) -> int:
+    def _natural_schema_tokens(self, json_schema: Mapping[str, object]) -> int:
         """没有额外传输 Schema 的兼容模式不重复估算 Prompt 内协议。"""
+        del json_schema
         return 0
 
     def _prepare_generation(
         self, request: GenerationRequest
     ) -> tuple[
-        tuple[ChatMessage, ...], GenerationRequest, PreparedGenerationPacket
+        tuple[ChatMessage, ...],
+        GenerationRequest,
+        PreparedGenerationPacket,
+        dict[str, object] | None,
     ]:
         """一次性固定消息、来源和含安全余量的输入预算。"""
+        json_schema = (
+            grounded_wire_schema(_natural_atom_ids(request))
+            if request.query_plan is not None
+            else None
+        )
         schema_tokens = (
-            self._natural_schema_tokens() if request.query_plan else 0
+            self._natural_schema_tokens(json_schema)
+            if json_schema is not None
+            else 0
         )
         budget = (
             self.config.max_input_tokens
@@ -2281,6 +2311,11 @@ class AliyunChatAdapter:
             max_input_tokens=self.config.max_input_tokens,
             max_output_tokens=self.config.max_output_tokens,
             schema_tokens=schema_tokens,
+            schema_sha256=(
+                canonical_sha256(json_schema)
+                if json_schema is not None
+                else None
+            ),
         )
         if prepared.input_budget_exceeded:
             raise packet_failure(
@@ -2291,7 +2326,7 @@ class AliyunChatAdapter:
                 ),
                 packet,
             )
-        return prepared.messages, narrowed, packet
+        return prepared.messages, narrowed, packet, json_schema
 
     def generate(self, request: GenerationRequest) -> AnswerDraft:
         """生成轻量 Wire 草稿，来源绑定与语义许可仍由应用负责。
@@ -2308,12 +2343,17 @@ class AliyunChatAdapter:
         """
         if not request.evidence:
             raise ValueError("生成不能接受空证据包。")
-        messages, request, packet = self._prepare_generation(request)
+        messages, request, packet, json_schema = self._prepare_generation(
+            request
+        )
         if request.query_plan is not None:
+            if json_schema is None:
+                raise RuntimeError("自然生成缺少本次 Atom 输出 Schema。")
             with generation_packet_scope(packet) as capture:
                 completion = self._complete_natural(
                     messages,
                     max_output_tokens=packet.reserved_output_tokens,
+                    json_schema=json_schema,
                 )
             try:
                 result = parse_grounded_wire(
@@ -2342,6 +2382,7 @@ class AliyunChatAdapter:
                     accepted_item_count=0,
                     rejected_item_count=0,
                     failure=error,
+                    schema_sha256=capture.packet.schema_sha256,
                 ).model_copy(
                     update={
                         "status_category": "RESPONSE_CONTRACT",
@@ -2361,6 +2402,7 @@ class AliyunChatAdapter:
                 completion,
                 accepted_item_count=len(result.claims),
                 rejected_item_count=len(result.diagnostics),
+                schema_sha256=capture.packet.schema_sha256,
             )
             return AnswerDraft(
                 text="\n".join(claim.text for claim in result.claims)
@@ -2446,7 +2488,9 @@ class AliyunChatAdapter:
             if cancellation.is_cancelled():
                 raise QueryCancelled("QUERY_CANCELLED")
             return self.generate(request)
-        messages, request, packet = self._prepare_generation(request)
+        messages, request, packet, _json_schema = self._prepare_generation(
+            request
+        )
         parser = IncrementalClaimsParser(
             max_claims=_MAX_CLAIMS,
             max_buffer_chars=_MAX_CONTENT_CHARS,
@@ -2739,15 +2783,14 @@ def _wire_observed_call(
     accepted_item_count: int,
     rejected_item_count: int,
     failure: GroundedWireError | None = None,
+    schema_sha256: str | None = None,
 ) -> ProviderCall:
     """记录足以定位协议形状、但不能恢复模型正文的安全摘要。"""
     diagnostics: dict[str, object] = {
         **dict(completion.call.transport_diagnostics),
         "wire_response": {
             "schema_revision": GROUNDED_CLAIM_SCHEMA_REVISION,
-            "schema_hash": canonical_sha256(
-                GroundedWirePayload.model_json_schema()
-            ),
+            "schema_hash": schema_sha256,
             "finish_reason": completion.finish_reason,
             "content_length": len(completion.content),
             "content_hash": canonical_sha256(completion.content),

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
 
@@ -32,6 +33,67 @@ class GroundedWirePayload(FrozenModel):
     """供 Provider structured output 使用的唯一根 Schema。"""
 
     claims: tuple[GroundedWireClaim, ...] = Field(max_length=_MAX_CLAIMS)
+
+
+_GROUNDED_WIRE_SCHEMA_TEMPLATE = GroundedWirePayload.model_json_schema()
+_KNOWN_ATOM_IDS = frozenset({"A1", "A2", "A3", "A4"})
+
+
+def _schema_object(value: object, path: str) -> dict[str, object]:
+    """读取受控 Schema 节点并在内部结构漂移时立即失败。"""
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Grounded Wire Schema 节点无效：{path}")
+    return value
+
+
+def _local_schema_target(
+    schema: dict[str, object], reference: str
+) -> dict[str, object]:
+    """解析同一 Schema 内的 JSON Pointer，避免误改 `$ref` 外壳。"""
+    if not reference.startswith("#/"):
+        raise RuntimeError("Grounded Wire Schema 只允许本地引用。")
+    target: object = schema
+    for raw_part in reference[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        target = _schema_object(target, reference).get(part)
+    return _schema_object(target, reference)
+
+
+def grounded_wire_schema(
+    allowed_atom_ids: Collection[str],
+) -> dict[str, object]:
+    """生成只允许本次真实发送 Atom 的独立输出 Schema。
+
+    Args:
+        allowed_atom_ids: 本次发送消息中存在的 Atom ID 集合。
+
+    Returns:
+        深复制的 Schema；`atom_id` enum 位于 Claim 的真实 `$ref` 目标。
+
+    Raises:
+        ValueError: 集合为空或包含协议外 Atom ID。
+        RuntimeError: Pydantic 生成的固定 Schema 结构发生不可兼容漂移。
+
+    """
+    atom_ids = tuple(sorted(set(allowed_atom_ids)))
+    if not atom_ids or not set(atom_ids) <= _KNOWN_ATOM_IDS:
+        raise ValueError("Grounded Wire Schema 的 Atom 集合无效。")
+    schema = deepcopy(_GROUNDED_WIRE_SCHEMA_TEMPLATE)
+    properties = _schema_object(schema.get("properties"), "properties")
+    claims = _schema_object(properties.get("claims"), "properties.claims")
+    items = _schema_object(claims.get("items"), "properties.claims.items")
+    reference = items.get("$ref")
+    if not isinstance(reference, str):
+        raise RuntimeError("Grounded Wire Claim 缺少本地 `$ref`。")
+    claim_schema = _local_schema_target(schema, reference)
+    claim_properties = _schema_object(
+        claim_schema.get("properties"), f"{reference}.properties"
+    )
+    atom_schema = _schema_object(
+        claim_properties.get("atom_id"), f"{reference}.properties.atom_id"
+    )
+    atom_schema["enum"] = list(atom_ids)
+    return schema
 
 
 class GroundedWireError(ValueError):

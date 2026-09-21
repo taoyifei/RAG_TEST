@@ -29,7 +29,6 @@ from rag_app.adapters.providers.generation_packet import (
     complete_generation_transport,
     observe_generation_transport,
 )
-from rag_app.adapters.providers.grounded_wire import GroundedWirePayload
 from rag_app.adapters.providers.http_common import (
     ProviderHttpClient,
     ProviderHttpError,
@@ -467,22 +466,23 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         messages: tuple[ChatMessage, ...],
         *,
         max_output_tokens: int,
+        json_schema: Mapping[str, object],
     ) -> ChatCompletion:
         """按已探测的唯一 Schema 协议执行自然 Claim 生成。"""
         return self.complete(
             messages,
             max_output_tokens=max_output_tokens,
-            json_schema=GroundedWirePayload.model_json_schema(),
+            json_schema=json_schema,
             schema_revision=GROUNDED_CLAIM_SCHEMA_REVISION,
         )
 
-    def _natural_schema_tokens(self) -> int:
+    def _natural_schema_tokens(self, json_schema: Mapping[str, object]) -> int:
         """计入消息外发送的输出 Schema 输入开销。"""
         if self._compatible_config.structured_output_mode == "none":
             return 0
         return _schema_payload_tokens(
             _structured_schema_fields(
-                GroundedWirePayload.model_json_schema(),
+                json_schema,
                 mode=self._compatible_config.structured_output_mode,
                 revision=GROUNDED_CLAIM_SCHEMA_REVISION,
             )

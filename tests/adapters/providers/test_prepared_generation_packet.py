@@ -67,6 +67,33 @@ def _request(*texts: str) -> GenerationRequest:
     )
 
 
+def _three_atom_request() -> GenerationRequest:
+    """构造计划连续、实际只发送 A1/A3 的非连续执行范围。"""
+    evidence = _evidence(
+        "甲部门保存记录。",
+        "乙部门复核记录。",
+        "丙部门归档记录。",
+    )
+    plan = _plan("甲部门", "乙部门", "丙部门")
+    return GenerationRequest(
+        query=plan.standalone_query,
+        evidence=evidence,
+        citation_protocol="support-id-v3-quoted-natural-claims",
+        query_plan=plan,
+        atom_support_matrix=_matrix(
+            plan,
+            tuple(
+                (AtomStatus.PARTIAL, (item.support_id,)) for item in evidence
+            ),
+        ),
+        per_atom_candidate_support_ids=tuple(
+            (atom.atom_id, (item.support_id,))
+            for atom, item in zip(plan.atoms, evidence, strict=True)
+        ),
+        execution_atom_ids=("A1", "A3"),
+    )
+
+
 def test_source_identity_does_not_merge_different_story() -> None:
     item = _evidence("甲部门保存记录。")[0]
     span = item.source_spans[0]
@@ -391,11 +418,122 @@ def test_compatible_natural_packet_matches_actual_schema_body(
     assert packet.transport_body_sha256 == canonical_sha256(payloads[0])
     assert packet.messages_sha256 == canonical_sha256(payloads[0]["messages"])
     assert packet.schema_tokens > 0
+    schema = payloads[0]["response_format"]["json_schema"]["schema"]
+    assert schema["$defs"]["GroundedWireClaim"]["properties"]["atom_id"][
+        "enum"
+    ] == ["A1"]
+    assert packet.schema_sha256 == canonical_sha256(schema)
+    assert "uniqueItems" not in json.dumps(schema)
     assert packet.observed_prompt_tokens == 700
     assert packet.estimate_error_tokens == 700 - packet.estimated_input_tokens
     assert packet.attempt_id == request.attempt_id
     assert packet.request_id == request.request_id
     assert "甲部门" not in packet.model_dump_json()
+
+
+def test_a1_schema_rejects_out_of_scope_model_atoms_without_network_error() -> (
+    None
+):
+    payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json=_response(
+                '{"claims":['
+                '{"atom_id":"A2","text":"越界二","refs":["E1"]},'
+                '{"atom_id":"A3","text":"越界三","refs":["E1"]},'
+                '{"atom_id":"A4","text":"越界四","refs":["E1"]}'
+                "]}",
+                model="synthetic-model",
+            ),
+        )
+
+    adapter = OpenAICompatibleChatAdapter(
+        OpenAICompatibleChatConfig(
+            model="synthetic-model",
+            egress_allowed=True,
+            structured_output_mode="response_format",
+        ),
+        http_client=ProviderHttpClient(
+            "https://provider.example",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            max_attempts=1,
+            defer_success_observation=True,
+        ),
+        api_key_resolver=lambda: "",
+    )
+    try:
+        draft = adapter.generate(_request("甲部门保存记录。"))
+    finally:
+        adapter.close()
+
+    schema = payloads[0]["response_format"]["json_schema"]["schema"]
+    atom_schema = schema["$defs"]["GroundedWireClaim"]["properties"]["atom_id"]
+    assert atom_schema["enum"] == ["A1"]
+    assert draft.wire_claims == ()
+    assert draft.reason_code == "GENERATION_ITEMS_REJECTED"
+    assert [item.failure_code for item in draft.wire_diagnostics] == [
+        "UNKNOWN_ATOM",
+        "UNKNOWN_ATOM",
+        "UNKNOWN_ATOM",
+    ]
+    assert draft.provider_calls[0].status_category == "SUCCESS"
+    assert draft.provider_calls[0].reason_code == "OK"
+
+
+def test_noncontiguous_a1_a3_scope_is_used_by_schema_and_parser() -> None:
+    payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        sent = json.loads(payload["messages"][1]["content"])
+        claims = [
+            {
+                "atom_id": atom["atom_id"],
+                "text": f"{atom['atom_id']}事实",
+                "refs": [atom["allowed_ref_ids"][0]],
+            }
+            for atom in sent["atoms"]
+        ]
+        return httpx.Response(
+            200,
+            json=_response(
+                json.dumps({"claims": claims}, ensure_ascii=False),
+                model="synthetic-model",
+            ),
+        )
+
+    adapter = OpenAICompatibleChatAdapter(
+        OpenAICompatibleChatConfig(
+            model="synthetic-model",
+            egress_allowed=True,
+            structured_output_mode="response_format",
+        ),
+        http_client=ProviderHttpClient(
+            "https://provider.example",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            max_attempts=1,
+            defer_success_observation=True,
+        ),
+        api_key_resolver=lambda: "",
+    )
+    try:
+        draft = adapter.generate(_three_atom_request())
+    finally:
+        adapter.close()
+
+    schema = payloads[0]["response_format"]["json_schema"]["schema"]
+    atom_enum = schema["$defs"]["GroundedWireClaim"]["properties"]["atom_id"][
+        "enum"
+    ]
+    assert atom_enum == ["A1", "A3"]
+    assert [claim.atom_id for claim in draft.wire_claims] == ["A1", "A3"]
+    assert draft.wire_diagnostics == ()
+    assert draft.prepared_packet is not None
+    assert draft.prepared_packet.schema_sha256 == canonical_sha256(schema)
 
 
 def test_stream_packet_uses_same_message_registry(tmp_path: Path) -> None:
