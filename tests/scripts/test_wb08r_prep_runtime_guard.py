@@ -89,7 +89,7 @@ def _container(*, candidate: bool) -> dict[str, object]:
                 ["wanshitong-prep-candidate-app", "app"]
                 if candidate
                 else ["wanshitong-app"]
-            )
+            ),
         },
         "egress": {
             "NetworkID": "b" * 64,
@@ -97,7 +97,7 @@ def _container(*, candidate: bool) -> dict[str, object]:
                 ["wanshitong-prep-candidate-app", "app"]
                 if candidate
                 else ["wanshitong-app"]
-            )
+            ),
         },
     }
     config = _config("candidate" if candidate else "baseline")
@@ -173,9 +173,7 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def _inputs(
-    tmp_path: Path, candidate: object
-) -> tuple[Path, Path, Path]:
+def _inputs(tmp_path: Path, candidate: object) -> tuple[Path, Path, Path]:
     baseline = tmp_path / "baseline.json"
     candidate_path = tmp_path / "candidate.json"
     image = tmp_path / "image.json"
@@ -204,6 +202,69 @@ def test_rendered_candidate_preserves_semantics_and_isolates_writes(
     assert report["semantic_mismatches"] == []
     assert report["mount_mismatches"] == []
     assert len(report["allowed_changes"]) >= 5
+
+
+def test_phase04_allows_only_explicit_department_shadow_enable(
+    tmp_path: Path,
+) -> None:
+    rendered = _rendered()
+    rendered["services"]["app"]["environment"][
+        "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+    ] = "true"
+    baseline, candidate, image = _inputs(tmp_path, rendered)
+
+    rejected = guard.compare_runtime(
+        stage="rendered_spec",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+    )
+    accepted = guard.compare_runtime(
+        stage="rendered_spec",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+        allow_department_shadow_enable=True,
+    )
+
+    assert rejected["ready"] is False
+    assert rejected["unclassified_changes"][0]["field_path"] == (
+        "services.app.environment.RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+    )
+    assert accepted["ready"] is True
+    assert any(
+        item["field_path"].endswith("RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED")
+        for item in accepted["allowed_changes"]
+    )
+
+
+def test_phase04_rejects_declared_shadow_enable_without_true_value(
+    tmp_path: Path,
+) -> None:
+    rendered = _rendered()
+    rendered["services"]["app"]["environment"][
+        "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+    ] = "false"
+    baseline, candidate, image = _inputs(tmp_path, rendered)
+
+    report = guard.compare_runtime(
+        stage="rendered_spec",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+        allow_department_shadow_enable=True,
+    )
+
+    assert report["ready"] is False
+    assert report["semantic_mismatches"][0]["field_path"].endswith(
+        "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+    )
 
 
 def test_rendered_candidate_reports_exact_missing_key_and_mount(
@@ -296,10 +357,12 @@ def test_write_candidate_environment_is_private_and_uses_baseline(
         secret_directory=PurePosixPath("/baseline/secrets"),
         internal_network="internal",
         egress_network="egress",
+        department_shadow_enabled=True,
     )
 
     content = output.read_text(encoding="utf-8")
     assert "RAG_PRODUCT_MODE='wanshitong'" in content
     assert "CANDIDATE_DATA_DIR='/candidate/data'" in content
     assert "WANSHITONG_SECRET_DIR='/baseline/secrets'" in content
+    assert "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED='true'" in content
     assert stat.S_IMODE(output.stat().st_mode) == 0o600

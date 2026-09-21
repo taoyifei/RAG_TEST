@@ -24,6 +24,7 @@ _BASE_IMAGE_LABELS = (
     "org.opencontainers.image.base.digest",
     "org.opencontainers.image.base.name",
 )
+_DEPARTMENT_SHADOW_KEY = "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
 
 
 def _load_json(path: Path) -> object:
@@ -89,17 +90,11 @@ class _Report:
     """累积不泄露原值的字段级比较结果。"""
 
     stage: Stage
-    missing_required_keys: list[dict[str, object]] = field(
-        default_factory=list
-    )
-    semantic_mismatches: list[dict[str, object]] = field(
-        default_factory=list
-    )
+    missing_required_keys: list[dict[str, object]] = field(default_factory=list)
+    semantic_mismatches: list[dict[str, object]] = field(default_factory=list)
     mount_mismatches: list[dict[str, object]] = field(default_factory=list)
     allowed_changes: list[dict[str, object]] = field(default_factory=list)
-    unclassified_changes: list[dict[str, object]] = field(
-        default_factory=list
-    )
+    unclassified_changes: list[dict[str, object]] = field(default_factory=list)
 
     def add_problem(
         self,
@@ -198,22 +193,54 @@ def _compare_environment(
     report: _Report,
     baseline: dict[str, str],
     candidate: dict[str, str],
+    *,
+    allow_department_shadow_enable: bool = False,
 ) -> None:
-    for key in sorted(set(baseline) - set(candidate)):
+    ignored_keys: set[str] = set()
+    if allow_department_shadow_enable:
+        baseline_value = baseline.get(_DEPARTMENT_SHADOW_KEY)
+        candidate_value = candidate.get(_DEPARTMENT_SHADOW_KEY)
+        ignored_keys.add(_DEPARTMENT_SHADOW_KEY)
+        if baseline_value not in (None, "false"):
+            report.add_problem(
+                "semantic_mismatches",
+                f"services.app.environment.{_DEPARTMENT_SHADOW_KEY}",
+                "部门 Shadow 基准必须缺省或显式关闭。",
+                baseline=baseline_value,
+                candidate=candidate_value,
+            )
+        elif candidate_value != "true":
+            report.add_problem(
+                "semantic_mismatches",
+                f"services.app.environment.{_DEPARTMENT_SHADOW_KEY}",
+                "本批已声明启用部门 Shadow，但候选最终值不是 true。",
+                baseline=baseline_value,
+                candidate=candidate_value,
+            )
+        else:
+            report.allow(
+                f"services.app.environment.{_DEPARTMENT_SHADOW_KEY}",
+                "阶段 04 只启用观察型部门 Shadow，不改变实际检索范围。",
+                baseline=baseline_value,
+                candidate=candidate_value,
+            )
+    baseline_keys = set(baseline) - ignored_keys
+    candidate_keys = set(candidate) - ignored_keys
+    for key in sorted(baseline_keys - candidate_keys):
         report.add_problem(
             "missing_required_keys",
             f"services.app.environment.{key}",
             "基准有效应用键未进入候选最终环境。",
             baseline=baseline[key],
         )
-    for key in sorted(set(candidate) - set(baseline)):
+    for key in sorted(candidate_keys - baseline_keys):
         report.add_problem(
             "unclassified_changes",
             f"services.app.environment.{key}",
             "候选新增应用键未在本批差异清单中声明。",
             candidate=candidate[key],
         )
-    for key in sorted(set(baseline) & set(candidate)):
+    for key in sorted(baseline_keys & candidate_keys):
         report.compare(
             f"services.app.environment.{key}",
             baseline[key],
@@ -353,7 +380,7 @@ def _rendered_ports(service: dict[str, Any]) -> list[dict[str, object]]:
 
 
 def _created_ports(container: dict[str, Any]) -> list[dict[str, object]]:
-    result = []
+    result: list[dict[str, object]] = []
     for target, bindings in container["HostConfig"]["PortBindings"].items():
         target_port, protocol = target.split("/", 1)
         result.extend(
@@ -656,6 +683,7 @@ def compare_runtime(  # noqa: PLR0913
     target_image_inspect: Path,
     candidate_root: PurePosixPath,
     forbidden_root: PurePosixPath,
+    allow_department_shadow_enable: bool = False,
 ) -> dict[str, object]:
     """比较候选描述或创建后容器，返回无秘密的字段级报告。
 
@@ -666,6 +694,7 @@ def compare_runtime(  # noqa: PLR0913
         target_image_inspect: 本批目标镜像 inspect JSON。
         candidate_root: 本批独立宿主根目录。
         forbidden_root: 不得写入的生产宿主根目录。
+        allow_department_shadow_enable: 是否允许唯一的 Shadow 开关启用差异。
 
     Returns:
         含逐类差异、各层摘要和 `ready` 判定的安全报告。
@@ -703,7 +732,10 @@ def compare_runtime(  # noqa: PLR0913
         candidate_mounts = _created_mounts(candidate)
         _compare_created_runtime(report, baseline, candidate, target_image)
     _compare_environment(
-        report, baseline_environment, candidate_environment
+        report,
+        baseline_environment,
+        candidate_environment,
+        allow_department_shadow_enable=allow_department_shadow_enable,
     )
     _compare_mounts(
         report,
@@ -717,9 +749,7 @@ def compare_runtime(  # noqa: PLR0913
         stage: _digest(candidate_payload),
         "target_image": _digest(target_image),
         "baseline_application_environment": _digest(baseline_environment),
-        "candidate_application_environment": _digest(
-            candidate_environment
-        ),
+        "candidate_application_environment": _digest(candidate_environment),
     }
     return report.result(layer_sha256)
 
@@ -739,6 +769,7 @@ def write_candidate_environment(  # noqa: PLR0913
     secret_directory: PurePosixPath,
     internal_network: str,
     egress_network: str,
+    department_shadow_enabled: bool = False,
 ) -> None:
     """从旧 8289 最终环境生成权限受限的唯一候选环境文件。
 
@@ -750,6 +781,7 @@ def write_candidate_environment(  # noqa: PLR0913
         secret_directory: 已批准的只读 Secret 宿主目录。
         internal_network: 既有内部网络精确名称。
         egress_network: 既有出口网络精确名称。
+        department_shadow_enabled: 是否显式启用阶段 04 观察型 Shadow。
 
     Raises:
         FileExistsError: 输出文件已存在时抛出。
@@ -762,15 +794,18 @@ def write_candidate_environment(  # noqa: PLR0913
     )
     if not environment or "RAG_PRODUCT_MODE" not in environment:
         raise ValueError("BASELINE_APPLICATION_ENVIRONMENT_INCOMPLETE")
+    if department_shadow_enabled:
+        baseline_shadow = environment.get(_DEPARTMENT_SHADOW_KEY)
+        if baseline_shadow not in (None, "false"):
+            raise ValueError("BASELINE_DEPARTMENT_SHADOW_NOT_DISABLED")
+        environment[_DEPARTMENT_SHADOW_KEY] = "true"
     interpolation = {
         "RAG_APP_IMAGE": image,
         "CANDIDATE_BIND_ADDRESS": "127.0.0.1",
         "CANDIDATE_PORT": "8289",
         "CANDIDATE_DATA_DIR": str(candidate_root / "data"),
         "CANDIDATE_LOG_DIR": str(candidate_root / "logs"),
-        "CANDIDATE_DIAGNOSTIC_DIR": str(
-            candidate_root / "private-diagnostics"
-        ),
+        "CANDIDATE_DIAGNOSTIC_DIR": str(candidate_root / "private-diagnostics"),
         "WANSHITONG_SECRET_DIR": str(secret_directory),
         "WANSHITONG_INTERNAL_NETWORK": internal_network,
         "WANSHITONG_EGRESS_NETWORK": egress_network,
@@ -817,6 +852,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     write_env.add_argument("--internal-network", required=True)
     write_env.add_argument("--egress-network", required=True)
+    write_env.add_argument(
+        "--department-shadow-enabled",
+        action="store_true",
+    )
 
     compare = subparsers.add_parser("compare")
     compare.add_argument(
@@ -830,6 +869,10 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate-root", type=PurePosixPath, required=True)
     compare.add_argument("--forbidden-root", type=PurePosixPath, required=True)
     compare.add_argument("--output", type=Path, required=True)
+    compare.add_argument(
+        "--allow-department-shadow-enable",
+        action="store_true",
+    )
     return parser
 
 
@@ -845,6 +888,7 @@ def main(argv: list[str] | None = None) -> int:
             secret_directory=arguments.secret_directory,
             internal_network=arguments.internal_network,
             egress_network=arguments.egress_network,
+            department_shadow_enabled=arguments.department_shadow_enabled,
         )
         return 0
     report = compare_runtime(
@@ -854,6 +898,9 @@ def main(argv: list[str] | None = None) -> int:
         target_image_inspect=arguments.target_image_inspect,
         candidate_root=arguments.candidate_root,
         forbidden_root=arguments.forbidden_root,
+        allow_department_shadow_enable=(
+            arguments.allow_department_shadow_enable
+        ),
     )
     _write_report(arguments.output, report)
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))

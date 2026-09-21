@@ -75,6 +75,12 @@ image_inspect="${evidence_dir}/candidate.image.private.json"
 rendered_guard="${evidence_dir}/candidate.rendered.guard.safe.json"
 created_inspect="${evidence_dir}/candidate.created.private.json"
 created_guard="${evidence_dir}/candidate.created.guard.safe.json"
+shadow_guard_args=()
+if grep -Eq \
+  "^RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED=(true|'true'|\"true\")$" \
+  "${env_file}"; then
+  shadow_guard_args+=(--allow-department-shadow-enable)
+fi
 
 report_ready() {
   python3 - "$1" <<'PY'
@@ -109,6 +115,7 @@ PY
       --target-image-inspect "${image_inspect}" \
       --candidate-root "${candidate_root}" \
       --forbidden-root /data/tyf/wanshitong \
+      "${shadow_guard_args[@]}" \
       --output "${rendered_guard}"
     ;;
   create)
@@ -127,6 +134,7 @@ PY
       --target-image-inspect "${image_inspect}" \
       --candidate-root "${candidate_root}" \
       --forbidden-root /data/tyf/wanshitong \
+      "${shadow_guard_args[@]}" \
       --output "${created_guard}"
     ;;
   start)
