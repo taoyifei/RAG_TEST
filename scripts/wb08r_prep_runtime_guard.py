@@ -402,7 +402,12 @@ def _extra_hosts_from_rendered(service: dict[str, Any]) -> set[str]:
     value = service.get("extra_hosts", {})
     if isinstance(value, dict):
         return {f"{key}:{item}" for key, item in value.items()}
-    return {str(item) for item in value}
+    result: set[str] = set()
+    for item in value:
+        text = str(item)
+        host, separator, address = text.partition("=")
+        result.add(f"{host}:{address}" if separator else text)
+    return result
 
 
 def _compare_image_contract(

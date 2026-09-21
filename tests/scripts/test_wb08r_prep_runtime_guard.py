@@ -157,9 +157,7 @@ def _rendered() -> dict[str, object]:
                 "cap_drop": ["ALL"],
                 "security_opt": ["no-new-privileges:true"],
                 "restart": "unless-stopped",
-                "extra_hosts": {
-                    "host.docker.internal": "host-gateway",
-                },
+                "extra_hosts": ["host.docker.internal=host-gateway"],
             }
         },
         "networks": {
