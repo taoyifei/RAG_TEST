@@ -1,55 +1,52 @@
-# WB-08R SSO 接入准备清单 v1.3
+# WB-08R 准备阶段 SSO 登记清单（CAS Ticket v1.3）
 
-状态：`EXTERNAL_INPUT_PENDING`
+状态：`REGISTRATION_INPUTS_PENDING`
 
-用途：只登记联调前置条件，不表示已完成注册、网络开通或安全验收。
+用途：登记阶段 SSO 的真实外部输入，不代表已完成注册、联调或安全验收。
 
-## 身份平台登记
+## 已确定的协议
 
-| 项目 | 待确认内容 | 当前状态 | 建议责任方 |
+- 身份源为 RDMS（RuoYi），KB 为 SP。
+- 本期使用 CAS 式一次性 Ticket，不引入 OIDC、SAML 或 IAM。
+- 用户名和密码只进入 RDMS；KB 不直连密码表，也不建立用户表。
+- RDMS 在 `sys_sso_client` 登记应用，`service_urls` 以逗号分隔多个精确回调。
+- KB 只从后端调用 `/sso/validate`，不读取 IdP Redis。
+- 本期不要求 JWKS、discovery、refresh token、MFA、统一角色映射平台或实时 SLO。
+
+## 需要外部提供的信息
+
+| 项目 | 要填的实际值 | 当前状态 | 责任方 |
 | --- | --- | --- | --- |
-| 协议与租户 | OIDC / SAML、租户或 Realm、环境名称 | 未确认 | 身份平台负责人 |
-| Issuer 与发现地址 | Issuer、OIDC discovery 或 SAML metadata 地址 | 未确认 | 身份平台负责人 |
-| 授权端点 | authorization、token、userinfo、JWKS 端点 | 未确认 | 身份平台负责人 |
-| Client 标识 | 测试与生产 Client ID 分离策略 | 未确认 | 身份平台负责人 |
-| Client 密钥 | 生成、密文交付、轮换和吊销流程 | 未确认；不得写入 Git | 身份平台负责人 / 运维 |
-| 回调地址 | 登录 redirect URI；测试与生产分别登记 | 未确认 | 应用负责人 / 身份平台负责人 |
-| 登出地址 | post-logout redirect URI、单点登出能力 | 未确认 | 应用负责人 / 身份平台负责人 |
-| 签名与证书 | 签名算法、证书/JWKS 轮换提前量、校验责任 | 未确认 | 身份平台负责人 / 安全 |
+| RDMS 浏览器 authorize URL | 浏览器可达的完整 `/sso/authorize` URL | 待提供 | RDMS / 网关 |
+| RDMS 后端 validate URL | 后端直连 21000 或实际 `/prod-api/sso/validate` 完整 URL | 待提供 | RDMS / 网络 |
+| `clientId` | 已登记的 KB 应用 ID；明确测试与生产是否分别注册 | 待登记 | RDMS 管理员 |
+| `clientSecret` 交付 | 只记录安全注入来源和是否到位，不填写明文 | 待提供 | RDMS / 部署负责人 |
+| 8289 浏览器 origin | 实际 scheme、host 和 port，不按容器地址猜测 | 待确认 | KB 负责人 |
+| 8289 callback | `<测试浏览器 origin>/kb/sso/callback` | 待登记 | 双方 |
+| 正式浏览器 origin | 以用户实际访问的 18288 或正式域名为准 | 待确认 | KB / 网关 |
+| 正式 callback | `<正式浏览器 origin>/kb/sso/callback` | 待登记 | 双方 |
+| 外网 origin | 无外网环境时明确写本期不实测 | 待确认 / 可后置 | 网关 |
+| 可信代理与前缀 | 哪一跳处理 `/kb`，保留哪个 host 和 proto | 待确认 | 部署负责人 |
+| 两个测试账号 | 只记录可用性，不保存密码；先验证能登录 RDMS | 待提供 | RDMS 管理员 |
+| KB 管理员入口 | 保留既有管理员机制，不按 RDMS admin 角色自动放权 | 既有，待联调确认 | KB 负责人 |
 
-## Claim 与权限映射
+## 后续实现必须保持的最小合同
 
-| 项目 | 待确认内容 | 当前状态 |
-| --- | --- | --- |
-| 主体标识 | `sub` 是否稳定且跨环境隔离 | 未确认 |
-| 展示信息 | 姓名、邮箱、工号对应的 claim 名称及是否必填 | 未确认 |
-| 组织信息 | 部门、组织路径、岗位的 claim 及数据时效 | 未确认 |
-| 群组/角色 | group claim、应用角色、默认最小权限 | 未确认 |
-| 映射表 | 身份平台群组到湾事通角色的逐项映射及审批人 | 未确认 |
-| 离职/调岗 | 权限撤销 SLA、缓存失效和紧急封禁流程 | 未确认 |
+1. 浏览器整页跳转 authorize；KB 后端不能代替浏览器请求并写 pending cookie。
+2. `POST validate` JSON 包含 `ticket`、`service`、`clientId`、`clientSecret`。
+3. 按真实 HTTP 状态处理失败；200 时校验 `data.userId`、`service` 和 `state`。
+4. Ticket 为 32 位 hex、TTL 10 秒；callback 立即换票，429 和超时不自动重试同一 Ticket。
+5. 内部业务 owner 来自受信返回的 `userId`，例如 `rdms:<userId>`，不采信前端 `userId`。
+6. KB 会话先按既有实施方案固定 2 小时；与规格滑动续期的差异显式保留，不在准备阶段实现。
+7. 8289 与正式入口均需登记；精确匹配包括端口与路径，同 host 不同端口的 Cookie 使用不同部署名。
+8. SSO 部门字段暂不缩小问答检索范围；04 仍为影子路由。
 
-## 会话、安全与网络
+## 准备阶段完成线
 
-| 项目 | 待确认内容 | 当前状态 |
-| --- | --- | --- |
-| 会话策略 | idle timeout、absolute timeout、刷新令牌策略 | 未确认 |
-| 强认证 | MFA、条件访问、异常登录处置 | 未确认 |
-| Cookie | HTTPS、`Secure`、`HttpOnly`、`SameSite` 策略 | 未确认 |
-| CSRF / state / nonce | 校验责任、失败审计和重放防护 | 未确认 |
-| DNS 与证书 | 正式域名、证书申请/续期、终止 TLS 的组件 | 未确认 |
-| 防火墙 | 应用到身份平台、身份平台回调到应用所需白名单 | 未确认 |
-| 代理头 | 可信反向代理、外部 scheme/host 传递规则 | 未确认 |
-| 日志审计 | 登录成功/失败、角色映射、登出、管理员操作留存期 | 未确认 |
+本清单已明确协议、参数、提供方和后续接口合同。地址、Client 或账号可以保持
+`PENDING`，不阻断阶段 04；没有真实输入时，后续 SSO 阶段不得标记
+`AUTH_READY`。
 
-## 联调资源与验收
-
-| 项目 | 待确认内容 | 当前状态 |
-| --- | --- | --- |
-| 负责人 | 应用、身份平台、网络、安全、运维联系人与升级路径 | 未确认 |
-| 测试账号 | 普通用户、无权限用户、多角色用户、停用用户 | 未提供 |
-| 联调窗口 | 测试环境时间窗、变更冻结期和回退联系人 | 未确认 |
-| 验收用例 | 登录、刷新、登出、超时、撤权、claim 缺失、证书轮换 | 未执行 |
-| 生产批准 | 安全评审、变更单、发布窗口和回滚决策人 | 未授权 |
-
-本清单没有记录任何真实 Client Secret、Cookie、令牌或个人账号。外部字段未得到
-责任方确认前，不得标记 SSO READY，也不得据此开展生产切换。
+本文不记录任何真实 Client Secret、Cookie、Ticket、令牌或个人账号。没有证据时
+不把示例公网域名写成实际服务，也不从源码猜测 RDMS 用户表名。阶段 06 继续遵守
+人工试用与明确批准发布流程。
