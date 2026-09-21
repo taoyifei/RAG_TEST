@@ -6,6 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from evaluation.wanshitong.v2.run_wb08r03_candidate import _cases
 from evaluation.wanshitong.v2.run_wb08r03f_candidate import (
     _CONCURRENCY_4,
@@ -19,6 +21,7 @@ from evaluation.wanshitong.v2.run_wb08r03f_candidate import (
     _functional_gate,
     _telemetry_summary,
     load_truth,
+    preflight_trace_source,
     read_history_identity,
     read_trace,
     score_observation,
@@ -212,6 +215,39 @@ def test_trace_file_uses_read_only_universal_database(tmp_path: Path) -> None:
         "admitted_sources": []
     }
     assert not (tmp_path / "product-traces.sqlite3").exists()
+
+
+def test_trace_preflight_requires_main_query_tables(tmp_path: Path) -> None:
+    trace_db = tmp_path / "universal-rag.sqlite3"
+    with sqlite3.connect(trace_db) as connection:
+        connection.execute("CREATE TABLE query_history (trace_id TEXT)")
+        connection.execute(
+            "CREATE TABLE query_trace_events "
+            "(trace_id TEXT, sequence INTEGER, "
+            "event_name TEXT, payload_json TEXT)"
+        )
+
+    observed = preflight_trace_source(
+        trace_db=trace_db, trace_container=None
+    )
+
+    assert observed == {
+        "database": "universal-rag.sqlite3",
+        "mode": "ro",
+        "required_tables": ["query_history", "query_trace_events"],
+        "source": "file",
+    }
+
+
+def test_trace_preflight_never_creates_missing_database(
+    tmp_path: Path,
+) -> None:
+    trace_db = tmp_path / "universal-rag.sqlite3"
+
+    with pytest.raises(ValueError, match="TRACE_DATABASE_INVALID"):
+        preflight_trace_source(trace_db=trace_db, trace_container=None)
+
+    assert not trace_db.exists()
 
 
 def test_catalog_shortcut_trace_is_complete_without_pack(

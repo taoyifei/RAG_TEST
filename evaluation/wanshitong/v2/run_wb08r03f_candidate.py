@@ -134,6 +134,30 @@ rows = database.execute(
 ).fetchall()
 print(json.dumps(rows, ensure_ascii=False))
 """
+_CONTAINER_TRACE_PREFLIGHT_CODE = """
+import json
+import sqlite3
+
+path = "/data/universal-rag.sqlite3"
+database = sqlite3.connect(
+    "file:" + path + "?mode=ro", uri=True, timeout=1
+)
+tables = {
+    row[0]
+    for row in database.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )
+}
+required = {"query_history", "query_trace_events"}
+missing = sorted(required - tables)
+if missing:
+    raise SystemExit("TRACE_TABLES_MISSING:" + ",".join(missing))
+print(json.dumps({
+    "database": path,
+    "mode": "ro",
+    "required_tables": sorted(required),
+}))
+"""
 _CONTAINER_HISTORY_CODE = """
 import hashlib
 import json
@@ -374,6 +398,75 @@ def _trace_rows_from_container(
         timeout=10,
     )
     return cast(list[list[str]], json.loads(result.stdout))
+
+
+def preflight_trace_source(
+    *, trace_db: Path | None, trace_container: str | None
+) -> dict[str, object]:
+    """在发送业务问题前只读确认 Query Trace 的真实存储位置。
+
+    Args:
+        trace_db: 可直接读取的主查询 SQLite；与容器入口二选一。
+        trace_container: 挂载主查询库的候选容器名；与文件入口二选一。
+
+    Returns:
+        不含业务正文的数据库位置、只读模式和必需表摘要。
+
+    Raises:
+        ValueError: 来源数量、容器名、文件形态或表结构无效时抛出。
+
+    """
+    if (trace_db is None) == (trace_container is None):
+        raise ValueError("REQUIRE_EXACTLY_ONE_TRACE_SOURCE")
+    if trace_db is not None:
+        if trace_db.is_symlink() or not trace_db.is_file():
+            raise ValueError("TRACE_DATABASE_INVALID")
+        try:
+            with sqlite3.connect(
+                trace_db.resolve().as_uri() + "?mode=ro",
+                uri=True,
+                timeout=1,
+            ) as connection:
+                tables = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+        except sqlite3.Error as error:
+            raise ValueError("TRACE_SOURCE_PREFLIGHT_FAILED") from error
+        required = {"query_history", "query_trace_events"}
+        missing = sorted(required - tables)
+        if missing:
+            raise ValueError("TRACE_TABLES_MISSING:" + ",".join(missing))
+        return {
+            "database": trace_db.name,
+            "mode": "ro",
+            "required_tables": sorted(required),
+            "source": "file",
+        }
+    container = trace_container or ""
+    if _CONTAINER_NAME.fullmatch(container) is None:
+        raise ValueError("INVALID_TRACE_CONTAINER")
+    try:
+        result = subprocess.run(  # noqa: S603
+            [  # noqa: S607
+                "docker",
+                "exec",
+                container,
+                "python",
+                "-c",
+                _CONTAINER_TRACE_PREFLIGHT_CODE,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        observed = cast(dict[str, object], json.loads(result.stdout))
+    except (subprocess.SubprocessError, json.JSONDecodeError) as error:
+        raise ValueError("TRACE_SOURCE_PREFLIGHT_FAILED") from error
+    return {**observed, "source": "container"}
 
 
 def read_trace(
@@ -1418,6 +1511,10 @@ def run(  # noqa: PLR0912, PLR0913, PLR0915
         raise ValueError("ONLY_8289_LOOPBACK_CANDIDATE_ALLOWED")
     if (trace_db is None) == (trace_container is None):
         raise ValueError("REQUIRE_EXACTLY_ONE_TRACE_SOURCE")
+    trace_source = preflight_trace_source(
+        trace_db=trace_db,
+        trace_container=trace_container,
+    )
     if gate == "concurrency-4" and case_ids is not None:
         raise ValueError("CONCURRENCY_REQUIRES_ALL_FOUR_CASES")
     if (
@@ -1590,6 +1687,7 @@ def run(  # noqa: PLR0912, PLR0913, PLR0915
         row for row in _read_ndjson(output) if row["run_id"] in selected_ids
     ]
     summary = summarize(selected_rows)
+    summary["trace_source_preflight"] = trace_source
     if gate == "evidence-pack-12":
         summary["evidence_pack_12_gate"] = _evidence_pack_12_gate(selected_rows)
     if gate in {"core-answer-16", "natural-36"}:
