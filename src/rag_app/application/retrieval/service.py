@@ -51,6 +51,7 @@ from rag_app.application.retrieval.atom_group_alignment import (
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.context_resolution import (
     CONTEXT_RESOLUTION_REVISION,
+    ResolvedRootQuery,
     SpanKind,
     build_input_spans,
     degraded_query_plan,
@@ -211,6 +212,8 @@ from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import (
     CancellationPort,
     CriticalOcrVerifierPort,
+    DepartmentShadowObserverPort,
+    DepartmentShadowRequest,
     EvidenceSourcePort,
     ExactStorePort,
     GeneratorPort,
@@ -249,6 +252,7 @@ class _AtomRetrievalOutcome:
     links: tuple[AtomCandidateLink, ...]
     selected_slot: str | None
     selected_vector: str | None
+    root_vector: tuple[float, ...] | None
     route_reason: str
     fused: tuple[FusedCandidate, ...]
     seed_chunk_ids: tuple[str, ...]
@@ -747,6 +751,7 @@ class RetrievalService:
         policy: RetrievalPolicy | None = None,
         expected_index_fingerprint: str | None = None,
         expected_profile_revision_id: str | None = None,
+        department_shadow: DepartmentShadowObserverPort | None = None,
     ) -> None:
         self._source = source
         self._expected_index_fingerprint = expected_index_fingerprint
@@ -765,6 +770,7 @@ class RetrievalService:
         self._generation_behavior = "model_required"
         self._trace = trace
         self._cache = cache
+        self._department_shadow = department_shadow
         self._policy = policy or RetrievalPolicy()
         # 检索实现演进仅改变 serving/query cache；文档索引与向量语义不变。
         self._serving_fingerprint = canonical_sha256(
@@ -812,6 +818,22 @@ class RetrievalService:
             reranker_provider_id=reranker_descriptor.name,
             reranker_model=reranker_descriptor.version,
         )
+
+    def with_department_shadow(
+        self, observer: DepartmentShadowObserverPort | None
+    ) -> RetrievalService:
+        """为单次服务副本绑定不会进入缓存身份的影子观察器。
+
+        Args:
+            observer: 只读本地观察器；空值代表完全不采集。
+
+        Returns:
+            共享主检索资源、仅增加观察事件的轻量副本。
+
+        """
+        configured = copy(self)
+        configured._department_shadow = observer
+        return configured
 
     def with_data_plane(
         self, context: QueryDataPlaneContext
@@ -1233,6 +1255,16 @@ class RetrievalService:
                 }
             )
             self._record_shortcut_trace(trace_id, cached_result, "CACHE_REPLAY")
+            self._record_department_shadow(
+                trace_id,
+                request=request,
+                snapshot=snapshot,
+                resolved_root=resolved_root,
+                source_context=source_context,
+                result=cached_result,
+                selected_slot=cached_result.selected_embedding_slot,
+                root_vector=None,
+            )
             if on_final is not None:
                 _raise_if_cancelled(cancellation, provider_calls)
                 _validate_stream_final_sources(
@@ -1295,6 +1327,8 @@ class RetrievalService:
                 on_stage=on_stage,
                 on_final=on_final,
                 cancellation=cancellation,
+                resolved_root=resolved_root,
+                source_context=source_context,
             )
             if catalog_result is not None:
                 return catalog_result
@@ -1792,6 +1826,7 @@ class RetrievalService:
             _finish_timing(stage_timings, "lexical_channel", channel_started)
         selected_slot: str | None = None
         selected_vector: str | None = None
+        root_vector: tuple[float, ...] | None = None
         route_reason = "DENSE_DISABLED_BY_PLAN"
         if "dense" in plan.channels and not atom_mode:
             _raise_if_cancelled(cancellation, provider_calls)
@@ -1804,11 +1839,14 @@ class RetrievalService:
                 "circuit_before": (),
                 "circuit_after": (),
             }
+            dense_root_query = (
+                effective_analysis.resolved_query
+                or effective_analysis.normalized_query
+            )
             try:
                 dense = self._dense.search(
                     snapshot,
-                    effective_analysis.resolved_query
-                    or effective_analysis.normalized_query,
+                    dense_root_query,
                     self._egress,
                     limit=top_k["dense"],
                     allowed_documents=root_allowed_documents,
@@ -1827,6 +1865,8 @@ class RetrievalService:
                 provider_calls.extend(dense.routed.provider_calls)
                 selected_slot = dense.routed.selected_slot_id
                 selected_vector = dense.routed.vector_name
+                if dense_root_query == resolved_root.resolved_query:
+                    root_vector = dense.routed.vector
                 route_reason = dense.routed.fallback_reason
                 dense_channel = f"dense:{selected_slot}"
                 channel_hits[dense_channel] = admit_single_channel(
@@ -1888,6 +1928,8 @@ class RetrievalService:
             atom_links = atom_retrieval.links
             selected_slot = atom_retrieval.selected_slot
             selected_vector = atom_retrieval.selected_vector
+            if query_plan.resolved_root_query == resolved_root.resolved_query:
+                root_vector = atom_retrieval.root_vector
             route_reason = atom_retrieval.route_reason
             unit_fused = atom_retrieval.fused
             unit_seed_ids = atom_retrieval.seed_chunk_ids
@@ -3317,6 +3359,16 @@ class RetrievalService:
             ),
             diagnostics=diagnostics,
         )
+        self._record_department_shadow(
+            trace_id,
+            request=request,
+            snapshot=snapshot,
+            resolved_root=resolved_root,
+            source_context=source_context,
+            result=result,
+            selected_slot=selected_slot,
+            root_vector=root_vector,
+        )
         if on_final is not None:
             # validation 阶段之后仍可能发生删除或撤权；在真正发送 final 的
             # 最后边界使用本请求冻结的快照再核验一次，禁止改读新激活版本。
@@ -3354,6 +3406,8 @@ class RetrievalService:
         on_stage: Callable[[str, dict[str, object]], None] | None,
         on_final: Callable[[SearchAnswerResult], None] | None,
         cancellation: CancellationPort | None,
+        resolved_root: ResolvedRootQuery,
+        source_context: ResolvedSourceContext,
     ) -> SearchAnswerResult | None:
         """仅用活动版本的目录元数据回答文档导航问题。"""
         catalog_reader = getattr(self._source, "catalog_documents", None)
@@ -3552,6 +3606,16 @@ class RetrievalService:
         )
         _raise_if_cancelled(cancellation)
         self._record_shortcut_trace(trace_id, result, "CATALOG_FAST_PATH")
+        self._record_department_shadow(
+            trace_id,
+            request=request,
+            snapshot=snapshot,
+            resolved_root=resolved_root,
+            source_context=source_context,
+            result=result,
+            selected_slot=None,
+            root_vector=None,
+        )
         if on_final is not None:
             if matched:
                 self._validate_catalog_citations(matched, request, snapshot)
@@ -4223,6 +4287,7 @@ class RetrievalService:
                         degraded.append(error.code)
         selected_slot: str | None = None
         selected_vector: str | None = None
+        root_vector: tuple[float, ...] | None = None
         route_reason = "DENSE_DISABLED_BY_PLAN"
         if "dense" in enabled:
             try:
@@ -4249,6 +4314,8 @@ class RetrievalService:
                     stage="retrieval.dense",
                 ) from error
             else:
+                if dense_results:
+                    root_vector = dense_results[0].routed.vector
                 for unit, dense in zip(units, dense_results, strict=True):
                     provider_calls.extend(dense.routed.provider_calls)
                     if selected_slot is not None and (
@@ -4371,6 +4438,7 @@ class RetrievalService:
             fusion.links,
             selected_slot,
             selected_vector,
+            root_vector,
             route_reason,
             fusion.candidates,
             fusion.seed_chunk_ids,
@@ -5496,6 +5564,84 @@ class RetrievalService:
                     "回答来源范围已失配。",
                     stage="answer.source_recheck",
                 )
+
+    def _record_department_shadow(  # noqa: PLR0913
+        self,
+        trace_id: str,
+        *,
+        request: SearchRequest,
+        snapshot: ActiveRevisionQuerySnapshot,
+        resolved_root: ResolvedRootQuery,
+        source_context: ResolvedSourceContext,
+        result: SearchAnswerResult,
+        selected_slot: str | None,
+        root_vector: tuple[float, ...] | None,
+    ) -> None:
+        """用主链既有数据记录部门观察，不改变请求或缓存合同。
+
+        Args:
+            trace_id: 本次查询的 Trace 身份。
+            request: 未经影子路由修改的原始检索请求。
+            snapshot: 本请求冻结的活动索引快照。
+            resolved_root: 已有上下文解析结果。
+            source_context: 已有 SourceScope 解析结果。
+            result: 已完成的公开结果，用于事后引用部门对比。
+            selected_slot: 主链实际选中的 Dense slot。
+            root_vector: 仅当主链嵌入文本等于根问题时提供的已有向量。
+
+        Returns:
+            无返回值；未配置观察器时不新增 Trace。
+
+        """
+        observer = self._department_shadow
+        if observer is None:
+            return
+        embedding_slot = (
+            snapshot.topology.slot(selected_slot)
+            if root_vector is not None and selected_slot is not None
+            else None
+        )
+        cited_document_ids = tuple(
+            dict.fromkeys(
+                (
+                    *(
+                        item.document_id
+                        for item in result.evidence
+                        if item.document_id is not None
+                    ),
+                    *(item.document_id for item in result.catalog_citations),
+                )
+            )
+        )
+        observation = observer.observe(
+            DepartmentShadowRequest(
+                project_id=request.scope.project_id,
+                knowledge_base_id=request.scope.knowledge_base_id,
+                index_revision_id=snapshot.revision.index_revision_id,
+                resolved_root_query=resolved_root.resolved_query,
+                context_mode=(
+                    f"{resolved_root.mode}:{resolved_root.confidence}"
+                ),
+                scope_digest=source_context.scope_digest,
+                actual_scope_kind=(
+                    "OPEN"
+                    if source_context.resolution is SourceResolution.OPEN
+                    else f"SOURCE_{source_context.resolution.value}"
+                ),
+                explicit_source_document_ids=tuple(
+                    item.document_id
+                    for item in source_context.allowed_documents
+                ),
+                final_cited_document_ids=cited_document_ids,
+                embedding_slot=embedding_slot,
+                root_vector=root_vector,
+            )
+        )
+        self._record(
+            trace_id,
+            "department_route_shadow",
+            observation.trace_attributes(),
+        )
 
     def _record(
         self, trace_id: str, stage: str, attributes: dict[str, object]

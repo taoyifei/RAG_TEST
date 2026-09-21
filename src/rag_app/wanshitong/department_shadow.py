@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import math
 import re
+import sqlite3
 import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
+from hashlib import sha256
+from time import perf_counter
+from typing import Protocol
 
 from pydantic import Field
 
 from rag_app.core.models.common import FrozenModel
+from rag_app.core.ports import (
+    DepartmentShadowObservation,
+    DepartmentShadowRequest,
+)
 from rag_app.wanshitong.department_profiles import (
     DepartmentEmbeddingIdentity,
     DepartmentProfile,
+    DepartmentProfileLoadError,
     DepartmentProfileSet,
+    DepartmentProfileSourceSnapshot,
 )
 
 DEPARTMENT_ROUTE_REVISION = "wanshitong-department-shadow-v1"
@@ -95,6 +105,160 @@ class DepartmentRouteSuggestion(FrozenModel):
 class _ScoredProfile:
     profile: DepartmentProfile
     score: float
+
+
+class _DepartmentProfileSourcePort(Protocol):
+    """读取与当前活动版本绑定的部门元数据快照。"""
+
+    def snapshot(
+        self, project_id: str, knowledge_base_id: str
+    ) -> DepartmentProfileSourceSnapshot:
+        """返回固定 Scope 的活动元数据快照。"""
+        ...
+
+
+class _DepartmentProfileStorePort(Protocol):
+    """只按完整版本身份读取已离线发布的 Profile。"""
+
+    def load(
+        self,
+        scope_id: str,
+        index_revision_id: str,
+        metadata_revision: str,
+    ) -> DepartmentProfileSet | None:
+        """返回精确版本 Profile；缺失时返回空。"""
+        ...
+
+
+class WanshitongDepartmentShadowObserver:
+    """把离线 Profile 建议投影为不影响主链的 SAFE 观察事件。"""
+
+    def __init__(
+        self,
+        source: _DepartmentProfileSourcePort,
+        profiles: _DepartmentProfileStorePort,
+    ) -> None:
+        self._source = source
+        self._profiles = profiles
+
+    def observe(
+        self, request: DepartmentShadowRequest
+    ) -> DepartmentShadowObservation:
+        """读取精确 Profile 并计算本地建议，不重建或调用 Provider。
+
+        Args:
+            request: 主检索已经产生的根问题、Scope、引用与可选根向量。
+
+        Returns:
+            仅含安全字段的观察结果；预期 Profile 故障降级为 GLOBAL。
+
+        """
+        started = perf_counter()
+        loaded_profiles: DepartmentProfileSet | None = None
+        try:
+            snapshot = self._source.snapshot(
+                request.project_id, request.knowledge_base_id
+            )
+            if snapshot.index_revision_id != request.index_revision_id:
+                suggestion = fallback_department_suggestion(
+                    "PROFILE_VERSION_MISMATCH"
+                )
+            else:
+                loaded_profiles = self._profiles.load(
+                    snapshot.scope_id,
+                    snapshot.index_revision_id,
+                    snapshot.metadata_revision,
+                )
+                if loaded_profiles is None:
+                    suggestion = fallback_department_suggestion(
+                        "PROFILE_UNAVAILABLE"
+                    )
+                else:
+                    suggestion = suggest_department(
+                        request.resolved_root_query,
+                        request.context_mode,
+                        loaded_profiles,
+                        _reusable_root_vector(request),
+                        request.explicit_source_document_ids,
+                    )
+        except DepartmentProfileLoadError:
+            suggestion = fallback_department_suggestion("PROFILE_CORRUPT")
+            loaded_profiles = None
+        except (OSError, sqlite3.Error, UnicodeError, ValueError):
+            suggestion = fallback_department_suggestion(
+                "PROFILE_UNAVAILABLE"
+            )
+            loaded_profiles = None
+        cited_departments = _cited_department_keys(
+            loaded_profiles, request.final_cited_document_ids
+        )
+        return DepartmentShadowObservation(
+            route_revision=suggestion.route_revision,
+            profile_revision=suggestion.profile_revision,
+            resolved_root_query_sha256=sha256(
+                request.resolved_root_query.encode("utf-8")
+            ).hexdigest(),
+            context_mode=request.context_mode,
+            scope_digest=request.scope_digest,
+            actual_scope_kind=request.actual_scope_kind,
+            top1_department_key=suggestion.top1_department_key,
+            top1_score_bucket=suggestion.top1_score_bucket,
+            top2_department_key=suggestion.top2_department_key,
+            top2_score_bucket=suggestion.top2_score_bucket,
+            confidence=suggestion.confidence.value,
+            recommended_scope=suggestion.recommended_scope.value,
+            final_cited_department_keys=cited_departments,
+            department_filter_applied=suggestion.department_filter_applied,
+            embedding_reused=suggestion.embedding_reused,
+            extra_provider_calls=suggestion.extra_provider_calls,
+            status=suggestion.status.value,
+            reason_codes=suggestion.reason_codes,
+            elapsed_ms=max(0, round((perf_counter() - started) * 1000)),
+        )
+
+
+def _reusable_root_vector(
+    request: DepartmentShadowRequest,
+) -> ReusableRootVector | None:
+    """仅在主链同时提供 slot 身份和根向量时构造复用输入。"""
+    slot = request.embedding_slot
+    if slot is None or request.root_vector is None:
+        return None
+    return ReusableRootVector(
+        identity=DepartmentEmbeddingIdentity(
+            slot_id=slot.slot_id,
+            provider_id=slot.provider_id,
+            model=slot.model,
+            vector_name=slot.vector_name,
+            dimension=slot.dimension,
+            normalization=slot.normalization,
+            adapter_revision=slot.adapter_revision,
+        ),
+        values=request.root_vector,
+    )
+
+
+def _cited_department_keys(
+    profiles: DepartmentProfileSet | None,
+    document_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    """只用最终引用做事后对比，不把它回流到路由评分。"""
+    if profiles is None:
+        return ()
+    by_document = {
+        document_id: profile.department_key
+        for profile in profiles.profiles
+        for document_id in profile.document_ids
+    }
+    return tuple(
+        sorted(
+            {
+                by_document[document_id]
+                for document_id in document_ids
+                if document_id in by_document
+            }
+        )
+    )
 
 
 def suggest_department(  # noqa: PLR0911, PLR0913
@@ -313,10 +477,7 @@ def _vector_availability(
         profile.vector is None for profile in profiles.profiles
     ):
         return False, "PROFILE_VECTOR_UNAVAILABLE"
-    if (
-        identity.vector_space_identity
-        != root_vector.identity.vector_space_identity
-    ):
+    if identity != root_vector.identity:
         return False, "VECTOR_IDENTITY_MISMATCH"
     if len(root_vector.values) != identity.dimension or any(
         not math.isfinite(value) for value in root_vector.values
@@ -369,6 +530,7 @@ __all__ = [
     "DepartmentRouteSuggestion",
     "DepartmentRoutingPolicy",
     "ReusableRootVector",
+    "WanshitongDepartmentShadowObserver",
     "disabled_department_suggestion",
     "fallback_department_suggestion",
     "suggest_department",

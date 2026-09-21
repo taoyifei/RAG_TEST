@@ -15,6 +15,11 @@ from rag_app.core.ports.console_inspection import (
     ConsoleRevisionStorePort,
 )
 from rag_app.core.ports.conversation import ConversationPort
+from rag_app.core.ports.department_shadow import (
+    DepartmentShadowObservation,
+    DepartmentShadowObserverPort,
+    DepartmentShadowRequest,
+)
 from rag_app.core.ports.embedding import (
     EmbeddingPort,
     EmbeddingRouteRequest,
@@ -69,6 +74,9 @@ __all__ = [
     "ConsoleRevisionStorePort",
     "ConversationPort",
     "CriticalOcrVerifierPort",
+    "DepartmentShadowObservation",
+    "DepartmentShadowObserverPort",
+    "DepartmentShadowRequest",
     "EmbeddingCachePort",
     "EmbeddingPort",
     "EmbeddingRouteRequest",

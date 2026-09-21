@@ -82,6 +82,7 @@ from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import (
     CancellationPort,
     ChunkValidationPort,
+    DepartmentShadowObserverPort,
     ExactStorePort,
 )
 from rag_app.ocr import OcrClient
@@ -673,6 +674,7 @@ class ProductProfileResolver:
         self._circuit_factory = circuit_factory
         self._acceptance_egress_resolver = acceptance_egress_resolver
         self._private_replay_recorder = private_replay_recorder
+        self._department_shadow: DepartmentShadowObserverPort | None = None
         self._evidence_group_mode = evidence_group_mode
         self._contextual_rerank_mode = contextual_rerank_mode
         self._controlled_scope: ContextVar[_ControlledPilotScope | None] = (
@@ -689,6 +691,22 @@ class ProductProfileResolver:
         self.singleflight = ProductQuerySingleflight()
         self._lock = RLock()
         self._closed = False
+
+    def configure_department_shadow(
+        self, observer: DepartmentShadowObserverPort | None
+    ) -> None:
+        """绑定不进入服务 generation 或缓存身份的只读观察器。
+
+        Args:
+            observer: 湾事通组合根提供的本地观察器；空值表示关闭。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._lock:
+            self._ensure_open_locked()
+            self._department_shadow = observer
 
     def singleflight_metrics(self) -> SingleflightMetrics:
         """返回不含查询、scope 或 key 的 singleflight 安全计数。
@@ -918,6 +936,7 @@ class ProductProfileResolver:
         settings = KnowledgeBaseModelSettings()
         model_configuration_failed = False
         authorization_status: CorpusAuthorizationStatus | None = None
+        department_shadow: DepartmentShadowObserverPort | None = None
         with self._lock:
             self._ensure_open_locked()
             profile = self.active_profile(knowledge_base_id)
@@ -966,6 +985,7 @@ class ProductProfileResolver:
                 self._acquire_generation_locked(service_generation)
             if model_generation is not None:
                 self._acquire_generation_locked(model_generation)
+            department_shadow = self._department_shadow
         try:
             if model_generation is not None:
                 if generation_identity is None:
@@ -994,6 +1014,8 @@ class ProductProfileResolver:
             with_data_plane = getattr(service, "with_data_plane", None)
             if data_plane_context is not None and callable(with_data_plane):
                 service = with_data_plane(data_plane_context)
+            if department_shadow is not None:
+                service = service.with_department_shadow(department_shadow)
             yield service
         finally:
             self._release_query_generations(

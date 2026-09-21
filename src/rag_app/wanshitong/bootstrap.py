@@ -8,6 +8,13 @@ from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.product.crypto import load_master_key
 from rag_app.wanshitong.admin_api import register_admin_routes
 from rag_app.wanshitong.api import register_scope_status_routes
+from rag_app.wanshitong.department_profiles import (
+    DepartmentProfileSourceReader,
+    DepartmentProfileStore,
+)
+from rag_app.wanshitong.department_shadow import (
+    WanshitongDepartmentShadowObserver,
+)
 from rag_app.wanshitong.document_metadata import (
     WanshitongDocumentMetadataStore,
 )
@@ -39,6 +46,9 @@ def configure_wanshitong_app(
     resolved = settings or WanshitongSettings.from_environment()
     app.state.wanshitong_enabled = resolved.enabled
     app.state.wanshitong_demo_allow_http = resolved.demo_allow_http
+    app.state.wanshitong_department_shadow_enabled = (
+        resolved.department_shadow_enabled
+    )
     if not resolved.enabled:
         return None
     master_key_file = runtime.settings.master_key_file
@@ -62,6 +72,18 @@ def configure_wanshitong_app(
     document_metadata = WanshitongDocumentMetadataStore(runtime.connections)
     document_metadata.synchronize_legacy_rows()
     app.state.wanshitong_document_metadata = document_metadata
+    department_shadow = (
+        WanshitongDepartmentShadowObserver(
+            DepartmentProfileSourceReader(runtime.connections),
+            DepartmentProfileStore(
+                runtime.settings.data_dir / "department-profiles"
+            ),
+        )
+        if resolved.department_shadow_enabled
+        else None
+    )
+    runtime.profiles.configure_department_shadow(department_shadow)
+    app.state.wanshitong_department_shadow = department_shadow
     register_scope_status_routes(app, service)
     register_admin_routes(
         app,

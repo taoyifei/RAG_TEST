@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from hashlib import sha256
 
 from rag_app.core.identifiers import canonical_sha256
+from rag_app.core.models import EmbeddingSlotIdentity, EmbeddingSlotRole
+from rag_app.core.ports import DepartmentShadowRequest
 from rag_app.wanshitong.department_profiles import (
     DepartmentEmbeddingIdentity,
+    DepartmentProfileLoadError,
     DepartmentProfileSet,
     DepartmentProfileSourceDocument,
     DepartmentProfileSourceSnapshot,
@@ -17,6 +21,7 @@ from rag_app.wanshitong.department_shadow import (
     DepartmentRouteConfidence,
     DepartmentRouteStatus,
     ReusableRootVector,
+    WanshitongDepartmentShadowObserver,
     suggest_department,
 )
 
@@ -26,7 +31,7 @@ _INDEX_REVISION_ID = "irev_" + "3" * 32
 _BUILT_AT = datetime(2026, 9, 21, tzinfo=UTC)
 
 
-def _profiles(*, vectors: bool = False) -> DepartmentProfileSet:
+def _source_snapshot() -> DepartmentProfileSourceSnapshot:
     documents = (
         DepartmentProfileSourceDocument(
             document_id="doc_" + "4" * 32,
@@ -50,7 +55,7 @@ def _profiles(*, vectors: bool = False) -> DepartmentProfileSet:
             metadata_revision="wanshitong-document-metadata-v1",
         ),
     )
-    snapshot = DepartmentProfileSourceSnapshot(
+    return DepartmentProfileSourceSnapshot(
         project_id=_PROJECT_ID,
         knowledge_base_id=_KNOWLEDGE_BASE_ID,
         scope_id=canonical_sha256(
@@ -65,6 +70,10 @@ def _profiles(*, vectors: bool = False) -> DepartmentProfileSet:
         ),
         documents=documents,
     )
+
+
+def _profiles(*, vectors: bool = False) -> DepartmentProfileSet:
+    snapshot = _source_snapshot()
     identity = DepartmentEmbeddingIdentity(
         slot_id="primary",
         provider_id="embedding",
@@ -81,6 +90,59 @@ def _profiles(*, vectors: bool = False) -> DepartmentProfileSet:
         if vectors
         else None,
         built_at=_BUILT_AT,
+    )
+
+
+class _StaticSource:
+    def __init__(self, snapshot: DepartmentProfileSourceSnapshot) -> None:
+        self._snapshot = snapshot
+
+    def snapshot(
+        self, project_id: str, knowledge_base_id: str
+    ) -> DepartmentProfileSourceSnapshot:
+        assert project_id == _PROJECT_ID
+        assert knowledge_base_id == _KNOWLEDGE_BASE_ID
+        return self._snapshot
+
+
+class _StaticStore:
+    def __init__(
+        self,
+        profiles: DepartmentProfileSet | None,
+        error: Exception | None = None,
+    ) -> None:
+        self._profiles = profiles
+        self._error = error
+
+    def load(
+        self,
+        scope_id: str,
+        index_revision_id: str,
+        metadata_revision: str,
+    ) -> DepartmentProfileSet | None:
+        del scope_id, index_revision_id, metadata_revision
+        if self._error is not None:
+            raise self._error
+        return self._profiles
+
+
+def _request(
+    *,
+    root_vector: tuple[float, ...] | None = None,
+    embedding_slot: EmbeddingSlotIdentity | None = None,
+) -> DepartmentShadowRequest:
+    return DepartmentShadowRequest(
+        project_id=_PROJECT_ID,
+        knowledge_base_id=_KNOWLEDGE_BASE_ID,
+        index_revision_id=_INDEX_REVISION_ID,
+        resolved_root_query="科研部负责什么",
+        context_mode="ORIGINAL:HIGH",
+        scope_digest=canonical_sha256({"scope": "open"}),
+        actual_scope_kind="OPEN",
+        explicit_source_document_ids=(),
+        final_cited_document_ids=("doc_" + "4" * 32,),
+        embedding_slot=embedding_slot,
+        root_vector=root_vector,
     )
 
 
@@ -182,3 +244,66 @@ def test_root_vector_reuse_requires_matching_identity() -> None:
     assert "ROOT_VECTOR_REUSED" in reused.reason_codes
     assert mismatched.embedding_reused is False
     assert "VECTOR_IDENTITY_MISMATCH" in mismatched.reason_codes
+
+
+def test_observer_emits_safe_fields_and_posthoc_cited_department() -> None:
+    profiles = _profiles(vectors=True)
+    identity = profiles.embedding_identity
+    assert identity is not None
+    observer = WanshitongDepartmentShadowObserver(
+        _StaticSource(_source_snapshot()), _StaticStore(profiles)
+    )
+    slot = EmbeddingSlotIdentity(
+        slot_id=identity.slot_id,
+        role=EmbeddingSlotRole.PRIMARY,
+        provider_id=identity.provider_id,
+        model=identity.model,
+        vector_name=identity.vector_name,
+        dimension=identity.dimension,
+        normalization=identity.normalization,
+        adapter_revision=identity.adapter_revision,
+    )
+
+    observation = observer.observe(
+        _request(root_vector=(1.0, 0.0), embedding_slot=slot)
+    )
+    attributes = observation.trace_attributes()
+
+    assert observation.status == "COMPUTED"
+    assert observation.top1_department_key == "research"
+    assert observation.final_cited_department_keys == ("research",)
+    assert observation.department_filter_applied is False
+    assert observation.embedding_reused is False  # 显式部门无需消费向量。
+    assert observation.extra_provider_calls == 0
+    assert observation.resolved_root_query_sha256 == sha256(
+        "科研部负责什么".encode()
+    ).hexdigest()
+    assert "科研部负责什么" not in repr(attributes)
+    assert "root_vector" not in attributes
+
+
+def test_observer_profile_failures_fall_back_without_throwing() -> None:
+    source = _StaticSource(_source_snapshot())
+    missing = WanshitongDepartmentShadowObserver(
+        source, _StaticStore(None)
+    ).observe(_request())
+    corrupt = WanshitongDepartmentShadowObserver(
+        source,
+        _StaticStore(
+            None, DepartmentProfileLoadError("synthetic corrupt profile")
+        ),
+    ).observe(_request())
+    mismatched = WanshitongDepartmentShadowObserver(
+        _StaticSource(
+            _source_snapshot().model_copy(
+                update={"index_revision_id": "irev_" + "9" * 32}
+            )
+        ),
+        _StaticStore(_profiles()),
+    ).observe(_request())
+
+    assert missing.status == "FALLBACK"
+    assert missing.recommended_scope == "GLOBAL"
+    assert missing.reason_codes == ("PROFILE_UNAVAILABLE",)
+    assert corrupt.reason_codes == ("PROFILE_CORRUPT",)
+    assert mismatched.reason_codes == ("PROFILE_VERSION_MISMATCH",)
