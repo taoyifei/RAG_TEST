@@ -199,6 +199,13 @@ def test_internal_model_configurator_updates_verified_thinking_capability(
             llm_disable_thinking_supported=True,
             llm_disable_thinking=True,
             llm_structured_output_mode="response_format",
+            llm_structured_profile_revision="unit-v1",
+            llm_structured_service_identity_sha256=("sha256:" + "1" * 64),
+            llm_structured_chat_template_revision="template-v1",
+            llm_structured_grammar_backend="xgrammar-v1",
+            llm_structured_qualification_evidence_sha256=("sha256:" + "2" * 64),
+            llm_structured_allow_unique_items=False,
+            llm_field_resolution_max_output_tokens=512,
         )
 
         second = configurator.configure(supported)
@@ -217,6 +224,18 @@ def test_internal_model_configurator_updates_verified_thinking_capability(
                 first.knowledge_base_id
             ).structured_output_mode
             == "response_format"
+        )
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
+            ).field_resolution_max_output_tokens
+            == 512
+        )
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
+            ).structured_output_allow_unique_items
+            is False
         )
     finally:
         harness.close()

@@ -12,6 +12,7 @@ from rag_app.adapters.providers.aliyun_chat import ChatResponseError
 from rag_app.adapters.providers.http_common import (
     ProviderHttpClient,
     ProviderHttpError,
+    provider_error,
 )
 from rag_app.adapters.providers.private_http_diagnostics import (
     PrivateProviderDiagnosticRecorder,
@@ -20,7 +21,11 @@ from rag_app.adapters.providers.transport_diagnostics import (
     transport_diagnostics,
 )
 from rag_app.clients.resilience import StreamCancellation
-from rag_app.core.errors import ProviderInvalidResponse
+from rag_app.core.errors import (
+    ProviderInputTooLarge,
+    ProviderInvalidResponse,
+    ProviderRequestRejected,
+)
 from rag_app.core.models import ProviderCall, ProviderFailureCategory
 
 
@@ -424,6 +429,50 @@ def test_400_and_422_are_not_retried(status: int) -> None:
     client.close()
     assert captured.value.category is ProviderFailureCategory.INPUT_INVALID
     assert calls == 1
+
+
+def test_generic_400_is_request_rejected_not_input_too_large() -> None:
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(400, json={})
+            )
+        ),
+    )
+    with pytest.raises(ProviderHttpError) as captured:
+        _request(client)
+    client.close()
+
+    error = provider_error(captured.value, stage="provider.unit")
+    assert isinstance(error, ProviderRequestRejected)
+    assert not isinstance(error, ProviderInputTooLarge)
+    assert dict(error.details)["reason_code"] == "REQUEST_REJECTED_UNKNOWN"
+
+
+def test_explicit_context_capacity_code_is_input_too_large() -> None:
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "code": "context_length_exceeded",
+                            "message": "private",
+                        }
+                    },
+                )
+            )
+        ),
+    )
+    with pytest.raises(ProviderHttpError) as captured:
+        _request(client)
+    client.close()
+
+    error = provider_error(captured.value, stage="provider.unit")
+    assert isinstance(error, ProviderInputTooLarge)
 
 
 def test_non_2xx_keeps_only_bounded_structural_diagnostics() -> None:

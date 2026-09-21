@@ -50,12 +50,35 @@ def test_internal_model_settings_normalize_primary_contracts() -> None:
 def test_internal_settings_require_explicit_structured_output_mode() -> None:
     environment = _environment()
     environment["RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE"] = "response_format"
+    with pytest.raises(ValueError, match="完整能力合同"):
+        InternalModelSettings.from_environment(environment)
+
+    environment.update(
+        {
+            "RAG_WANSHITONG_LLM_STRUCTURED_PROFILE_REVISION": "unit-v1",
+            "RAG_WANSHITONG_LLM_STRUCTURED_SERVICE_IDENTITY_SHA256": (
+                "sha256:" + "1" * 64
+            ),
+            "RAG_WANSHITONG_LLM_STRUCTURED_CHAT_TEMPLATE_REVISION": (
+                "template-v1"
+            ),
+            "RAG_WANSHITONG_LLM_STRUCTURED_GRAMMAR_BACKEND": "xgrammar-v1",
+            "RAG_WANSHITONG_LLM_STRUCTURED_QUALIFICATION_EVIDENCE_SHA256": (
+                "sha256:" + "2" * 64
+            ),
+            "RAG_WANSHITONG_LLM_STRUCTURED_ALLOW_UNIQUE_ITEMS": "false",
+            "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS": "512",
+        }
+    )
     assert (
         InternalModelSettings.from_environment(
             environment
         ).llm_structured_output_mode
         == "response_format"
     )
+    assert not InternalModelSettings.from_environment(
+        environment
+    ).llm_structured_allow_unique_items
 
     environment["RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE"] = "auto"
     with pytest.raises(ValueError, match="STRUCTURED_OUTPUT_MODE"):

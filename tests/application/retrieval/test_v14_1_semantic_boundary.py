@@ -9,11 +9,12 @@ import pytest
 
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlanOutcome,
+    FieldResolutionExecutionState,
     FieldResolutionOutcome,
 )
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.composition.p07_runtime import build_p07_runtime
-from rag_app.core.identifiers import deterministic_id
+from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
     ConfidenceStatus,
@@ -22,9 +23,11 @@ from rag_app.core.models import (
     FieldResolution,
     FieldResolutionStatus,
     KnowledgeBaseScope,
+    ResolvedQueryView,
     SearchRequest,
     SourceDocumentIdentity,
 )
+from rag_app.core.models.query_plan import QueryAtom
 from rag_app.core.ports.evidence_source import DocumentStructurePage
 from tests.adapters.parsers.docx_fixtures import build_docx
 from tests.support.grounded_fixture_generator import GroundedFixtureGenerator
@@ -102,7 +105,11 @@ def test_explicit_source_defers_interpret_until_real_schema_exists(
             self,
             request: SearchRequest,
             candidates: tuple[FieldCandidate, ...],
+            *,
+            query_view: ResolvedQueryView,
+            atoms: tuple[QueryAtom, ...],
         ) -> FieldResolutionOutcome:
+            del atoms
             self.field_calls += 1
             self.questions.append(request.text)
             self.candidates = candidates
@@ -121,11 +128,16 @@ def test_explicit_source_defers_interpret_until_real_schema_exists(
                         candidate_ids=(selected.candidate_id,),
                         query_span_start=start,
                         query_span_end=start + len(span),
-                        reason_code="SCHEMA_AWARE_INTERPRETATION",
+                        query_fragment=span,
+                        query_view_digest=canonical_sha256(
+                            query_view.model_dump(mode="json")
+                        ),
+                        reason_code="SCHEMA_AWARE_INTERPRETATION_V2",
                     ),
                 ),
                 reason_code="FIELD_RESOLUTION_ACCEPTED",
                 attempted=True,
+                execution_state=FieldResolutionExecutionState.SUCCEEDED,
             )
 
     planner = SchemaAwarePlanner()
@@ -248,7 +260,11 @@ def test_incomplete_structure_never_claims_field_not_found(
             self,
             _request: SearchRequest,
             _candidates: tuple[FieldCandidate, ...],
+            *,
+            query_view: ResolvedQueryView,
+            atoms: tuple[QueryAtom, ...],
         ) -> FieldResolutionOutcome:
+            del query_view, atoms
             self.field_calls += 1
             raise AssertionError("不完整 schema 不应进入确定性字段解释")
 
@@ -334,7 +350,11 @@ def test_ambiguous_schema_fields_do_not_fall_through_to_generation(
             self,
             request: SearchRequest,
             candidates: tuple[FieldCandidate, ...],
+            *,
+            query_view: ResolvedQueryView,
+            atoms: tuple[QueryAtom, ...],
         ) -> FieldResolutionOutcome:
+            del atoms
             self.field_calls += 1
             start = request.text.index("准备哪些材料")
             return FieldResolutionOutcome(
@@ -347,11 +367,16 @@ def test_ambiguous_schema_fields_do_not_fall_through_to_generation(
                         ),
                         query_span_start=start,
                         query_span_end=start + len("准备哪些材料"),
+                        query_fragment="准备哪些材料",
+                        query_view_digest=canonical_sha256(
+                            query_view.model_dump(mode="json")
+                        ),
                         reason_code="SCHEMA_FIELDS_REMAIN_AMBIGUOUS",
                     ),
                 ),
                 reason_code="FIELD_RESOLUTION_ACCEPTED",
                 attempted=True,
+                execution_state=FieldResolutionExecutionState.SUCCEEDED,
             )
 
     planner = AmbiguousPlanner()
@@ -390,3 +415,98 @@ def test_ambiguous_schema_fields_do_not_fall_through_to_generation(
     assert result.generation_reason_code == "FIELD_RESOLUTION_AMBIGUOUS"
     assert result.display_message is not None
     assert "无法确定唯一字段" in result.display_message
+
+
+def test_field_provider_failure_is_not_rewritten_as_semantic_ambiguity(
+    tmp_path: Path,
+) -> None:
+    """没有合法模型结果时保留系统失败，不能消费初始 AMBIGUOUS。"""
+    title = "开发中心三种工作模式"
+    scope = KnowledgeBaseScope(
+        project_id=deterministic_id("prj", "v14-1-field-provider-failure"),
+        knowledge_base_id=deterministic_id(
+            "kb", "v14-1-field-provider-failure"
+        ),
+    )
+
+    class RejectedPlanner:
+        def __init__(self) -> None:
+            self.field_calls = 0
+
+        def plan_adaptive(self, *_args: object) -> AdaptivePlanOutcome:
+            raise AssertionError("显式来源路径不应执行前置解释")
+
+        def resolve_fields(
+            self,
+            _request: SearchRequest,
+            _candidates: tuple[FieldCandidate, ...],
+            *,
+            query_view: ResolvedQueryView,
+            atoms: tuple[QueryAtom, ...],
+        ) -> FieldResolutionOutcome:
+            del query_view, atoms
+            self.field_calls += 1
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_PROVIDER_UNAVAILABLE",
+                attempted=True,
+                execution_state=(
+                    FieldResolutionExecutionState.REQUEST_REJECTED
+                ),
+                failure_category="PROVIDER_REQUEST_REJECTED",
+                schema_revision="wb08r-field-resolution-v2",
+                schema_sha256=canonical_sha256("schema"),
+                contract_sha256=canonical_sha256("contract"),
+                capability_profile_sha256=canonical_sha256("profile"),
+            )
+
+    planner = RejectedPlanner()
+    generator = GroundedFixtureGenerator()
+    field_trace: dict[str, object] = {}
+    with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
+        runtime.retrieval = runtime.retrieval.with_generation(
+            generator,
+            serving_identity="unit-v14-1-field-provider-failure",
+        )
+        runtime.persistence.control.put_project(scope.project_id, "V14.1")
+        runtime.persistence.control.put_knowledge_base(
+            scope.knowledge_base_id,
+            scope.project_id,
+            "V14.1 KB",
+            profile_id="dev-p06-memory",
+        )
+        runtime.persistence.builder.build_and_activate(
+            project_id=scope.project_id,
+            knowledge_base_id=scope.knowledge_base_id,
+            documents=(_table_document(scope, title),),
+            idempotency_key="v14-1-field-provider-failure",
+            budgets=runtime.persistence.default_budgets(),
+        )
+        runtime.retrieval._adaptive_planner = planner  # type: ignore[assignment]
+        search_request = SearchRequest(
+            scope=scope,
+            text=(f"《{title}》中，需求快验开始前必须准备哪些材料？"),
+        )
+        result = runtime.retrieval.search_and_answer(search_request)
+        repeated = runtime.retrieval.search_and_answer(search_request)
+        field_trace = dict(
+            next(
+                event
+                for event in runtime.retrieval._trace.events(result.trace_id)  # type: ignore[attr-defined]
+                if event.event_name == "retrieval.field_resolution"
+            ).attributes
+        )
+
+    assert planner.field_calls == 2
+    assert generator.calls == 0
+    assert result.status is ConfidenceStatus.PROVIDER_UNAVAILABLE
+    assert result.answer is None
+    assert repeated.result_origin == "fresh"
+    assert result.generation_reason_code == (
+        "FIELD_RESOLUTION_PROVIDER_UNAVAILABLE"
+    )
+    assert field_trace["execution_state"] == "REQUEST_REJECTED"
+    assert field_trace["semantic_resolutions_consumed"] is False
+    assert field_trace["pending_atom_ids"] == ["A1"]
+    assert field_trace["resolutions"][0]["resolution_origin"] == (
+        "PENDING_INITIAL"
+    )

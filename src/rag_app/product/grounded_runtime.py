@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from threading import RLock
 from time import perf_counter
-from typing import Literal, TypedDict, TypeVar
+from typing import TypedDict, TypeVar
 
 from pydantic import (
     Field,
@@ -29,9 +29,23 @@ from rag_app.adapters.providers.budget_transport import (
     provider_budget_scope,
     provider_data_scope,
 )
+from rag_app.adapters.providers.field_resolution_wire import (
+    FIELD_RESOLUTION_SCHEMA_REVISION,
+    FieldResolutionContractContext,
+    FieldResolutionWireError,
+    build_field_resolution_contract,
+    render_wire_schema,
+    validate_field_response,
+)
+from rag_app.adapters.providers.field_resolution_wire import (
+    request_payload as field_resolution_request_payload,
+)
 from rag_app.adapters.providers.openai_compatible import (
     OpenAICompatibleChatAdapter,
     OpenAICompatibleChatConfig,
+)
+from rag_app.adapters.providers.structured_contract import (
+    wb08r_structured_output_profile,
 )
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.application.answering.semantic_validation import (
@@ -40,6 +54,7 @@ from rag_app.application.answering.semantic_validation import (
 )
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlanOutcome,
+    FieldResolutionExecutionState,
     FieldResolutionOutcome,
     ReasoningEffort,
 )
@@ -61,7 +76,10 @@ from rag_app.application.retrieval.rewrite_constraints import (
 from rag_app.core.capabilities import ComponentCapabilities, ComponentDescriptor
 from rag_app.core.errors import (
     PolicyDenied,
+    ProviderInputTooLarge,
+    ProviderInvalidResponse,
     ProviderQuotaExhausted,
+    ProviderRequestRejected,
     QueryCancelled,
     RagError,
 )
@@ -70,18 +88,17 @@ from rag_app.core.models import (
     AnswerClaim,
     AnswerDraft,
     FieldCandidate,
-    FieldResolution,
-    FieldResolutionStatus,
     ProviderCall,
     ProviderHealth,
     QueryAnalysis,
     QuerySemantics,
     QueryVariant,
     RequestedAnswerType,
+    ResolvedQueryView,
     SearchRequest,
 )
 from rag_app.core.models.common import FrozenModel
-from rag_app.core.models.query_plan import QUERY_PLAN_SCHEMA_REVISION
+from rag_app.core.models.query_plan import QUERY_PLAN_SCHEMA_REVISION, QueryAtom
 from rag_app.core.models.relation_review import (
     RelationReviewRequest,
     RelationReviewResponse,
@@ -192,26 +209,6 @@ class _InterpretPayload(FrozenModel):
         }:
             raise ValueError("只有列举或计数问题可以返回 expected_count。")
         return self
-
-
-class _FieldResolutionChoice(FrozenModel):
-    """模型只回传短候选 ID、映射状态和逐字原问片段。"""
-
-    a: str = Field(pattern=r"^A[1-4]$")
-    s: Literal[
-        "SUPPORTED_PARAPHRASE",
-        "RELATED_FIELD",
-        "AMBIGUOUS",
-        "NOT_FOUND",
-    ]
-    c: tuple[str, ...] = Field(default=(), max_length=16)
-    q: str = Field(min_length=1, max_length=160)
-
-
-class _FieldResolutionPayload(FrozenModel):
-    """一次 schema-aware 字段解释的完整返回。"""
-
-    r: tuple[_FieldResolutionChoice, ...] = Field(min_length=1, max_length=4)
 
 
 _AdaptivePlanPayload = MinimalPlanPayload
@@ -411,6 +408,9 @@ class ProductGroundedModel:
                 ),
                 disable_thinking=self.settings.disable_thinking,
                 structured_output_mode=self.settings.structured_output_mode,
+                structured_output_profile=(
+                    self.settings.structured_output_profile_for(model)
+                ),
             )
         return AliyunChatConfig(
             model=model,
@@ -651,98 +651,114 @@ class ProductGroundedModel:
             schema_sha256=canonical_sha256(schema),
         )
 
-    def resolve_fields(
+    def resolve_fields(  # noqa: PLR0911
         self,
         request: SearchRequest,
         candidates: tuple[FieldCandidate, ...],
+        *,
+        query_view: ResolvedQueryView,
+        atoms: tuple[QueryAtom, ...],
     ) -> FieldResolutionOutcome:
-        """复用一次 ``query.interpret``，在真实 schema 后选择字段 ID。"""
+        """从单一字段合同发送并验证一次 ``query.interpret``。"""
         if not candidates:
             return FieldResolutionOutcome()
         if len(request.text) > _MAX_REWRITE_CHARS:
             return FieldResolutionOutcome(
                 reason_code="FIELD_RESOLUTION_INPUT_LIMIT",
                 failure_category="FIELD_RESOLUTION_INPUT_LIMIT",
+                execution_state=FieldResolutionExecutionState.OUTPUT_INVALID,
             )
-        atom_ids = tuple(dict.fromkeys(item.atom_id for item in candidates))
-        candidate_ids = {item.candidate_id for item in candidates}
-        schema_revision = "wb08r-field-resolution-v1"
-        schema: dict[str, object] = {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["r"],
-            "properties": {
-                "r": {
-                    "type": "array",
-                    "minItems": len(atom_ids),
-                    "maxItems": len(atom_ids),
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["a", "s", "c", "q"],
-                        "properties": {
-                            "a": {"type": "string", "enum": list(atom_ids)},
-                            "s": {
-                                "type": "string",
-                                "enum": [
-                                    "SUPPORTED_PARAPHRASE",
-                                    "RELATED_FIELD",
-                                    "AMBIGUOUS",
-                                    "NOT_FOUND",
-                                ],
-                            },
-                            "c": {
-                                "type": "array",
-                                "maxItems": 16,
-                                "uniqueItems": True,
-                                "items": {
-                                    "type": "string",
-                                    "enum": sorted(candidate_ids),
-                                },
-                            },
-                            "q": {"type": "string", "minLength": 1},
-                        },
-                    },
-                }
-            },
-        }
+        try:
+            contract = build_field_resolution_contract(
+                FieldResolutionContractContext(
+                    query_view=query_view,
+                    atoms=atoms,
+                    candidates=candidates,
+                )
+            )
+        except (FieldResolutionWireError, ValidationError, ValueError) as error:
+            reason = getattr(error, "reason_code", type(error).__name__)
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_CONTRACT_INVALID",
+                failure_category=str(reason),
+                execution_state=FieldResolutionExecutionState.OUTPUT_INVALID,
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+            )
+        compatible_adapter = (
+            self.adapter
+            if isinstance(self.adapter, OpenAICompatibleChatAdapter)
+            else None
+        )
+        actual_adapter = compatible_adapter is not None
+        profile = (
+            compatible_adapter.compatible_config.structured_output_profile
+            if compatible_adapter is not None
+            else wb08r_structured_output_profile(
+                profile_revision="domain-unit-test-v1",
+                service_identity_sha256=canonical_sha256("DOMAIN_UNIT_TEST"),
+                model="domain-unit-test",
+                chat_template_revision="domain-unit-test",
+                mode="response_format",
+                grammar_backend="domain-unit-test",
+                deadline_ms=round(
+                    self.settings.planner_transport_timeout_seconds * 1000
+                ),
+                field_resolution_output_tokens=(
+                    self.settings.field_resolution_max_output_tokens
+                ),
+                qualification_evidence_sha256=canonical_sha256(
+                    "DOMAIN_UNIT_TEST_EVIDENCE"
+                ),
+            )
+        )
+        if profile is None:
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_CAPABILITY_UNQUALIFIED",
+                failure_category="CAPABILITY_PROFILE_MISSING",
+                execution_state=FieldResolutionExecutionState.REQUEST_REJECTED,
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                contract_sha256=contract.contract_sha256,
+            )
+        try:
+            schema = render_wire_schema(contract, profile)
+        except (FieldResolutionWireError, ValueError) as error:
+            reason = getattr(error, "reason_code", str(error))
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_CAPABILITY_UNQUALIFIED",
+                failure_category=str(reason),
+                execution_state=FieldResolutionExecutionState.REQUEST_REJECTED,
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                contract_sha256=contract.contract_sha256,
+                capability_profile_sha256=profile.profile_sha256,
+            )
+        schema_sha256 = canonical_sha256(schema)
+        system = (
+            "只在服务端给出的真实表结构字段候选中解析用户所问的"
+            "基础字段，不回答问题，不判断必须、先后、禁止等附加命题。"
+            "SUPPORTED_PARAPHRASE 仅用于同一目标下可接受的等义字段；"
+            "RELATED_FIELD 表示只能作为相关资料；多个字段仍可能成立时"
+            "返回 AMBIGUOUS；没有候选时返回 NOT_FOUND。"
+            "c 只填当前 Atom 给定的短 ID，不能返回 EXACT；"
+            "q 必须逐字摘自当前 Atom 的用户问题片段。"
+            "输出只包含符合字段合同的 JSON 对象。"
+        )
+        if not actual_adapter:
+            system += "输出schema：" + json.dumps(
+                schema, ensure_ascii=False, separators=(",", ":")
+            )
         messages = (
             ChatMessage(
                 role="system",
-                content=(
-                    "只在服务端给出的真实表结构字段候选中解析用户所问的"
-                    "基础字段，不回答问题，不判断必须、先后、禁止等附加命题。"
-                    "SUPPORTED_PARAPHRASE 仅用于同一目标下可接受的等义字段；"
-                    "RELATED_FIELD 表示只能作为相关资料；多个字段仍可能成立时"
-                    "返回 AMBIGUOUS；没有候选时返回 NOT_FOUND。"
-                    "c 只填给定短 ID，q 必须逐字摘自用户问题。"
-                    "输出只包含符合 JSON Schema 的对象。"
-                ),
+                content=system,
             ),
             ChatMessage(
                 role="user",
                 content=json.dumps(
-                    {
-                        "question": request.text,
-                        "candidates": [
-                            {
-                                "id": item.candidate_id,
-                                "atom": item.atom_id,
-                                "target": item.target_label,
-                                "field": item.field_label,
-                                "value_preview": item.value_preview,
-                            }
-                            for item in candidates
-                        ],
-                    },
+                    field_resolution_request_payload(contract),
                     ensure_ascii=False,
+                    separators=(",", ":"),
                 ),
             ),
-        )
-        mode = (
-            self.adapter.compatible_config.structured_output_mode
-            if isinstance(self.adapter, OpenAICompatibleChatAdapter)
-            else "none"
         )
         started = perf_counter()
         timeout = self.settings.planner_transport_timeout_seconds
@@ -751,82 +767,80 @@ class ProductGroundedModel:
             schema_args = (
                 {
                     "json_schema": schema,
-                    "schema_revision": schema_revision,
+                    "schema_revision": FIELD_RESOLUTION_SCHEMA_REVISION,
                 }
-                if isinstance(self.adapter, OpenAICompatibleChatAdapter)
+                if actual_adapter
                 else {}
             )
             with self._scope("query.interpret"):
                 completion = self.adapter.complete(
                     messages,
                     operation="query.interpret",
-                    max_output_tokens=self.settings.planner_max_output_tokens,
+                    max_output_tokens=(profile.field_resolution_output_tokens),
                     timeout_seconds=timeout,
                     **schema_args,
                 )
-            calls = (completion.call,)
-            payload_data = (
-                json.loads(completion.content)
-                if mode != "none"
-                else extract_json_object(completion.content)
+            calls = (
+                ()
+                if getattr(completion, "call", None) is None
+                else (completion.call,)
             )
-            payload = _FieldResolutionPayload.model_validate(payload_data)
-            if tuple(dict.fromkeys(item.a for item in payload.r)) != atom_ids:
-                raise ValueError("FIELD_RESOLUTION_ATOM_SET_MISMATCH")
-            resolutions: list[FieldResolution] = []
-            candidates_by_atom = {
-                atom_id: {
-                    item.candidate_id
-                    for item in candidates
-                    if item.atom_id == atom_id
-                }
-                for atom_id in atom_ids
-            }
-            for item in payload.r:
-                if not set(item.c) <= candidates_by_atom[item.a]:
-                    raise ValueError("FIELD_RESOLUTION_CANDIDATE_OUT_OF_SCOPE")
-                span_start = request.text.find(item.q)
-                if span_start < 0:
-                    raise ValueError("FIELD_RESOLUTION_QUERY_SPAN_INVALID")
-                resolutions.append(
-                    FieldResolution(
-                        atom_id=item.a,
-                        status=FieldResolutionStatus(item.s),
-                        candidate_ids=item.c,
-                        query_span_start=span_start,
-                        query_span_end=span_start + len(item.q),
-                        reason_code="SCHEMA_AWARE_INTERPRETATION",
-                    )
-                )
+            resolutions = validate_field_response(completion.content, contract)
         except RagError as error:
+            if isinstance(
+                error, (ProviderRequestRejected, ProviderInputTooLarge)
+            ):
+                execution_state = FieldResolutionExecutionState.REQUEST_REJECTED
+            elif isinstance(error, ProviderInvalidResponse):
+                execution_state = FieldResolutionExecutionState.OUTPUT_INVALID
+            else:
+                execution_state = FieldResolutionExecutionState.TRANSPORT_FAILED
+            provider_reason = str(
+                dict(error.details).get("reason_code", error.code)
+            )
             return FieldResolutionOutcome(
                 calls=_error_provider_calls(error),
                 reason_code="FIELD_RESOLUTION_PROVIDER_UNAVAILABLE",
                 attempted=True,
-                failure_category=error.code,
+                failure_category=provider_reason,
+                execution_state=execution_state,
                 latency_ms=round((perf_counter() - started) * 1000),
                 transport_timeout_ms=round(timeout * 1000),
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                schema_sha256=schema_sha256,
+                contract_sha256=contract.contract_sha256,
+                capability_profile_sha256=profile.profile_sha256,
             )
-        except (json.JSONDecodeError, ValidationError, ValueError) as error:
+        except FieldResolutionWireError as error:
             return FieldResolutionOutcome(
                 calls=calls,
                 reason_code="FIELD_RESOLUTION_OUTPUT_INVALID",
                 attempted=True,
-                failure_category=type(error).__name__,
+                failure_category=error.reason_code,
+                execution_state=FieldResolutionExecutionState.OUTPUT_INVALID,
                 latency_ms=round((perf_counter() - started) * 1000),
                 transport_timeout_ms=round(timeout * 1000),
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                schema_sha256=schema_sha256,
+                contract_sha256=contract.contract_sha256,
+                capability_profile_sha256=profile.profile_sha256,
             )
         usage = getattr(completion, "usage", None)
         return FieldResolutionOutcome(
-            resolutions=tuple(resolutions),
+            resolutions=resolutions,
             calls=calls,
             reason_code="FIELD_RESOLUTION_ACCEPTED",
             attempted=True,
+            execution_state=FieldResolutionExecutionState.SUCCEEDED,
             latency_ms=round((perf_counter() - started) * 1000),
             input_tokens=getattr(usage, "prompt_tokens", None),
             output_tokens=getattr(usage, "completion_tokens", None),
             finish_reason=getattr(completion, "finish_reason", None),
             transport_timeout_ms=round(timeout * 1000),
+            schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+            schema_sha256=schema_sha256,
+            contract_sha256=contract.contract_sha256,
+            capability_profile_sha256=profile.profile_sha256,
         )
 
     def _plan_adaptive_once(  # noqa: PLR0913

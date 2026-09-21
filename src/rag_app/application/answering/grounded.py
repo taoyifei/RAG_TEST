@@ -2648,6 +2648,7 @@ class GroundedAnsweringService:
             }
             eligible &= deferred_atoms
         blocked_field_atom_ids: set[str] = set()
+        pending_field_atom_ids: set[str] = set()
         field_resolution_reason: str | None = None
         if (
             generation_evidence_pack is not None
@@ -2657,10 +2658,14 @@ class GroundedAnsweringService:
                 item.atom_id
                 for item in generation_evidence_pack.field_candidates
             }
+            pending_field_atom_ids = set(
+                generation_evidence_pack.field_resolution_pending_atom_ids
+            )
             blocked_resolutions = tuple(
                 item
                 for item in generation_evidence_pack.field_resolutions
                 if item.atom_id in candidate_atom_ids
+                and item.atom_id not in pending_field_atom_ids
                 and item.status
                 in {
                     FieldResolutionStatus.AMBIGUOUS,
@@ -2669,9 +2674,14 @@ class GroundedAnsweringService:
             )
             blocked_field_atom_ids = {
                 item.atom_id for item in blocked_resolutions
-            }
+            } | pending_field_atom_ids
             eligible -= blocked_field_atom_ids
-            if any(
+            if pending_field_atom_ids:
+                field_resolution_reason = (
+                    generation_evidence_pack.field_resolution_failure_reason
+                    or "FIELD_RESOLUTION_PROVIDER_UNAVAILABLE"
+                )
+            elif any(
                 item.status is FieldResolutionStatus.AMBIGUOUS
                 for item in blocked_resolutions
             ):
@@ -4117,6 +4127,11 @@ class GroundedAnsweringService:
             )
             if pre.status is AtomStatus.CONTRADICTORY:
                 final = AtomStatus.CONTRADICTORY
+            elif atom.atom_id in pending_field_atom_ids:
+                final = AtomStatus.MISSING
+                missing[atom.atom_id] = (
+                    MissingAtomReason.SYSTEM_DEPENDENCY_FAILED
+                )
             elif atom.atom_id in covered and _natural_atom_complete(
                 atom,
                 atom_support_matrix,
@@ -4253,6 +4268,13 @@ class GroundedAnsweringService:
                     for atom_id, status in coverage
                     if status != AtomStatus.SUPPORTED.value
                 }
+                for atom_id in pending_field_atom_ids:
+                    if atom_id in dict(coverage) and dict(coverage)[
+                        atom_id
+                    ] != (AtomStatus.SUPPORTED.value):
+                        missing[atom_id] = (
+                            MissingAtomReason.SYSTEM_DEPENDENCY_FAILED
+                        )
         answer = render_natural_answer(
             query_plan,
             atom_support_matrix,
@@ -4382,6 +4404,8 @@ class GroundedAnsweringService:
             calls=tuple(calls),
             reason_code="CONTRADICTORY_EVIDENCE"
             if has_conflict
+            else field_resolution_reason
+            if pending_field_atom_ids
             else "LIMITED_ANSWER"
             if missing
             else "CLAIMS_VALIDATED",

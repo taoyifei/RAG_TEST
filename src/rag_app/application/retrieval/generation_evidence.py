@@ -153,6 +153,11 @@ class GenerationEvidencePack:
     field_candidates: tuple[FieldCandidate, ...] = ()
     field_resolutions: tuple[FieldResolution, ...] = ()
     field_resolution_active: bool = False
+    field_resolution_execution_state: str = "NOT_NEEDED"
+    field_resolution_failure_reason: str | None = None
+    field_resolution_pending_atom_ids: tuple[str, ...] = ()
+    field_resolution_contract_sha256: str | None = None
+    field_resolution_capability_profile_sha256: str | None = None
 
     @property
     def evidence(self) -> tuple[EvidenceItem, ...]:

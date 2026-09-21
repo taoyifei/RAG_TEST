@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import unicodedata
 from collections import defaultdict
 
 from rag_app.application.retrieval.generation_evidence import (
     GenerationEvidencePack,
 )
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models.answer_plan import (
     FieldCandidate,
     FieldResolution,
@@ -126,6 +128,7 @@ def _default_resolution(
     query_view: ResolvedQueryView,
 ) -> FieldResolution:
     """先冻结可形式验证的精确轴；其余不猜等义。"""
+    query_view_digest = canonical_sha256(query_view.model_dump(mode="json"))
     exact = tuple(
         item
         for item in candidates
@@ -141,6 +144,7 @@ def _default_resolution(
             atom_id=atom_id,
             status=FieldResolutionStatus.EXACT,
             candidate_ids=(exact[0].candidate_id,),
+            query_view_digest=query_view_digest,
             reason_code="EXACT_SCHEMA_AXES",
         )
     if len(exact) > 1:
@@ -148,6 +152,7 @@ def _default_resolution(
             atom_id=atom_id,
             status=FieldResolutionStatus.AMBIGUOUS,
             candidate_ids=tuple(item.candidate_id for item in exact),
+            query_view_digest=query_view_digest,
             reason_code="MULTIPLE_EXACT_SCHEMA_FIELDS",
         )
     if len(candidates) == 1:
@@ -155,6 +160,7 @@ def _default_resolution(
             atom_id=atom_id,
             status=FieldResolutionStatus.RELATED_FIELD,
             candidate_ids=(candidates[0].candidate_id,),
+            query_view_digest=query_view_digest,
             reason_code="SINGLE_RELATED_SCHEMA_FIELD",
         )
     if candidates:
@@ -162,11 +168,13 @@ def _default_resolution(
             atom_id=atom_id,
             status=FieldResolutionStatus.AMBIGUOUS,
             candidate_ids=tuple(item.candidate_id for item in candidates),
+            query_view_digest=query_view_digest,
             reason_code="SCHEMA_FIELDS_REQUIRE_INTERPRETATION",
         )
     return FieldResolution(
         atom_id=atom_id,
         status=FieldResolutionStatus.NOT_FOUND,
+        query_view_digest=query_view_digest,
         reason_code="NO_SCHEMA_FIELD_FOR_TARGET",
     )
 
@@ -198,7 +206,11 @@ def merge_field_resolutions(
 ) -> tuple[FieldResolution, ...]:
     """核对模型仅选择真实 ID；精确 schema 结果不能被模型覆盖。"""
     candidate_by_id = {item.candidate_id: item for item in candidates}
+    proposal_ids = tuple(item.atom_id for item in proposed)
+    if len(proposal_ids) != len(set(proposal_ids)):
+        return defaults
     proposals = {item.atom_id: item for item in proposed}
+    query_view_digest = canonical_sha256(query_view.model_dump(mode="json"))
     result: list[FieldResolution] = []
     for default in defaults:
         if default.status is FieldResolutionStatus.EXACT:
@@ -221,9 +233,40 @@ def merge_field_resolutions(
             result.append(default)
             continue
         if (
+            proposal.query_view_digest != query_view_digest
+            or proposal.span_basis != "BUSINESS_QUERY"
+        ):
+            result.append(default)
+            continue
+        if (
             proposal.query_span_start is not None
             and proposal.query_span_end is not None
-            and proposal.query_span_end > len(query_view.original_query)
+            and (
+                proposal.query_span_end > len(query_view.business_query)
+                or query_view.business_query[
+                    proposal.query_span_start : proposal.query_span_end
+                ]
+                != proposal.query_fragment
+            )
+        ):
+            result.append(default)
+            continue
+        if (
+            proposal.original_query_span_start is not None
+            and proposal.original_query_span_end is not None
+            and (
+                proposal.original_query_span_end
+                > len(query_view.original_query)
+                or unicodedata.normalize(
+                    "NFKC",
+                    query_view.original_query[
+                        proposal.original_query_span_start : (
+                            proposal.original_query_span_end
+                        )
+                    ],
+                )
+                != proposal.query_fragment
+            )
         ):
             result.append(default)
             continue

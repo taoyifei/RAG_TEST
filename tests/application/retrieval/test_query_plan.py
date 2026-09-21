@@ -14,13 +14,18 @@ from rag_app.application.retrieval.context_resolution import (
     degraded_query_plan,
     resolve_root_query,
 )
+from rag_app.application.retrieval.source_scope import (
+    resolve_query_source_context,
+)
 from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
     FieldCandidate,
     FieldResolutionStatus,
     KnowledgeBaseScope,
+    ResolvedQueryView,
     SearchRequest,
 )
+from rag_app.core.models.query_plan import AtomAnswerShape, QueryAtom
 from rag_app.product.grounded_runtime import ProductGroundedModel
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
 
@@ -126,6 +131,29 @@ def _field_response(
     model.adapter = Adapter()  # type: ignore[assignment]
     model.settings = KnowledgeBaseModelSettings()  # type: ignore[assignment]
     return model
+
+
+def _field_contract_context(
+    request: SearchRequest,
+    *fragments: str,
+) -> tuple[ResolvedQueryView, tuple[QueryAtom, ...]]:
+    """为旧 DOMAIN_UNIT_TEST 构造生产同形的问题视图与 Atom。"""
+    query_view = resolve_query_source_context(
+        request.text,
+        (),
+        registry_revision="unit-field-contract-v1",
+    ).query_view
+    atoms = tuple(
+        QueryAtom(
+            atom_id=f"A{index}",
+            target=fragment,
+            relation="对应字段",
+            answer_shape=AtomAnswerShape.FACT,
+            original_fragment=fragment,
+        )
+        for index, fragment in enumerate(fragments, start=1)
+    )
+    return query_view, atoms
 
 
 @pytest.mark.parametrize(
@@ -281,7 +309,10 @@ def test_field_resolution_reuses_one_interpret_call_after_schema() -> None:
         observed_calls,
     )
 
-    outcome = model.resolve_fields(request, candidates)
+    query_view, atoms = _field_contract_context(request, request.text)
+    outcome = model.resolve_fields(
+        request, candidates, query_view=query_view, atoms=atoms
+    )
 
     assert len(observed_calls) == 1
     assert observed_calls[0]["operation"] == "query.interpret"
@@ -325,7 +356,10 @@ def test_field_resolution_rejects_cross_atom_candidate_without_retry() -> None:
         observed_calls,
     )
 
-    outcome = model.resolve_fields(request, candidates)
+    query_view, atoms = _field_contract_context(request, "甲", "乙")
+    outcome = model.resolve_fields(
+        request, candidates, query_view=query_view, atoms=atoms
+    )
 
     assert len(observed_calls) == 1
     assert outcome.reason_code == "FIELD_RESOLUTION_OUTPUT_INVALID"
@@ -350,9 +384,12 @@ def test_field_resolution_rejects_non_verbatim_query_span() -> None:
         observed_calls,
     )
 
+    query_view, atoms = _field_contract_context(request, request.text)
     outcome = model.resolve_fields(
         request,
         (_field_candidate("F1", atom_id="A1", column=1, field_label="输入"),),
+        query_view=query_view,
+        atoms=atoms,
     )
 
     assert len(observed_calls) == 1

@@ -36,6 +36,9 @@ from rag_app.adapters.providers.http_common import (
     invalid_response_error,
     provider_error,
 )
+from rag_app.adapters.providers.structured_contract import (
+    StructuredOutputCapabilityProfile,
+)
 from rag_app.adapters.providers.validation import (
     finite_score,
     ordered_vectors,
@@ -132,11 +135,19 @@ class OpenAICompatibleChatConfig(FrozenModel):
     structured_output_mode: Literal[
         "none", "response_format", "structured_outputs", "guided_json"
     ] = "none"
+    structured_output_profile: StructuredOutputCapabilityProfile | None = None
 
     @model_validator(mode="after")
     def _validate_thinking_strategy(self) -> OpenAICompatibleChatConfig:
         if self.disable_thinking and not self.disable_thinking_supported:
             raise ValueError("关闭 thinking 前必须确认 Provider 支持该参数。")
+        profile = self.structured_output_profile
+        if profile is not None and (
+            self.structured_output_mode == "none"
+            or profile.mode != self.structured_output_mode
+            or profile.model != self.model
+        ):
+            raise ValueError("结构化输出能力合同与模型或固定模式不一致。")
         return self
 
 
@@ -506,6 +517,13 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             json_schema=json_schema,
             schema_revision=schema_revision,
         )
+        profile = self._compatible_config.structured_output_profile
+        if (
+            json_schema is not None
+            and schema_revision is not None
+            and profile is not None
+        ):
+            profile.assert_schema(schema_revision, json_schema)
         estimated_tokens = message_token_estimate(messages) + (
             _schema_payload_tokens(payload)
         )
@@ -525,6 +543,15 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
                     "schema_family": schema_revision.split("-v", 1)[0],
                     "schema_revision": schema_revision,
                     "schema_sha256": canonical_sha256(json_schema),
+                }
+            )
+        if profile is not None:
+            request_diagnostics.update(
+                {
+                    "grammar_backend_fingerprint": (
+                        profile.grammar_backend_fingerprint
+                    ),
+                    "capability_profile_sha256": profile.profile_sha256,
                 }
             )
         if request_label is not None:

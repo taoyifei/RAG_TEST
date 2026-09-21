@@ -32,6 +32,7 @@ from rag_app.core.errors import (
     ProviderInvalidResponse,
     ProviderQuotaExhausted,
     ProviderRateLimited,
+    ProviderRequestRejected,
     ProviderUnavailable,
     QueryCancelled,
     RagError,
@@ -64,6 +65,7 @@ _SAFE_CONTENT_TYPE = re.compile(
 _SAFE_REQUEST_DIAGNOSTIC_KEYS = frozenset(
     {
         "grammar_backend_fingerprint",
+        "capability_profile_sha256",
         "output_budget",
         "preflight_estimated_tokens",
         "purpose",
@@ -71,6 +73,14 @@ _SAFE_REQUEST_DIAGNOSTIC_KEYS = frozenset(
         "schema_family",
         "schema_revision",
         "schema_sha256",
+    }
+)
+_CONTEXT_CAPACITY_REASON_CODES = frozenset(
+    {
+        "context_length_exceeded",
+        "input_too_long",
+        "max_context_length_exceeded",
+        "prompt_too_long",
     }
 )
 _StreamValue = TypeVar("_StreamValue")
@@ -1233,12 +1243,27 @@ def provider_error(failure: ProviderHttpError, *, stage: str) -> RagError:
             stage=stage,
             details={"reason_code": failure.reason_code},
         )
-    elif failure.category is ProviderFailureCategory.INPUT_INVALID:
+    elif (
+        failure.category is ProviderFailureCategory.INPUT_INVALID
+        and failure.reason_code.casefold() in _CONTEXT_CAPACITY_REASON_CODES
+    ):
         error = ProviderInputTooLarge(
-            "Provider 拒绝了调用方输入。",
+            "Provider 明确报告输入超过上下文容量。",
             stage=stage,
             retryable=False,
             details={"reason_code": failure.reason_code},
+        )
+    elif failure.category is ProviderFailureCategory.INPUT_INVALID:
+        reason_code = (
+            "REQUEST_REJECTED_UNKNOWN"
+            if failure.reason_code in {"HTTP_400", "HTTP_422"}
+            else failure.reason_code
+        )
+        error = ProviderRequestRejected(
+            "Provider 拒绝了请求合同。",
+            stage=stage,
+            retryable=False,
+            details={"reason_code": reason_code},
         )
     elif failure.category is ProviderFailureCategory.RESPONSE_CONTRACT:
         error = ProviderInvalidResponse(

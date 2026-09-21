@@ -33,6 +33,7 @@ from rag_app.application.answering.source_projection import (
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlannerPort,
     AdaptivePlanOutcome,
+    FieldResolutionExecutionState,
     FieldResolutionOutcome,
     ReasoningEffort,
     catalog_matches,
@@ -447,13 +448,16 @@ def _scope_candidate_ledger(  # noqa: PLR0913
     }
 
 
-def _answer_binding_cache_key(
+def _answer_binding_cache_key(  # noqa: PLR0913
     base_cache_key: str,
     query_plan: QueryPlan,
     candidates: tuple[FieldCandidate, ...],
     resolutions: tuple[FieldResolution, ...],
     *,
     schema_complete_atom_ids: frozenset[str],
+    field_execution_state: str,
+    field_contract_sha256: str | None,
+    capability_profile_sha256: str | None,
 ) -> str:
     """把来源、基础字段绑定和完整要求加入最终回答缓存身份。"""
     candidates_by_id = {item.candidate_id: item for item in candidates}
@@ -476,6 +480,8 @@ def _answer_binding_cache_key(
             ),
             resolution.query_span_start,
             resolution.query_span_end,
+            resolution.query_view_digest,
+            resolution.span_basis,
             resolution.reason_code,
         )
         for resolution in resolutions
@@ -486,6 +492,9 @@ def _answer_binding_cache_key(
             "query_plan_id": query_plan.plan_id,
             "schema_complete_atom_ids": sorted(schema_complete_atom_ids),
             "field_bindings": selected,
+            "field_execution_state": field_execution_state,
+            "field_contract_sha256": field_contract_sha256,
+            "capability_profile_sha256": capability_profile_sha256,
             "answer_plan_schema_revision": ANSWER_PLAN_SCHEMA_REVISION,
             "answer_plan_policy_revision": ANSWER_PLAN_POLICY_REVISION,
         }
@@ -2290,6 +2299,9 @@ class RetrievalService:
             for item in field_candidates
             if item.atom_id in unresolved_atom_ids
         )
+        interpretable_atom_ids = {
+            item.atom_id for item in interpretable_candidates
+        }
         if (
             schema_field_resolution_deferred
             and interpretable_candidates
@@ -2300,19 +2312,59 @@ class RetrievalService:
                     update={"text": source_context.query_view.business_query}
                 ),
                 interpretable_candidates,
+                query_view=source_context.query_view,
+                atoms=tuple(
+                    atom
+                    for atom in query_plan.atoms
+                    if atom.atom_id in interpretable_atom_ids
+                ),
             )
             provider_calls.extend(field_outcome.calls)
-            field_resolutions = merge_field_resolutions(
-                field_resolutions,
-                field_outcome.resolutions,
-                field_candidates,
-                source_context.query_view,
-            )
+            if (
+                field_outcome.execution_state
+                is FieldResolutionExecutionState.SUCCEEDED
+            ):
+                field_resolutions = merge_field_resolutions(
+                    field_resolutions,
+                    field_outcome.resolutions,
+                    field_candidates,
+                    source_context.query_view,
+                )
+        field_resolution_pending_atom_ids = (
+            tuple(sorted(interpretable_atom_ids))
+            if schema_field_resolution_deferred
+            and interpretable_candidates
+            and field_outcome.execution_state
+            is not FieldResolutionExecutionState.SUCCEEDED
+            else ()
+        )
+        field_resolution_system_failed = bool(field_resolution_pending_atom_ids)
+        validated_field_atom_ids = (
+            {item.atom_id for item in field_outcome.resolutions}
+            if field_outcome.execution_state
+            is FieldResolutionExecutionState.SUCCEEDED
+            else set()
+        )
         generation_evidence_pack = replace(
             generation_evidence_pack,
             field_candidates=field_candidates,
             field_resolutions=field_resolutions,
             field_resolution_active=schema_field_resolution_active,
+            field_resolution_execution_state=(
+                field_outcome.execution_state.value
+            ),
+            field_resolution_failure_reason=(
+                field_outcome.reason_code
+                if field_resolution_system_failed
+                else None
+            ),
+            field_resolution_pending_atom_ids=(
+                field_resolution_pending_atom_ids
+            ),
+            field_resolution_contract_sha256=(field_outcome.contract_sha256),
+            field_resolution_capability_profile_sha256=(
+                field_outcome.capability_profile_sha256
+            ),
         )
         self._record(
             trace_id,
@@ -2351,6 +2403,24 @@ class RetrievalService:
                             item.query_span_start,
                             item.query_span_end,
                         ),
+                        "query_fragment_sha256": (
+                            None
+                            if item.query_fragment is None
+                            else canonical_sha256(item.query_fragment)
+                        ),
+                        "query_view_digest": item.query_view_digest,
+                        "span_basis": item.span_basis,
+                        "original_query_span": (
+                            item.original_query_span_start,
+                            item.original_query_span_end,
+                        ),
+                        "resolution_origin": (
+                            "PENDING_INITIAL"
+                            if item.atom_id in field_resolution_pending_atom_ids
+                            else "MODEL_VALIDATED"
+                            if item.atom_id in validated_field_atom_ids
+                            else "DETERMINISTIC_OR_SCHEMA_DEFAULT"
+                        ),
                         "reason_code": item.reason_code,
                     }
                     for item in field_resolutions
@@ -2358,6 +2428,18 @@ class RetrievalService:
                 "reason_code": field_outcome.reason_code,
                 "attempted": field_outcome.attempted,
                 "failure_category": field_outcome.failure_category,
+                "execution_state": field_outcome.execution_state.value,
+                "semantic_resolutions_consumed": (
+                    field_outcome.execution_state
+                    is FieldResolutionExecutionState.SUCCEEDED
+                ),
+                "pending_atom_ids": field_resolution_pending_atom_ids,
+                "schema_revision": field_outcome.schema_revision,
+                "schema_sha256": field_outcome.schema_sha256,
+                "contract_sha256": field_outcome.contract_sha256,
+                "capability_profile_sha256": (
+                    field_outcome.capability_profile_sha256
+                ),
                 "latency_ms": field_outcome.latency_ms,
                 "input_tokens": field_outcome.input_tokens,
                 "output_tokens": field_outcome.output_tokens,
@@ -2465,6 +2547,11 @@ class RetrievalService:
                 field_candidates,
                 field_resolutions,
                 schema_complete_atom_ids=schema_complete_atom_ids,
+                field_execution_state=field_outcome.execution_state.value,
+                field_contract_sha256=field_outcome.contract_sha256,
+                capability_profile_sha256=(
+                    field_outcome.capability_profile_sha256
+                ),
             )
             self._record(
                 trace_id,
@@ -2484,7 +2571,11 @@ class RetrievalService:
                     ),
                 },
             )
-            cached = self._cache.get(cache_key)
+            cached = (
+                None
+                if field_resolution_system_failed
+                else self._cache.get(cache_key)
+            )
             if cached is not None:
                 return replay_cached_result(
                     cached, timing_name="post_binding_cache"
@@ -3767,6 +3858,17 @@ class RetrievalService:
         if (
             result.status is ConfidenceStatus.ANSWERABLE
             and not rerank_dependency_failed(result.rerank_execution_mode)
+            and not any(
+                reason.startswith(
+                    (
+                        "FIELD_RESOLUTION_PROVIDER_",
+                        "FIELD_RESOLUTION_CAPABILITY_",
+                        "FIELD_RESOLUTION_OUTPUT_",
+                        "FIELD_RESOLUTION_CONTRACT_",
+                    )
+                )
+                for reason in result.degraded_reason_codes
+            )
         ):
             _raise_if_cancelled(cancellation)
             self._cache.put(result.cache_key, result, ttl_seconds=300)
@@ -5783,6 +5885,7 @@ def _model_capability_status(  # noqa: PLR0911
             marker in normalized
             for marker in (
                 "CONFIGURATION",
+                "CAPABILITY_UNQUALIFIED",
                 "CREDENTIAL",
                 "AUTHENTICATION",
                 "GENERATOR_NOT_CONFIGURED",

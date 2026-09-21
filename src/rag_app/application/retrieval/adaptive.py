@@ -14,6 +14,7 @@ from rag_app.core.models import (
     FieldResolution,
     ProviderCall,
     QueryAnalysis,
+    ResolvedQueryView,
     SearchRequest,
 )
 from rag_app.core.models.query_plan import QueryAtom
@@ -70,6 +71,16 @@ class ReasoningEffort(StrEnum):
     DEEP = "DEEP"
 
 
+class FieldResolutionExecutionState(StrEnum):
+    """与字段语义结果正交的 Provider 执行状态。"""
+
+    NOT_NEEDED = "NOT_NEEDED"
+    SUCCEEDED = "SUCCEEDED"
+    REQUEST_REJECTED = "REQUEST_REJECTED"
+    TRANSPORT_FAILED = "TRANSPORT_FAILED"
+    OUTPUT_INVALID = "OUTPUT_INVALID"
+
+
 @dataclass(frozen=True, slots=True)
 class AdaptivePlanOutcome:
     """轻量 Planner 的严格输出和实际调用记录。"""
@@ -101,6 +112,9 @@ class FieldResolutionOutcome:
 
     resolutions: tuple[FieldResolution, ...] = ()
     calls: tuple[ProviderCall, ...] = ()
+    execution_state: FieldResolutionExecutionState = (
+        FieldResolutionExecutionState.NOT_NEEDED
+    )
     reason_code: str = "FIELD_RESOLUTION_NOT_NEEDED"
     attempted: bool = False
     failure_category: str | None = None
@@ -109,6 +123,10 @@ class FieldResolutionOutcome:
     output_tokens: int | None = None
     finish_reason: str | None = None
     transport_timeout_ms: int = 0
+    schema_revision: str | None = None
+    schema_sha256: str | None = None
+    contract_sha256: str | None = None
+    capability_profile_sha256: str | None = None
 
 
 class AdaptivePlannerPort(Protocol):
@@ -127,6 +145,9 @@ class AdaptivePlannerPort(Protocol):
         self,
         request: SearchRequest,
         candidates: tuple[FieldCandidate, ...],
+        *,
+        query_view: ResolvedQueryView,
+        atoms: tuple[QueryAtom, ...],
     ) -> FieldResolutionOutcome:
         """在真实 schema 已知后选择短字段候选 ID。"""
         ...

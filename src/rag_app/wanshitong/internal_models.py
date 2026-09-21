@@ -148,6 +148,27 @@ class InternalModelConfigurator:
                     "structured_output_mode": (
                         desired_models.structured_output_mode
                     ),
+                    "structured_output_profile_revision": (
+                        desired_models.structured_output_profile_revision
+                    ),
+                    "structured_output_service_identity_sha256": (
+                        desired_models.structured_output_service_identity_sha256
+                    ),
+                    "structured_output_chat_template_revision": (
+                        desired_models.structured_output_chat_template_revision
+                    ),
+                    "structured_output_grammar_backend": (
+                        desired_models.structured_output_grammar_backend
+                    ),
+                    "structured_output_qualification_evidence_sha256": (
+                        desired_models.structured_output_qualification_evidence_sha256
+                    ),
+                    "structured_output_allow_unique_items": (
+                        desired_models.structured_output_allow_unique_items
+                    ),
+                    "field_resolution_max_output_tokens": (
+                        desired_models.field_resolution_max_output_tokens
+                    ),
                 }
             )
             == desired_models
@@ -589,6 +610,27 @@ class InternalModelConfigurator:
                 ),
                 "disable_thinking": settings.llm_disable_thinking,
                 "structured_output_mode": (settings.llm_structured_output_mode),
+                "structured_output_profile_revision": (
+                    settings.llm_structured_profile_revision
+                ),
+                "structured_output_service_identity_sha256": (
+                    settings.llm_structured_service_identity_sha256
+                ),
+                "structured_output_chat_template_revision": (
+                    settings.llm_structured_chat_template_revision
+                ),
+                "structured_output_grammar_backend": (
+                    settings.llm_structured_grammar_backend
+                ),
+                "structured_output_qualification_evidence_sha256": (
+                    settings.llm_structured_qualification_evidence_sha256
+                ),
+                "structured_output_allow_unique_items": (
+                    settings.llm_structured_allow_unique_items
+                ),
+                "field_resolution_max_output_tokens": (
+                    settings.llm_field_resolution_max_output_tokens
+                ),
             }
         )
 

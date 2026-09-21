@@ -90,6 +90,13 @@ class FieldResolution(FrozenModel):
     candidate_ids: tuple[str, ...] = Field(default=(), max_length=16)
     query_span_start: StrictInt | None = Field(default=None, ge=0)
     query_span_end: StrictInt | None = Field(default=None, gt=0)
+    query_fragment: str | None = Field(
+        default=None, min_length=1, max_length=160
+    )
+    query_view_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    span_basis: Literal["BUSINESS_QUERY"] = "BUSINESS_QUERY"
+    original_query_span_start: StrictInt | None = Field(default=None, ge=0)
+    original_query_span_end: StrictInt | None = Field(default=None, gt=0)
     reason_code: str = Field(min_length=1, max_length=120)
 
     @model_validator(mode="after")
@@ -115,12 +122,24 @@ class FieldResolution(FrozenModel):
             raise ValueError("NOT_FOUND 不能携带候选。")
         if (self.query_span_start is None) != (self.query_span_end is None):
             raise ValueError("字段解析原问跨度必须同时存在或同时为空。")
+        if (self.query_span_start is None) != (self.query_fragment is None):
+            raise ValueError("字段解析业务问题跨度必须携带逐字片段。")
         if (
             self.query_span_start is not None
             and self.query_span_end is not None
             and self.query_span_end <= self.query_span_start
         ):
             raise ValueError("字段解析原问跨度不能倒置。")
+        if (self.original_query_span_start is None) != (
+            self.original_query_span_end is None
+        ):
+            raise ValueError("字段解析原始问题跨度必须同时存在或同时为空。")
+        if (
+            self.original_query_span_start is not None
+            and self.original_query_span_end is not None
+            and self.original_query_span_end <= self.original_query_span_start
+        ):
+            raise ValueError("字段解析原始问题跨度不能倒置。")
         return self
 
 

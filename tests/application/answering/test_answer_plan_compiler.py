@@ -285,7 +285,8 @@ def _resolve_input_candidate(
     input_candidate = next(
         item for item in candidates if item.field_label.startswith("输入")
     )
-    start = plan.original_query.index(query_span)
+    start = query_view.business_query.index(query_span)
+    original_start = query_view.original_query.index(query_span)
     resolved = merge_field_resolutions(
         defaults,
         (
@@ -295,7 +296,13 @@ def _resolve_input_candidate(
                 candidate_ids=(input_candidate.candidate_id,),
                 query_span_start=start,
                 query_span_end=start + len(query_span),
-                reason_code="SCHEMA_AWARE_INTERPRETATION",
+                query_fragment=query_span,
+                query_view_digest=canonical_sha256(
+                    query_view.model_dump(mode="json")
+                ),
+                original_query_span_start=original_start,
+                original_query_span_end=original_start + len(query_span),
+                reason_code="SCHEMA_AWARE_INTERPRETATION_V2",
             ),
         ),
         candidates,
@@ -1597,3 +1604,63 @@ def test_mixed_plan_keeps_deterministic_fact_when_generation_fails(
     ) == ("FULL", "RESOURCE_LIMITED")
     request = generator.generate.call_args.args[0]
     assert request.execution_atom_ids == ("A2",)
+
+
+def test_field_provider_failure_keeps_independent_deterministic_fact() -> None:
+    """一个待解析 Atom 系统失败时，已冻结的独立事实仍可部分发布。"""
+    query_plan, pack, _ = _fixture_plan(
+        "需求快验的输入是什么，并概述背景。",
+        relations=("输入", "背景"),
+    )
+    query_view = build_resolved_query_view(query_plan)
+    field_candidates = build_field_candidates(query_plan, pack)
+    exact_a1 = tuple(
+        item
+        for item in default_field_resolutions(
+            query_plan, field_candidates, query_view
+        )
+        if item.atom_id == "A1"
+    )
+    assert exact_a1[0].status is FieldResolutionStatus.EXACT
+    pack = replace(
+        pack,
+        atom_fact_bindings=tuple(
+            item for item in pack.atom_fact_bindings if item.atom_id == "A1"
+        ),
+        field_candidates=field_candidates,
+        field_resolutions=exact_a1,
+        field_resolution_active=True,
+        field_resolution_execution_state="REQUEST_REJECTED",
+        field_resolution_failure_reason=(
+            "FIELD_RESOLUTION_PROVIDER_UNAVAILABLE"
+        ),
+        field_resolution_pending_atom_ids=("A2",),
+        field_resolution_contract_sha256=canonical_sha256("contract"),
+        field_resolution_capability_profile_sha256=canonical_sha256("profile"),
+    )
+    generator = Mock()
+    support_ids = tuple(item.support_id for item in pack.evidence)
+
+    outcome = GroundedAnsweringService(generator).answer(
+        query_plan.standalone_query,
+        pack.evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        query_plan=query_plan,
+        atom_support_matrix=_matrix(
+            query_plan,
+            (
+                (AtomStatus.SUPPORTED, support_ids),
+                (AtomStatus.SUPPORTED, support_ids),
+            ),
+        ),
+        generation_evidence_pack=pack,
+        snapshot_id="irev-test",
+    )
+
+    assert outcome.answer is not None
+    assert "需求功能点描述" in outcome.answer
+    assert outcome.mode == "extractive"
+    assert outcome.reason_code == "FIELD_RESOLUTION_PROVIDER_UNAVAILABLE"
+    assert outcome.atom_coverage == (("A1", "SUPPORTED"), ("A2", "MISSING"))
+    assert outcome.missing_atom_reasons == (("A2", "SYSTEM_DEPENDENCY_FAILED"),)
+    assert generator.generate.call_count == 0
