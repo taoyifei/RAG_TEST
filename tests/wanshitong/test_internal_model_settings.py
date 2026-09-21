@@ -45,6 +45,7 @@ def test_internal_model_settings_normalize_primary_contracts() -> None:
     assert not settings.llm_disable_thinking_supported
     assert not settings.llm_disable_thinking
     assert settings.llm_structured_output_mode == "none"
+    assert settings.llm_field_resolution_max_output_tokens == 1280
 
 
 def test_internal_settings_require_explicit_structured_output_mode() -> None:

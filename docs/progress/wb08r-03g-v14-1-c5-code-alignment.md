@@ -24,11 +24,11 @@
 | 工作包 | 当前实现 | 真实测试前状态 |
 |---|---|---|
 | A1 安全/私有失败观测 | `http_common.py` 记录有界状态、类型、code、param、body 长度/hash；`private_http_diagnostics.py` 只在显式 ACK、Git 外 0700/0600 目录记录有界请求和响应，写入失败不覆盖原异常 | 离线测试通过 |
-| A2 服务身份固定 | 能力合同包含服务摘要、模型、模板、固定 mode、grammar 后端、资格证据和 deadline；现场值必须经 54→60 只读核验后填写 | 待现场只读核验 |
+| A2 服务身份固定 | 能力合同包含服务摘要、模型、模板、固定 mode、grammar 后端、资格证据和 deadline；已经 54→60 只读核验并写入安全身份记录 | 通过，待 D3 证明实际协议 |
 | A3 受控 A/B | 资格脚本分离 `reconstructed-original` 与 `reconstructed-transferred`；前者逐字段重建 `de251f0` 的 v1 请求，后者只删除 `uniqueItems`，同一 fixture、同一 Adapter、160 输出预算、每阶段一次调用 | 脚本/差异测试通过，待真实执行 |
 | B 单一字段合同 | `field_resolution_wire.py` 从一个合同生成请求、schema 和本地验证；拒绝重复 JSON 键/Atom/候选、跨 Atom/未知候选、错误状态组合和非唯一 q；使用 BUSINESS_QUERY digest/span，并验证可恢复的 original slice；模型不能签发 EXACT | D1 通过 |
 | B 能力子集 | `structured_contract.py` 登记字段、Planner、Claim Wire、语义复核和关系复核五个家族；动态 enum hash 只作审计；`uniqueItems` 的 Provider/本地执行位置必须显式固定 | 通过 |
-| B 输出预算 | 字段解析有独立输出预算配置，不能继续把旧 Planner 160 当作已证明值；资格脚本包含 1 Atom、真实双 Atom 及 4×16 最大形状 | 待部署 tokenizer 测量和 D3 |
+| B 输出预算 | 字段解析有独立 1280-token 输出预算；现场 Qwen tokenizer 对 1 Atom/4 候选、双 Atom、4 Atom×16 候选三种合法 JSON 的实测分别为 193、58、959 tokens，1280 不改变 6144 输入、8 秒 timeout 或 8192 总上下文 | tokenizer 门禁通过，待 D3 |
 | C1 错误映射 | 只有明确上下文容量 code 映射 `ProviderInputTooLarge`；普通 400/422 为 `ProviderRequestRejected`，未知为 `REQUEST_REJECTED_UNKNOWN`；安全 Provider code 贯穿字段 Trace；400 不重试 | D2 通过 |
 | C2 正交状态 | 字段结果使用 NOT_NEEDED/SUCCEEDED/REQUEST_REJECTED/TRANSPORT_FAILED/OUTPUT_INVALID；失败时不消费初始 AMBIGUOUS，Trace 将其标为 `PENDING_INITIAL` | 通过 |
 | C3 终态/缓存 | 无可发布事实的字段系统失败映射现有系统失败终态；独立 EXACT 安全事实可以部分发布，缺失原因是 SYSTEM_DEPENDENCY_FAILED；系统失败不读写语义结果缓存；cache key 绑定合同/profile/执行状态 | 通过 |
@@ -36,9 +36,32 @@
 | D2 实际 Adapter + MockTransport | 使用真实 `OpenAICompatibleChatAdapter`，核对最终 HTTP body、固定 mode、schema、输出预算、400 安全诊断和单次请求 | 通过 |
 | D3 真实协议资格 | 五个安全合成 case，按字段身份而非 F1 顺序验真，同时检查状态、Atom、q 锚点、finish reason、token usage 和调用数 | 脚本通过，尚未实测 |
 
+## 现场只读身份与资格定义
+
+- 推理服务：vLLM `0.19.1`，模型 `Qwen/Qwen3-8B-AWQ`，
+  `max_model_len=8192`，AWQ，tensor parallel 2；服务命令没有显式
+  structured-output backend 参数，因此能力记录使用
+  `vllm-0.19.1:auto`，不把 auto 的逐请求实际选择当成已经验证。
+- 8289 基线当前仍为 `rag-test-wanshitong:wb08r03f-bd00c56`，仅绑定
+  `127.0.0.1:8289`；其应用配置实际使用 `response_format`。
+- 生产仍为 `rag-test-wanshitong:604ef63`，容器、镜像和启动时间均与
+  V14.1 收尾记录一致；本次只读核验没有修改生产。
+- 安全身份记录：
+  `docs/progress/wb08r-03g-v14-1-c5-runtime-identity.safe.json`，文件
+  SHA-256 为
+  `67bf43e71d4ea2ed6738194ce2cff5baf1645a6747cc92d352c186d8afeeeed6`。
+  该值同时作为本轮能力合同的 service identity digest。
+- D3 资格定义：
+  `docs/progress/wb08r-03g-v14-1-c5-qualification-definition.safe.json`，
+  文件 SHA-256 为
+  `54da768d67c9587aadecba994f31fb5aecfeabca67fcaf1fb39d5821c2a7b119`。
+  它固定五类合成题、请求计数和字段身份验真标准；真实结果另行保存，
+  不用定义文件冒充已经通过的资格结果。
+
 ## 已执行的相关门禁
 
 - 相关问答、协议、错误、缓存及配置测试：`565 passed, 1 deselected`。
+- 固定 1280 输出预算及现场资格定义后的针对性回归：`55 passed`。
 - Ruff：改动 Python 文件通过。
 - Ruff format：改动 Python 文件通过。
 - mypy：`407 source files`，无错误。

@@ -1,0 +1,74 @@
+{
+  "schema_version": "wb08r03-v141-c5-runtime-identity-v1",
+  "captured_at": "2026-09-21T10:30:53+08:00",
+  "capture_mode": "READ_ONLY",
+  "serving": {
+    "host_role": "internal-llm-forward-target",
+    "container_id": "5ce24c19d2d4d3ff99ae86f3b2bbcb860e6351c0209cfd10482787971059bcb7",
+    "image": "covlink-llm-main:server",
+    "image_id": "sha256:b2527a6b9cfbd8c73c4a42dccf425173eac65554b05b60e7c357ab4838c922df",
+    "image_repo_digest": "sha256:b2527a6b9cfbd8c73c4a42dccf425173eac65554b05b60e7c357ab4838c922df",
+    "vllm_version": "0.19.1",
+    "model": "Qwen/Qwen3-8B-AWQ",
+    "max_model_len": 8192,
+    "tensor_parallel_size": 2,
+    "quantization": "awq",
+    "structured_output_mode": "response_format",
+    "structured_output_backend_configuration": "vllm-0.19.1:auto",
+    "structured_output_backend_observation": "NO_EXPLICIT_BACKEND_FLAG_D3_REQUIRED"
+  },
+  "model_artifacts": {
+    "tokenizer_class": "Qwen2Tokenizer",
+    "tokenizer_config_sha256": "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c9223acd8101",
+    "tokenizer_json_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+    "chat_template_sha256": "41d5929bf73796beb66809ac700b2cf3ff81694f933e5c14d52b7fd69633c947d",
+    "model_config_sha256": "7457674d8044143cd4159e47deecf28fd6698a9826569094b60d7bead8f351ee",
+    "generation_config_sha256": "2325da0f15bb848e018c5ae071b7943332e9f871d6b60e2ed222ca97d4cb993d2"
+  },
+  "field_resolution_budget": {
+    "max_input_tokens": 6144,
+    "max_output_tokens": 1280,
+    "transport_timeout_ms": 8000,
+    "model_context_tokens": 8192,
+    "tokenizer_measurements": [
+      {
+        "case_id": "ONE_ATOM_FOUR_FIELDS",
+        "payload_sha256": "578e1fe95e4954ee3544e8bbd85fd1a2cfe8a4d29ee15a774c55931670c045991",
+        "characters": 227,
+        "bytes": 547,
+        "tokens": 193
+      },
+      {
+        "case_id": "TWO_ATOMS",
+        "payload_sha256": "85777e3f6a0fda38a67837a9027d4909751fa28d2e5c4dd3ebc37ef5a9782aa6c",
+        "characters": 137,
+        "bytes": 173,
+        "tokens": 58
+      },
+      {
+        "case_id": "MAX_FOUR_BY_SIXTEEN",
+        "payload_sha256": "38223800410b5c9dbc3625f52fd9e18b9e2742b225c9070e9773a292261aa8e07",
+        "characters": 1182,
+        "bytes": 2462,
+        "tokens": 959
+      }
+    ]
+  },
+  "candidate_baseline": {
+    "container_id": "7d8dfc396fdb7af2e7daea991db134cc3fc71c21dd8ef3e0b655c60b4732591d",
+    "image": "rag-test-wanshitong:wb08r03f-bd00c56",
+    "image_id": "sha256:621acc792c12169d347fde03a8cfb06dff4ca033bf4867171d35bc46f284b75c",
+    "port_binding": "127.0.0.1:8289",
+    "live_health": 200,
+    "ready_health": 200,
+    "structured_output_mode": "response_format"
+  },
+  "production_snapshot": {
+    "container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
+    "image": "rag-test-wanshitong:604ef63",
+    "image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306",
+    "started_at": "2026-09-17T01:45:12.001523599Z",
+    "port_binding": "0.0.0.0:8288",
+    "modified": false
+  }
+}

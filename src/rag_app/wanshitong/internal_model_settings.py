@@ -132,7 +132,7 @@ class InternalModelSettings:
     llm_structured_grammar_backend: str | None = None
     llm_structured_qualification_evidence_sha256: str | None = None
     llm_structured_allow_unique_items: bool | None = None
-    llm_field_resolution_max_output_tokens: int = 160
+    llm_field_resolution_max_output_tokens: int = 1280
     embedding_credential: InternalCredentialSettings = field(
         default_factory=InternalCredentialSettings
     )
@@ -211,7 +211,7 @@ class InternalModelSettings:
                 _LLM_STRUCTURED_ALLOW_UNIQUE_ITEMS,
             ),
             llm_field_resolution_max_output_tokens=_bounded_positive_int(
-                source.get(_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS, "160"),
+                source.get(_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS, "1280"),
                 _LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS,
                 maximum=1536,
             ),

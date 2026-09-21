@@ -323,3 +323,6 @@ def test_max_shape_has_explicit_non_planner_output_budget() -> None:
     profile = _profile(output_tokens=1024)
     assert profile.field_resolution_output_tokens == 1024
     assert profile.field_resolution_output_tokens != 160
+    assert (
+        KnowledgeBaseModelSettings().field_resolution_max_output_tokens == 1280
+    )

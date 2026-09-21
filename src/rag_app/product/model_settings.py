@@ -54,7 +54,7 @@ class KnowledgeBaseModelSettings(FrozenModel):
     )
     structured_output_allow_unique_items: StrictBool | None = None
     field_resolution_max_output_tokens: StrictInt = Field(
-        default=160, ge=32, le=1536
+        default=1280, ge=32, le=1536
     )
     planner_transport_timeout_seconds: float = Field(
         default=8.0, gt=0.0, le=30.0
