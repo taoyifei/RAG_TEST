@@ -159,21 +159,27 @@ PY
         docker start "${baseline_id}" >/dev/null
       fi
     }
+    abort_start() {
+      local reason="$1"
+      rollback_on_error
+      rollback_required=false
+      trap - ERR INT TERM
+      fail "${reason}"
+    }
     trap rollback_on_error ERR INT TERM
     docker stop --time 30 "${baseline_id}" >/dev/null
     "${compose[@]}" start app
     ready=false
     for _ in $(seq 1 36); do
       if curl -fsS --max-time 3 http://127.0.0.1:8289/live >/dev/null &&
-        curl -fsS --max-time 3 http://127.0.0.1:8289/ready >/dev/null; then
+        curl -fsS --max-time 3 http://127.0.0.1:8289/ready >/dev/null &&
+        [[ "$(docker inspect -f '{{.State.Health.Status}}' "${candidate_container}")" = "healthy" ]]; then
         ready=true
         break
       fi
       sleep 5
     done
-    [[ "${ready}" = true ]] || fail "candidate-health-timeout"
-    [[ "$(docker inspect -f '{{.State.Health.Status}}' "${candidate_container}")" = "healthy" ]] || \
-      fail "candidate-docker-health-not-healthy"
+    [[ "${ready}" = true ]] || abort_start "candidate-health-timeout"
     rollback_required=false
     trap - ERR INT TERM
     echo "candidate_deploy=started container=${candidate_container} port=8289"
