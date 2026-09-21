@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import ssl
+from pathlib import Path
 from typing import NoReturn
 
 import httpx
@@ -11,6 +12,9 @@ from rag_app.adapters.providers.aliyun_chat import ChatResponseError
 from rag_app.adapters.providers.http_common import (
     ProviderHttpClient,
     ProviderHttpError,
+)
+from rag_app.adapters.providers.private_http_diagnostics import (
+    PrivateProviderDiagnosticRecorder,
 )
 from rag_app.adapters.providers.transport_diagnostics import (
     transport_diagnostics,
@@ -420,6 +424,104 @@ def test_400_and_422_are_not_retried(status: int) -> None:
     client.close()
     assert captured.value.category is ProviderFailureCategory.INPUT_INVALID
     assert calls == 1
+
+
+def test_non_2xx_keeps_only_bounded_structural_diagnostics() -> None:
+    """普通 Trace 保留安全字段和 hash，不复制自由文本错误正文。"""
+    body = {
+        "error": {
+            "type": "invalid_request_error",
+            "code": "json_schema_invalid",
+            "param": "response_format",
+            "message": "private business question /srv/internal/path",
+        }
+    }
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(400, json=body)
+            )
+        ),
+    )
+
+    with pytest.raises(ProviderHttpError) as captured:
+        client.request_json(
+            "POST",
+            "/chat/completions",
+            payload={"private": "question"},
+            headers={"Authorization": "Bearer secret-value"},
+            provider_id="test-provider",
+            operation="query.interpret",
+            model="test-model",
+            input_count=2,
+            estimated_tokens=1377,
+            request_diagnostics={
+                "purpose": "query.interpret",
+                "schema_family": "wb08r-field-resolution",
+                "schema_revision": "wb08r-field-resolution-v2",
+                "schema_sha256": "sha256:" + "a" * 64,
+                "output_budget": 160,
+                "preflight_estimated_tokens": 1377,
+            },
+        )
+    client.close()
+
+    diagnostics = dict(captured.value.call.transport_diagnostics)
+    assert captured.value.reason_code == "json_schema_invalid"
+    assert diagnostics["http_status"] == 400
+    assert diagnostics["response_content_type"] == "application/json"
+    assert diagnostics["response_body_bytes"] > 0
+    assert len(str(diagnostics["response_body_sha256"])) == 64
+    assert diagnostics["response_body_hash_scope"] == "full"
+    assert diagnostics["response_body_truncated"] is False
+    assert diagnostics["provider_error_type"] == "invalid_request_error"
+    assert diagnostics["provider_error_code"] == "json_schema_invalid"
+    assert diagnostics["provider_error_param"] == "response_format"
+    serialized = captured.value.call.model_dump_json()
+    assert "private business question" not in serialized
+    assert "/srv/internal/path" not in serialized
+    assert "secret-value" not in serialized
+
+
+def test_private_diagnostic_is_explicit_bounded_and_redacts_headers(
+    tmp_path: Path,
+) -> None:
+    private_directory = tmp_path / "private"
+    private_directory.mkdir(mode=0o700)
+    recorder = PrivateProviderDiagnosticRecorder(private_directory)
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    400,
+                    content=b"bad private response",
+                    headers={"Content-Type": "text/plain"},
+                )
+            )
+        ),
+        private_diagnostic_recorder=recorder,
+    )
+
+    with pytest.raises(ProviderHttpError) as captured:
+        _request(client)
+    client.close()
+
+    files = tuple(private_directory.glob("provider-http-private-*.json"))
+    assert len(files) == 1
+    assert files[0].stat().st_mode & 0o777 == 0o600
+    raw = files[0].read_text(encoding="utf-8")
+    assert "secret-value" not in raw
+    assert "Bearer" not in raw
+    assert '"Authorization":"REDACTED"' in raw
+    assert "WRITE_FAILED" not in raw
+    assert (
+        dict(captured.value.call.transport_diagnostics)[
+            "private_diagnostic_status"
+        ]
+        == "WRITTEN"
+    )
 
 
 def test_close_is_idempotent_and_rejects_future_calls() -> None:

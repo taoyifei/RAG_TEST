@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import random
 import re
 import time
+import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC
@@ -15,6 +18,10 @@ from urllib.parse import urlparse
 import httpx
 
 from rag_app.adapters.providers.budget_transport import budgeted_client
+from rag_app.adapters.providers.private_http_diagnostics import (
+    PrivateHttpDiagnostic,
+    PrivateProviderDiagnosticRecorder,
+)
 from rag_app.adapters.providers.transport_diagnostics import (
     retryable_transport,
     transport_diagnostics,
@@ -50,6 +57,22 @@ _HTTP_SUCCESS_MAX = 300
 _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_SERVER_ERROR_MAX = 600
 _MAX_ERROR_RESPONSE_BYTES = 64 * 1024
+_SAFE_ERROR_VALUE = re.compile(r"^[A-Za-z0-9_.:/-]{1,80}$")
+_SAFE_CONTENT_TYPE = re.compile(
+    r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+)
+_SAFE_REQUEST_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "grammar_backend_fingerprint",
+        "output_budget",
+        "preflight_estimated_tokens",
+        "purpose",
+        "request_label",
+        "schema_family",
+        "schema_revision",
+        "schema_sha256",
+    }
+)
 _StreamValue = TypeVar("_StreamValue")
 
 
@@ -137,6 +160,9 @@ class ProviderHttpClient:
         ) = None,
         allow_http: bool = False,
         use_budget_transport: bool = True,
+        private_diagnostic_recorder: (
+            PrivateProviderDiagnosticRecorder | None
+        ) = None,
     ) -> None:
         """冻结 endpoint、连接池和有界重试策略。
 
@@ -155,6 +181,7 @@ class ProviderHttpClient:
             response_error_code: 可选的 Provider 安全错误码解析器。
             allow_http: 是否允许 Demo 内网兼容端点使用明文 HTTP。
             use_budget_transport: 是否安装内置 Provider 活动预算传输。
+            private_diagnostic_recorder: 显式启用的有界私有失败记录器。
 
         Returns:
             无返回值。
@@ -199,6 +226,7 @@ class ProviderHttpClient:
         self._observer = observer
         self._defer_success_observation = defer_success_observation
         self._response_error_code = response_error_code
+        self._private_diagnostic_recorder = private_diagnostic_recorder
         self._closed = False
 
     @property
@@ -224,6 +252,7 @@ class ProviderHttpClient:
         input_count: int,
         estimated_tokens: int,
         timeout_seconds: float | None = None,
+        request_diagnostics: Mapping[str, object] | None = None,
     ) -> ProviderHttpResult:
         """发送 JSON 并严格限制重试、大小和内容类型。
 
@@ -238,6 +267,7 @@ class ProviderHttpClient:
             input_count: 本次输入条目数。
             estimated_tokens: 本地保守估算 Token 数。
             timeout_seconds: 可选的单次 HTTP 请求时限。
+            request_diagnostics: 不含正文的协议身份与预算诊断。
 
         Returns:
             JSON payload 和脱敏调用审计。
@@ -258,6 +288,7 @@ class ProviderHttpClient:
         if not path.startswith("/") or path.startswith("//") or "?" in path:
             raise ValueError("Provider path 必须是无 query 的单斜杠相对路径。")
         started = self._monotonic()
+        request_id = uuid.uuid4().hex
         last_retry_after_ms: int | None = None
         encountered_rate_limit = False
         # 有显式时限的轻量 Planner 只发送一次，避免重试放大整体时延。
@@ -361,8 +392,17 @@ class ProviderHttpClient:
                 continue
             category = _status_category(status)
             if category is not None:
-                reason_code = self._safe_response_error_code(response) or (
-                    f"HTTP_{status}"
+                response_diagnostics, response_body, truncated = (
+                    self._error_response_diagnostics(response)
+                )
+                reason_code = (
+                    self._safe_response_error_code(
+                        response,
+                        response_body,
+                        truncated=truncated,
+                    )
+                    or _diagnostic_error_code(response_diagnostics)
+                    or f"HTTP_{status}"
                 )
                 call = self._call(
                     provider_id,
@@ -377,6 +417,33 @@ class ProviderHttpClient:
                     estimated_tokens,
                     None,
                     encountered_rate_limit,
+                )
+                attempt_id = f"{request_id}-{attempt}"
+                diagnostics = {
+                    "request_id": request_id,
+                    "attempt_id": attempt_id,
+                    "http_status": status,
+                    **_safe_request_diagnostics(request_diagnostics),
+                    **response_diagnostics,
+                }
+                private_status = self._record_private_failure(
+                    request_id=request_id,
+                    attempt_id=attempt_id,
+                    operation=operation,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    payload=payload,
+                    response=response,
+                    response_body=response_body,
+                    response_truncated=truncated,
+                )
+                if private_status is not None:
+                    diagnostics["private_diagnostic_status"] = private_status
+                call = call.model_copy(
+                    update={
+                        "transport_diagnostics": freeze_json_object(diagnostics)
+                    }
                 )
                 self._observe(call)
                 raise ProviderHttpError(category, reason_code, call)
@@ -456,6 +523,7 @@ class ProviderHttpClient:
         estimated_tokens: int,
         consumer: Callable[[Iterator[bytes]], _StreamValue],
         cancellation: CancellationPort,
+        request_diagnostics: Mapping[str, object] | None = None,
     ) -> ProviderHttpStreamResult[_StreamValue]:
         """发送并在当前调用线程消费一个可取消的有限 SSE 响应。
 
@@ -474,6 +542,7 @@ class ProviderHttpClient:
             estimated_tokens: 本地输入估算。
             consumer: 在响应作用域内消费原始字节的函数。
             cancellation: 可由 HTTP 断连线程触发的取消令牌。
+            request_diagnostics: 不含正文的协议身份与预算诊断。
 
         Returns:
             consumer 的完整结果与唯一调用审计。
@@ -488,6 +557,7 @@ class ProviderHttpClient:
         if not path.startswith("/") or path.startswith("//") or "?" in path:
             raise ValueError("Provider path 必须是无 query 的单斜杠相对路径。")
         started = self._monotonic()
+        request_id = uuid.uuid4().hex
         last_retry_after_ms: int | None = None
         encountered_rate_limit = False
         for attempt in range(1, self._max_attempts + 1):
@@ -531,8 +601,18 @@ class ProviderHttpClient:
                                 continue
                         category = _status_category(status)
                         if category is not None:
+                            (
+                                response_diagnostics,
+                                response_body,
+                                truncated,
+                            ) = self._error_response_diagnostics(response)
                             reason_code = (
-                                self._safe_response_error_code(response)
+                                self._safe_response_error_code(
+                                    response,
+                                    response_body,
+                                    truncated=truncated,
+                                )
+                                or _diagnostic_error_code(response_diagnostics)
                                 or f"HTTP_{status}"
                             )
                             call = self._call(
@@ -548,6 +628,39 @@ class ProviderHttpClient:
                                 estimated_tokens,
                                 last_retry_after_ms,
                                 encountered_rate_limit,
+                            )
+                            attempt_id = f"{request_id}-{attempt}"
+                            diagnostics = {
+                                "request_id": request_id,
+                                "attempt_id": attempt_id,
+                                "http_status": status,
+                                **_safe_request_diagnostics(
+                                    request_diagnostics
+                                ),
+                                **response_diagnostics,
+                            }
+                            private_status = self._record_private_failure(
+                                request_id=request_id,
+                                attempt_id=attempt_id,
+                                operation=operation,
+                                method=method,
+                                path=path,
+                                headers=headers,
+                                payload=payload,
+                                response=response,
+                                response_body=response_body,
+                                response_truncated=truncated,
+                            )
+                            if private_status is not None:
+                                diagnostics["private_diagnostic_status"] = (
+                                    private_status
+                                )
+                            call = call.model_copy(
+                                update={
+                                    "transport_diagnostics": freeze_json_object(
+                                        diagnostics
+                                    )
+                                }
                             )
                             self._observe(call)
                             raise ProviderHttpError(category, reason_code, call)
@@ -787,21 +900,18 @@ class ProviderHttpClient:
         )
         return diagnostics, category
 
-    def _safe_response_error_code(self, response: httpx.Response) -> str | None:
-        """只把有限错误外壳交给受信解析器，不保存响应正文。"""
+    def _safe_response_error_code(
+        self,
+        response: httpx.Response,
+        content: bytes,
+        *,
+        truncated: bool,
+    ) -> str | None:
+        """只把完整、有界错误外壳交给受信解析器。"""
         resolver = self._response_error_code
-        if resolver is None:
+        if resolver is None or truncated:
             return None
         try:
-            if response.is_stream_consumed:
-                content = response.content
-            else:
-                buffered = bytearray()
-                for chunk in response.iter_bytes():
-                    buffered.extend(chunk)
-                    if len(buffered) > _MAX_ERROR_RESPONSE_BYTES:
-                        return None
-                content = bytes(buffered)
             if len(content) > _MAX_ERROR_RESPONSE_BYTES:
                 return None
             bounded = httpx.Response(
@@ -812,6 +922,92 @@ class ProviderHttpClient:
             return resolver(bounded)
         except (httpx.HTTPError, TypeError, ValueError):
             return None
+
+    def _error_response_diagnostics(
+        self, response: httpx.Response
+    ) -> tuple[dict[str, object], bytes, bool]:
+        """读取至多 64 KiB，并只返回可进入普通 Trace 的结构字段。"""
+        buffered = bytearray()
+        truncated = False
+        try:
+            chunks = (
+                iter((response.content,))
+                if response.is_stream_consumed
+                else response.iter_bytes()
+            )
+            for chunk in chunks:
+                remaining = _MAX_ERROR_RESPONSE_BYTES + 1 - len(buffered)
+                if remaining <= 0:
+                    truncated = True
+                    break
+                buffered.extend(chunk[:remaining])
+                if (
+                    len(chunk) > remaining
+                    or len(buffered) > _MAX_ERROR_RESPONSE_BYTES
+                ):
+                    truncated = True
+                    break
+        except httpx.HTTPError:
+            return (
+                {
+                    "response_body_bytes": 0,
+                    "response_body_sha256": hashlib.sha256(b"").hexdigest(),
+                    "response_body_hash_scope": "unavailable",
+                    "response_body_truncated": True,
+                },
+                b"",
+                True,
+            )
+        content = bytes(buffered[:_MAX_ERROR_RESPONSE_BYTES])
+        content_type = response.headers.get("content-type", "").split(";", 1)[0]
+        diagnostics: dict[str, object] = {
+            "response_body_bytes": len(content),
+            "response_body_sha256": hashlib.sha256(content).hexdigest(),
+            "response_body_hash_scope": "prefix" if truncated else "full",
+            "response_body_truncated": truncated,
+        }
+        if _SAFE_CONTENT_TYPE.fullmatch(content_type):
+            diagnostics["response_content_type"] = content_type
+        diagnostics.update(_safe_error_fields(content, truncated=truncated))
+        return diagnostics, content, truncated
+
+    def _record_private_failure(  # noqa: PLR0913
+        self,
+        *,
+        request_id: str,
+        attempt_id: str,
+        operation: str,
+        method: str,
+        path: str,
+        headers: Mapping[str, str],
+        payload: object,
+        response: httpx.Response,
+        response_body: bytes,
+        response_truncated: bool,
+    ) -> str | None:
+        """私有记录故障只返回安全状态，绝不覆盖原始 HTTP 异常。"""
+        recorder = self._private_diagnostic_recorder
+        if recorder is None:
+            return None
+        try:
+            recorder.record(
+                PrivateHttpDiagnostic(
+                    request_id=request_id,
+                    attempt_id=attempt_id,
+                    operation=operation,
+                    method=method,
+                    endpoint=self._base_url + path,
+                    request_headers=headers,
+                    request_payload=payload,
+                    response_status=response.status_code,
+                    response_headers=dict(response.headers),
+                    response_body=response_body,
+                    response_truncated=response_truncated,
+                )
+            )
+        except Exception:
+            return "WRITE_FAILED"
+        return "WRITTEN"
 
     def complete_call(
         self,
@@ -953,6 +1149,65 @@ def _status_category(status: int) -> ProviderFailureCategory | None:
     if _HTTP_SERVER_ERROR_MIN <= status < _HTTP_SERVER_ERROR_MAX:
         return ProviderFailureCategory.TRANSIENT
     return ProviderFailureCategory.RESPONSE_CONTRACT
+
+
+def _safe_request_diagnostics(
+    diagnostics: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """只允许固定协议身份和整数预算进入普通 Trace。"""
+    if diagnostics is None:
+        return {}
+    safe: dict[str, object] = {}
+    for key, value in diagnostics.items():
+        if key not in _SAFE_REQUEST_DIAGNOSTIC_KEYS:
+            continue
+        if isinstance(value, bool):
+            continue
+        if (isinstance(value, int) and 0 <= value <= (1 << 31) - 1) or (
+            isinstance(value, str) and _SAFE_ERROR_VALUE.fullmatch(value)
+        ):
+            safe[key] = value
+    return safe
+
+
+def _safe_error_fields(content: bytes, *, truncated: bool) -> dict[str, str]:
+    """从完整 JSON 错误外壳提取有限 type/code/param，不复制 message。"""
+    if truncated or not content:
+        return {}
+    try:
+        value = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(value, Mapping):
+        return {}
+    error = value.get("error")
+    containers = (error, value) if isinstance(error, Mapping) else (value,)
+    safe: dict[str, str] = {}
+    for container in containers:
+        if not isinstance(container, Mapping):
+            continue
+        for source_key, target_key in (
+            ("type", "provider_error_type"),
+            ("code", "provider_error_code"),
+            ("param", "provider_error_param"),
+        ):
+            item = container.get(source_key)
+            if (
+                target_key not in safe
+                and isinstance(item, str)
+                and _SAFE_ERROR_VALUE.fullmatch(item)
+            ):
+                safe[target_key] = item
+    return safe
+
+
+def _diagnostic_error_code(diagnostics: Mapping[str, object]) -> str | None:
+    """优先保留 Provider 明确返回的安全 code，其次保留 error type。"""
+    for key in ("provider_error_code", "provider_error_type"):
+        value = diagnostics.get(key)
+        if isinstance(value, str) and _SAFE_ERROR_VALUE.fullmatch(value):
+            return value
+    return None
 
 
 def provider_error(failure: ProviderHttpError, *, stage: str) -> RagError:

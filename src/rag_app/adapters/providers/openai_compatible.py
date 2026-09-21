@@ -53,7 +53,7 @@ from rag_app.core.errors import (
     QueryCancelled,
     RagError,
 )
-from rag_app.core.identifiers import canonical_json
+from rag_app.core.identifiers import canonical_json, canonical_sha256
 from rag_app.core.models import (
     EmbeddingRequest,
     EmbeddingRequestRole,
@@ -488,6 +488,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         timeout_seconds: float | None = None,
         json_schema: Mapping[str, object] | None = None,
         schema_revision: str | None = None,
+        request_label: str | None = None,
     ) -> ChatCompletion:
         """执行一次标准同步 Chat Completions 请求。"""
         if not self._compatible_config.egress_allowed:
@@ -505,13 +506,36 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             json_schema=json_schema,
             schema_revision=schema_revision,
         )
+        estimated_tokens = message_token_estimate(messages) + (
+            _schema_payload_tokens(payload)
+        )
+        output_budget = (
+            self._compatible_config.max_output_tokens
+            if max_output_tokens is None
+            else max_output_tokens
+        )
+        request_diagnostics: dict[str, object] = {
+            "purpose": operation,
+            "output_budget": output_budget,
+            "preflight_estimated_tokens": estimated_tokens,
+        }
+        if json_schema is not None and schema_revision is not None:
+            request_diagnostics.update(
+                {
+                    "schema_family": schema_revision.split("-v", 1)[0],
+                    "schema_revision": schema_revision,
+                    "schema_sha256": canonical_sha256(json_schema),
+                }
+            )
+        if request_label is not None:
+            request_diagnostics["request_label"] = request_label
         return self.request_payload(
             payload,
             operation=operation,
             input_count=len(messages),
-            estimated_tokens=message_token_estimate(messages)
-            + _schema_payload_tokens(payload),
+            estimated_tokens=estimated_tokens,
             timeout_seconds=timeout_seconds,
+            request_diagnostics=request_diagnostics,
         )
 
     def complete_stream(
@@ -575,7 +599,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         )
         return ChatCompletion(**content.model_dump(), call=call)
 
-    def request_payload(
+    def request_payload(  # noqa: PLR0913
         self,
         payload: Mapping[str, object],
         *,
@@ -585,6 +609,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         input_count: int,
         estimated_tokens: int,
         timeout_seconds: float | None = None,
+        request_diagnostics: Mapping[str, object] | None = None,
     ) -> ChatCompletion:
         """发送标准同步请求并校验可选 model、finish 和 usage。"""
         observe_generation_transport(payload)
@@ -600,6 +625,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
                 input_count=input_count,
                 estimated_tokens=estimated_tokens,
                 timeout_seconds=timeout_seconds,
+                request_diagnostics=request_diagnostics,
             )
         except ProviderHttpError as failure:
             raise provider_error(
