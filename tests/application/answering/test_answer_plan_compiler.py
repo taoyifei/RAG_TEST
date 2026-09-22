@@ -1745,4 +1745,11 @@ def test_field_provider_failure_keeps_independent_deterministic_fact() -> None:
     assert outcome.reason_code == "FIELD_RESOLUTION_PROVIDER_UNAVAILABLE"
     assert outcome.atom_coverage == (("A1", "SUPPORTED"), ("A2", "MISSING"))
     assert outcome.missing_atom_reasons == (("A2", "SYSTEM_DEPENDENCY_FAILED"),)
+    assert outcome.accepted_claim_count == 1
+    assert outcome.published_claim_count == 1
+    assert outcome.accepted_support_ids == outcome.published_support_ids
+    assert set(outcome.accepted_support_ids).issubset(support_ids)
+    assert outcome.calls == ()
+    assert "其余部分因本次系统处理未完成，暂时无法确认" in outcome.answer
+    assert "指代对象尚不明确" not in outcome.answer
     assert generator.generate.call_count == 0

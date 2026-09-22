@@ -620,8 +620,11 @@ describe("湾事通公共应用", () => {
     );
     await openHome();
     const user = await ask();
-    const summary = await screen.findByText("已核验来源（1）");
+    const summary = await screen.findByText("引用依据（1段）");
     await user.click(summary);
+    const groupSummary = screen.getByText("展开全部片段").closest("summary");
+    expect(groupSummary).not.toBeNull();
+    if (groupSummary) await user.click(groupSummary);
 
     expect(screen.getByText("湾事通办事指南.docx")).toBeInTheDocument();
     expect(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -19,6 +20,11 @@ from rag_app.adapters.providers.aliyun_chat import (
 from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     GroundedOutcome,
+)
+from rag_app.application.answering.natural_renderer import (
+    MissingAtomReason,
+    ValidatedNaturalClaim,
+    render_natural_answer,
 )
 from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.core.models import (
@@ -40,7 +46,11 @@ from rag_app.core.models.query_plan import (
     QueryPlan,
     make_query_plan,
 )
-from rag_app.core.models.retrieval import ClaimSupport, NaturalClaim
+from rag_app.core.models.retrieval import (
+    AnswerClaim,
+    ClaimSupport,
+    NaturalClaim,
+)
 from rag_app.core.ports import GenerationRequest
 from tests.adapters.providers.generation_packet_helpers import trusted_groups
 from tests.application.retrieval.test_descriptive_answers import (
@@ -847,3 +857,136 @@ def test_procedure_renderer_uses_source_order() -> None:
     assert outcome.answer is not None
     assert outcome.answer.splitlines()[0].startswith("1. 先登记申请。")
     assert outcome.answer.splitlines()[1].startswith("2. 再审核材料。")
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_message"),
+    (
+        (
+            MissingAtomReason.SOURCE_MISSING,
+            "现有资料中没有找到该部分的明确规定：乙部门的规定。",
+        ),
+        (
+            MissingAtomReason.EVIDENCE_NOT_DIRECT,
+            "已检索到相关资料，但尚未确认乙部门的规定的直接依据。",
+        ),
+        (
+            MissingAtomReason.STRUCTURE_INCOMPLETE,
+            "当前资料只检索到部分条目，尚无法确认乙部门的规定。",
+        ),
+        (
+            MissingAtomReason.GENERATION_INCOMPLETE,
+            "已检索到相关资料，但本次未能完整组织全部内容。",
+        ),
+        (
+            MissingAtomReason.CLAIM_REJECTED,
+            "检索到了相关资料，但其中部分表述未能通过引用核验："
+            "乙部门的规定。",
+        ),
+        (
+            MissingAtomReason.CONTEXT_UNRESOLVED,
+            "当前问题的指代对象尚不明确。",
+        ),
+        (
+            MissingAtomReason.SYSTEM_DEPENDENCY_FAILED,
+            "其余部分因本次系统处理未完成，暂时无法确认。",
+        ),
+    ),
+)
+def test_renderer_maps_every_missing_reason_to_its_own_message(
+    reason: MissingAtomReason,
+    expected_message: str,
+) -> None:
+    evidence = _evidence("甲部门保存记录 14 天。")
+    support_id = evidence[0].support_id
+    plan = _plan("甲部门", "乙部门")
+    matrix = _matrix(
+        plan,
+        (
+            (AtomStatus.SUPPORTED, (support_id,)),
+            (AtomStatus.MISSING, ()),
+        ),
+    )
+    accepted = ValidatedNaturalClaim(
+        claim_id="C1",
+        atom_ids=("A1",),
+        claim=AnswerClaim(
+            text="甲部门保存记录 14 天。",
+            supports=(
+                ClaimSupport(
+                    support_id=support_id,
+                    quote="甲部门保存记录 14 天。",
+                ),
+            ),
+        ),
+    )
+
+    answer = render_natural_answer(
+        plan,
+        matrix,
+        (accepted,),
+        evidence,
+        missing_atoms={"A2": reason},
+    )
+
+    assert answer is not None
+    assert "甲部门保存记录 14 天。" in answer
+    assert expected_message in answer
+    assert answer.count(f"[{support_id}]") == 1
+
+
+def test_renderer_uses_neutral_message_for_unknown_missing_reason() -> None:
+    evidence = _evidence("甲部门保存记录 14 天。")
+    support_id = evidence[0].support_id
+    plan = _plan("甲部门", "乙部门")
+    matrix = _matrix(
+        plan,
+        (
+            (AtomStatus.SUPPORTED, (support_id,)),
+            (AtomStatus.MISSING, ()),
+        ),
+    )
+    accepted = ValidatedNaturalClaim(
+        claim_id="C1",
+        atom_ids=("A1",),
+        claim=AnswerClaim(
+            text="甲部门保存记录 14 天。",
+            supports=(
+                ClaimSupport(
+                    support_id=support_id,
+                    quote="甲部门保存记录 14 天。",
+                ),
+            ),
+        ),
+    )
+
+    answer = render_natural_answer(
+        plan,
+        matrix,
+        (accepted,),
+        evidence,
+        missing_atoms={
+            "A2": cast(MissingAtomReason, "FUTURE_MISSING_REASON")
+        },
+    )
+
+    assert answer is not None
+    assert "本次未能完成这部分回答。" in answer
+    assert "指代对象尚不明确" not in answer
+
+
+def test_renderer_does_not_create_answer_without_accepted_facts() -> None:
+    plan = _plan("甲部门")
+    matrix = _matrix(plan, ((AtomStatus.MISSING, ()),))
+
+    answer = render_natural_answer(
+        plan,
+        matrix,
+        (),
+        (),
+        missing_atoms={
+            "A1": MissingAtomReason.SYSTEM_DEPENDENCY_FAILED,
+        },
+    )
+
+    assert answer is None

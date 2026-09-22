@@ -171,8 +171,12 @@ test("无登录公共问答完成流式回答、来源与反馈", async ({
   ).toBeVisible();
   await expect(page.getByText("材料应在五个工作日内核验。")).toHaveCount(0);
 
-  await page.getByText("已核验来源（1）").click();
+  await page.getByText("引用依据（1段）").click();
   await expect(page.getByText("湾事通办事指南", { exact: true })).toBeVisible();
+  const citationGroupSummary = page.locator(".wst-citation-group > summary");
+  await citationGroupSummary.press("Enter");
+  await expect(citationGroupSummary).toBeFocused();
+  await expect(page.getByText("片段 1")).toBeVisible();
   await expect(
     page.getByText("政务服务部 · 办事服务 / 材料办理"),
   ).toBeVisible();
