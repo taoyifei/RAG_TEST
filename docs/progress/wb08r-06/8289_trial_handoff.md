@@ -1,6 +1,6 @@
 # WB-08R 阶段 06：8289 本人试用交接
 
-当前状态：`READY_FOR_USER_TRIAL / AWAITING_USER_ACCEPTANCE`
+当前状态：`RETAINED_TEST_ENVIRONMENT_AFTER_PRODUCTION_RELEASE`
 
 记录时间：2026-09-22T20:17:18+08:00
 
@@ -66,6 +66,6 @@ Docker 镜像均已清理。正在运行的 8289 应用、前缀代理和 54 转
 | 3～5 人真实试用 | `NOT_RUN_BY_USER_DIRECTION` | 用户明确暂缓 |
 | 真实反馈提交 | `NOT_RUN_BY_USER_DIRECTION` | 用户明确暂缓，不伪造反馈 |
 | 管理员 Trace 联查 | `NOT_RUN_BY_USER_DIRECTION` | 不产生真实反馈；管理员仍使用原令牌体系 |
-| 8288/18288 切换 | `NOT_EXECUTED` | 尚未取得针对当前镜像的生产授权 |
+| 8288/18288 切换 | `EXECUTED` | 用户已明确授权，详见 `cutover_report.md` |
 
-当前 8289 将保持在线供本人查看，不因本轮记录提交而停止。
+当前 8289 继续作为独立测试环境在线，不与新的生产工作副本混用数据。

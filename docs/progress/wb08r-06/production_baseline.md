@@ -2,7 +2,10 @@
 
 记录时间：2026-09-22T20:17:18+08:00
 
-状态：`PRODUCTION_BASELINE_OBSERVED_UNCHANGED`
+状态：`PRODUCTION_BASELINE_CAPTURED_BEFORE_CUTOVER`
+
+本文件记录 2026-09-22 生产切换前的旧版基线；切换后的实际状态见
+`cutover_report.md` 与 `rollback_retention.md`。
 
 ## 只读边界
 
@@ -20,7 +23,7 @@
 | 生产容器 | `wanshitong-app` |
 | 容器 ID | `7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e` |
 | 镜像标签 | `rag-test-wanshitong:604ef63` |
-| 镜像 ID | `sha256:97826be2208718be61d37921705f595c3c0056d57a23884ffc54ffdaf66380306` |
+| 镜像 ID | `sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306` |
 | 启动时间 | `2026-09-17T01:45:12.001523599Z` |
 | 数据/日志/密钥 | `/data/tyf/wanshitong/{data,logs,secrets}` |
 | 现场健康 | 容器 `running/healthy`；54 入口 HTTP 200 |

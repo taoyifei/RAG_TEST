@@ -1,21 +1,18 @@
 {
-  "schema_version": "wb08r-phase06-release-identity-v1",
-  "recorded_at": "2026-09-22T20:17:18+08:00",
-  "status": "AWAITING_USER_ACCEPTANCE",
+  "schema_version": "wb08r-phase06-release-identity-v2",
+  "recorded_at": "2026-09-22T21:45:28+08:00",
+  "status": "RELEASED_WITH_ROLLBACK_RETAINED",
   "source": {
     "branch": "codex/wb-08r-adaptive-rag",
-    "build_revision": "d814f8d58d89418ced99aefe470fff58ee4b6b6c",
-    "remote_revision_at_freeze": "d814f8d58d89418ced99aefe470fff58ee4b6b6c"
+    "application_build_revision": "d814f8d58d89418ced99aefe470fff58ee4b6b6c",
+    "production_proxy_revision": "da8bb0006bd1a740b1555fb949a6c61294a10f2a",
+    "production_proxy_sha256": "73e926c922adb7390310d10230bc167612537c44a0bc8b95ab72d369accd3ab7"
   },
-  "candidate_image": {
+  "released_image": {
     "tag": "rag-test-wanshitong:wb08r06-d814f8d",
     "image_id": "sha256:96f1aa48eed69de4a98f48af6f4fa89ebf5b35a6392c30697ee855b105f5ecd9",
     "repo_digest": null,
     "registry_published": false,
-    "compressed_archive_sha256": "e55f038b952420a559f512413de56ea0966547a6314af372bcce32c64ba80fdf",
-    "compressed_archive_bytes": 360028259,
-    "archive_retained_after_load": false,
-    "image_inspect_bytes": 361917100,
     "product_assets": {
       "schema_version": "product-assets-v1",
       "manifest_sha256": "933c8ad4dfccaa2226047b311808ac9ddd6f30cc2c65fcf024cafa861bae1468",
@@ -24,84 +21,116 @@
       "source_revision": "d814f8d58d89418ced99aefe470fff58ee4b6b6c"
     }
   },
-  "candidate_runtime": {
-    "public_url": "http://10.242.180.54:8289/kb/",
+  "user_acceptance": {
+    "approved": true,
+    "candidate_public_url": "http://10.242.180.54:8289/kb/",
+    "candidate_image_id": "sha256:96f1aa48eed69de4a98f48af6f4fa89ebf5b35a6392c30697ee855b105f5ecd9",
+    "instruction": "promote_current_8289_version_to_8288_and_retain_previous_production_image"
+  },
+  "production_release": {
+    "public_url": "http://10.242.180.54:18288/kb/",
+    "admin_url": "http://10.242.180.54:18288/kb/admin",
+    "legacy_root_behavior": "307_to_/kb/_no_store",
     "application_container": {
-      "name": "wanshitong-sso-candidate-app",
-      "id": "e11155e2f426e6d0792ccb2dace43c51b6c28f402746c08cda62b25304bb4636",
+      "name": "wanshitong-wb08r06-production-app",
+      "id": "fb65fdaeaec49c161bc6a7e73c9af7eca01cb9c5858341c073c75a64d64abf47",
       "status": "running_healthy",
-      "restart_count_after_fix": 0,
-      "started_at": "2026-09-22T12:04:03.925247556Z"
+      "restart_count": 0,
+      "started_at": "2026-09-22T13:21:47.396178213Z"
     },
     "prefix_proxy_container": {
-      "name": "wanshitong-wb08r06-prefix-proxy",
-      "id": "ebbce6fb09b3f8b4541da75dd8fb40599add3d915cec533bfb82aef4c03e956c",
+      "name": "wanshitong-wb08r06-production-prefix-proxy",
+      "id": "958b1040d543262ed769abc3d8f39966b0723d778631e713b97588ffea76fb14",
       "status": "running_healthy",
-      "started_at": "2026-09-22T12:11:18.111015233Z"
+      "restart_count": 0,
+      "started_at": "2026-09-22T13:27:00.903164365Z"
     },
-    "host_data_root": "/data/tyf/wanshitong-wb08r06-d814f8d/data",
+    "host_root": "/data/tyf/wanshitong-wb08r06-prod-20260922-2114",
     "root_path": "/kb",
-    "sso_namespace": "candidate_8289",
+    "sso": {
+      "client_id": "wanshitong_prod",
+      "deployment_id": "production_18288",
+      "callback": "http://10.242.180.54:18288/kb/sso/callback",
+      "authorize_url": "http://172.24.7.172:21000/prod-api/sso/authorize",
+      "validate_url": "http://172.24.7.172:21000/prod-api/sso/validate"
+    },
     "topology": [
-      "10.242.180.54:8289",
-      "10.242.180.60:18289",
-      "127.0.0.1:8289",
+      "10.242.180.54:18288",
+      "10.242.180.60:8288",
+      "127.0.0.1:18288",
       "container:8088"
     ]
   },
-  "initial_candidate_data_snapshot": {
-    "source": "/data/tyf/wanshitong-wb08r05-c828673/data",
-    "destination": "/data/tyf/wanshitong-wb08r06-d814f8d/data",
-    "method": "sqlite_online_backup_plus_non_database_copy",
-    "universal_rag": {
-      "bytes": 1372721152,
-      "sha256": "7a0aaeda6a0c46d14528da28d4cd12a566a01ebdb5ef022a237ef1d1a568d793",
-      "quick_check": "ok"
+  "production_data_copy": {
+    "source": "/data/tyf/wanshitong/data",
+    "destination": "/data/tyf/wanshitong-wb08r06-prod-20260922-2114/data",
+    "method": "clean_shutdown_plus_sqlite_backup_and_non_database_copy",
+    "source_frozen": {
+      "universal_rag": {
+        "bytes": 2022731776,
+        "sha256": "601020def8a5fa0aae279f6f147d8d24d6a29ebd998ab69cad2b53e060fc54f1",
+        "quick_check": "ok"
+      },
+      "product_traces": {
+        "bytes": 109383680,
+        "sha256": "1baf20e287d4ad9c4a51232a7d577c479f667a1a8371c4e0aee8d55cbaff18ef",
+        "quick_check": "ok"
+      }
     },
-    "product_traces": {
-      "bytes": 355586048,
-      "sha256": "5f417aacb13beca9522ee6fd5ed8d2a92d075cb4a48cfc42281b9c60948e044e",
-      "quick_check": "ok"
+    "working_copy_after_smoke": {
+      "universal_rag": {
+        "bytes": 2023051264,
+        "sha256": "f7967ebe92adf54c5dd6858d29a086f7827b72a96cf9d25c4b1aaf482600d7bb"
+      },
+      "product_traces": {
+        "bytes": 109674496,
+        "sha256": "b4ad73f991ceba21890b5d3f676eed85ca566881c54fa6df53a7ce1fb6489c22"
+      }
     }
   },
+  "old_production_retained": {
+    "container_name": "wanshitong-app",
+    "container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
+    "state": "stopped_exit_0_not_deleted",
+    "stopped_at": "2026-09-22T13:17:13.850429445Z",
+    "image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306",
+    "image_tags": [
+      "rag-test-wanshitong:604ef63",
+      "rag-test-wanshitong:rollback-pre-wb08r06-20260922-2114"
+    ],
+    "data_root": "/data/tyf/wanshitong/data",
+    "evidence_root": "/data/tyf/wanshitong-wb08r06-prod-20260922-2114/rollback"
+  },
+  "candidate_runtime_retained": {
+    "public_url": "http://10.242.180.54:8289/kb/",
+    "application_container": "wanshitong-sso-candidate-app",
+    "prefix_proxy_container": "wanshitong-wb08r06-prefix-proxy",
+    "status": "running_healthy"
+  },
   "verification": {
-    "backend_related": "124 passed, 1 warning",
-    "frontend_related": "2 files, 31 tests passed",
-    "frontend_lint": "passed",
-    "frontend_build": "passed",
-    "target_ruff": "passed",
-    "target_mypy": "passed",
-    "runtime_guard": "ready=true; 0 missing, 0 mount mismatch, 0 semantic mismatch, 0 unclassified",
-    "fresh_sso_login": "passed",
+    "callback_registration_probe": "HTTP 302",
+    "production_http": 200,
+    "production_live": 200,
+    "production_ready": 200,
+    "fresh_sso_login": "passed_with_taoyifei",
     "suggestion_to_terminal_answer": "passed",
     "citation_expand": "passed",
-    "candidate_http": 200,
-    "relay_probe": "40/40 HTTP 200; 0.297-0.391s; no residual queue",
+    "local_logout": "passed",
+    "admin_route_separate_from_sso": "passed",
+    "admin_bootstrap_login": "passed",
+    "production_container_health": "2/2 healthy; restart_count 0",
+    "production_relay_queue": "listen_queue_0_of_100_after_smoke",
+    "targeted_proxy_tests": "12 passed",
+    "targeted_proxy_ruff": "passed",
     "live_feedback": "NOT_RUN_BY_USER_DIRECTION",
     "account_switch": "NOT_RUN_BY_USER_DIRECTION",
     "real_multi_user_trial": "NOT_RUN_BY_USER_DIRECTION"
   },
   "repair_rounds": {
-    "recommendation_tuning": 0,
-    "deployment_new_issue": 1,
-    "deployment_issue": "online SQLite backup files required mode 0600",
-    "deployment_resolution": "candidate-copy database modes corrected to 0600; healthy with restart_count 0"
-  },
-  "production": {
-    "public_url": "http://10.242.180.54:18288/",
-    "container_name": "wanshitong-app",
-    "container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
-    "image_tag": "rag-test-wanshitong:604ef63",
-    "image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a23884ffc54ffdaf66380306",
-    "started_at": "2026-09-17T01:45:12.001523599Z",
-    "identity_unchanged_before_after_candidate_deploy": true,
-    "modified": false,
-    "cutover": "NOT_EXECUTED_REQUIRES_EXPLICIT_USER_APPROVAL",
-    "future_data_strategy": "PENDING_FINAL_PRODUCTION_SNAPSHOT_AND_USER_APPROVAL"
-  },
-  "user_acceptance": {
-    "approved": false,
-    "state": "AWAITING_USER_ACCEPTANCE",
-    "latest_instruction": "keep_current_8289_online_for_user_review"
+    "candidate_deployment": 1,
+    "candidate_issue": "online SQLite backup files required mode 0600",
+    "production_cutover": 1,
+    "production_issue": "legacy root URL returned 404 after adopting /kb",
+    "production_resolution": "temporary no-store 307 redirect from / to /kb/"
   }
 }
