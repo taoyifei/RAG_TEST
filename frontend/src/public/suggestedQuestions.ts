@@ -16,7 +16,7 @@ export const SUGGESTED_QUESTIONS_REVISION = "2026-09-22-f01-r1";
 export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   {
     id: "sq-security-assessment-lead-time-01",
-    question: "系统上线前的安全评估申请有哪些时间要求？",
+    question: "上线安全评估要提前多久申请？",
     documentId: "DOCX-014",
     style: "SHORT",
     topicKey: "security-assessment",
@@ -24,7 +24,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-asset-depreciation-start-01",
-    question: "固定资产折旧的起算规则是什么？",
+    question: "固定资产从什么时候开始折旧？",
     documentId: "DOCX-026",
     style: "SHORT",
     topicKey: "fixed-assets",
@@ -32,7 +32,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-rd-hours-record-01",
-    question: "研发工时怎样记录和留痕？",
+    question: "研发工时怎么填、怎么留痕？",
     documentId: "DOCX-003",
     style: "SHORT",
     topicKey: "rd-hours",
@@ -40,7 +40,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-design-document-confirmation-01",
-    question: "业务团队收到设计文档后如何完成业务确认？",
+    question: "业务团队收到设计文档后怎么确认？",
     documentId: "DOCX-046",
     style: "SHORT",
     topicKey: "product-delivery",
@@ -48,8 +48,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-company-seal-application-01",
-    question:
-      "申请公司公章要从哪个系统入口发起，需要填写或上传什么，完整审批流程是什么？",
+    question: "公司公章怎么申请？",
     documentId: "DOCX-023",
     style: "SHORT",
     topicKey: "seal-application",
@@ -57,7 +56,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-rd-outsourcing-budget-01",
-    question: "研发外协成本使用时是否需要先有预算？",
+    question: "研发外协费用需要先有预算吗？",
     documentId: "DOCX-009",
     style: "SHORT",
     topicKey: "rd-outsourcing",
@@ -65,7 +64,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-procurement-response-deadline-01",
-    question: "采购文件发布到应答截止有什么时间要求？",
+    question: "采购文件发布到应答截止至少要几天？",
     documentId: "DOCX-018",
     style: "SHORT",
     topicKey: "procurement",
@@ -73,7 +72,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-certification-scope-01",
-    question: "外部认证管理办法的适用边界是什么？",
+    question: "哪些认证不适用外部认证管理办法？",
     documentId: "DOCX-010",
     style: "SHORT",
     topicKey: "employee-certification",
@@ -81,7 +80,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-rd-project-kickoff-01",
-    question: "研发项目立项时需要准备哪些事项？",
+    question: "研发项目立项要准备什么？",
     documentId: "DOCX-004",
     style: "SHORT",
     topicKey: "rd-project",
@@ -89,7 +88,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-ip-records-filing-01",
-    question: "知识产权管理机构需要对哪些类型的文件资料进行备案？",
+    question: "知识产权管理机构要备案哪些文件资料？",
     documentId: "DOCX-012",
     style: "STANDARD",
     topicKey: "intellectual-property",
@@ -97,7 +96,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-performance-indicator-adjustment-01",
-    question: "组织绩效考核指标调整需要经过哪些程序？",
+    question: "组织绩效考核指标调整要走哪些程序？",
     documentId: "DOCX-016",
     style: "STANDARD",
     topicKey: "performance-management",
@@ -105,7 +104,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-office-supplies-off-catalog-01",
-    question: "哪些情况下可以采购电商平台或集采目录里没有的办公用品？",
+    question: "什么情况下可以采购电商平台或集采目录外的办公用品？",
     documentId: "DOCX-024",
     style: "STANDARD",
     topicKey: "office-procurement",
@@ -113,26 +112,23 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   },
   {
     id: "sq-rd-project-name-rules-01",
-    question:
-      "研发项目名称中是否需要同时包含项目内容和动作，并且不能使用非研发相关的动词？",
+    question: "研发项目名称必须包含哪些内容，哪些非研发动词不能使用？",
     documentId: "DOCX-007",
     style: "COMPOUND",
     topicKey: "rd-project-naming",
     enabled: true,
   },
   {
-    id: "sq-technology-license-negotiation-01",
-    question:
-      "在技术授权谈判过程中，若谈判结果超出预定方案范围且双方无法达成一致，是否仍可继续推进授权流程？",
-    documentId: "DOCX-011",
+    id: "sq-prebid-publicity-deadline-01",
+    question: "标前公示截止日必须是工作日吗，至少要公示几天？",
+    documentId: "DOCX-020",
     style: "COMPOUND",
-    topicKey: "technology-licensing",
+    topicKey: "procurement-publicity",
     enabled: true,
   },
   {
     id: "sq-rd-direct-cost-scope-01",
-    question:
-      "研发活动直接消耗的材料、燃料和动力费用是否属于研究开发支出列支范围？",
+    question: "研发直接消耗的材料、燃料和动力费用能计入研发支出吗？",
     documentId: "DOCX-027",
     style: "COMPOUND",
     topicKey: "rd-costs",
