@@ -138,7 +138,52 @@ class InternalModelConfigurator:
             settings,
         )
         current_models = self._runtime.models.get(scope.knowledge_base_id)
-        if ready is not None and current_models != desired_models:
+        capability_only_change = (
+            current_models.model_copy(
+                update={
+                    "disable_thinking_supported": (
+                        desired_models.disable_thinking_supported
+                    ),
+                    "disable_thinking": desired_models.disable_thinking,
+                    "structured_output_mode": (
+                        desired_models.structured_output_mode
+                    ),
+                    "structured_output_profile_revision": (
+                        desired_models.structured_output_profile_revision
+                    ),
+                    "structured_output_service_identity_sha256": (
+                        desired_models.structured_output_service_identity_sha256
+                    ),
+                    "structured_output_chat_template_revision": (
+                        desired_models.structured_output_chat_template_revision
+                    ),
+                    "structured_output_grammar_backend": (
+                        desired_models.structured_output_grammar_backend
+                    ),
+                    "structured_output_qualification_evidence_sha256": (
+                        desired_models.structured_output_qualification_evidence_sha256
+                    ),
+                    "structured_output_allow_unique_items": (
+                        desired_models.structured_output_allow_unique_items
+                    ),
+                    "field_resolution_max_output_tokens": (
+                        desired_models.field_resolution_max_output_tokens
+                    ),
+                    "field_resolution_transport_timeout_seconds": (
+                        desired_models.field_resolution_transport_timeout_seconds
+                    ),
+                    "field_resolution_total_deadline_seconds": (
+                        desired_models.field_resolution_total_deadline_seconds
+                    ),
+                }
+            )
+            == desired_models
+        )
+        if (
+            ready is not None
+            and current_models != desired_models
+            and not capability_only_change
+        ):
             raise InternalModelConfigurationError(
                 "湾事通已锁定的 Generation Model Settings 已发生漂移。",
                 stage="wanshitong.models.verify",
@@ -242,10 +287,9 @@ class InternalModelConfigurator:
                 )
             )
         )
-        if (
-            not connection.enabled
-            or _connection_contract(actual) != _connection_contract(expected)
-        ):
+        if not connection.enabled or _connection_contract(
+            actual
+        ) != _connection_contract(expected):
             raise InternalModelConfigurationError(
                 "湾事通模型角色引用的 Connection 与冻结配置不一致。",
                 stage="wanshitong.models.connection.verify",
@@ -549,9 +593,7 @@ class InternalModelConfigurator:
                 InternalModelValidationReport(
                     operation=operation,
                     validation_id=run.validation_id,
-                    validation_mode=cast(
-                        _ValidationMode, run.validation_mode
-                    ),
+                    validation_mode=cast(_ValidationMode, run.validation_mode),
                 )
             )
         return tuple(reports)
@@ -569,6 +611,38 @@ class InternalModelConfigurator:
                 "generation_model": settings.llm_model,
                 "generation_fallback_models": (),
                 "rewrite_enabled": False,
+                "disable_thinking_supported": (
+                    settings.llm_disable_thinking_supported
+                ),
+                "disable_thinking": settings.llm_disable_thinking,
+                "structured_output_mode": (settings.llm_structured_output_mode),
+                "structured_output_profile_revision": (
+                    settings.llm_structured_profile_revision
+                ),
+                "structured_output_service_identity_sha256": (
+                    settings.llm_structured_service_identity_sha256
+                ),
+                "structured_output_chat_template_revision": (
+                    settings.llm_structured_chat_template_revision
+                ),
+                "structured_output_grammar_backend": (
+                    settings.llm_structured_grammar_backend
+                ),
+                "structured_output_qualification_evidence_sha256": (
+                    settings.llm_structured_qualification_evidence_sha256
+                ),
+                "structured_output_allow_unique_items": (
+                    settings.llm_structured_allow_unique_items
+                ),
+                "field_resolution_max_output_tokens": (
+                    settings.llm_field_resolution_max_output_tokens
+                ),
+                "field_resolution_transport_timeout_seconds": (
+                    settings.llm_field_resolution_timeout_seconds
+                ),
+                "field_resolution_total_deadline_seconds": (
+                    settings.llm_field_resolution_total_deadline_seconds
+                ),
             }
         )
 

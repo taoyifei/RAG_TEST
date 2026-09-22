@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from rag_app.application.retrieval.fusion import reciprocal_rank_fusion
+from rag_app.application.retrieval.lexical import _merge_question_term_hits
 from rag_app.application.retrieval.service import (
     _required_structural_candidate_ids,
 )
@@ -33,6 +34,21 @@ def _hit(
         raw_score=float(rank),
         must_keep=must_keep,
     )
+
+
+def test_original_query_top_hits_survive_supplemental_lexical_hits() -> None:
+    """对象词补召回不得挤掉原问直接命中的前三条证据。"""
+    original = tuple(_hit(value, "lexical", value) for value in (1, 2, 3, 4))
+    supplemental = tuple(
+        _hit(value, "lexical", value) for value in (5, 6, 1, 7)
+    )
+
+    merged = _merge_question_term_hits(original, supplemental, 5)
+
+    assert [item.chunk_id for item in merged] == [
+        f"chunk_{value:032x}" for value in (1, 2, 3, 5, 6)
+    ]
+    assert [item.rank for item in merged] == [1, 2, 3, 4, 5]
 
 
 def test_rrf_uses_rank_contributions_and_stable_ties() -> None:

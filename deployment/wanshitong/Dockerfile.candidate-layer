@@ -1,0 +1,41 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG VCS_REF
+
+USER root
+
+RUN rm -rf \
+    /usr/local/lib/python3.11/site-packages/rag_app \
+    /usr/local/lib/python3.11/site-packages/docx_rag-0.1.0.dist-info \
+    /app/frontend
+
+COPY --chown=root:root layer/site-packages/rag_app/ \
+    /usr/local/lib/python3.11/site-packages/rag_app/
+COPY --chown=root:root layer/site-packages/docx_rag-0.1.0.dist-info/ \
+    /usr/local/lib/python3.11/site-packages/docx_rag-0.1.0.dist-info/
+COPY --chown=rag:rag layer/app/frontend/ /app/frontend/
+
+RUN chmod -R u=rwX,go=rX \
+    /usr/local/lib/python3.11/site-packages/rag_app \
+    /usr/local/lib/python3.11/site-packages/docx_rag-0.1.0.dist-info \
+    && python -c \
+    'import sys; from rag_app._build_revision import SOURCE_REVISION; sys.exit(0 if SOURCE_REVISION == sys.argv[1] else 1)' \
+    "${VCS_REF}" \
+    && python -c \
+    'from rag_app.product.compatibility import write_manifest; write_manifest("/app/compatibility-manifest.json")' \
+    && python -c \
+    'import pathlib, sys; from rag_app.product.asset_manifest import write_product_asset_manifest; write_product_asset_manifest(root=pathlib.Path("/app"), manifest_path=pathlib.Path("/app/product-assets.json"), source_revision=sys.argv[1])' \
+    "${VCS_REF}" \
+    && chown rag:rag \
+    /app/compatibility-manifest.json \
+    /app/product-assets.json
+
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+
+USER rag:rag
+
+RUN python -c \
+    'import sys; from rag_app._build_revision import SOURCE_REVISION; sys.exit(0 if SOURCE_REVISION == sys.argv[1] else 1)' \
+    "${VCS_REF}" \
+    && rag-app product-asset-selfcheck --expected-revision "${VCS_REF}"

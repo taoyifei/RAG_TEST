@@ -17,6 +17,9 @@ from rag_app.composition.product_runtime import (
 from rag_app.product.crypto import initialize_master_key
 from rag_app.product.provider_runtime import build_offline_mock_transport
 from rag_app.wanshitong.api import SCOPE_STATUS_PATH
+from rag_app.wanshitong.department_shadow import (
+    WanshitongDepartmentShadowObserver,
+)
 from rag_app.wanshitong.errors import ScopeBindingError
 from rag_app.wanshitong.mode import (
     WANSHITONG_KNOWLEDGE_BASE_NAME,
@@ -106,6 +109,26 @@ def test_restart_reuses_persisted_scope(
         )
     finally:
         second_runtime.close()
+
+
+def test_shadow_observer_is_bound_only_when_explicitly_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_PRODUCT_MODE", "wanshitong")
+    monkeypatch.setenv(
+        "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED", "true"
+    )
+    runtime = _build_runtime(_runtime_settings(tmp_path))
+    try:
+        app = create_product_app(runtime)
+
+        assert app.state.wanshitong_department_shadow_enabled is True
+        assert isinstance(
+            app.state.wanshitong_department_shadow,
+            WanshitongDepartmentShadowObserver,
+        )
+    finally:
+        runtime.close()
 
 
 def test_concurrent_ensure_does_not_duplicate_scope(tmp_path: Path) -> None:

@@ -46,6 +46,7 @@ from rag_app.core.models import (
     ChunkingReport,
     DocumentIR,
     DocumentRef,
+    DocumentVersionRef,
     EmbeddingCoverage,
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
@@ -62,9 +63,15 @@ from rag_app.core.models import (
     RevisionSlotCoverage,
     RevisionValidationEvidence,
     RevisionVectorSpec,
+    SourceDocumentIdentity,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.ports import MetadataRecord
+from rag_app.core.ports.evidence_source import (
+    CatalogDocument,
+    DocumentStructureItem,
+    DocumentStructurePage,
+)
 
 _TERMINAL_REVISION_STATES = {
     IndexRevisionState.ACTIVE,
@@ -73,6 +80,7 @@ _TERMINAL_REVISION_STATES = {
 }
 _MAX_HYDRATION_CHUNKS = 200
 _MAX_SECTION_CHUNKS = 20
+_MAX_CATALOG_DOCUMENTS = 5000
 _DEFAULT_LEASE_SECONDS = 300
 
 
@@ -1736,6 +1744,75 @@ class SqliteControlStore:
             ),
         )
 
+    def catalog_documents(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        limit: int,
+    ) -> tuple[CatalogDocument, ...] | None:
+        """从冻结 Revision 和 canonical Chunk 读取可信目录元数据。
+
+        超过上限时返回 None，避免将不完整目录误判为唯一命中。
+        """
+        if not 1 <= limit <= _MAX_CATALOG_DOCUMENTS:
+            raise ValueError("Catalog 文档上限必须位于 1 到 5000。")
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT rd.document_id, rd.document_version_id, "
+                "d.display_name, c.chunk_id, c.chunk_json "
+                "FROM revision_documents rd JOIN documents d "
+                "ON d.document_id=rd.document_id "
+                "JOIN chunks c ON c.revision_id=rd.revision_id "
+                "AND c.chunk_id=(SELECT c2.chunk_id "
+                "FROM chunks c2 "
+                "WHERE c2.revision_id=rd.revision_id "
+                "AND c2.document_id=rd.document_id "
+                "AND c2.document_version_id=rd.document_version_id "
+                "ORDER BY c2.chunk_id LIMIT 1) "
+                "WHERE rd.revision_id=? AND d.project_id=? "
+                "AND d.knowledge_base_id=? AND d.deleted_at IS NULL "
+                "AND d.status='active' AND d.lifecycle_status='active' "
+                "ORDER BY rd.document_id LIMIT ?",
+                (
+                    revision.index_revision_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    limit + 1,
+                ),
+            ).fetchall()
+        if len(rows) > limit:
+            return None
+        documents: list[CatalogDocument] = []
+        for row in rows:
+            chunk = Chunk.model_validate_json(str(row["chunk_json"]))
+            if (
+                chunk.index_revision_id != revision.index_revision_id
+                or chunk.version.document_id != row["document_id"]
+                or chunk.version.document_version_id
+                != row["document_version_id"]
+            ):
+                raise IndexCorrupt(
+                    "Catalog 与 canonical Chunk 版本失配。",
+                    stage="retrieval.catalog",
+                )
+            metadata = dict(chunk.metadata)
+            title = metadata.get("document_title")
+            documents.append(
+                CatalogDocument(
+                    document_id=str(row["document_id"]),
+                    document_version_id=str(row["document_version_id"]),
+                    chunk_id=str(row["chunk_id"]),
+                    title=(
+                        title.strip()
+                        if isinstance(title, str) and title.strip()
+                        else str(row["display_name"])
+                    ),
+                    metadata=chunk.metadata,
+                )
+            )
+        return tuple(documents)
+
     def hydrate_chunks(
         self,
         snapshot: ActiveRevisionQuerySnapshot,
@@ -1816,6 +1893,78 @@ class SqliteControlStore:
             )
         return tuple(hydrated)
 
+    def load_document_structure(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        allowed_documents: tuple[SourceDocumentIdentity, ...],
+        cursor: int,
+        limit: int,
+    ) -> DocumentStructurePage:
+        """在许可身份内部、排名之前读取稳定 canonical 结构页。"""
+        if cursor < 0:
+            raise ValueError("document structure cursor 不能为负数。")
+        if not 0 < limit <= _MAX_HYDRATION_CHUNKS:
+            raise ValueError("document structure limit 必须在 1..200。")
+        if not allowed_documents:
+            return DocumentStructurePage((), None, True)
+        pair_clause = " OR ".join(
+            "(c.document_id=? AND c.document_version_id=?)"
+            for _ in allowed_documents
+        )
+        pair_parameters = tuple(
+            value
+            for identity in allowed_documents
+            for value in (
+                identity.document_id,
+                identity.document_version_id,
+            )
+        )
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            statement = (
+                "SELECT c.chunk_id, c.document_id, "  # noqa: S608
+                "c.document_version_id, c.role, c.section_id, "
+                "c.content_sha256 FROM chunks c "
+                "JOIN index_revisions r ON r.index_revision_id=c.revision_id "
+                "JOIN documents d ON d.document_id=c.document_id "
+                "WHERE c.revision_id=? AND r.project_id=? "
+                "AND r.knowledge_base_id=? AND d.deleted_at IS NULL "
+                "AND d.status='active' AND d.lifecycle_status='active' "
+                f"AND ({pair_clause}) "
+                "ORDER BY c.document_id, c.document_version_id, c.row_id "
+                "LIMIT ? OFFSET ?"
+            )
+            rows = connection.execute(
+                statement,
+                (
+                    revision.index_revision_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    *pair_parameters,
+                    limit + 1,
+                    cursor,
+                ),
+            ).fetchall()
+        has_more = len(rows) > limit
+        selected = rows[:limit]
+        items = tuple(
+            DocumentStructureItem(
+                chunk_id=str(row["chunk_id"]),
+                document_id=str(row["document_id"]),
+                document_version_id=str(row["document_version_id"]),
+                role=str(row["role"]),
+                section_id=str(row["section_id"]),
+                content_sha256=str(row["content_sha256"]),
+            )
+            for row in selected
+        )
+        return DocumentStructurePage(
+            items=items,
+            next_cursor=cursor + len(items) if has_more else None,
+            complete=not has_more,
+        )
+
     def section_chunk_ids(
         self,
         snapshot: ActiveRevisionQuerySnapshot,
@@ -1860,6 +2009,55 @@ class SqliteControlStore:
                 ),
             ).fetchall()
         return tuple(str(item["chunk_id"]) for item in rows)
+
+    def table_context_chunk_ids(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        document_version: DocumentVersionRef,
+        table_node_id: str,
+        row_indices: tuple[int, ...],
+        limit: int,
+    ) -> tuple[str, ...] | None:
+        """按 canonical atom 映射读取同表表头与目标行，不扫描章节正文。"""
+        if not 0 < limit <= _MAX_HYDRATION_CHUNKS:
+            raise ValueError("table context limit 必须在 1..200。")
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT c.chunk_id FROM chunks c "
+                "JOIN index_revisions r ON r.index_revision_id=c.revision_id "
+                "JOIN documents d ON d.document_id=c.document_id "
+                "WHERE c.revision_id=? AND c.document_id=? "
+                "AND c.document_version_id=? "
+                "AND r.project_id=? AND r.knowledge_base_id=? "
+                "AND d.deleted_at IS NULL AND d.status='active' "
+                "AND d.lifecycle_status='active' AND EXISTS ("
+                "SELECT 1 FROM json_each(c.chunk_json, '$.source_spans') s "
+                "WHERE json_extract(s.value, '$.is_citable')=1 "
+                "AND json_extract(s.value, '$.is_repeated')=0) AND EXISTS ("
+                "SELECT 1 FROM json_each(c.chunk_json, '$.metadata') m, "
+                "json_each(m.value, '$[1]') a "
+                "WHERE json_extract(m.value, '$[0]')='atoms' "
+                "AND json_extract(a.value, '$.metadata.table_node_id')=? "
+                "AND (json_extract(a.value, '$.metadata.header_strategy')"
+                "='tblHeader' OR json_extract(a.value, '$.metadata.row_index') "
+                "IN (SELECT value FROM json_each(?)))) "
+                "ORDER BY c.row_id LIMIT ?",
+                (
+                    revision.index_revision_id,
+                    document_version.document_id,
+                    document_version.document_version_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    table_node_id,
+                    canonical_json(row_indices),
+                    limit + 1,
+                ),
+            ).fetchall()
+        if len(rows) > limit:
+            return None
+        return tuple(str(row["chunk_id"]) for row in rows)
 
     def knowledge_base_scope(self, knowledge_base_id: str) -> tuple[str, str]:
         """读取知识库的 project 与 Profile 身份。

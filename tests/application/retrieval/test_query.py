@@ -61,6 +61,25 @@ def test_analyzer_preserves_mixed_script_identifier() -> None:
 
 
 @pytest.mark.parametrize(
+    ("question", "relation"),
+    (
+        ("甲计划包括哪些类型？", "类型"),
+        ("甲计划包含什么种类？", "种类"),
+        ("甲计划有哪几种类别？", "类别"),
+    ),
+)
+def test_type_enumeration_is_directly_analyzed(
+    question: str, relation: str
+) -> None:
+    semantics = _analyze(question).semantics
+
+    assert semantics.target == "甲计划"
+    assert semantics.relation == relation
+    assert semantics.answer_type is RequestedAnswerType.ENUMERATION
+    assert semantics.source == "RULE"
+
+
+@pytest.mark.parametrize(
     ("text", "expected"),
     (
         ("订单号 ABC-123 是什么", QueryKind.EXACT_IDENTIFIER),
@@ -68,6 +87,7 @@ def test_analyzer_preserves_mixed_script_identifier() -> None:
         ("表格第几行是 12 kg", QueryKind.TABLE_NUMERIC),
         ("它", QueryKind.AMBIGUOUS),
         ("比较方案一和方案二的影响", QueryKind.COMPLEX),
+        ("立项要备哪些材料、走哪些步骤？", QueryKind.COMPLEX),
     ),
 )
 def test_planner_covers_five_query_kinds(
@@ -594,9 +614,7 @@ def test_conditional_permission_question_targets_complete_rule_row() -> None:
     assert semantics.target == "产品开发"
     assert semantics.relation == "对应内容"
     assert semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY
-    assert semantics.reason_codes == (
-        "CONDITIONAL_PERMISSION_QUESTION_SYNTAX",
-    )
+    assert semantics.reason_codes == ("CONDITIONAL_PERMISSION_QUESTION_SYNTAX",)
 
 
 @pytest.mark.parametrize(
@@ -722,6 +740,54 @@ def test_pure_response_directive_is_not_an_answer_constraint() -> None:
     assert "RESPONSE_DIRECTIVE_EXCLUDED" in analysis.reason_codes
 
 
+def test_leading_no_citation_directive_is_not_a_business_clause() -> None:
+    analysis = _analyze("别引用，直接说采购金额门槛。")
+
+    assert analysis.resolved_query == "直接说采购金额门槛。"
+    assert analysis.semantics.target == "采购"
+    assert analysis.semantics.relation == "金额门槛"
+    assert analysis.semantics.answer_type is RequestedAnswerType.FACT
+    assert all(
+        constraint.raw_text != "别"
+        for constraint in analysis.semantics.constraints
+    )
+    assert "RESPONSE_DIRECTIVE_EXCLUDED" in analysis.reason_codes
+
+
+def test_colloquial_terminal_bu_is_a_question_particle() -> None:
+    analysis = _analyze("钱能放明年报不？")
+
+    assert analysis.negation_signals == ()
+    assert all(
+        constraint.kind.value != "NEGATION"
+        for constraint in analysis.semantics.constraints
+    )
+
+
+def test_colloquial_prerequisite_question_has_typed_semantics() -> None:
+    analysis = _analyze("做快验前到底得备齐啥？")
+
+    assert analysis.semantics.target == "快验"
+    assert analysis.semantics.relation == "输入"
+    assert analysis.semantics.answer_type is RequestedAnswerType.ENUMERATION
+
+
+def test_temporal_duty_question_keeps_role_as_target() -> None:
+    analysis = _analyze("首单那会儿开发组要管哪些活？")
+
+    assert analysis.semantics.target == "开发组"
+    assert analysis.semantics.answer_type is RequestedAnswerType.DUTIES
+
+
+def test_colloquial_responsible_party_uses_the_managed_object() -> None:
+    analysis = _analyze("办公室用品归谁管？")
+
+    assert analysis.semantics.target == "办公室用品"
+    assert (
+        analysis.semantics.answer_type is RequestedAnswerType.RESPONSIBLE_PARTY
+    )
+
+
 def test_response_directive_free_variant_reaches_retrieval() -> None:
     """原问保留供审计，纯作答方式不污染补充检索变体。"""
     analysis = _analyze("“一般”对应的内容是什么？请仅依据原文完整作答。")
@@ -741,6 +807,21 @@ def test_source_label_signals_do_not_become_answer_constraints() -> None:
     assert analysis.numbers == ()
     assert all(
         constraint.raw_text not in {"GM-09", "09"}
+        for constraint in analysis.semantics.constraints
+    )
+    assert "SOURCE_SCOPE_EXCLUDED_FROM_CONSTRAINTS" in analysis.reason_codes
+
+
+def test_bare_book_title_scope_does_not_become_answer_count() -> None:
+    analysis = _analyze("《开发中心三种工作模式》中，需求快验的输入项是什么？")
+
+    assert analysis.resolved_query is not None
+    assert analysis.resolved_query.endswith("需求快验的输入项是什么?")
+    assert analysis.semantics.source_qualifier == "开发中心三种工作模式"
+    assert analysis.semantics.expected_count is None
+    assert analysis.numbers == ()
+    assert all(
+        constraint.raw_text not in {"三", "开发中心三种工作模式"}
         for constraint in analysis.semantics.constraints
     )
     assert "SOURCE_SCOPE_EXCLUDED_FROM_CONSTRAINTS" in analysis.reason_codes

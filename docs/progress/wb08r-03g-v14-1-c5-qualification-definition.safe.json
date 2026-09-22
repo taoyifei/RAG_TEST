@@ -1,0 +1,92 @@
+{
+  "schema_version": "wb08r03-v141-c5-qualification-definition-v1",
+  "plan_sha256": "645e206a66e107f6cb5cd6cd82eed50f1d98c9964a92d8bc75818d7549df0c9f",
+  "input_evidence_sha256": "2c117a5d27850b40e829bc4be0d2123b75009a27b8c8aee76bbc6d40148f2c6e",
+  "runtime_identity": {
+    "path": "docs/progress/wb08r-03g-v14-1-c5-runtime-identity.safe.json",
+    "file_sha256": "67bf43e71d4ea2ed6738194ce2cff5baf1645a6747cc92d352c186d8afeeeed6",
+    "service_identity_sha256": "sha256:67bf43e71d4ea2ed6738194ce2cff5baf1645a6747cc92d352c186d8afeeeed6"
+  },
+  "contract_sources": {
+    "qualification_script_sha256": "ba51a2867dc4887190a658ce0f1bc44c96b27986c008f2a9efce3d3abf95c489",
+    "field_resolution_wire_sha256": "b45d037191d104ccaf6dd9190c168d1f42e2da8f7c2abc383062d9228be1b740",
+    "structured_contract_sha256": "7ce60c3f2d6bab0fa4df35722a80fbb0cfee42a56de87209fd60c7114d6d6cd5",
+    "field_schema_revision": "wb08r-field-resolution-v2"
+  },
+  "diagnostic_protocol": {
+    "fixture_label": "RECONSTRUCTED_REQUEST",
+    "original_phase": "reconstructed-original",
+    "transferred_phase": "reconstructed-transferred",
+    "transferred_difference": "REMOVE_UNIQUE_ITEMS_ONLY",
+    "max_output_tokens_each": 160,
+    "request_count_each": 1,
+    "automatic_retry": false,
+    "budget_change_during_ab": false
+  },
+  "qualification_protocol": {
+    "phase": "qualified",
+    "structured_output_mode": "response_format",
+    "grammar_backend_configuration": "vllm-0.19.1:auto",
+    "max_input_tokens": 6144,
+    "max_output_tokens": 1280,
+    "transport_timeout_ms": 8000,
+    "expected_request_count": 5,
+    "unique_items_execution": "FIX_FROM_NUMBERED_AB_BEFORE_D3",
+    "cases": [
+      {
+        "case_id": "PARAPHRASE",
+        "atom_count": 1,
+        "max_candidates_per_atom": 2,
+        "expected_statuses": [
+          "SUPPORTED_PARAPHRASE"
+        ]
+      },
+      {
+        "case_id": "AMBIGUOUS",
+        "atom_count": 1,
+        "max_candidates_per_atom": 2,
+        "expected_statuses": [
+          "AMBIGUOUS"
+        ]
+      },
+      {
+        "case_id": "NOT_FOUND",
+        "atom_count": 1,
+        "max_candidates_per_atom": 2,
+        "expected_statuses": [
+          "NOT_FOUND"
+        ]
+      },
+      {
+        "case_id": "TWO_ATOMS",
+        "atom_count": 2,
+        "max_candidates_per_atom": 2,
+        "expected_statuses": [
+          "SUPPORTED_PARAPHRASE",
+          "SUPPORTED_PARAPHRASE"
+        ]
+      },
+      {
+        "case_id": "MAX_SHAPE",
+        "atom_count": 4,
+        "max_candidates_per_atom": 16,
+        "expected_statuses": [
+          "SUPPORTED_PARAPHRASE",
+          "SUPPORTED_PARAPHRASE",
+          "SUPPORTED_PARAPHRASE",
+          "SUPPORTED_PARAPHRASE"
+        ]
+      }
+    ],
+    "required_checks": [
+      "EXECUTION_SUCCEEDED",
+      "ONE_REQUEST_PER_CASE",
+      "FINISH_REASON_STOP",
+      "OUTPUT_USAGE_WITHIN_BUDGET",
+      "EXACT_ATOM_SET",
+      "STATUS_BY_FIELD_IDENTITY",
+      "CANDIDATES_BY_FIELD_IDENTITY",
+      "QUERY_ANCHOR_EXACT"
+    ]
+  }
+}

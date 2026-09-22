@@ -2,11 +2,15 @@ import { PublicAnswer } from "./PublicAnswer";
 import { PublicChatComposer } from "./PublicChatComposer";
 import { SuggestedQuestionCarousel } from "./SuggestedQuestionCarousel";
 import type { SuggestedQuestion } from "./suggestedQuestions";
+import type { PublicFeedbackSubmission } from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
 
 export function WanshitongChat({
   busy,
+  feedbackDetailsEnabled,
+  initialQuestion,
   onFeedback,
+  onFeedbackLogin,
   onRefresh,
   onRetry,
   onStop,
@@ -15,7 +19,14 @@ export function WanshitongChat({
   turns,
 }: {
   busy: boolean;
-  onFeedback: (turnId: string, traceId: string, useful: boolean) => void;
+  feedbackDetailsEnabled: boolean;
+  initialQuestion?: string;
+  onFeedback: (
+    turnId: string,
+    traceId: string,
+    feedback: PublicFeedbackSubmission,
+  ) => void;
+  onFeedbackLogin: () => void;
   onRefresh: () => void;
   onRetry: (turnId: string, question: string) => void;
   onStop: () => void;
@@ -37,9 +48,11 @@ export function WanshitongChat({
                 {turn.question}
               </div>
               <PublicAnswer
-                onFeedback={(useful) => {
-                  if (turn.traceId) onFeedback(turn.id, turn.traceId, useful);
+                feedbackDetailsEnabled={feedbackDetailsEnabled}
+                onFeedback={(feedback) => {
+                  if (turn.traceId) onFeedback(turn.id, turn.traceId, feedback);
                 }}
+                onFeedbackLogin={onFeedbackLogin}
                 onRetry={() => onRetry(turn.id, turn.question)}
                 turn={turn}
               />
@@ -60,6 +73,7 @@ export function WanshitongChat({
           <PublicChatComposer
             busy={busy}
             compact
+            initialQuestion={initialQuestion}
             onStop={onStop}
             onSubmit={onSubmit}
           />

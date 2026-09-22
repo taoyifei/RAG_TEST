@@ -1,0 +1,566 @@
+"""调度冻结问答计划；本地执行 D 任务并显式交回 G 任务。"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal
+
+from rag_app.application.answering.plan_coverage import (
+    CompiledPlanCoverage,
+    ValidatedPlanArtifact,
+)
+from rag_app.application.answering.qualifier_evidence import evaluate_qualifier
+from rag_app.application.answering.source_projection import (
+    SourceProjectionError,
+    render_physical_table_fact,
+)
+from rag_app.application.retrieval.generation_evidence import (
+    GenerationEvidencePack,
+)
+from rag_app.core.errors import QueryCancelled, RagError
+from rag_app.core.identifiers import canonical_sha256
+from rag_app.core.models.answer_plan import (
+    AnswerTaskMode,
+    CompiledAnswerPlan,
+    EvidenceSelection,
+    QualifierEvidenceResult,
+    QualifierStatus,
+)
+from rag_app.core.models.generation_packet import stable_support_key
+from rag_app.core.models.retrieval import (
+    AnswerClaim,
+    ClaimSupport,
+    EvidenceItem,
+    PhysicalTableFact,
+)
+from rag_app.core.ports.cancellation import CancellationPort
+
+
+class AnswerExecutionError(ValueError):
+    """冻结计划与运行时来源发生不可发布的不一致。"""
+
+    def __init__(self, failure_code: str) -> None:
+        self.failure_code = failure_code
+        super().__init__(failure_code)
+
+
+@dataclass(frozen=True, slots=True)
+class DeterministicExecutionRecord:
+    """不伪装模型传输的确定性执行审计记录。"""
+
+    task_id: str
+    plan_id: str
+    selection_digest: str
+    source_digest: str
+    checked_support_ids: tuple[str, ...]
+    published_member_keys: tuple[str, ...]
+    satisfied_qualifier_ids: tuple[str, ...]
+    satisfied_qualifier_keys: tuple[tuple[str, str], ...]
+    qualifier_results: tuple[QualifierEvidenceResult, ...]
+    claim_sha256: str
+    origin: str = "DETERMINISTIC_EXECUTION"
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerExecutionResult:
+    """确定性产物与仍需开放生成的义务。"""
+
+    artifacts: tuple[ValidatedPlanArtifact, ...]
+    records: tuple[DeterministicExecutionRecord, ...]
+    deferred_obligation_ids: tuple[str, ...]
+    deferred_atom_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationFailureDisposition:
+    """一次 G 失败是否已经发生真实传输及其稳定原因。"""
+
+    reason_code: str
+    transported: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationBatchRecord:
+    """G 物理批次的调度终态，不包含私有正文。"""
+
+    atom_ids: tuple[str, ...]
+    status: Literal["SUCCEEDED", "FAILED", "INVALID", "REPLANNED"]
+    reason_code: str | None = None
+
+
+def _validate_selection(
+    selection: EvidenceSelection,
+    fact: PhysicalTableFact,
+    registry: dict[str, EvidenceItem],
+) -> tuple[EvidenceItem, ...]:
+    """执行前重验事实身份、正向依赖和可引用跨度。"""
+    if (
+        fact.fact_id != selection.fact_id
+        or fact.document_id != selection.document_id
+        or fact.document_version_id != selection.document_version_id
+        or fact.table_key != selection.table_key
+        or fact.row_index != selection.row_index
+        or fact.value_column_index != selection.value_column_index
+        or fact.all_support_ids != selection.dependency_support_ids
+        or fact.value_support_ids != selection.value_support_ids
+        or selection.member_keys != (fact.fact_id,)
+    ):
+        raise AnswerExecutionError("ANSWER_SELECTION_RUNTIME_MISMATCH")
+    try:
+        sources = tuple(
+            registry[support_id]
+            for support_id in selection.dependency_support_ids
+        )
+    except KeyError as error:
+        raise AnswerExecutionError("ANSWER_SELECTION_SOURCE_MISSING") from error
+    if any(
+        item.document_id != selection.document_id
+        or item.document_version_id != selection.document_version_id
+        or not item.publishable
+        or not item.source_spans
+        or any(not span.is_citable for span in item.source_spans)
+        for item in sources
+    ):
+        raise AnswerExecutionError("ANSWER_SELECTION_SOURCE_INVALID")
+    return sources
+
+
+def execute_compiled_tasks(
+    plan: CompiledAnswerPlan,
+    pack: GenerationEvidencePack,
+    *,
+    cancellation: CancellationPort | None = None,
+) -> AnswerExecutionResult:
+    """按冻结物理任务调度 D/G，D 本地执行，G 明确标为待处理。
+
+    Args:
+        plan: 已冻结的统一问答计划。
+        pack: 编译时所用的授权来源和物理事实。
+        cancellation: 可选的请求取消端口。
+
+    Returns:
+        可发布事实、SAFE 执行记录和仍需 G 路径处理的义务。
+
+    Raises:
+        AnswerExecutionError: 运行时来源与冻结选择不一致。
+        QueryCancelled: 请求在执行过程中被取消。
+
+    """
+    registry = {item.support_id: item for item in pack.evidence}
+    if len(registry) != len(pack.evidence):
+        raise AnswerExecutionError("ANSWER_EXECUTION_DUPLICATE_SUPPORT_ID")
+    facts = {item.fact_id: item for item in pack.physical_table_facts}
+    selections = {item.selection_id: item for item in plan.selections}
+    obligations = {item.obligation_id: item for item in plan.obligations}
+    artifacts: list[ValidatedPlanArtifact] = []
+    records: list[DeterministicExecutionRecord] = []
+    deferred: list[str] = []
+    deferred_atoms: list[str] = []
+    for task in plan.physical_tasks:
+        if cancellation is not None and cancellation.is_cancelled():
+            raise QueryCancelled("QUERY_CANCELLED")
+        if task.mode is AnswerTaskMode.GROUNDED_GENERATION:
+            deferred.extend(task.obligation_ids)
+            deferred_atoms.extend(task.atom_ids)
+            continue
+        for selection_id in task.selection_ids:
+            selection = selections[selection_id]
+            fact = facts.get(selection.fact_id)
+            if fact is None:
+                raise AnswerExecutionError("ANSWER_SELECTION_FACT_MISSING")
+            sources = _validate_selection(selection, fact, registry)
+            related_obligations = tuple(
+                obligation
+                for obligation_id in task.obligation_ids
+                if selection_id
+                in (obligation := obligations[obligation_id]).selection_ids
+            )
+            if not related_obligations:
+                raise AnswerExecutionError("ANSWER_SELECTION_UNUSED")
+            try:
+                text = render_physical_table_fact(fact, registry)
+            except SourceProjectionError as error:
+                raise AnswerExecutionError(error.failure_code) from error
+            qualifier_results = tuple(
+                evaluate_qualifier(
+                    qualifier,
+                    member_sources=tuple(
+                        (
+                            dependency.member_key,
+                            dependency.support_ids,
+                        )
+                        for dependency in obligation.member_dependencies
+                    ),
+                    registry=registry,
+                    allowed_document_pairs=frozenset(
+                        {
+                            (
+                                selection.document_id,
+                                selection.document_version_id,
+                            )
+                        }
+                    ),
+                )
+                for obligation in related_obligations
+                for qualifier in obligation.qualifiers
+            )
+            supported_results = tuple(
+                item
+                for item in qualifier_results
+                if item.status is QualifierStatus.SUPPORTED
+            )
+            qualifier_support_ids = tuple(
+                dict.fromkeys(
+                    support_id
+                    for item in supported_results
+                    for support_id in item.support_ids
+                )
+            )
+            claim_source_ids = tuple(
+                dict.fromkeys(
+                    (
+                        *(item.support_id for item in sources),
+                        *(
+                            support_id
+                            for support_id in qualifier_support_ids
+                            if support_id in registry
+                        ),
+                    )
+                )
+            )
+            claim_sources = tuple(
+                registry[support_id] for support_id in claim_source_ids
+            )
+            qualifier_quotes = tuple(
+                dict.fromkeys(
+                    registry[support_id].citation_text.strip()
+                    for support_id in qualifier_support_ids
+                    if support_id in registry
+                    and registry[support_id].citation_text.strip()
+                    and registry[support_id].citation_text.strip() not in text
+                )
+            )
+            if qualifier_quotes:
+                text += "\n来源另载：" + "；".join(qualifier_quotes) + "。"
+            claim = AnswerClaim(
+                text=text,
+                supports=tuple(
+                    ClaimSupport(
+                        support_id=item.support_id,
+                        quote=item.citation_text,
+                    )
+                    for item in claim_sources
+                ),
+            )
+            qualifier_keys = tuple(
+                item.qualifier_key for item in supported_results
+            )
+            obligation_ids = tuple(
+                item.obligation_id for item in related_obligations
+            )
+            artifact = ValidatedPlanArtifact(
+                artifact_id=f"D{len(artifacts) + 1}",
+                plan_id=plan.plan_id,
+                obligation_ids=obligation_ids,
+                selection_digests=(selection.selection_digest,),
+                covered_member_keys=selection.member_keys,
+                satisfied_qualifier_ids=tuple(
+                    item[1] for item in dict.fromkeys(qualifier_keys)
+                ),
+                satisfied_qualifier_keys=tuple(dict.fromkeys(qualifier_keys)),
+                qualifier_results=qualifier_results,
+                source_closed=True,
+                origin="DETERMINISTIC_EXECUTION",
+                claim=claim,
+            )
+            artifacts.append(artifact)
+            records.append(
+                DeterministicExecutionRecord(
+                    task_id=task.task_id,
+                    plan_id=plan.plan_id,
+                    selection_digest=selection.selection_digest,
+                    source_digest=canonical_sha256(
+                        tuple(
+                            stable_support_key(item) for item in claim_sources
+                        )
+                    ),
+                    checked_support_ids=tuple(
+                        item.support_id for item in claim_sources
+                    ),
+                    published_member_keys=selection.member_keys,
+                    satisfied_qualifier_ids=artifact.satisfied_qualifier_ids,
+                    satisfied_qualifier_keys=(
+                        artifact.satisfied_qualifier_keys
+                    ),
+                    qualifier_results=qualifier_results,
+                    claim_sha256=canonical_sha256(claim.text),
+                )
+            )
+    return AnswerExecutionResult(
+        artifacts=tuple(artifacts),
+        records=tuple(records),
+        deferred_obligation_ids=tuple(dict.fromkeys(deferred)),
+        deferred_atom_ids=tuple(dict.fromkeys(deferred_atoms)),
+    )
+
+
+def execute_deterministic_tasks(
+    plan: CompiledAnswerPlan,
+    pack: GenerationEvidencePack,
+    *,
+    cancellation: CancellationPort | None = None,
+) -> AnswerExecutionResult:
+    """兼容旧调用名，委托统一的冻结任务调度器。"""
+    return execute_compiled_tasks(
+        plan,
+        pack,
+        cancellation=cancellation,
+    )
+
+
+def split_generation_atoms(
+    atom_ids: tuple[str, ...],
+) -> tuple[tuple[str, ...], ...]:
+    """把真实待执行 Atom 稳定拆成最多两个互不重叠的 G 批次。"""
+    unique = tuple(dict.fromkeys(atom_ids))
+    if len(unique) <= 1:
+        return (unique,) if unique else ()
+    midpoint = (len(unique) + 1) // 2
+    return unique[:midpoint], unique[midpoint:]
+
+
+def execute_generation_tasks(  # noqa: PLR0913
+    atom_ids: tuple[str, ...],
+    *,
+    run_batch: Callable[[tuple[str, ...], bool], None],
+    classify_failure: Callable[[RagError], GenerationFailureDisposition],
+    record_failure: Callable[
+        [RagError, tuple[str, ...], bool, GenerationFailureDisposition], None
+    ],
+    record_invalid: Callable[[tuple[str, ...]], None],
+    cancellation: CancellationPort | None = None,
+) -> tuple[GenerationBatchRecord, ...]:
+    """执行一个 G 任务；只有未传输的输入超限可改编为两个批次。
+
+    Args:
+        atom_ids: 冻结物理任务实际包含的 Atom。
+        run_batch: 执行一批生成、绑定和必要复核；布尔值表示复核可否再分批。
+        classify_failure: 无副作用地识别失败原因及是否已真实传输。
+        record_failure: 保存失败包并更新对应义务终态。
+        record_invalid: 保存响应合同错误并更新对应义务终态。
+        cancellation: 可选的请求取消端口。
+
+    Returns:
+        不含正文的批次调度记录。一次未传输的重编排不算真实模型批次。
+
+    Raises:
+        QueryCancelled: 请求在任一批次前或执行中被取消。
+
+    """
+    scheduled = tuple(dict.fromkeys(atom_ids))
+    if not scheduled:
+        return ()
+
+    records: list[GenerationBatchRecord] = []
+
+    def raise_if_cancelled() -> None:
+        if cancellation is not None and cancellation.is_cancelled():
+            raise QueryCancelled("QUERY_CANCELLED")
+
+    raise_if_cancelled()
+    try:
+        run_batch(scheduled, True)
+    except RagError as error:
+        disposition = classify_failure(error)
+        can_replan = (
+            disposition.reason_code == "GENERATION_INPUT_BUDGET_EXCEEDED"
+            and not disposition.transported
+            and len(scheduled) > 1
+        )
+        record_failure(
+            error,
+            scheduled,
+            not can_replan,
+            disposition,
+        )
+        if not can_replan:
+            return (
+                GenerationBatchRecord(
+                    atom_ids=scheduled,
+                    status="FAILED",
+                    reason_code=disposition.reason_code,
+                ),
+            )
+        records.append(
+            GenerationBatchRecord(
+                atom_ids=scheduled,
+                status="REPLANNED",
+                reason_code=disposition.reason_code,
+            )
+        )
+    except ValueError:
+        record_invalid(scheduled)
+        return (
+            GenerationBatchRecord(
+                atom_ids=scheduled,
+                status="INVALID",
+                reason_code="GENERATION_OUTPUT_INVALID",
+            ),
+        )
+    else:
+        return (
+            GenerationBatchRecord(
+                atom_ids=scheduled,
+                status="SUCCEEDED",
+            ),
+        )
+
+    for batch in split_generation_atoms(scheduled):
+        raise_if_cancelled()
+        try:
+            run_batch(batch, False)
+        except RagError as error:
+            disposition = classify_failure(error)
+            record_failure(error, batch, True, disposition)
+            records.append(
+                GenerationBatchRecord(
+                    atom_ids=batch,
+                    status="FAILED",
+                    reason_code=disposition.reason_code,
+                )
+            )
+        except ValueError:
+            record_invalid(batch)
+            records.append(
+                GenerationBatchRecord(
+                    atom_ids=batch,
+                    status="INVALID",
+                    reason_code="GENERATION_OUTPUT_INVALID",
+                )
+            )
+        else:
+            records.append(
+                GenerationBatchRecord(
+                    atom_ids=batch,
+                    status="SUCCEEDED",
+                )
+            )
+    return tuple(records)
+
+
+def render_deterministic_answer(
+    plan: CompiledAnswerPlan,
+    execution: AnswerExecutionResult,
+    coverage: CompiledPlanCoverage,
+) -> str | None:
+    """只组织受检事实和冻结限定缺口，不调用润色模型。"""
+    fact_lines: list[str] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for artifact in execution.artifacts:
+        if artifact.claim is None:
+            continue
+        fact = (
+            artifact.claim.text,
+            tuple(item.support_id for item in artifact.claim.supports),
+        )
+        if fact in seen:
+            continue
+        seen.add(fact)
+        citations = " ".join(
+            f"[{item.support_id}]" for item in artifact.claim.supports
+        )
+        fact_lines.append(f"{artifact.claim.text} {citations}")
+    missing_qualifier_keys = {
+        qualifier_key
+        for item in coverage.obligations
+        for qualifier_key in item.missing_qualifier_keys
+    }
+    results = {
+        item.qualifier_key: item
+        for artifact in execution.artifacts
+        for item in artifact.qualifier_results
+    }
+    contradicted_text = tuple(
+        dict.fromkeys(
+            qualifier.text
+            for obligation in plan.obligations
+            for qualifier in obligation.qualifiers
+            if qualifier.qualifier_key in missing_qualifier_keys
+            and (result := results.get(qualifier.qualifier_key)) is not None
+            and result.status is QualifierStatus.CONTRADICTED
+        )
+    )
+    unresolved_text = tuple(
+        dict.fromkeys(
+            qualifier.text
+            for obligation in plan.obligations
+            for qualifier in obligation.qualifiers
+            if qualifier.qualifier_key in missing_qualifier_keys
+            and (
+                results.get(qualifier.qualifier_key) is None
+                or results[qualifier.qualifier_key].status
+                is QualifierStatus.NOT_ESTABLISHED
+            )
+        )
+    )
+    limitation_lines: list[str] = []
+    if contradicted_text:
+        joined = "、".join(f"“{item}”" for item in contradicted_text)
+        limitation_lines.append(
+            f"现有来源中的相关表述与{joined}这些限定相反，"
+            "不能据此按这些限定筛选结果。"
+        )
+    if unresolved_text:
+        joined = "、".join(f"“{item}”" for item in unresolved_text)
+        limitation_lines.append(
+            f"现有来源未直接证明{joined}这些限定，因此不把它们作为结论。"
+        )
+    lines = (*limitation_lines, *fact_lines)
+    return "\n".join(lines) if lines else None
+
+
+def compiled_atom_coverage(
+    plan: CompiledAnswerPlan,
+    coverage: CompiledPlanCoverage,
+) -> tuple[tuple[str, str], ...]:
+    """把义务覆盖稳定映射回现有逐 Atom 公开诊断。"""
+    by_obligation = {item.obligation_id: item for item in coverage.obligations}
+    result: list[tuple[str, str]] = []
+    atom_ids = tuple(
+        dict.fromkeys(
+            atom_id
+            for obligation in plan.obligations
+            for atom_id in obligation.atom_ids
+        )
+    )
+    for atom_id in atom_ids:
+        statuses = tuple(
+            by_obligation[obligation.obligation_id].status
+            for obligation in plan.obligations
+            if atom_id in obligation.atom_ids
+        )
+        status = (
+            "SUPPORTED"
+            if statuses and all(item == "FULL" for item in statuses)
+            else "PARTIAL"
+            if any(item in {"FULL", "PARTIAL"} for item in statuses)
+            else "MISSING"
+        )
+        result.append((atom_id, status))
+    return tuple(result)
+
+
+__all__ = [
+    "AnswerExecutionError",
+    "AnswerExecutionResult",
+    "DeterministicExecutionRecord",
+    "GenerationBatchRecord",
+    "GenerationFailureDisposition",
+    "compiled_atom_coverage",
+    "execute_compiled_tasks",
+    "execute_deterministic_tasks",
+    "execute_generation_tasks",
+    "render_deterministic_answer",
+    "split_generation_atoms",
+]

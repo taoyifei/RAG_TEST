@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 
 from rag_app.core.errors import IndexCorrupt
 from rag_app.core.models import ChannelHit, FusedCandidate, RrfContribution
+from rag_app.core.models.search import RetrievalOrigin
 
 
 def reciprocal_rank_fusion(  # noqa: PLR0913
@@ -38,32 +39,28 @@ def reciprocal_rank_fusion(  # noqa: PLR0913
         raise ValueError("RRF k 和 limit 必须为正数。")
     resolved_weights = dict(weights or {})
     aggregate: dict[str, dict[str, ChannelHit]] = {}
-    identities: dict[str, tuple[str, str, str, str, str]] = {}
-    for hits in channels.values():
+    origins: dict[str, list[RetrievalOrigin]] = {}
+    identities = validated_channel_identities(
+        channels, expected_revision_id=expected_revision_id
+    )
+    for variant_id, hits in channels.items():
         best_per_chunk: dict[str, ChannelHit] = {}
         for hit in hits:
-            if hit.revision_id != expected_revision_id:
-                raise IndexCorrupt(
-                    "RRF 候选 revision 漂移。", stage="retrieval.fuse"
-                )
             previous = best_per_chunk.get(hit.chunk_id)
             if previous is None or hit.rank < previous.rank:
                 best_per_chunk[hit.chunk_id] = hit
-        for hit in best_per_chunk.values():
-            identity = (
-                hit.document_id,
-                hit.document_version_id,
-                hit.role,
-                hit.section_id,
-                hit.content_sha256,
-            )
-            existing = identities.setdefault(hit.chunk_id, identity)
-            if existing != identity:
-                raise IndexCorrupt(
-                    "跨通道相同 chunk 身份不一致。",
-                    stage="retrieval.fuse",
-                    details={"chunk_id": hit.chunk_id},
+            origins.setdefault(hit.chunk_id, []).extend(
+                hit.retrieval_origins
+                or (
+                    RetrievalOrigin(
+                        logical_channel=_channel_family(hit.channel),
+                        variant_id=variant_id,
+                        source_channel=hit.channel,
+                        native_rank=hit.rank,
+                    ),
                 )
+            )
+        for hit in best_per_chunk.values():
             family = _channel_family(hit.channel)
             existing_hit = aggregate.setdefault(hit.chunk_id, {}).get(family)
             if existing_hit is None or hit.rank < existing_hit.rank:
@@ -94,6 +91,7 @@ def reciprocal_rank_fusion(  # noqa: PLR0913
                 best_channel_rank=min(item.rank for item in hits),
                 must_keep=any(item.must_keep for item in hits),
                 contributions=contributions,
+                retrieval_origins=tuple(dict.fromkeys(origins[chunk_id])),
             )
         )
     fused.sort(
@@ -115,6 +113,63 @@ def reciprocal_rank_fusion(  # noqa: PLR0913
         ]
         fused = [*required, *other]
     return tuple(fused[:limit])
+
+
+def candidate_source_identity(
+    item: ChannelHit | FusedCandidate,
+) -> tuple[str, str, str, str, str]:
+    """普通融合与预融合复用同一来源身份，S/rank 不参与身份认证。
+
+    Args:
+        item: 已授权的原始或融合候选。
+
+    Returns:
+        不含排名、分数和可变认证的来源身份。
+
+    """
+    return (
+        item.document_id,
+        item.document_version_id,
+        item.role,
+        item.section_id,
+        item.content_sha256,
+    )
+
+
+def validated_channel_identities(
+    channels: Mapping[str, Sequence[ChannelHit]],
+    *,
+    expected_revision_id: str,
+) -> dict[str, tuple[str, str, str, str, str]]:
+    """对所有授权候选核对版本和身份，包括未被计票的重复 variant。
+
+    Args:
+        channels: 已通过访问边界的通道候选。
+        expected_revision_id: 本请求固定的活动索引版本。
+
+    Returns:
+        由 chunk ID 索引的已核验来源身份。
+
+    Raises:
+        IndexCorrupt: 任一候选版本漂移或同 ID 的来源身份不一致。
+
+    """
+    identities: dict[str, tuple[str, str, str, str, str]] = {}
+    for hits in channels.values():
+        for hit in hits:
+            if hit.revision_id != expected_revision_id:
+                raise IndexCorrupt(
+                    "RRF 候选 revision 漂移。", stage="retrieval.fuse"
+                )
+            identity = candidate_source_identity(hit)
+            existing = identities.setdefault(hit.chunk_id, identity)
+            if existing != identity:
+                raise IndexCorrupt(
+                    "跨通道相同 chunk 身份不一致。",
+                    stage="retrieval.fuse",
+                    details={"chunk_id": hit.chunk_id},
+                )
+    return identities
 
 
 def _channel_family(channel: str) -> str:

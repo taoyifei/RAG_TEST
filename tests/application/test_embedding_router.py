@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -19,6 +21,7 @@ from rag_app.application.provider_health import (
     LocalUsageBudget,
     ProviderCircuitBreaker,
 )
+from rag_app.application.retrieval.dense import DenseChannel
 from rag_app.composition.profiles import default_hot_standby_profile
 from rag_app.core.capabilities import (
     ComponentCapabilities,
@@ -28,6 +31,7 @@ from rag_app.core.capabilities import (
 )
 from rag_app.core.errors import (
     DenseUnavailable,
+    IndexCompatibilityError,
     PolicyDenied,
     ProviderAuthenticationError,
     ProviderInputTooLarge,
@@ -37,6 +41,7 @@ from rag_app.core.errors import (
 )
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
+    ActiveRevisionQuerySnapshot,
     CircuitState,
     EmbeddingCoverage,
     EmbeddingRequest,
@@ -44,6 +49,7 @@ from rag_app.core.models import (
     EmbeddingResult,
     EmbeddingSlotIdentity,
     EmbeddingTopology,
+    ProviderCall,
     ProviderFailureCategory,
     ProviderHealth,
     ProviderHealthStatus,
@@ -181,6 +187,251 @@ def _router(
     primary: _EmbeddingFake, standby: _EmbeddingFake
 ) -> EmbeddingFailoverRouter:
     return EmbeddingFailoverRouter(primary, standby)
+
+
+class _AuditedEmbeddingFake(_EmbeddingFake):
+    def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
+        result = super().embed(request)
+        return result.model_copy(
+            update={
+                "vectors": tuple(
+                    (float(len(text)),) + (0.0,) * (self.slot.dimension - 1)
+                    for text in request.texts
+                ),
+                "calls": (
+                    ProviderCall(
+                        provider_id=self.slot.provider_id,
+                        operation="embedding.query",
+                        call_count=1,
+                        retry_count=0,
+                        elapsed_ms=1,
+                        input_count=len(request.texts),
+                    ),
+                ),
+            }
+        )
+
+
+class _VectorStoreFake:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, tuple[float, ...]]] = []
+
+    def search_named(
+        self,
+        spec: object,
+        **kwargs: object,
+    ) -> tuple[()]:
+        del spec
+        slot_id = cast(str, kwargs["slot_id"])
+        vector_name = cast(str, kwargs["vector_name"])
+        query_vector = cast(tuple[float, ...], kwargs["query_vector"])
+        self.calls.append((slot_id, vector_name, query_vector))
+        return ()
+
+
+def _dense_snapshot() -> ActiveRevisionQuerySnapshot:
+    state = _revision()
+    return cast(
+        ActiveRevisionQuerySnapshot,
+        SimpleNamespace(
+            topology=state.topology,
+            coverages=state.coverages,
+            vector_spec=SimpleNamespace(slot=state.topology.slot),
+            excluded_document_ids=(),
+            revision=SimpleNamespace(index_revision_id="irev_" + "a" * 32),
+        ),
+    )
+
+
+def test_batch_router_uses_one_provider_call_and_audits_once() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _AuditedEmbeddingFake(primary_slot)
+    standby = _EmbeddingFake(standby_slot)
+    texts = ("first", "second", "three")
+
+    results = _router(primary, standby).embed_queries(
+        texts, _revision(), _egress()
+    )
+
+    assert len(results) == len(texts)
+    assert primary.requests == [
+        EmbeddingRequest(
+            slot_id="primary", role=EmbeddingRequestRole.QUERY, texts=texts
+        )
+    ]
+    assert standby.calls == 0
+    assert {item.selected_slot_id for item in results} == {"primary"}
+    assert tuple(item.vector[0] for item in results) == (5.0, 6.0, 5.0)
+    assert results[0].provider_calls[0].call_count == 1
+    assert results[0].provider_calls[0].input_count == 3
+    assert all(item.provider_calls == () for item in results[1:])
+
+
+def test_batch_router_failover_keeps_all_atoms_on_standby() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _EmbeddingFake(
+        primary_slot, (ProviderUnavailable("timeout", stage="test.primary"),)
+    )
+    standby = _EmbeddingFake(standby_slot)
+    texts = ("first", "second", "third")
+
+    results = _router(primary, standby).embed_queries(
+        texts, _revision(), _egress()
+    )
+
+    assert primary.calls == standby.calls == 1
+    assert standby.requests[0].texts == texts
+    assert {item.selected_slot_id for item in results} == {"standby"}
+    assert {item.vector_name for item in results} == {"dense_standby"}
+
+
+def test_batch_router_uses_same_slot_when_provider_lacks_batch() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _EmbeddingFake(primary_slot)
+    primary.descriptor = primary.descriptor.model_copy(
+        update={
+            "capabilities": primary.capabilities.model_copy(
+                update={"supports_batch": False}
+            )
+        }
+    )
+    standby = _EmbeddingFake(standby_slot)
+
+    results = _router(primary, standby).embed_queries(
+        ("first", "second"), _revision(), _egress()
+    )
+
+    assert primary.calls == 2
+    assert standby.calls == 0
+    assert all(len(request.texts) == 1 for request in primary.requests)
+    assert {item.selected_slot_id for item in results} == {"primary"}
+
+
+def test_batch_router_rejects_incomplete_response_without_failover() -> None:
+    primary_slot, standby_slot = _slots()
+
+    class IncompleteEmbedding(_EmbeddingFake):
+        def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
+            result = super().embed(request)
+            return result.model_copy(update={"vectors": result.vectors[:1]})
+
+    primary = IncompleteEmbedding(primary_slot)
+    standby = _EmbeddingFake(standby_slot)
+
+    with pytest.raises(IndexCompatibilityError):
+        _router(primary, standby).embed_queries(
+            ("first", "second"), _revision(), _egress()
+        )
+
+    assert primary.calls == 1
+    assert standby.calls == 0
+
+
+def test_batch_router_rejects_empty_input_without_provider_call() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _EmbeddingFake(primary_slot)
+    standby = _EmbeddingFake(standby_slot)
+
+    with pytest.raises(ValueError):
+        _router(primary, standby).embed_queries((), _revision(), _egress())
+
+    assert primary.calls == standby.calls == 0
+
+
+def test_dense_search_many_uses_batch_router_and_single_slot() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _AuditedEmbeddingFake(primary_slot)
+    standby = _EmbeddingFake(standby_slot)
+    store = _VectorStoreFake()
+    dense = DenseChannel(_router(primary, standby), store)
+
+    results = dense.search_many(
+        _dense_snapshot(), ("first", "second"), _egress(), limit=2
+    )
+
+    assert len(results) == 2
+    assert primary.calls == 1
+    assert [item[0] for item in store.calls] == ["primary", "primary"]
+    assert len(results[0].routed.provider_calls) == 1
+    assert results[1].routed.provider_calls == ()
+
+
+def test_dense_search_many_deduplicates_batch_texts() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _AuditedEmbeddingFake(primary_slot)
+    store = _VectorStoreFake()
+    dense = DenseChannel(_router(primary, _EmbeddingFake(standby_slot)), store)
+
+    results = dense.search_many(
+        _dense_snapshot(), ("root", "atom", "atom", "root"), _egress(), limit=2
+    )
+
+    assert len(results) == 4
+    assert primary.calls == 1
+    assert primary.requests[0].texts == ("root", "atom")
+    assert len(results[0].routed.provider_calls) == 1
+    assert all(not item.routed.provider_calls for item in results[1:])
+    assert len(store.calls) == 4
+
+
+def test_root_and_three_atoms_use_one_embedding_batch_and_one_slot() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _AuditedEmbeddingFake(primary_slot)
+    store = _VectorStoreFake()
+    dense = DenseChannel(_router(primary, _EmbeddingFake(standby_slot)), store)
+    queries = ("root", "atom-one", "atom-two", "atom-three")
+
+    results = dense.search_many(_dense_snapshot(), queries, _egress(), limit=2)
+
+    assert primary.calls == 1
+    assert primary.requests[0].texts == queries
+    assert len(results) == len(queries)
+    assert {result.routed.selected_slot_id for result in results} == {"primary"}
+    assert len(results[0].routed.provider_calls) == 1
+    assert all(not result.routed.provider_calls for result in results[1:])
+
+
+def test_dense_legacy_router_sequential_fallback_keeps_one_slot() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _EmbeddingFake(primary_slot)
+    standby = _EmbeddingFake(standby_slot)
+    router = _router(primary, standby)
+    legacy_router = SimpleNamespace(
+        descriptor=router.descriptor,
+        embed_query=router.embed_query,
+    )
+    store = _VectorStoreFake()
+
+    results = DenseChannel(legacy_router, store).search_many(
+        _dense_snapshot(), ("first", "second"), _egress(), limit=2
+    )
+
+    assert len(results) == 2
+    assert primary.calls == 2
+    assert standby.calls == 0
+    assert [item[0] for item in store.calls] == ["primary", "primary"]
+
+
+def test_dense_legacy_router_rejects_mixed_slot_before_vector_search() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _EmbeddingFake(
+        primary_slot, (ProviderUnavailable("timeout", stage="test.primary"),)
+    )
+    standby = _EmbeddingFake(standby_slot)
+    router = _router(primary, standby)
+    legacy_router = SimpleNamespace(
+        descriptor=router.descriptor,
+        embed_query=router.embed_query,
+    )
+    store = _VectorStoreFake()
+    dense = DenseChannel(legacy_router, store)
+
+    with pytest.raises(IndexCompatibilityError):
+        dense.search_many(
+            _dense_snapshot(), ("first", "second"), _egress(), limit=2
+        )
+
+    assert store.calls == []
 
 
 def test_primary_success_does_not_call_standby() -> None:

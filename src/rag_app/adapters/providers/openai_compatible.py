@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from typing import Literal
+from uuid import uuid4
 
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, model_validator
 
 from rag_app.adapters.providers.aliyun_chat import (
     AliyunChatAdapter,
@@ -24,11 +25,18 @@ from rag_app.adapters.providers.batching import (
     batch_texts,
     estimate_tokens,
 )
+from rag_app.adapters.providers.generation_packet import (
+    complete_generation_transport,
+    observe_generation_transport,
+)
 from rag_app.adapters.providers.http_common import (
     ProviderHttpClient,
     ProviderHttpError,
     invalid_response_error,
     provider_error,
+)
+from rag_app.adapters.providers.structured_contract import (
+    StructuredOutputCapabilityProfile,
 )
 from rag_app.adapters.providers.validation import (
     finite_score,
@@ -47,6 +55,7 @@ from rag_app.core.errors import (
     QueryCancelled,
     RagError,
 )
+from rag_app.core.identifiers import canonical_json, canonical_sha256
 from rag_app.core.models import (
     EmbeddingRequest,
     EmbeddingRequestRole,
@@ -60,6 +69,8 @@ from rag_app.core.models import (
     RerankResult,
 )
 from rag_app.core.models.common import FrozenModel
+from rag_app.core.models.generation_packet import PreparedGenerationPacket
+from rag_app.core.models.query_plan import GROUNDED_CLAIM_SCHEMA_REVISION
 from rag_app.core.models.retrieval import AnswerClaim, AnswerDraft
 from rag_app.core.ports import CancellationPort
 from rag_app.core.ports.generator import GenerationRequest
@@ -110,14 +121,33 @@ class OpenAICompatibleRerankerConfig(FrozenModel):
 
 
 class OpenAICompatibleChatConfig(FrozenModel):
-    """只发送标准 Chat Completions 字段的兼容模型策略。"""
+    """显式选择 Chat Completions 的结构化输出协议。"""
 
     model: str = Field(min_length=1, max_length=200)
     egress_allowed: bool = False
     max_input_tokens: StrictInt = Field(default=6144, gt=0, le=131072)
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=16384)
     max_messages: StrictInt = Field(default=6, gt=0, le=32)
-    prompt_version: str = Field(default="grounded-chat-v8", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v9", max_length=64)
+    disable_thinking_supported: bool = False
+    disable_thinking: bool = False
+    structured_output_mode: Literal[
+        "none", "response_format", "structured_outputs", "guided_json"
+    ] = "none"
+    structured_output_profile: StructuredOutputCapabilityProfile | None = None
+
+    @model_validator(mode="after")
+    def _validate_thinking_strategy(self) -> OpenAICompatibleChatConfig:
+        if self.disable_thinking and not self.disable_thinking_supported:
+            raise ValueError("关闭 thinking 前必须确认 Provider 支持该参数。")
+        profile = self.structured_output_profile
+        if profile is not None and (
+            self.structured_output_mode == "none"
+            or profile.mode != self.structured_output_mode
+            or profile.model != self.model
+        ):
+            raise ValueError("结构化输出能力合同与模型或固定模式不一致。")
+        return self
 
 
 class OpenAICompatibleEmbeddingAdapter:
@@ -414,11 +444,51 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             ),
         )
 
+    @property
+    def compatible_config(self) -> OpenAICompatibleChatConfig:
+        """返回兼容协议专属配置，避免沿基类类型读取不存在的能力字段。
+
+        Args:
+            无参数；读取当前适配器的实际配置。
+
+        Returns:
+            实际初始化本 adapter 的不可变兼容 Provider 配置。
+
+        """
+        return self._compatible_config
+
     def _generation_stage(self) -> str:
         """把共享事实闭合失败归入兼容 Provider 阶段。"""
         return "provider.openai_compatible.generation"
 
-    def complete(
+    def _complete_natural(
+        self,
+        messages: tuple[ChatMessage, ...],
+        *,
+        max_output_tokens: int,
+        json_schema: Mapping[str, object],
+    ) -> ChatCompletion:
+        """按已探测的唯一 Schema 协议执行自然 Claim 生成。"""
+        return self.complete(
+            messages,
+            max_output_tokens=max_output_tokens,
+            json_schema=json_schema,
+            schema_revision=GROUNDED_CLAIM_SCHEMA_REVISION,
+        )
+
+    def _natural_schema_tokens(self, json_schema: Mapping[str, object]) -> int:
+        """计入消息外发送的输出 Schema 输入开销。"""
+        if self._compatible_config.structured_output_mode == "none":
+            return 0
+        return _schema_payload_tokens(
+            _structured_schema_fields(
+                json_schema,
+                mode=self._compatible_config.structured_output_mode,
+                revision=GROUNDED_CLAIM_SCHEMA_REVISION,
+            )
+        )
+
+    def complete(  # noqa: PLR0913
         self,
         messages: tuple[ChatMessage, ...],
         *,
@@ -426,6 +496,10 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             "generation", "query.interpret", "query.rewrite"
         ] = "generation",
         max_output_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+        json_schema: Mapping[str, object] | None = None,
+        schema_revision: str | None = None,
+        request_label: str | None = None,
     ) -> ChatCompletion:
         """执行一次标准同步 Chat Completions 请求。"""
         if not self._compatible_config.egress_allowed:
@@ -435,15 +509,88 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             )
         if operation not in {"generation", "query.interpret", "query.rewrite"}:
             raise ValueError("Chat 用途不在允许范围。")
+        payload = openai_compatible_chat_payload(
+            messages,
+            self._compatible_config,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=self._compatible_config.disable_thinking,
+            json_schema=json_schema,
+            schema_revision=schema_revision,
+        )
+        profile = self._compatible_config.structured_output_profile
+        if (
+            json_schema is not None
+            and schema_revision is not None
+            and profile is not None
+        ):
+            profile.assert_schema(schema_revision, json_schema)
+        estimated_tokens = message_token_estimate(messages) + (
+            _schema_payload_tokens(payload)
+        )
+        output_budget = (
+            self._compatible_config.max_output_tokens
+            if max_output_tokens is None
+            else max_output_tokens
+        )
+        request_diagnostics: dict[str, object] = {
+            "purpose": operation,
+            "output_budget": output_budget,
+            "preflight_estimated_tokens": estimated_tokens,
+        }
+        if json_schema is not None and schema_revision is not None:
+            request_diagnostics.update(
+                {
+                    "schema_family": schema_revision.split("-v", 1)[0],
+                    "schema_revision": schema_revision,
+                    "schema_sha256": canonical_sha256(json_schema),
+                }
+            )
+        if profile is not None:
+            request_diagnostics.update(
+                {
+                    "grammar_backend_fingerprint": (
+                        profile.grammar_backend_fingerprint
+                    ),
+                    "capability_profile_sha256": profile.profile_sha256,
+                }
+            )
+        if request_label is not None:
+            request_diagnostics["request_label"] = request_label
         return self.request_payload(
-            openai_compatible_chat_payload(
-                messages,
-                self._compatible_config,
-                max_output_tokens=max_output_tokens,
-            ),
+            payload,
             operation=operation,
             input_count=len(messages),
-            estimated_tokens=message_token_estimate(messages),
+            estimated_tokens=estimated_tokens,
+            timeout_seconds=timeout_seconds,
+            request_diagnostics=request_diagnostics,
+        )
+
+    def record_private_response_contract_failure(  # noqa: PLR0913
+        self,
+        messages: tuple[ChatMessage, ...],
+        *,
+        operation: Literal["generation", "query.interpret", "query.rewrite"],
+        max_output_tokens: int,
+        json_schema: Mapping[str, object],
+        schema_revision: str,
+        response_content: str,
+        reason_code: str,
+    ) -> str | None:
+        """把成功 HTTP 后的本地合同失败写入已启用的私有诊断。"""
+        payload = openai_compatible_chat_payload(
+            messages,
+            self._compatible_config,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=self._compatible_config.disable_thinking,
+            json_schema=json_schema,
+            schema_revision=schema_revision,
+        )
+        return self._http.record_private_response_contract_failure(
+            operation=operation,
+            path=_CHAT_COMPLETIONS_PATH,
+            request_payload=payload,
+            response_content=response_content,
+            reason_code=reason_code,
         )
 
     def complete_stream(
@@ -460,8 +607,12 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
                 stage="provider.openai_compatible.chat",
             )
         payload = openai_compatible_chat_payload(
-            messages, self._compatible_config, stream=True
+            messages,
+            self._compatible_config,
+            stream=True,
+            disable_thinking=self._compatible_config.disable_thinking,
         )
+        observe_generation_transport(payload)
 
         def consume(chunks: Iterator[bytes]) -> ChatContent:
             accumulator = _ChatStreamAccumulator(
@@ -489,17 +640,21 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
                 cancellation=cancellation,
             )
         except ProviderHttpError as failure:
+            if failure.reason_code in _STREAM_UNSUPPORTED:
+                # HTTP/SSE协议明确拒绝证明本次消息已到达服务端。
+                complete_generation_transport(None)
             raise provider_error(
                 failure, stage="provider.openai_compatible.generation"
             ) from None
         content = response.value
+        complete_generation_transport(content.usage.prompt_tokens)
         call = self._http.complete_call(
             _call_usage(response.call, content.usage),
             observed_tokens=content.usage.total_tokens or None,
         )
         return ChatCompletion(**content.model_dump(), call=call)
 
-    def request_payload(
+    def request_payload(  # noqa: PLR0913
         self,
         payload: Mapping[str, object],
         *,
@@ -508,8 +663,11 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         ],
         input_count: int,
         estimated_tokens: int,
+        timeout_seconds: float | None = None,
+        request_diagnostics: Mapping[str, object] | None = None,
     ) -> ChatCompletion:
         """发送标准同步请求并校验可选 model、finish 和 usage。"""
+        observe_generation_transport(payload)
         try:
             response = self._http.request_json(
                 "POST",
@@ -521,6 +679,8 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
                 model=self._compatible_config.model,
                 input_count=input_count,
                 estimated_tokens=estimated_tokens,
+                timeout_seconds=timeout_seconds,
+                request_diagnostics=request_diagnostics,
             )
         except ProviderHttpError as failure:
             raise provider_error(
@@ -545,6 +705,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             _call_usage(response.call, content.usage),
             observed_tokens=content.usage.total_tokens or None,
         )
+        complete_generation_transport(content.usage.prompt_tokens)
         return ChatCompletion(**content.model_dump(), call=call)
 
     def generate_stream(
@@ -555,6 +716,10 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         cancellation: CancellationPort,
     ) -> AnswerDraft:
         """上游明确不支持 SSE 时退回一次同步最终结果，不伪造增量。"""
+        if request.query_plan is not None:
+            return super().generate_stream(
+                request, on_claim=on_claim, cancellation=cancellation
+            )
         emitted = False
 
         def observe(claim: AnswerClaim) -> None:
@@ -571,29 +736,50 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             if emitted or reason not in _STREAM_UNSUPPORTED:
                 raise
             stream_calls = _error_calls(stream_error)
+            stream_packet = getattr(
+                stream_error, "_prepared_generation_packet", None
+            )
+            previous_packets = (
+                (stream_packet,)
+                if isinstance(stream_packet, PreparedGenerationPacket)
+                else ()
+            )
+            retry_request = request.model_copy(
+                update={"attempt_id": uuid4().hex}
+            )
             try:
-                draft = self.generate(request)
+                draft = self.generate(retry_request)
             except RagError as final_error:
                 final_error.provider_calls = (
                     *stream_calls,
                     *_error_calls(final_error),
                 )
+                vars(final_error)["_previous_prepared_generation_packets"] = (
+                    previous_packets
+                )
                 raise
             return draft.model_copy(
                 update={
-                    "provider_calls": (*stream_calls, *draft.provider_calls)
+                    "provider_calls": (*stream_calls, *draft.provider_calls),
+                    "previous_prepared_packets": (
+                        *previous_packets,
+                        *draft.previous_prepared_packets,
+                    ),
                 }
             )
 
 
-def openai_compatible_chat_payload(
+def openai_compatible_chat_payload(  # noqa: PLR0913
     messages: tuple[ChatMessage, ...],
     config: OpenAICompatibleChatConfig,
     *,
     max_output_tokens: int | None = None,
     stream: bool = False,
+    disable_thinking: bool = False,
+    json_schema: Mapping[str, object] | None = None,
+    schema_revision: str | None = None,
 ) -> dict[str, object]:
-    """构造只含标准字段的有界 Chat Completions 请求。"""
+    """按固定配置构造单次 Chat 请求，不在失败时轮询协议。"""
     limit = (
         config.max_output_tokens
         if max_output_tokens is None
@@ -611,13 +797,67 @@ def openai_compatible_chat_payload(
             "兼容 Chat 输入超过本地上限。",
             stage="provider.openai_compatible.chat",
         )
-    return {
+    payload: dict[str, object] = {
         "model": config.model,
         "messages": [message.model_dump() for message in messages],
         "temperature": 0,
         "max_tokens": limit,
         "stream": stream,
     }
+    if disable_thinking and config.disable_thinking_supported:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if json_schema is not None:
+        if not schema_revision:
+            raise ValueError("结构化 Schema 必须具有明确 revision。")
+        payload.update(
+            _structured_schema_fields(
+                json_schema,
+                mode=config.structured_output_mode,
+                revision=schema_revision,
+            )
+        )
+    if (
+        message_token_estimate(messages) + _schema_payload_tokens(payload)
+        > config.max_input_tokens
+    ):
+        raise ProviderInputTooLarge(
+            "完整消息与输出 Schema 超过生成输入预算。",
+            stage="provider.openai_compatible.chat",
+            code="GENERATION_INPUT_BUDGET_EXCEEDED",
+        )
+    return payload
+
+
+def _schema_payload_tokens(payload: Mapping[str, object]) -> int:
+    """按实际唯一协议计算消息之外 Schema 的估计开销。"""
+    fields = {
+        key: payload[key]
+        for key in ("response_format", "structured_outputs", "guided_json")
+        if key in payload
+    }
+    return estimate_tokens(canonical_json(fields)) if fields else 0
+
+
+def _structured_schema_fields(
+    schema: Mapping[str, object], *, mode: str, revision: str
+) -> dict[str, object]:
+    """预算估算与实际 HTTP 使用同一个 Schema 序列化合同。"""
+    if mode == "response_format":
+        return {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": revision,
+                    "schema": dict(schema),
+                    "strict": True,
+                },
+            }
+        }
+    if mode == "structured_outputs":
+        return {"structured_outputs": {"json": dict(schema)}}
+    if mode == "guided_json":
+        return {"guided_json": dict(schema)}
+    return {}
 
 
 def _headers(api_key: str) -> dict[str, str]:

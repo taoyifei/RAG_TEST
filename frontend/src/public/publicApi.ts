@@ -1,9 +1,17 @@
+import { withAppBase } from "../app/basePath";
 import { PublicSseParseError } from "./publicSse";
+
+export interface PublicSessionUser {
+  userId: string;
+  displayName: string;
+}
 
 export interface PublicSession {
   sessionId: string;
   csrfToken: string;
   expiresIn: number;
+  deploymentId?: string;
+  user?: PublicSessionUser;
 }
 
 export interface PublicShortcut {
@@ -19,7 +27,23 @@ export interface PublicCapabilities {
   stream_protocol: "wanshitong-public-sse-v1";
   document_visibility: "all_internal";
   feedback: boolean;
+  feedback_details?: boolean;
   shortcuts: PublicShortcut[];
+}
+
+export type PublicFeedbackReasonDetail =
+  | "INCORRECT"
+  | "INCOMPLETE"
+  | "WRONG_SOURCE"
+  | "FALSE_REFUSAL"
+  | "UNSAFE_ANSWER"
+  | "TOO_SLOW"
+  | "OTHER";
+
+export interface PublicFeedbackSubmission {
+  useful: boolean;
+  reasonDetail?: PublicFeedbackReasonDetail;
+  comment?: string;
 }
 
 interface PublicErrorBody {
@@ -87,7 +111,7 @@ async function requireJson<T>(response: Response): Promise<T> {
 export async function createPublicSession(
   signal?: AbortSignal,
 ): Promise<PublicSession> {
-  const response = await fetch(PUBLIC_SESSION_PATH, {
+  const response = await fetch(withAppBase(PUBLIC_SESSION_PATH), {
     method: "POST",
     credentials: "same-origin",
     headers: { Accept: "application/json" },
@@ -97,18 +121,27 @@ export async function createPublicSession(
     session_id: string;
     csrf_token: string;
     expires_in: number;
+    deployment_id?: string;
+    user?: { user_id: string; display_name: string };
   }>(response);
   return {
     sessionId: body.session_id,
     csrfToken: body.csrf_token,
     expiresIn: body.expires_in,
+    deploymentId: body.deployment_id,
+    user: body.user
+      ? {
+          userId: body.user.user_id,
+          displayName: body.user.display_name,
+        }
+      : undefined,
   };
 }
 
 export async function getPublicCapabilities(
   signal?: AbortSignal,
 ): Promise<PublicCapabilities> {
-  const response = await fetch(PUBLIC_CAPABILITIES_PATH, {
+  const response = await fetch(withAppBase(PUBLIC_CAPABILITIES_PATH), {
     credentials: "same-origin",
     headers: { Accept: "application/json" },
     signal,
@@ -122,7 +155,7 @@ export async function openPublicChat(options: {
   question: string;
   signal: AbortSignal;
 }): Promise<Response> {
-  const response = await fetch(PUBLIC_CHAT_PATH, {
+  const response = await fetch(withAppBase(PUBLIC_CHAT_PATH), {
     method: "POST",
     credentials: "same-origin",
     headers: {
@@ -146,10 +179,21 @@ export async function openPublicChat(options: {
 export async function sendPublicFeedback(options: {
   csrfToken: string;
   traceId: string;
-  useful: boolean;
+  feedback: PublicFeedbackSubmission;
   signal?: AbortSignal;
 }): Promise<void> {
-  const response = await fetch(PUBLIC_FEEDBACK_PATH, {
+  const reasonCodes: Record<PublicFeedbackReasonDetail, string> = {
+    INCORRECT: "INCORRECT",
+    INCOMPLETE: "INCOMPLETE",
+    WRONG_SOURCE: "WRONG_SOURCE",
+    FALSE_REFUSAL: "INCORRECT",
+    UNSAFE_ANSWER: "INCORRECT",
+    TOO_SLOW: "TOO_SLOW",
+    OTHER: "OTHER",
+  };
+  const comment = options.feedback.comment?.trim() || undefined;
+  const reasonDetail = options.feedback.reasonDetail;
+  const response = await fetch(withAppBase(PUBLIC_FEEDBACK_PATH), {
     method: "POST",
     credentials: "same-origin",
     headers: {
@@ -159,9 +203,32 @@ export async function sendPublicFeedback(options: {
     },
     body: JSON.stringify({
       trace_id: options.traceId,
-      useful: options.useful,
+      useful: options.feedback.useful,
+      ...(reasonDetail
+        ? {
+            reason_code: reasonCodes[reasonDetail],
+            reason_detail: reasonDetail,
+          }
+        : {}),
+      ...(comment ? { comment } : {}),
     }),
     signal: options.signal,
+  });
+  if (!response.ok) throw await readError(response);
+}
+
+export async function logoutPublicSession(
+  csrfToken: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(withAppBase("/sso/logout"), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "X-CSRF-Token": csrfToken,
+    },
+    signal,
   });
   if (!response.ok) throw await readError(response);
 }

@@ -19,6 +19,7 @@ from rag_app.core.models import (
     EmbeddingSlotIdentity,
     NamedVectorPoint,
     RevisionVectorSpec,
+    SourceDocumentIdentity,
     VectorRevisionInventory,
     VectorRevisionValidation,
     VectorSearchResult,
@@ -128,6 +129,7 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
         query_vector: tuple[float, ...],
         limit: int,
         excluded_document_ids: tuple[str, ...] = (),
+        allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None,
     ) -> tuple[VectorSearchResult, ...]:
         """在严格 slot/vector 空间内执行余弦查询。
 
@@ -138,6 +140,7 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
             query_vector: 同维度查询向量。
             limit: 最大命中数。
             excluded_document_ids: 排名截断前排除的已删除文档。
+            allowed_documents: 排名截断前允许的成对文档与版本身份。
 
         Returns:
             稳定排序的向量命中。
@@ -151,8 +154,25 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
             )
         scored = []
         excluded = frozenset(excluded_document_ids)
+        allowed = (
+            None
+            if allowed_documents is None
+            else frozenset(
+                (item.document_id, item.document_version_id)
+                for item in allowed_documents
+            )
+        )
         for point in self._points[spec.physical_namespace].values():
             if point.payload.document_id in excluded:
+                continue
+            if (
+                allowed is not None
+                and (
+                    point.payload.document_id,
+                    point.payload.document_version_id,
+                )
+                not in allowed
+            ):
                 continue
             vector = point.vector_map()[vector_name]
             scored.append((point, _cosine(query_vector, vector)))

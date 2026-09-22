@@ -1,0 +1,26 @@
+{
+  "dataset_revision": "wb08r03r2-regression-v1",
+  "frozen_source_revision": "wanshitong-v2-20260917",
+  "case_count": 8,
+  "cases_sha256": "222c63972262d5c6340d9084302bf409869451ac9dc3c9e6ea063bb8f67da162",
+  "source_files_sha256": {
+    "formal-54.ndjson": "19f785acdde997ee4ce53aefcb461fa16854c05176c1c1d02e12bc51b16b582f",
+    "natural-60.ndjson": "07c92c95d4bf695394104f688e72941ef0724172836edc392823c277954d9807"
+  },
+  "case_identity": {
+    "WB08R-F-001": "9a0c50fd030181ea192b9acb0d70b3f0b2725d9563ed35f1affacad4dc8ca82f",
+    "WB08R-F-014": "b85c21d97d0c99af6a5eb5b02524348dabda2af0b86102a35d7f862c7e1c91a7",
+    "WB08R-F-020": "0c95b0ea4182b155e713f09ac62e853e29fca49810bd1e0ba033a20ad740aed4",
+    "WB08R-F-034": "d10f06603d8f6bafbcf74184d1c69cf3484d87426debf5004ce0d2542a0dac20",
+    "WB08R-N-003": "1e9a819a521b9b7a395d4ba50d8430a33f350a85c0046b2776e5c5015fa23f87",
+    "WB08R-N-043": "2621c01bcea62d0b3512e7c422bc60d945e1c0bcbbcd86e718b5a18206034227",
+    "WB08R-N-044": "0be0f27eeb9eb8e7290fc6e2b1835a946f2c6505b880bd1795992cc0f495a0fa",
+    "WB08R-N-055": "3430b7d0f5d741b460aef78e440911e06ed8eb7d1a38eacf9553a6b311759be7"
+  },
+  "standard_answers_stored": false,
+  "purpose": "评测审计，仅从既有冻结问题复制原文；不用于生产查询或 Prompt。",
+  "supplemental_files_sha256": {
+    "baseline-safe-summary.json": "d6e5d0d30134cb28aa69c1e19d7e19c6f62c698a9949e3037b7f9a782001ef09",
+    "gate-selections.json": "75a08e0b0d3f0e074d35eb3d89cc6a170e90add9bad0275447e6c8f196698ec8"
+  }
+}

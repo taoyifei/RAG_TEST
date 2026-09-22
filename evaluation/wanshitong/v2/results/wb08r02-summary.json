@@ -1,0 +1,58 @@
+{
+  "phase": "WB08R-02",
+  "index_decision": "Reuse active Chunk V3 revision; embedding_text and lexical_text unchanged",
+  "candidate_code_revision": "01822083832f81f07f00575f1b1d32123ea468ec",
+  "candidate_image": "rag-test-wanshitong:wb08r02-0182208",
+  "candidate_port": 8289,
+  "candidate_flags": {
+    "evidence_group_mode": "active",
+    "contextual_rerank_mode": "off"
+  },
+  "chunk_view_audit": {
+    "report": "wb08r02-0182208-chunk-view-audit-v2.ndjson",
+    "active_revision_chunks": 2880,
+    "embedding_title_present": 2880,
+    "lexical_title_present": 2880,
+    "nonempty_heading_path": 2617,
+    "embedding_heading_present": 2617,
+    "lexical_heading_present": 2607,
+    "legacy_duplicate_prefix_detected": 29,
+    "department_metadata_present": 2880,
+    "category_metadata_present": 2880
+  },
+  "natural24": {
+    "baseline_report": "wb08r02-baseline-92bbee1-8289.ndjson",
+    "candidate_report": "wb08r02-0182208-natural24-8289.ndjson",
+    "candidate_trace_summary": "wb08r02-final-0182208-natural24-trace.json",
+    "baseline_answerable": 18,
+    "candidate_answerable": 18,
+    "baseline_source_hit": 13,
+    "candidate_source_hit": 13,
+    "baseline_p95_total_ms": 9261.47,
+    "candidate_p95_total_ms": 9147.81,
+    "candidate_p95_group_build_ms": 20.571,
+    "max_reranker_calls_per_question": 1,
+    "max_generation_calls_per_question": 1
+  },
+  "latency8": {
+    "baseline_report": "wb08r01-92bbee1-8289.ndjson",
+    "candidate_report": "wb08r02-0182208-latency8-8289.ndjson",
+    "candidate_trace_summary": "wb08r02-final-0182208-latency8-trace.json",
+    "baseline_answerable": 4,
+    "candidate_answerable": 4,
+    "baseline_source_hit": 4,
+    "candidate_source_hit": 4,
+    "baseline_p95_total_ms": 8586.53,
+    "candidate_p95_total_ms": 8655.99,
+    "candidate_p95_group_build_ms": 19.776,
+    "max_reranker_calls_per_question": 1,
+    "max_generation_calls_per_question": 1
+  },
+  "open_boundaries": [
+    "Contextual rerank active mode regressed a cross-year fact spot check; candidate keeps it off.",
+    "The reused Chunk V3 index has 29 repeated context labels and 10 lexical views without every heading level.",
+    "These small samples do not establish full Natural-60 quality or production readiness."
+  ],
+  "production_8288_modified": false,
+  "merged_to_feature_wanshitong": false
+}

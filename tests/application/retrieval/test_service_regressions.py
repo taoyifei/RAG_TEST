@@ -1,5 +1,7 @@
 """查询终态与正式引用复核的公开回归。"""
 
+import pytest
+
 from rag_app.application.retrieval.service import (
     QueryDataPlaneContext,
     _formal_span_is_current,
@@ -40,6 +42,67 @@ def test_invalid_generated_claims_are_not_projected_as_provider_outage() -> (
 
     assert (
         _model_capability_status(context, "GENERATION_CLAIMS_INVALID") is None
+    )
+
+
+def test_semantic_rejection_is_not_projected_as_provider_outage() -> None:
+    """复核成功但无可发布事实时应保持证据不足终态。"""
+    context = QueryDataPlaneContext(
+        generation_provider_id="openai-compatible",
+        generation_model="synthetic-model",
+        model_configuration_state="CONFIGURED",
+    )
+
+    assert (
+        _model_capability_status(context, "SEMANTIC_REVIEW_NO_SUPPORTED_CLAIM")
+        is None
+    )
+    assert _model_capability_status(
+        context, "SEMANTIC_REVIEW_PROVIDER_ERROR"
+    ) == (
+        ConfidenceStatus.PROVIDER_UNAVAILABLE,
+        "SEMANTIC_REVIEW_PROVIDER_ERROR",
+    )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    (
+        "GENERATION_JSON_DECODE_FAILED",
+        "GENERATION_WIRE_SCHEMA_ROOT_FIELDS",
+        "GENERATION_ITEMS_REJECTED",
+        "GENERATION_OUTPUT_INVALID",
+        "EVIDENCE_BINDING_FAILED",
+        "SEMANTIC_REVIEW_DEADLINE_EXHAUSTED",
+        "SEMANTIC_REVIEW_NOT_AVAILABLE",
+        "SEMANTIC_REVIEW_RESPONSE_INVALID",
+    ),
+)
+def test_generation_validation_incomplete_is_not_provider_outage(
+    reason: str,
+) -> None:
+    """成功响应后的生成或校验失败不应伪装成网络不可用。"""
+    context = QueryDataPlaneContext(
+        generation_provider_id="openai-compatible",
+        generation_model="synthetic-model",
+        model_configuration_state="CONFIGURED",
+    )
+
+    assert _model_capability_status(context, reason) is None
+
+
+def test_review_model_identity_is_policy_blocker() -> None:
+    context = QueryDataPlaneContext(
+        generation_provider_id="openai-compatible",
+        generation_model="synthetic-model",
+        model_configuration_state="CONFIGURED",
+    )
+
+    assert _model_capability_status(
+        context, "SEMANTIC_REVIEW_MODEL_IDENTITY_REQUIRED"
+    ) == (
+        ConfidenceStatus.POLICY_DENIED,
+        "SEMANTIC_REVIEW_MODEL_IDENTITY_REQUIRED",
     )
 
 

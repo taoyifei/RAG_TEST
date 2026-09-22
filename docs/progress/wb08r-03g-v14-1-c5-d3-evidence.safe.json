@@ -1,0 +1,115 @@
+{
+  "schema_version": "wb08r03-v141-c5-d3-safe-evidence-v1",
+  "status": "FAILED",
+  "phase_status": "PAUSED",
+  "source_head_sha": "4c981fa4c8579c98c2881bee1106b57f749d19e6",
+  "plan_sha256": "645e206a66e107f6cb5cd6cd82eed50f1d98c9964a92d8bc75818d7549df0c9f",
+  "service_identity_sha256": "67bf43e71d4ea2ed6738194ce2cff5baf1645a6747cc92d352c186d8afeeeed6",
+  "qualification_definition_sha256": "54da768d67c9587aadecba994f31fb5aecfeabca67fcaf1fb39d5821c2a7b119",
+  "diagnostic_ab": {
+    "request_count": 2,
+    "provider_retry_count": 0,
+    "reconstructed_original": {
+      "http_status": 400,
+      "provider_error_type": "BadRequestError",
+      "error_message": "Grammar error: Unimplemented keys: [\"uniqueItems\"]",
+      "response_body_complete": true,
+      "schema_sha256": "31dd8406a45dc76f3085e6404d246d05ede6a0f114316b5162edb45ca6606744",
+      "safe_sha256": "687ab0ead08475b44cf41cb7a618afca8a3379d1b093758812888b26d87285c3",
+      "private_sha256": "614d5430f6ed3ff8477b47395e81b86cbe1809acb30f9c81c4ef092808f73454",
+      "http_diagnostic_sha256": "0fd71ea0957a4574fb512d51a6a9030b232032780c54c769361a223c789454d3"
+    },
+    "reconstructed_transferred": {
+      "http_status": 200,
+      "finish_reason": "stop",
+      "input_tokens": 374,
+      "output_tokens": 67,
+      "schema_sha256": "4606bb2d152d172b3f9bf95630d4bd3291fea2afd046ceec3ba3c9e487a0d9eb",
+      "safe_sha256": "e44de5975c6cdae16e2d0024989e588d8ad4680a9cb0bd3751dde987918cfc4a",
+      "private_sha256": "25687952288d680f226234981e3c553e52f9e4e9f31a33f69229abc27eea50a2"
+    },
+    "only_http_payload_diff": "REMOVE_$.response_format.json_schema.schema.properties.r.items.properties.c.uniqueItems",
+    "conclusion": "UNIQUE_ITEMS_MUST_BE_ENFORCED_BY_LOCAL_VALIDATOR"
+  },
+  "d3": {
+    "case_count": 5,
+    "request_count": 4,
+    "provider_retry_count": 0,
+    "passed_case_count": 1,
+    "safe_sha256": "0fec7dd32a8b0684e5e990ec6f95e7f9f827e795746b0a760f0eecc153d04066",
+    "private_sha256": "fcd7da7732e466b68430a19d8423c287f11c6b9744b0f13685a728bde205ac2c",
+    "capability_profile_sha256": "a3b93584e5f29ddb5d495f852b2280d043ab1b3ac25899b2828521704ebb8563",
+    "cases": {
+      "AMBIGUOUS": {
+        "status": "PASS",
+        "execution_state": "SUCCEEDED",
+        "request_count": 1,
+        "input_tokens": 318,
+        "output_tokens": 66
+      },
+      "PARAPHRASE": {
+        "status": "FAIL",
+        "execution_state": "TRANSPORT_FAILED",
+        "request_count": 1,
+        "transport_error_type": "ReadTimeout",
+        "attempt_elapsed_ms": 8011,
+        "server_root_cause": "NOT_OBSERVED"
+      },
+      "NOT_FOUND": {
+        "status": "FAIL",
+        "execution_state": "OUTPUT_INVALID",
+        "request_count": 1,
+        "failure_category": "FIELD_RESPONSE_STATUS_COMBINATION_INVALID",
+        "provider_prompt_tokens": 296,
+        "provider_completion_tokens": 62,
+        "raw_message_content": "NOT_RETAINED",
+        "exact_invalid_combination": "NOT_OBSERVED"
+      },
+      "TWO_ATOMS": {
+        "status": "FAIL",
+        "execution_state": "SUCCEEDED",
+        "request_count": 1,
+        "input_tokens": 385,
+        "output_tokens": 81,
+        "failure": "BOTH_ATOMS_RETURNED_AMBIGUOUS_WITH_TWO_CANDIDATES_INSTEAD_OF_ONE_SUPPORTED_PARAPHRASE_FIELD"
+      },
+      "MAX_SHAPE": {
+        "status": "FAIL",
+        "execution_state": "REQUEST_REJECTED",
+        "request_count": 0,
+        "failure_category": "PROVIDER_INPUT_TOO_LARGE",
+        "message_tokens": 6570,
+        "schema_tokens": 983,
+        "total_input_tokens": 7553,
+        "input_limit_tokens": 6144
+      }
+    }
+  },
+  "call_accounting": {
+    "chat_diagnostic": 2,
+    "chat_qualification": 4,
+    "chat_business": 0,
+    "chat_total": 6,
+    "tokenizer_endpoint_separate": 3
+  },
+  "verification": {
+    "related_pytest": "565 passed, 1 deselected, 1 warning",
+    "final_targeted_pytest": "55 passed, 1 warning",
+    "ruff_check": "PASSED_29_CHANGED_PYTHON_FILES",
+    "ruff_format": "PASSED_29_CHANGED_PYTHON_FILES",
+    "mypy": "PASSED_407_SOURCE_FILES",
+    "compose_config": "PASSED_WITH_PLACEHOLDER_ENV",
+    "git_diff_check": "PASSED",
+    "unrelated_tests": "NOT_RUN_BY_USER_INSTRUCTION"
+  },
+  "downstream": {
+    "business_five_case": "NOT_RUN_D3_FAILED",
+    "candidate_image_build": "NOT_RUN_D3_FAILED",
+    "candidate_8289_deploy": "NOT_RUN_D3_FAILED",
+    "preflight_16": "NOT_RUN_D3_FAILED",
+    "a_to_f": "NOT_RUN_D3_FAILED"
+  },
+  "production_modified": false,
+  "final_8289": "BASELINE_BD00C56_HEALTHY_200",
+  "cleanup_complete": true
+}

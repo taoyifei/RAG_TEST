@@ -8,6 +8,7 @@ from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
     ChannelHit,
     QueryAnalysis,
+    SourceDocumentIdentity,
     StructuralSearchRequest,
 )
 from rag_app.core.ports import LexicalStorePort
@@ -25,6 +26,7 @@ class StructuralChannel:
         analysis: QueryAnalysis,
         *,
         limit: int,
+        allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None,
     ) -> tuple[ChannelHit, ...]:
         """返回具有独立 rank/reason 的 canonical Chunk 身份。
 
@@ -32,6 +34,7 @@ class StructuralChannel:
             snapshot: 请求级不可变活动 Revision。
             analysis: Planner、Evidence 和生成共同消费的分析。
             limit: structural 通道最大候选数。
+            allowed_documents: 排名截断前允许的成对文档与版本身份。
 
         Returns:
             Store 支持结构检索时返回候选；兼容旧 Store 时为空。
@@ -51,6 +54,7 @@ class StructuralChannel:
                 source_qualifier=semantics.source_qualifier,
                 context_qualifier=semantics.context_qualifier,
                 limit=limit,
+                allowed_documents=allowed_documents,
             )
         )
         return cast(tuple[ChannelHit, ...], result)

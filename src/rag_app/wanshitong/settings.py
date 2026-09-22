@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rag_app.wanshitong.mode import ProductMode
+from rag_app.wanshitong.sso_settings import SsoSettings
 
 _PRODUCT_MODE_ENVIRONMENT_KEY = "RAG_PRODUCT_MODE"
 _DEMO_ALLOW_HTTP_ENVIRONMENT_KEY = "RAG_WANSHITONG_DEMO_ALLOW_HTTP"
+_DEPARTMENT_SHADOW_ENVIRONMENT_KEY = (
+    "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +22,8 @@ class WanshitongSettings:
 
     product_mode: ProductMode = ProductMode.UNIVERSAL
     demo_allow_http: bool = False
+    department_shadow_enabled: bool = False
+    sso: SsoSettings = field(default_factory=SsoSettings)
 
     @property
     def enabled(self) -> bool:
@@ -59,11 +65,33 @@ class WanshitongSettings:
             raise ValueError(
                 "RAG_WANSHITONG_DEMO_ALLOW_HTTP 仅支持 true 或 false。"
             )
+        raw_department_shadow = (
+            source.get(_DEPARTMENT_SHADOW_ENVIRONMENT_KEY, "false")
+            .strip()
+            .casefold()
+        )
+        if raw_department_shadow not in {"true", "false"}:
+            raise ValueError(
+                "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED "
+                "仅支持 true 或 false。"
+            )
         return cls(
             product_mode=product_mode,
             demo_allow_http=(
                 product_mode is ProductMode.WANSHITONG
                 and raw_allow_http == "true"
+            ),
+            department_shadow_enabled=(
+                product_mode is ProductMode.WANSHITONG
+                and raw_department_shadow == "true"
+            ),
+            sso=(
+                SsoSettings.from_environment(
+                    source,
+                    root_path=source.get("RAG_ROOT_PATH", "").strip(),
+                )
+                if product_mode is ProductMode.WANSHITONG
+                else SsoSettings()
             ),
         )
 

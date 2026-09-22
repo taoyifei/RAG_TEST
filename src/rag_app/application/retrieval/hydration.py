@@ -69,6 +69,9 @@ class CandidateHydrator:
                     fusion_rank=rank,
                     must_keep=candidate.must_keep,
                     contributions=candidate.contributions,
+                    unit_rank_contributions=candidate.unit_rank_contributions,
+                    retrieval_origins=candidate.retrieval_origins,
+                    retention_reasons=candidate.retention_reasons,
                 )
             )
         return tuple(result)

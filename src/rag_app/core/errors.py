@@ -207,6 +207,12 @@ class ProviderInputTooLarge(RagError):
     default_code = "PROVIDER_INPUT_TOO_LARGE"
 
 
+class ProviderRequestRejected(RagError):
+    """Provider 拒绝请求合同，但没有证明输入超过上下文容量。"""
+
+    default_code = "PROVIDER_REQUEST_REJECTED"
+
+
 class DenseUnavailable(RagError):
     """两个 Dense slot 均不可安全使用。"""
 

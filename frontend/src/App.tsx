@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import AppShell from "./app/AppShell";
+import { applicationPath } from "./app/basePath";
 import { detectProductMode, type ProductMode } from "./app/product-mode";
 import { isWanshitongAdminPath } from "./app/router";
 import { ErrorPanel } from "./components/ui";
@@ -14,11 +15,11 @@ type ModeState =
   | { state: "error"; error: unknown };
 
 export default function App() {
-  const [location, setLocation] = useState(window.location.pathname);
+  const [location, setLocation] = useState(() => applicationPath());
   const [modeState, setModeState] = useState<ModeState>({ state: "loading" });
   const [modeRefresh, setModeRefresh] = useState(0);
   useEffect(() => {
-    const handleLocation = () => setLocation(window.location.pathname);
+    const handleLocation = () => setLocation(applicationPath());
     window.addEventListener("popstate", handleLocation);
     return () => window.removeEventListener("popstate", handleLocation);
   }, []);

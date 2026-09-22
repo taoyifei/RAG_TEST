@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
-from pydantic import Field, StrictInt, model_validator
+from pydantic import Field, StrictBool, StrictInt, model_validator
 
+from rag_app.adapters.providers.structured_contract import (
+    StructuredOutputCapabilityProfile,
+    wb08r_structured_output_profile,
+)
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.core.errors import NotFound
 from rag_app.core.identifiers import canonical_sha256
@@ -27,6 +32,42 @@ class KnowledgeBaseModelSettings(FrozenModel):
         default=(), max_length=4
     )
     rewrite_enabled: bool = False
+    disable_thinking_supported: bool = False
+    disable_thinking: bool = False
+    structured_output_mode: Literal[
+        "none", "response_format", "structured_outputs", "guided_json"
+    ] = "none"
+    structured_output_profile_revision: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    )
+    structured_output_service_identity_sha256: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    structured_output_chat_template_revision: str | None = Field(
+        default=None, min_length=1, max_length=160
+    )
+    structured_output_grammar_backend: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,159}$"
+    )
+    structured_output_qualification_evidence_sha256: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    structured_output_allow_unique_items: StrictBool | None = None
+    field_resolution_max_output_tokens: StrictInt = Field(
+        default=512, ge=32, le=1536
+    )
+    field_resolution_transport_timeout_seconds: float = Field(
+        default=12.0, gt=0.0, le=30.0
+    )
+    field_resolution_total_deadline_seconds: float = Field(
+        default=15.0, gt=0.0, le=30.0
+    )
+    planner_transport_timeout_seconds: float = Field(
+        default=8.0, gt=0.0, le=30.0
+    )
+    planner_max_output_tokens: StrictInt = Field(default=160, ge=32, le=192)
+    planner_slo_target_ms: StrictInt = Field(default=5000, gt=0)
+    planner_hard_ceiling_ms: StrictInt = Field(default=7000, gt=0)
     ocr_connection_id: str | None = None
     ocr_model: str | None = None
     ocr_enabled: bool = False
@@ -42,7 +83,35 @@ class KnowledgeBaseModelSettings(FrozenModel):
     )
 
     @model_validator(mode="after")
-    def _paired_references(self) -> KnowledgeBaseModelSettings:
+    def _paired_references(  # noqa: PLR0912
+        self,
+    ) -> KnowledgeBaseModelSettings:
+        if (
+            self.field_resolution_total_deadline_seconds
+            < self.field_resolution_transport_timeout_seconds
+        ):
+            raise ValueError("字段解析总时限不得小于单次传输时限。")
+        if self.planner_slo_target_ms > self.planner_hard_ceiling_ms:
+            raise ValueError("Planner SLO 不得超过硬时延上限。")
+        if self.disable_thinking and not self.disable_thinking_supported:
+            raise ValueError("关闭 thinking 前必须确认 Provider 支持该参数。")
+        profile_values = (
+            self.structured_output_profile_revision,
+            self.structured_output_service_identity_sha256,
+            self.structured_output_chat_template_revision,
+            self.structured_output_grammar_backend,
+            self.structured_output_qualification_evidence_sha256,
+        )
+        if any(profile_values) and not all(profile_values):
+            raise ValueError("结构化输出能力合同必须完整配置或全部留空。")
+        if any(profile_values) and self.structured_output_mode == "none":
+            raise ValueError("结构化输出能力合同不能绑定 none 模式。")
+        if all(profile_values) != (
+            self.structured_output_allow_unique_items is not None
+        ):
+            raise ValueError(
+                "结构化输出能力合同必须显式固定 uniqueItems 执行位置。"
+            )
         if any(
             len(value) != _SHA256_LENGTH
             or any(char not in "0123456789abcdef" for char in value)
@@ -67,6 +136,55 @@ class KnowledgeBaseModelSettings(FrozenModel):
         if self.pdf_parser_enabled and not self.pdf_parser_connection_id:
             raise ValueError("PDF 解析需要已选择的 PaddleOCR 模型。")
         return self
+
+    def structured_output_profile_for(
+        self, model: str
+    ) -> StructuredOutputCapabilityProfile | None:
+        """为当前模型构造共享资格；结构化模式缺资格时安全失败。
+
+        Args:
+            model: 当前轮换位置的真实模型身份。
+
+        Returns:
+            ``none`` 模式返回空；其它模式返回完整能力合同。
+
+        Raises:
+            ValueError: 结构化模式尚未固定服务、模板、后端或资格证据。
+
+        """
+        if self.structured_output_mode == "none":
+            return None
+        values = (
+            self.structured_output_profile_revision,
+            self.structured_output_service_identity_sha256,
+            self.structured_output_chat_template_revision,
+            self.structured_output_grammar_backend,
+            self.structured_output_qualification_evidence_sha256,
+        )
+        if not all(values):
+            raise ValueError("STRUCTURED_OUTPUT_CAPABILITY_PROFILE_MISSING")
+        return wb08r_structured_output_profile(
+            profile_revision=str(self.structured_output_profile_revision),
+            service_identity_sha256=str(
+                self.structured_output_service_identity_sha256
+            ),
+            model=model,
+            chat_template_revision=str(
+                self.structured_output_chat_template_revision
+            ),
+            mode=self.structured_output_mode,
+            grammar_backend=str(self.structured_output_grammar_backend),
+            deadline_ms=round(
+                self.field_resolution_transport_timeout_seconds * 1000
+            ),
+            field_resolution_output_tokens=(
+                self.field_resolution_max_output_tokens
+            ),
+            qualification_evidence_sha256=str(
+                self.structured_output_qualification_evidence_sha256
+            ),
+            allow_unique_items=bool(self.structured_output_allow_unique_items),
+        )
 
     @property
     def generation_models(self) -> tuple[str, ...]:
@@ -213,10 +331,10 @@ class ProductModelSettings:
                     "pdf_poll_timeout_seconds",
                 }
             ),
-            "prompt": "grounded-chat-v8",
-            "interpret": "bounded-interpret-v2",
+            "prompt": "grounded-chat-v9",
+            "interpret": "adaptive-plan-v1",
             "rewrite": "bounded-rewrite-v3",
-            "validation": "claim-support-v17",
+            "validation": "claim-support-v18",
             "answer_selection": "shared-query-semantics-v12",
             "generation_output": "grounded-output-4096-v1",
         }

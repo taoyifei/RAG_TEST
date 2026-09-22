@@ -63,6 +63,7 @@ def test_capabilities_publish_only_fixed_public_policy(
         "document_visibility": "all_internal",
         "conversation_delete": True,
         "feedback": True,
+        "feedback_details": True,
         "shortcuts": [],
     }
 

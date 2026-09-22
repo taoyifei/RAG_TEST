@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WanshitongApp } from "./WanshitongApp";
+import * as authNavigation from "./authNavigation";
 
 const encoder = new TextEncoder();
 
@@ -60,6 +61,7 @@ const capabilitiesBody = {
   stream_protocol: "wanshitong-public-sse-v1",
   document_visibility: "all_internal",
   feedback: true,
+  feedback_details: true,
   shortcuts: [],
 };
 
@@ -108,7 +110,8 @@ async function ask(question = "材料多久完成核验？") {
 afterEach(() => {
   vi.restoreAllMocks();
   window.history.replaceState({}, "", "/");
-  window.localStorage.removeItem("wanshitong-theme");
+  window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 describe("湾事通公共应用", () => {
@@ -183,6 +186,66 @@ describe("湾事通公共应用", () => {
       await screen.findByRole("heading", { name: "你的内部知识助手" }),
     ).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("未登录 bootstrap 只触发整页 SSO，不显示匿名降级", async () => {
+    const redirect = vi
+      .spyOn(authNavigation, "redirectToSso")
+      .mockImplementation(() => undefined);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "public login required" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    render(<WanshitongApp />);
+
+    await waitFor(() => expect(redirect).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole("heading", { name: "你的内部知识助手" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("SSO 用户本地退出后清空工作台并提供重新登录", async () => {
+    const ssoSession = {
+      ...sessionBody,
+      deployment_id: "candidate_8289",
+      user: { user_id: "1001", display_name: "测试用户" },
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(Response.json(ssoSession));
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === "/sso/logout") {
+          return Promise.resolve(
+            Response.json({ status: "logged_out", scope: "kb_local" }),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+    await openHome();
+
+    expect(screen.getByText("测试用户")).toBeVisible();
+    await userEvent.setup().click(
+      screen.getByRole("button", { name: "退出湾事通" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "已退出" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "重新登录" })).toBeVisible();
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => pathOf(input) === "/sso/logout",
+      ),
+    ).toHaveLength(1);
   });
 
   it("不显示部门筛选、管理能力或不可见快捷入口", async () => {
@@ -439,6 +502,31 @@ describe("湾事通公共应用", () => {
     expect(screen.queryByText(/已核验来源（/)).not.toBeInTheDocument();
   });
 
+  it("校验未完成时展示服务端重试提示而非资料不足文案", async () => {
+    installFetch(
+      streamResponse([
+        event("final", 0, {
+          status: "INSUFFICIENT_EVIDENCE",
+          answer: null,
+          user_message:
+            "已找到相关资料，但本次答案生成或核验未完成。你可以稍后重试。",
+          citations: [],
+        }),
+      ]),
+    );
+    await openHome();
+    await ask();
+
+    expect(
+      await screen.findByText(
+        "已找到相关资料，但本次答案生成或核验未完成。你可以稍后重试。",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("暂未在内部资料中找到足以回答这个问题的内容。"),
+    ).not.toBeInTheDocument();
+  });
+
   it("兼容 WB-03 未携带 user_message 的空答案 final", async () => {
     installFetch(
       streamResponse([
@@ -532,8 +620,11 @@ describe("湾事通公共应用", () => {
     );
     await openHome();
     const user = await ask();
-    const summary = await screen.findByText("已核验来源（1）");
+    const summary = await screen.findByText("引用依据（1段）");
     await user.click(summary);
+    const groupSummary = screen.getByText("展开全部片段").closest("summary");
+    expect(groupSummary).not.toBeNull();
+    if (groupSummary) await user.click(groupSummary);
 
     expect(screen.getByText("湾事通办事指南.docx")).toBeInTheDocument();
     expect(
@@ -571,6 +662,139 @@ describe("湾事通公共应用", () => {
     expect(
       screen.queryByRole("button", { name: "没帮助" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("负反馈可选原因和说明并提交兼容字段", async () => {
+    const fetchMock = installFetch(
+      streamResponse([
+        event("final", 0, { answer: "来源待核对答案", citations: [] }),
+      ]),
+    );
+    await openHome();
+    const user = await ask();
+    await screen.findByText("来源待核对答案");
+
+    await user.click(screen.getByRole("button", { name: "没帮助" }));
+    await user.selectOptions(
+      screen.getByLabelText("主要原因（可选）"),
+      "WRONG_SOURCE",
+    );
+    await user.type(
+      screen.getByLabelText("补充说明（可选）"),
+      "应该引用最新办事指南。",
+    );
+    await user.click(screen.getByRole("button", { name: "提交反馈" }));
+
+    expect(await screen.findByText("感谢你的反馈")).toBeInTheDocument();
+    const feedbackCall = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === "/api/public/feedback",
+    );
+    expect(
+      JSON.parse(
+        typeof feedbackCall?.[1]?.body === "string"
+          ? feedbackCall[1].body
+          : "{}",
+      ),
+    ).toEqual({
+      trace_id: "trace_11111111111111111111111111111111",
+      useful: false,
+      reason_code: "WRONG_SOURCE",
+      reason_detail: "WRONG_SOURCE",
+      comment: "应该引用最新办事指南。",
+    });
+  });
+
+  it("反馈失败保留选项与输入并允许原样重试", async () => {
+    let feedbackCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (input: RequestInfo | URL) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(Response.json(sessionBody));
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === "/api/public/chat") {
+          return Promise.resolve(
+            streamResponse([
+              event("final", 0, { answer: "可重试反馈答案", citations: [] }),
+            ]),
+          );
+        }
+        if (path === "/api/public/feedback") {
+          feedbackCalls += 1;
+          return Promise.resolve(
+            feedbackCalls === 1
+              ? Response.json(
+                  { error: { code: "FEEDBACK_STORE_UNAVAILABLE" } },
+                  { status: 503 },
+                )
+              : Response.json({ useful: false }),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      },
+    );
+    await openHome();
+    const user = await ask();
+    await screen.findByText("可重试反馈答案");
+    await user.click(screen.getByRole("button", { name: "没帮助" }));
+    const reason = screen.getByLabelText("主要原因（可选）");
+    const comment = screen.getByLabelText("补充说明（可选）");
+    await user.selectOptions(reason, "INCOMPLETE");
+    await user.type(comment, "缺少办理时限。");
+    await user.click(screen.getByRole("button", { name: "提交反馈" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "已保留你的选择和说明",
+    );
+    expect(reason).toHaveValue("INCOMPLETE");
+    expect(comment).toHaveValue("缺少办理时限。");
+    await user.click(
+      screen.getByRole("button", { name: "重新提交反馈" }),
+    );
+
+    expect(await screen.findByText("感谢你的反馈")).toBeInTheDocument();
+    expect(feedbackCalls).toBe(2);
+  });
+
+  it("反馈时会话过期不丢失说明并提供重新登录", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (input: RequestInfo | URL) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(Response.json(sessionBody));
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === "/api/public/chat") {
+          return Promise.resolve(
+            streamResponse([
+              event("final", 0, { answer: "会话过期反馈答案", citations: [] }),
+            ]),
+          );
+        }
+        if (path === "/api/public/feedback") {
+          return Promise.resolve(new Response(null, { status: 401 }));
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      },
+    );
+    await openHome();
+    const user = await ask();
+    await screen.findByText("会话过期反馈答案");
+    await user.click(screen.getByRole("button", { name: "没帮助" }));
+    const comment = screen.getByLabelText("补充说明（可选）");
+    await user.type(comment, "需要重新登录后提交。");
+    await user.click(screen.getByRole("button", { name: "提交反馈" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "登录会话已过期",
+    );
+    expect(comment).toHaveValue("需要重新登录后提交。");
+    expect(screen.getByRole("button", { name: "重新登录" })).toBeVisible();
   });
 
   it("429 读取 Retry-After 后显示限流文案且不自动重试", async () => {
@@ -612,50 +836,38 @@ describe("湾事通公共应用", () => {
     expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toBeEnabled();
   });
 
-  it("Session 过期时只重建一次并重试原问题", async () => {
+  it("Session 过期时整页登录且不自动重发原问题", async () => {
     let sessionCalls = 0;
     let chatCalls = 0;
+    const redirect = vi
+      .spyOn(authNavigation, "redirectToSso")
+      .mockImplementation(() => undefined);
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
         const path = pathOf(input);
         if (path === "/api/public/session") {
           sessionCalls += 1;
-          return Promise.resolve(
-            Response.json({
-              ...sessionBody,
-              csrf_token: (sessionCalls === 1 ? "a" : "b").repeat(64),
-            }),
-          );
+          return Promise.resolve(Response.json(sessionBody));
         }
         if (path === "/api/public/capabilities") {
           return Promise.resolve(Response.json(capabilitiesBody));
         }
         if (path === "/api/public/chat") {
           chatCalls += 1;
-          if (chatCalls === 1) {
-            return Promise.resolve(new Response(null, { status: 401 }));
-          }
-          return Promise.resolve(
-            streamResponse([
-              event("final", 0, { answer: "重试成功", citations: [] }),
-            ]),
-          );
+          return Promise.resolve(new Response(null, { status: 401 }));
         }
         return Promise.resolve(new Response(null, { status: 404 }));
       });
     await openHome();
     await ask("会话过期测试");
 
-    expect(await screen.findByText("重试成功")).toBeInTheDocument();
-    expect(sessionCalls).toBe(2);
-    expect(chatCalls).toBe(2);
-    const chatHeaders = fetchMock.mock.calls
-      .filter(([input]) => pathOf(input) === "/api/public/chat")
-      .map(
-        ([, init]) => (init?.headers as Record<string, string>)["X-CSRF-Token"],
-      );
-    expect(chatHeaders).toEqual(["a".repeat(64), "b".repeat(64)]);
+    await waitFor(() => {
+      expect(redirect).toHaveBeenCalledWith("会话过期测试");
+    });
+    expect(sessionCalls).toBe(1);
+    expect(chatCalls).toBe(1);
+    expect(fetchMock.mock.calls).toHaveLength(3);
   });
 
   it("pagehide 取消仍在进行的请求", async () => {

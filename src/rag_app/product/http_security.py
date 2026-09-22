@@ -103,6 +103,15 @@ def effective_request_scheme(
     return request.url.scheme
 
 
+def application_path(request: Request) -> str:
+    """返回剥离一次外部 `root_path` 的应用路由路径。"""
+    path = str(request.scope.get("path", "")) or "/"
+    root_path = str(request.scope.get("root_path", "")).rstrip("/")
+    if root_path and (path == root_path or path.startswith(f"{root_path}/")):
+        return path[len(root_path) :] or "/"
+    return path
+
+
 def demo_http_request_allowed(
     request: Request,
     *,
@@ -161,6 +170,7 @@ def _is_demo_private_address(value: str) -> bool:
 
 __all__ = [
     "RequestRateLimiter",
+    "application_path",
     "demo_http_request_allowed",
     "effective_request_scheme",
     "is_loopback",

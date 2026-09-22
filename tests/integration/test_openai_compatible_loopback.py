@@ -63,7 +63,7 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def do_POST(self) -> None:  # noqa: PLR0911, PLR0912, PLR0915
+        def do_POST(self) -> None:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length))
             state.requests.append(
@@ -76,79 +76,11 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
                     },
                 )
             )
-            if self.path in {"/embeddings", "/gateway/v1/embeddings"}:
-                response = {
-                    "data": [
-                        {"index": index, "embedding": [3.0, 4.0, index + 1.0]}
-                        for index in reversed(range(len(payload["input"])))
-                    ],
-                    "usage": {"total_tokens": 9},
-                }
-                self._json(response)
-                return
-            if self.path == "/wrong-model/embeddings":
-                self._json(
-                    {
-                        "model": "unexpected-model",
-                        "data": [{"index": 0, "embedding": [1.0, 1.0, 1.0]}],
-                    }
-                )
-                return
-            if self.path == "/bad-dimension/embeddings":
-                self._json({"data": [{"index": 0, "embedding": [1.0, 2.0]}]})
-                return
-            if self.path == "/auth/embeddings":
-                if self.headers.get("Authorization") != "Bearer expected-key":
-                    self._status(401)
-                    return
-                self._json(
-                    {"data": [{"index": 0, "embedding": [1.0, 2.0, 3.0]}]}
-                )
-                return
-            if self.path == "/slow/embeddings":
-                sleep(0.2)
-                with suppress(BrokenPipeError):
-                    self._json(
-                        {"data": [{"index": 0, "embedding": [1.0, 2.0, 3.0]}]}
-                    )
-                return
-            if self.path == "/redirect/embeddings":
-                self.send_response(307)
-                self.send_header("Location", "/embeddings")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            if self.path in {"/rerank", "/v1/rerank"}:
-                documents = payload.get("texts", payload.get("documents", []))
-                self._json(
-                    {
-                        "results": [
-                            {
-                                "index": index,
-                                "score": (index + 1) / (len(documents) + 1),
-                            }
-                            for index in reversed(range(len(documents)))
-                        ]
-                    }
-                )
-                return
-            if self.path == "/duplicate/rerank":
-                self._json(
-                    {
-                        "results": [
-                            {"index": 0, "score": 0.2},
-                            {"index": 0, "score": 0.9},
-                        ]
-                    }
-                )
-                return
-            if self.path == "/missing/rerank":
-                self._json({"results": [{"index": 0, "score": 0.7}]})
+            if self._handle_embedding(payload) or self._handle_rerank(payload):
                 return
             if self.path == "/no-stream/chat/completions" and payload["stream"]:
                 self._status(405)
-                return
-            if self.path == "/no-stream/chat/completions":
+            elif self.path == "/no-stream/chat/completions":
                 self._json(
                     {
                         "choices": [
@@ -159,8 +91,7 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
                         ]
                     }
                 )
-                return
-            if (
+            elif (
                 self.path == "/fenced-stream/chat/completions"
                 and payload["stream"]
             ):
@@ -186,8 +117,7 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
-                return
-            if self.path == "/fenced-stream/chat/completions":
+            elif self.path == "/fenced-stream/chat/completions":
                 self._json(
                     {
                         "choices": [
@@ -202,8 +132,7 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
                         ]
                     }
                 )
-                return
-            if self.path == "/bad-grounded/chat/completions":
+            elif self.path == "/bad-grounded/chat/completions":
                 self._json(
                     {
                         "choices": [
@@ -214,8 +143,7 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
                         ]
                     }
                 )
-                return
-            if self.path == "/chat/completions" and payload["stream"]:
+            elif self.path == "/chat/completions" and payload["stream"]:
                 answer = _chat_answer(payload)
                 midpoint = max(1, len(answer) // 2)
                 content = (
@@ -252,8 +180,7 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
-                return
-            if self.path == "/chat/completions":
+            elif self.path == "/chat/completions":
                 self._json(
                     {
                         "choices": [
@@ -264,8 +191,80 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
                         ]
                     }
                 )
-                return
-            self.send_error(404)
+            else:
+                self.send_error(404)
+
+        def _handle_embedding(self, payload: dict[str, Any]) -> bool:
+            """响应嵌入正常与故障路径。"""
+            if self.path in {"/embeddings", "/gateway/v1/embeddings"}:
+                response = {
+                    "data": [
+                        {"index": index, "embedding": [3.0, 4.0, index + 1.0]}
+                        for index in reversed(range(len(payload["input"])))
+                    ],
+                    "usage": {"total_tokens": 9},
+                }
+                self._json(response)
+            elif self.path == "/wrong-model/embeddings":
+                self._json(
+                    {
+                        "model": "unexpected-model",
+                        "data": [{"index": 0, "embedding": [1.0, 1.0, 1.0]}],
+                    }
+                )
+            elif self.path == "/bad-dimension/embeddings":
+                self._json({"data": [{"index": 0, "embedding": [1.0, 2.0]}]})
+            elif self.path == "/auth/embeddings":
+                if self.headers.get("Authorization") != "Bearer expected-key":
+                    self._status(401)
+                else:
+                    self._json(
+                        {"data": [{"index": 0, "embedding": [1.0, 2.0, 3.0]}]}
+                    )
+            elif self.path == "/slow/embeddings":
+                sleep(0.2)
+                with suppress(BrokenPipeError):
+                    self._json(
+                        {"data": [{"index": 0, "embedding": [1.0, 2.0, 3.0]}]}
+                    )
+            elif self.path == "/redirect/embeddings":
+                self.send_response(307)
+                self.send_header("Location", "/embeddings")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                return False
+            return True
+
+        def _handle_rerank(self, payload: dict[str, Any]) -> bool:
+            """响应重排正常与故障路径。"""
+            if self.path in {"/rerank", "/v1/rerank"}:
+                documents = payload.get("texts", payload.get("documents", []))
+                self._json(
+                    {
+                        "results": [
+                            {
+                                "index": index,
+                                "score": (index + 1) / (len(documents) + 1),
+                            }
+                            for index in reversed(range(len(documents)))
+                        ]
+                    }
+                )
+            elif self.path == "/duplicate/rerank":
+                self._json(
+                    {
+                        "results": [
+                            {"index": 0, "score": 0.2},
+                            {"index": 0, "score": 0.9},
+                        ]
+                    }
+                )
+            elif self.path == "/missing/rerank":
+                self._json({"results": [{"index": 0, "score": 0.7}]})
+            else:
+                return False
+            return True
 
         def _json(self, payload: dict[str, Any]) -> None:
             content = json.dumps(payload, ensure_ascii=False).encode()
@@ -1013,7 +1012,8 @@ def test_product_api_real_loopback_grounded_qa_and_trace(  # noqa: PLR0915
             assert answered.status_code == 200, answered.text
             result = answered.json()
             assert result["status"] == "ANSWERABLE", result
-            assert result["generation_mode"] == "llm"
+            assert result["generation_mode"] == "extractive"
+            assert result["generation_called_this_request"] is False
             assert "设备 MX-41 的维护周期为 14 天。" in result["answer"]
             assert result["evidence"]
             assert result["evidence"][0]["source_spans"]
@@ -1029,8 +1029,8 @@ def test_product_api_real_loopback_grounded_qa_and_trace(  # noqa: PLR0915
             }
             assert usage["embedding.query"]["call_count"] == 1
             assert usage["reranking"]["call_count"] == 1
-            assert usage["generation"]["call_count"] == 1
-            assert usage["generation"]["usage"] == "unknown"
+            assert usage["generation"]["call_count"] == 0
+            assert usage["generation"]["usage"] is None
 
             trace = harness.client.get(
                 f"/api/v1/admin/operational-traces/{result['trace_id']}"
@@ -1053,7 +1053,7 @@ def test_product_api_real_loopback_grounded_qa_and_trace(  # noqa: PLR0915
             paths = [item[0] for item in state.requests]
             assert paths.count("/embeddings") >= 4
             assert paths.count("/rerank") >= 2
-            assert paths.count("/chat/completions") >= 4
+            assert paths.count("/chat/completions") == 3
             assert all(
                 "authorization" not in headers
                 for _, _, headers in state.requests

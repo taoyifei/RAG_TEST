@@ -15,6 +15,11 @@ from rag_app.core.ports.console_inspection import (
     ConsoleRevisionStorePort,
 )
 from rag_app.core.ports.conversation import ConversationPort
+from rag_app.core.ports.department_shadow import (
+    DepartmentShadowObservation,
+    DepartmentShadowObserverPort,
+    DepartmentShadowRequest,
+)
 from rag_app.core.ports.embedding import (
     EmbeddingPort,
     EmbeddingRouteRequest,
@@ -22,7 +27,10 @@ from rag_app.core.ports.embedding import (
     SlotEligibilityPort,
 )
 from rag_app.core.ports.embedding_cache import EmbeddingCachePort
-from rag_app.core.ports.evidence_source import EvidenceSourcePort
+from rag_app.core.ports.evidence_source import (
+    CatalogDocument,
+    EvidenceSourcePort,
+)
 from rag_app.core.ports.exact_store import ExactStorePort
 from rag_app.core.ports.generator import GenerationRequest, GeneratorPort
 from rag_app.core.ports.lexical_analyzer import LexicalAnalyzerPort
@@ -59,12 +67,16 @@ __all__ = [
     "BlobStorePort",
     "BlobWriteRequest",
     "CancellationPort",
+    "CatalogDocument",
     "ChunkValidationPort",
     "ChunkerPort",
     "ConsoleJobStorePort",
     "ConsoleRevisionStorePort",
     "ConversationPort",
     "CriticalOcrVerifierPort",
+    "DepartmentShadowObservation",
+    "DepartmentShadowObserverPort",
+    "DepartmentShadowRequest",
     "EmbeddingCachePort",
     "EmbeddingPort",
     "EmbeddingRouteRequest",

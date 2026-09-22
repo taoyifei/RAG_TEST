@@ -1,0 +1,111 @@
+{
+  "stage": "WB08R-01",
+  "branch": "codex/wb-08r-adaptive-rag",
+  "candidate_revision": "92bbee1820ac79b20c5c339caab4ca554d171304",
+  "candidate_host": "10.242.180.60 via 10.242.180.54",
+  "candidate_port": 8289,
+  "candidate_isolated_root": "/data/tyf/wanshitong-wb08r01",
+  "existing_8288_health_after_test": 200,
+  "corpus_docx_retrievable": 46,
+  "run_scope": {
+    "latency24": 24,
+    "natural20": 20,
+    "formal54_run": false,
+    "adversarial30_run": false,
+    "legacy149_run": false
+  },
+  "metrics_note": "request_total_ms 是本地经 SSH 隧道的客户端墙钟；catalog 特定问法同时记录候选服务端 Trace duration_ms。p95 使用 nearest rank。expected_source_match 只比较冻结来源标题与公开引用，不等于人工质量评分。",
+  "latency24": {
+    "count": 24,
+    "answerable": 19,
+    "source_title_match": 16,
+    "p50_total_ms": 5677.2,
+    "p95_total_ms": 8586.53
+  },
+  "natural20": {
+    "count": 20,
+    "answerable": 17,
+    "source_title_match": 14,
+    "p50_total_ms": 5781.365,
+    "p95_total_ms": 10178.59
+  },
+  "latency_buckets": {
+    "catalog_navigation": {
+      "count": 8,
+      "answerable": 8,
+      "source_title_match": 8,
+      "p50_total_ms": 254.65,
+      "p95_total_ms": 266.65,
+      "planner_calls": 0,
+      "generation_calls": 0
+    },
+    "single_fact": {
+      "count": 8,
+      "answerable": 8,
+      "p50_total_ms": 6157.26,
+      "p95_total_ms": 10148.24,
+      "p95_retrieval_and_rerank_ms": 1150,
+      "planner_calls": 7,
+      "generation_calls": 8,
+      "max_estimated_generation_input_tokens": 3170
+    },
+    "compound_multi_turn": {
+      "count": 8,
+      "answerable": 3,
+      "p50_total_ms": 6726.365,
+      "p95_total_ms": 8586.53,
+      "p95_retrieval_and_rerank_ms": 1887,
+      "planner_calls": 6,
+      "generation_calls": 7,
+      "max_estimated_generation_input_tokens": 3451
+    }
+  },
+  "special_real_questions": {
+    "natural_catalog_short": {
+      "public_status": "AMBIGUOUS_NEEDS_CLARIFICATION",
+      "catalog_candidates": 3,
+      "public_catalog_citations": 3,
+      "client_total_ms": 304.38,
+      "server_trace_duration_ms": 207,
+      "planner_calls": 0,
+      "generation_calls": 0,
+      "trace_id": "trace_6638ba99a2f1b52f7a2618c31ac87d94"
+    },
+    "explicit_document_title": {
+      "public_status": "ANSWERABLE",
+      "public_catalog_citations": 1,
+      "client_total_ms": 217.07,
+      "server_trace_duration_ms": 164,
+      "planner_calls": 0,
+      "generation_calls": 0,
+      "trace_id": "trace_c3bd3247017a7b55b62ae3fa1f642172"
+    }
+  },
+  "trace_call_audit": {
+    "audited_traces": 44,
+    "planner_calls": 27,
+    "planner_applied": 21,
+    "planner_timeout_or_unavailable": 6,
+    "generation_calls": 30,
+    "repair_calls": 0,
+    "budget_violations": 0,
+    "natural20_p95_retrieval_and_rerank_ms": 1604,
+    "natural20_max_estimated_generation_input_tokens": 3482
+  },
+  "architecture_audit": {
+    "universal_core_extended": true,
+    "new_retriever_or_generator_data_plane": false,
+    "new_runtime_case_or_answer_mapping": false,
+    "exact_fts_dense_parallelized": false,
+    "parallelism_reason": "现有通道依次执行，但 FTS 与 Dense 候选需保留共享 SQLite 快照、降级语义与顺序审计；本次通道耗时通常为几十毫秒，不为此改变主链调度。",
+    "evaluation_excluded_from_image": true,
+    "preexisting_frontend_title_example": "frontend/src/public/suggestedQuestions.ts 中已有显式标题预设问句；本阶段未修改，也未用于运行时匹配。"
+  },
+  "limitations": [
+    "单事实 p95 10.15 秒，高于 8 秒目标；Planner 的候选 p50 调用约 2.78 秒。8289 与正在内测的 8288 共用 54 模型服务，排队影响本次总耗时。",
+    "复合问题与 Natural-20 的检索加重排 p95 分别为 1.887 秒和 1.604 秒，高于 1.5 秒目标。",
+    "一条复合问题的 Planner 在 3 秒超时后安全回退，Generation 已发布部分流式内容后收到 INVALID_STREAM_SCHEMA，最终拒答；未触发第二次完整生成。",
+    "44 条中有 36 条 ANSWERABLE、30 条来源标题匹配；未进行逐条人工质量评分。",
+    "WB08R-00 自然问法 10.519 秒与本次 0.207 秒来自不同版本和时点，只作为方向性对照。"
+  ]
+}

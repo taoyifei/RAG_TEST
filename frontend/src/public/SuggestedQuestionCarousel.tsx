@@ -97,7 +97,7 @@ export function SuggestedQuestionCarousel({
           <button
             className="wst-suggestion"
             disabled={busy}
-            key={item.caseId}
+            key={item.question}
             onClick={() => onSubmit(item.question)}
             type="button"
           >

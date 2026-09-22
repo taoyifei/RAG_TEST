@@ -13,10 +13,12 @@ from rag_app.application.revision_builder import IngestionDocument
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import (
     DocumentRef,
+    ExactSearchRequest,
     KnowledgeBaseScope,
     LexicalSearchRequest,
     RequestedAnswerType,
     RetrievalPolicy,
+    SourceDocumentIdentity,
     StructuralSearchRequest,
 )
 from tests.adapters.parsers.docx_fixtures import build_docx
@@ -141,6 +143,131 @@ def test_long_question_recalls_evidence_when_strict_cjk_phrase_misses(
         assert candidates[0].document_id == target.document.document_id
         assert all(
             hit.document_id != noise.document.document_id for hit in candidates
+        )
+    finally:
+        runtime.close()
+
+
+def test_document_scope_is_applied_before_each_channel_limit(
+    tmp_path: Path,
+) -> None:
+    """目标在全库 top-24 外时，来源内检索仍必须召回目标版本。"""
+    runtime, project_id, knowledge_base_id = runtime_with_kb(tmp_path)
+    documents = tuple(
+        _document(
+            project_id,
+            knowledge_base_id,
+            f"相同主题文档-{index:02d}",
+            "共同检索词用于验证来源范围必须先于排名截断。",
+        )
+        for index in range(28)
+    )
+    try:
+        result = runtime.builder.build_and_activate(
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+            documents=documents,
+            idempotency_key="fts-source-scope-before-limit",
+            budgets=runtime.default_budgets(),
+        )
+        spec = runtime.control.revision_vector_spec(result.revision_id)
+        unscoped = runtime.components.lexical_store.search_candidates(
+            LexicalSearchRequest(
+                revision=spec.revision,
+                query="共同检索词",
+                limit=24,
+            )
+        )
+        all_hits = runtime.components.lexical_store.search_candidates(
+            LexicalSearchRequest(
+                revision=spec.revision,
+                query="共同检索词",
+                limit=100,
+            )
+        )
+        assert len(unscoped) == 24
+        assert len(all_hits) == 28
+        target = all_hits[-1]
+        assert target.chunk_id not in {item.chunk_id for item in unscoped}
+        allowed = (
+            SourceDocumentIdentity(
+                document_id=target.document_id,
+                document_version_id=target.document_version_id,
+            ),
+        )
+
+        lexical = runtime.components.lexical_store.search_candidates(
+            LexicalSearchRequest(
+                revision=spec.revision,
+                query="共同检索词",
+                limit=1,
+                allowed_documents=allowed,
+            )
+        )
+        structural = (
+            runtime.components.lexical_store.search_structural_candidates(
+                StructuralSearchRequest(
+                    revision=spec.revision,
+                    query="共同检索词",
+                    target="共同检索词",
+                    limit=1,
+                    allowed_documents=allowed,
+                )
+            )
+        )
+        exact = runtime.components.lexical_store.search_exact_candidates(
+            ExactSearchRequest(
+                revision=spec.revision,
+                quoted_phrases=("共同检索词",),
+                limit=1,
+                allowed_documents=allowed,
+            )
+        )
+        structure = runtime.control.load_document_structure(
+            runtime.control.active_query_snapshot(
+                KnowledgeBaseScope(
+                    project_id=project_id,
+                    knowledge_base_id=knowledge_base_id,
+                ),
+                serving_fingerprint=runtime.components.serving_fingerprint,
+                retrieval_policy=RetrievalPolicy(),
+            ),
+            allowed_documents=allowed,
+            cursor=0,
+            limit=1,
+        )
+
+        assert [item.chunk_id for item in lexical] == [target.chunk_id]
+        assert [item.chunk_id for item in structural] == [target.chunk_id]
+        assert [item.chunk_id for item in exact] == [target.chunk_id]
+        assert [item.chunk_id for item in structure.items] == [target.chunk_id]
+        assert (
+            runtime.components.lexical_store.search_candidates(
+                LexicalSearchRequest(
+                    revision=spec.revision,
+                    query="共同检索词",
+                    limit=1,
+                    allowed_documents=(),
+                )
+            )
+            == ()
+        )
+        wrong_version = (
+            SourceDocumentIdentity(
+                document_id=target.document_id,
+                document_version_id=deterministic_id("dver", "wrong"),
+            ),
+        )
+        assert (
+            runtime.components.lexical_store.search_candidates(
+                LexicalSearchRequest(
+                    revision=spec.revision,
+                    query="共同检索词",
+                    limit=1,
+                    allowed_documents=wrong_version,
+                )
+            )
+            == ()
         )
     finally:
         runtime.close()
@@ -383,10 +510,7 @@ def test_source_scoped_structural_search_finds_late_short_heading(
         hits = runtime.components.lexical_store.search_structural_candidates(
             StructuralSearchRequest(
                 revision=revision,
-                query=(
-                    "根据《蓝熊测试开发工程师篇》，"
-                    "预期具体有哪些要求？"
-                ),
+                query=("根据《蓝熊测试开发工程师篇》，预期具体有哪些要求？"),
                 target="预期",
                 relation="章节内容",
                 answer_type=RequestedAnswerType.SECTION_SUMMARY,

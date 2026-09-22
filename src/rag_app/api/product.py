@@ -39,6 +39,7 @@ from rag_app.product.catalog import provider_catalog
 from rag_app.product.control_store import validate_connection_metadata
 from rag_app.product.http_security import (
     RequestRateLimiter,
+    application_path,
     demo_http_request_allowed,
     effective_request_scheme,
     is_loopback,
@@ -271,6 +272,7 @@ def create_product_app(
         admin_token=internal_admin,
         debug_enabled=runtime.settings.debug_enabled,
     )
+    app.root_path = runtime.settings.root_path
     _register_auth_middleware(
         app,
         runtime,
@@ -334,6 +336,7 @@ def create_product_lifespan_app(
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        root_path=settings.root_path,
         lifespan=_lifespan,
     )
 
@@ -403,7 +406,7 @@ def _request_security_error(
             and origin.rstrip("/") not in runtime.settings.trusted_origins
         ):
             return _policy_error(403, "ORIGIN_DENIED", "请求来源不受信任。")
-    bucket = _rate_limit_bucket(request.url.path, request.method)
+    bucket = _rate_limit_bucket(application_path(request), request.method)
     if bucket is None:
         return None
     if limiter.allow(peer or "unknown", bucket, limit=_RATE_LIMITS[bucket]):
@@ -442,7 +445,7 @@ def _apply_security_headers(
     response.headers["Permissions-Policy"] = (
         "camera=(), microphone=(), geolocation=()"
     )
-    if request.url.path.startswith("/api/"):
+    if application_path(request).startswith(("/api/", "/sso/")):
         cache_control = response.headers.get("Cache-Control", "")
         directives = {
             item.strip().casefold() for item in cache_control.split(",")
@@ -467,7 +470,7 @@ def _authenticate_request(
     config: _AuthConfig,
 ) -> StarletteResponse | None:
     """验证 Cookie 或外部 Token，并注入进程内 P09 Token。"""
-    path = request.url.path
+    path = application_path(request)
     if not path.startswith("/api/v1") or (
         path == "/api/v1/console/session" and request.method == "POST"
     ):
@@ -549,6 +552,8 @@ def _register_product_routes(app: FastAPI, runtime: ProductRuntime) -> None:
 
 
 def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:
+    cookie_path = runtime.settings.root_path or "/"
+
     @app.post("/api/v1/console/session", tags=["console-session"])
     def _login(
         body: SessionRequest,
@@ -570,7 +575,7 @@ def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             ),
             samesite="lax",
             max_age=runtime.sessions.ttl_seconds,
-            path="/",
+            path=cookie_path,
         )
         return {
             "session_id": session_id,
@@ -594,7 +599,7 @@ def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             ),
             samesite="lax",
             max_age=runtime.sessions.ttl_seconds,
-            path="/",
+            path=cookie_path,
         )
         return {
             "authenticated": True,
@@ -624,7 +629,7 @@ def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             ),
             samesite="lax",
             max_age=runtime.sessions.ttl_seconds,
-            path="/",
+            path=cookie_path,
         )
         return {
             "session_id": session_id,
@@ -637,7 +642,7 @@ def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         token = request.cookies.get(SESSION_COOKIE)
         if token:
             runtime.auth.revoke_session(token)
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(SESSION_COOKIE, path=cookie_path)
         response.status_code = 204
         return response
 

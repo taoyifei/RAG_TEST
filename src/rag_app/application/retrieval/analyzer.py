@@ -69,6 +69,7 @@ _NEGATIONS = (
     "without",
     "never",
 )
+_TERMINAL_INTERROGATIVE_BU = re.compile(r"不[呢吗呀啊]?[?？]?$")
 _QUALIFIER = re.compile(
     r"仅限|仅仅|只限|只有|至少|至多|最多|最少|不超过|不低于|"
     r"不少于|不高于|超过|低于|高于|大于|小于|之前|之后|以前|"
@@ -126,7 +127,12 @@ class QueryAnalyzer:
         units = tuple(dict.fromkeys(_UNITS.findall(signal_text)))
         dates = tuple(dict.fromkeys(_DATE_VERSION.findall(signal_text)))
         structural = tuple(term for term in _TABLE_TERMS if term in folded)
-        negations = tuple(term for term in _NEGATIONS if term in folded)
+        negations = tuple(
+            dict.fromkeys(
+                raw
+                for _start, _end, raw in _negation_occurrences(signal_text)
+            )
+        )
         language: list[str] = []
         if any("\u3400" <= char <= "\u9fff" for char in normalized):
             language.append("zh")
@@ -333,11 +339,10 @@ def _query_constraints(text: str) -> tuple[QueryConstraint, ...]:
             ):
                 continue
             matches.append((start, end, kind, raw))
-    for signal in _NEGATIONS:
-        matches.extend(
-            ((match.start(), match.end(), ConstraintKind.NEGATION, match[0]))
-            for match in re.finditer(re.escape(signal), text, re.IGNORECASE)
-        )
+    matches.extend(
+        (start, end, ConstraintKind.NEGATION, raw)
+        for start, end, raw in _negation_occurrences(text)
+    )
     unique = {
         (start, end, kind, raw.casefold()): QueryConstraint(
             kind=kind,
@@ -355,6 +360,26 @@ def _query_constraints(text: str) -> tuple[QueryConstraint, ...]:
             unique, key=lambda item: (item[0], item[1], item[2].value)
         )
     )
+
+
+def _negation_occurrences(text: str) -> tuple[tuple[int, int, str], ...]:
+    """提取陈述性否定，排除口语句尾表示询问的“报不”。"""
+    terminal = _TERMINAL_INTERROGATIVE_BU.search(text)
+    terminal_start = terminal.start() if terminal is not None else None
+    matches: list[tuple[int, int, str]] = []
+    occupied: list[tuple[int, int]] = []
+    for signal in _NEGATIONS:
+        for match in re.finditer(re.escape(signal), text, re.IGNORECASE):
+            if signal == "不" and match.start() == terminal_start:
+                continue
+            if any(
+                start <= match.start() and match.end() <= end
+                for start, end in occupied
+            ):
+                continue
+            matches.append((match.start(), match.end(), match[0]))
+            occupied.append(match.span())
+    return tuple(sorted(matches))
 
 
 __all__ = ["QueryAnalyzer"]

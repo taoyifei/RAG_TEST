@@ -8,6 +8,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
+from rag_app.product.http_security import application_path
+
 MODEL_CONFIGURATION_LOCKED = "MODEL_CONFIGURATION_LOCKED"
 _LOCKED_MESSAGE = "湾事通模式下模型配置由服务端初始化流程管理。"
 _LOCKED_ROUTES = (
@@ -51,7 +53,8 @@ def model_configuration_lock_response(request: Request) -> Response | None:
     if not getattr(request.app.state, "wanshitong_enabled", False):
         return None
     if not any(
-        request.method == method and pattern.fullmatch(request.url.path)
+        request.method == method
+        and pattern.fullmatch(application_path(request))
         for method, pattern in _LOCKED_ROUTES
     ):
         return None

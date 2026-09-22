@@ -1,0 +1,70 @@
+{
+  "": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WB08R-03R2 regression audit case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "source_dataset",
+    "question",
+    "question_sha256",
+    "context_question",
+    "question_style",
+    "expected_behavior",
+    "audit_categories"
+  ],
+  "properties": {
+    "case_id": {
+      "type": "string",
+      "pattern": "^WB08R-[FNA]-[0-9]{3}$"
+    },
+    "source_dataset": {
+      "enum": [
+        "formal-54.ndjson",
+        "natural-60.ndjson",
+        "adversarial-30.ndjson"
+      ]
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1
+    },
+    "question_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "context_question": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "question_style": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expected_behavior": {
+      "enum": [
+        "ANSWER",
+        "LIMITED",
+        "REFUSE"
+      ]
+    },
+    "audit_categories": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "EVIDENCE_PRESENT_BUT_REJECTED",
+          "CONTEXT_FOLLOW_UP",
+          "UNSUPPORTED_ACCEPTED_INFERENCE",
+          "FALSE_LIMITED",
+          "ANSWER_SHAPE_WRONG",
+          "SAFE_REFUSAL",
+          "RETRIEVAL_MISS"
+        ]
+      }
+    }
+  }
+}

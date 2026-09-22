@@ -8,7 +8,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 from rag_app.product.catalog import validate_model
@@ -30,11 +30,44 @@ _RERANKER_MODEL = "RAG_WANSHITONG_RERANKER_MODEL"
 _RERANKER_PROTOCOL = "RAG_WANSHITONG_RERANKER_PROTOCOL"
 _RERANKER_PATH = "RAG_WANSHITONG_RERANKER_PATH"
 _LLM_MODEL = "RAG_WANSHITONG_LLM_MODEL"
+_LLM_DISABLE_THINKING_SUPPORTED = (
+    "RAG_WANSHITONG_LLM_DISABLE_THINKING_SUPPORTED"
+)
+_LLM_DISABLE_THINKING = "RAG_WANSHITONG_LLM_DISABLE_THINKING"
+_LLM_STRUCTURED_OUTPUT_MODE = "RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE"
+_LLM_STRUCTURED_PROFILE_REVISION = (
+    "RAG_WANSHITONG_LLM_STRUCTURED_PROFILE_REVISION"
+)
+_LLM_STRUCTURED_SERVICE_IDENTITY_SHA256 = (
+    "RAG_WANSHITONG_LLM_STRUCTURED_SERVICE_IDENTITY_SHA256"
+)
+_LLM_STRUCTURED_CHAT_TEMPLATE_REVISION = (
+    "RAG_WANSHITONG_LLM_STRUCTURED_CHAT_TEMPLATE_REVISION"
+)
+_LLM_STRUCTURED_GRAMMAR_BACKEND = (
+    "RAG_WANSHITONG_LLM_STRUCTURED_GRAMMAR_BACKEND"
+)
+_LLM_STRUCTURED_QUALIFICATION_EVIDENCE_SHA256 = (
+    "RAG_WANSHITONG_LLM_STRUCTURED_QUALIFICATION_EVIDENCE_SHA256"
+)
+_LLM_STRUCTURED_ALLOW_UNIQUE_ITEMS = (
+    "RAG_WANSHITONG_LLM_STRUCTURED_ALLOW_UNIQUE_ITEMS"
+)
+_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS = (
+    "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS"
+)
+_LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS = (
+    "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS"
+)
+_LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS = (
+    "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS"
+)
 _CREDENTIAL_ENV_SUFFIX = "_CREDENTIAL_ENV"
 _API_KEY_FILE_SUFFIX = "_API_KEY_FILE"
 _ENVIRONMENT_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,127}$")
 _MAX_EMBEDDING_DIMENSION = 65536
 _MAX_SECRET_LENGTH = 4096
+_MAX_IDENTITY_LENGTH = 160
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +127,20 @@ class InternalModelSettings:
     reranker_protocol: str = "tei"
     reranker_path: str = "/rerank"
     llm_model: str = "Qwen/Qwen3-8B-AWQ"
+    llm_disable_thinking_supported: bool = False
+    llm_disable_thinking: bool = False
+    llm_structured_output_mode: Literal[
+        "none", "response_format", "structured_outputs", "guided_json"
+    ] = "none"
+    llm_structured_profile_revision: str | None = None
+    llm_structured_service_identity_sha256: str | None = None
+    llm_structured_chat_template_revision: str | None = None
+    llm_structured_grammar_backend: str | None = None
+    llm_structured_qualification_evidence_sha256: str | None = None
+    llm_structured_allow_unique_items: bool | None = None
+    llm_field_resolution_max_output_tokens: int = 512
+    llm_field_resolution_timeout_seconds: float = 12.0
+    llm_field_resolution_total_deadline_seconds: float = 15.0
     embedding_credential: InternalCredentialSettings = field(
         default_factory=InternalCredentialSettings
     )
@@ -103,6 +150,10 @@ class InternalModelSettings:
     llm_credential: InternalCredentialSettings = field(
         default_factory=InternalCredentialSettings
     )
+
+    def __post_init__(self) -> None:
+        """所有构造入口都执行模型与结构化能力合同验证。"""
+        self._validate_models()
 
     @classmethod
     def from_environment(
@@ -126,9 +177,7 @@ class InternalModelSettings:
                 source.get(_EMBEDDING_DIMENSION, "1024"),
                 _EMBEDDING_DIMENSION,
             ),
-            reranker_model=source.get(
-                _RERANKER_MODEL, "Qwen3-Reranker-0.6B"
-            ),
+            reranker_model=source.get(_RERANKER_MODEL, "Qwen3-Reranker-0.6B"),
             reranker_protocol=normalize_rerank_protocol(
                 source.get(_RERANKER_PROTOCOL, "tei")
             ),
@@ -137,11 +186,62 @@ class InternalModelSettings:
                 source.get(_RERANKER_PROTOCOL, "tei"),
             ),
             llm_model=source.get(_LLM_MODEL, "Qwen/Qwen3-8B-AWQ"),
+            llm_disable_thinking_supported=_boolean(
+                source.get(_LLM_DISABLE_THINKING_SUPPORTED, "false"),
+                _LLM_DISABLE_THINKING_SUPPORTED,
+            ),
+            llm_disable_thinking=_boolean(
+                source.get(_LLM_DISABLE_THINKING, "false"),
+                _LLM_DISABLE_THINKING,
+            ),
+            llm_structured_output_mode=_structured_output_mode(
+                source.get(_LLM_STRUCTURED_OUTPUT_MODE, "none")
+            ),
+            llm_structured_profile_revision=_optional_text(
+                source.get(_LLM_STRUCTURED_PROFILE_REVISION)
+            ),
+            llm_structured_service_identity_sha256=_optional_sha256(
+                source.get(_LLM_STRUCTURED_SERVICE_IDENTITY_SHA256),
+                _LLM_STRUCTURED_SERVICE_IDENTITY_SHA256,
+            ),
+            llm_structured_chat_template_revision=_optional_text(
+                source.get(_LLM_STRUCTURED_CHAT_TEMPLATE_REVISION)
+            ),
+            llm_structured_grammar_backend=_optional_text(
+                source.get(_LLM_STRUCTURED_GRAMMAR_BACKEND)
+            ),
+            llm_structured_qualification_evidence_sha256=_optional_sha256(
+                source.get(_LLM_STRUCTURED_QUALIFICATION_EVIDENCE_SHA256),
+                _LLM_STRUCTURED_QUALIFICATION_EVIDENCE_SHA256,
+            ),
+            llm_structured_allow_unique_items=_optional_boolean(
+                source.get(_LLM_STRUCTURED_ALLOW_UNIQUE_ITEMS),
+                _LLM_STRUCTURED_ALLOW_UNIQUE_ITEMS,
+            ),
+            llm_field_resolution_max_output_tokens=_bounded_positive_int(
+                source.get(_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS, "512"),
+                _LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS,
+                maximum=1536,
+            ),
+            llm_field_resolution_timeout_seconds=_bounded_positive_float(
+                source.get(_LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS, "12"),
+                _LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS,
+                maximum=30.0,
+            ),
+            llm_field_resolution_total_deadline_seconds=(
+                _bounded_positive_float(
+                    source.get(
+                        _LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS,
+                        "15",
+                    ),
+                    _LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS,
+                    maximum=30.0,
+                )
+            ),
             embedding_credential=_credential(source, "EMBEDDING"),
             reranker_credential=_credential(source, "RERANKER"),
             llm_credential=_credential(source, "LLM"),
         )
-        settings._validate_models()
         if settings.uses_http and not mode.demo_allow_http:
             raise ValueError(
                 "内网 HTTP 端点要求显式设置 "
@@ -181,6 +281,32 @@ class InternalModelSettings:
         validate_model("openai-compatible", self.llm_model, "generation")
         if self.embedding_dimension > _MAX_EMBEDDING_DIMENSION:
             raise ValueError("Embedding Dimension 不能超过 65536。")
+        if (
+            self.llm_disable_thinking
+            and not self.llm_disable_thinking_supported
+        ):
+            raise ValueError("关闭 thinking 前必须确认 LLM 端点支持该参数。")
+        profile_values = (
+            self.llm_structured_profile_revision,
+            self.llm_structured_service_identity_sha256,
+            self.llm_structured_chat_template_revision,
+            self.llm_structured_grammar_backend,
+            self.llm_structured_qualification_evidence_sha256,
+        )
+        if self.llm_structured_output_mode == "none":
+            if any(profile_values) or (
+                self.llm_structured_allow_unique_items is not None
+            ):
+                raise ValueError("none 模式不能配置结构化输出能力合同。")
+        elif not all(profile_values) or (
+            self.llm_structured_allow_unique_items is None
+        ):
+            raise ValueError("结构化输出模式必须配置完整能力合同。")
+        if (
+            self.llm_field_resolution_total_deadline_seconds
+            < self.llm_field_resolution_timeout_seconds
+        ):
+            raise ValueError("字段解析总时限不得小于单次传输时限。")
 
 
 def _base_url(environment: Mapping[str, str], key: str) -> str:
@@ -203,6 +329,72 @@ def _positive_int(value: str, key: str) -> int:
     if parsed <= 0:
         raise ValueError(f"{key} 必须为正整数。")
     return parsed
+
+
+def _bounded_positive_int(value: str, key: str, *, maximum: int) -> int:
+    parsed = _positive_int(value, key)
+    if parsed > maximum:
+        raise ValueError(f"{key} 不能超过 {maximum}。")
+    return parsed
+
+
+def _bounded_positive_float(value: str, key: str, *, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except ValueError:
+        raise ValueError(f"{key} 必须为正数。") from None
+    if not 0 < parsed <= maximum:
+        raise ValueError(f"{key} 必须大于 0 且不能超过 {maximum:g}。")
+    return parsed
+
+
+def _optional_text(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    stripped = value.strip()
+    if len(stripped) > _MAX_IDENTITY_LENGTH or "\x00" in stripped:
+        raise ValueError("结构化输出身份字段无效。")
+    return stripped
+
+
+def _optional_sha256(value: str | None, key: str) -> str | None:
+    stripped = _optional_text(value)
+    if stripped is None:
+        return None
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", stripped):
+        raise ValueError(f"{key} 必须是带 sha256: 前缀的摘要。")
+    return stripped
+
+
+def _boolean(value: str, key: str) -> bool:
+    normalized = value.strip().casefold()
+    if normalized not in {"true", "false"}:
+        raise ValueError(f"{key} 必须为 true 或 false。")
+    return normalized == "true"
+
+
+def _optional_boolean(value: str | None, key: str) -> bool | None:
+    """解析能力合同中的显式布尔值，缺失时保留未资格化状态。"""
+    if value is None or not value.strip():
+        return None
+    return _boolean(value, key)
+
+
+def _structured_output_mode(
+    value: str,
+) -> Literal["none", "response_format", "structured_outputs", "guided_json"]:
+    normalized = value.strip().casefold()
+    if normalized not in {
+        "none",
+        "response_format",
+        "structured_outputs",
+        "guided_json",
+    }:
+        raise ValueError(f"{_LLM_STRUCTURED_OUTPUT_MODE} 配置无效。")
+    return cast(
+        Literal["none", "response_format", "structured_outputs", "guided_json"],
+        normalized,
+    )
 
 
 def _credential(

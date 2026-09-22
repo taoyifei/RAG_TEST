@@ -8,6 +8,7 @@ import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal, Protocol, runtime_checkable
 
 from rag_app.core.errors import PolicyDenied
 from rag_app.product.crypto import MasterKey
@@ -29,11 +30,17 @@ _OWNER_DOMAIN = b"wanshitong/public-session/owner/v1"
 
 @dataclass(frozen=True, slots=True)
 class PublicSessionPrincipal:
-    """已验证匿名 SID 对应的内部主体。"""
+    """已验证公共 SID 对应的内部主体。"""
 
     session_id: str
     owner_id: str
     expires_at: int
+    user_id: str | None = None
+    username: str | None = None
+    nick_name: str | None = None
+    dept_id: str | None = None
+    roles: tuple[str, ...] = ()
+    permissions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -44,6 +51,42 @@ class PublicSessionIssue:
     cookie_value: str
     csrf_token: str
     expires_in: int
+
+
+@runtime_checkable
+class PublicSessionProvider(Protocol):
+    """公共 Facade 可消费的匿名或 SSO 会话合同。"""
+
+    @property
+    def cookie_name(self) -> str:
+        """返回浏览器会话 Cookie 名。"""
+
+    @property
+    def cookie_path(self) -> str:
+        """返回浏览器会话 Cookie Path。"""
+
+    @property
+    def cookie_samesite(self) -> Literal["lax", "strict"]:
+        """返回浏览器会话 SameSite 策略。"""
+
+    @property
+    def set_cookie_on_bootstrap(self) -> bool:
+        """说明 bootstrap 是否需要写回会话 Cookie。"""
+
+    @property
+    def deployment_id(self) -> str | None:
+        """返回多标签通知使用的稳定部署标识。"""
+
+    def bootstrap(self, cookie_value: str | None) -> PublicSessionIssue:
+        """恢复或签发 Facade bootstrap 所需会话。"""
+
+    def authenticate(
+        self, cookie_value: str, csrf_token: str
+    ) -> PublicSessionPrincipal:
+        """验证 Cookie 与 CSRF。"""
+
+    def validate_cookie(self, cookie_value: str) -> PublicSessionPrincipal:
+        """只验证 Cookie 与有效期。"""
 
 
 class PublicSessionService:
@@ -74,6 +117,35 @@ class PublicSessionService:
         self._owner_key = _derive_key(master_key, _OWNER_DOMAIN)
         self._ttl_seconds = ttl_seconds
         self._clock = clock
+
+    @property
+    def cookie_name(self) -> str:
+        """返回匿名会话 Cookie 名。"""
+        return PUBLIC_SESSION_COOKIE
+
+    @property
+    def cookie_path(self) -> str:
+        """保持现有匿名 Facade 的最窄 Cookie Path。"""
+        return "/api/public"
+
+    @property
+    def cookie_samesite(self) -> Literal["strict"]:
+        """匿名模式继续使用 Strict。"""
+        return "strict"
+
+    @property
+    def set_cookie_on_bootstrap(self) -> bool:
+        """匿名 bootstrap 需要签发或恢复 Cookie。"""
+        return True
+
+    @property
+    def deployment_id(self) -> None:
+        """匿名开发模式不参与 SSO 多标签命名空间。"""
+        return None
+
+    def bootstrap(self, cookie_value: str | None) -> PublicSessionIssue:
+        """实现公共 Facade 的会话提供者合同。"""
+        return self.issue_or_resume(cookie_value)
 
     def issue_or_resume(self, cookie_value: str | None) -> PublicSessionIssue:
         """恢复仍有效的匿名 SID，或签发一个新的服务端 SID。
@@ -213,5 +285,6 @@ __all__ = [
     "PUBLIC_SESSION_COOKIE",
     "PublicSessionIssue",
     "PublicSessionPrincipal",
+    "PublicSessionProvider",
     "PublicSessionService",
 ]

@@ -1,0 +1,254 @@
+{
+  "dataset_revision": "wanshitong-v2-20260917",
+  "created_at": "2026-09-17",
+  "formal_source_status": "按旧版 54 题构成规则重建；未发现上一版已冻结的 diagnostic-54.ndjson",
+  "known_exposure": {
+    "formal_regression_cases_in_preexisting_public_suggestions": 20,
+    "source": "frontend/src/public/suggestedQuestions.ts at base_sha",
+    "interpretation": "只用于已见问法回归，不用于未见自然问法的泛化质量声明"
+  },
+  "files": {
+    "formal-54.ndjson": {
+      "case_count": 54,
+      "sha256": "19f785acdde997ee4ce53aefcb461fa16854c05176c1c1d02e12bc51b16b582f"
+    },
+    "natural-60.ndjson": {
+      "case_count": 60,
+      "sha256": "07c92c95d4bf695394104f688e72941ef0724172836edc392823c277954d9807"
+    },
+    "adversarial-30.ndjson": {
+      "case_count": 30,
+      "sha256": "0b7c95d773329b741d9984f7053fc648e596e31f8c0d7b7fa05947bac8687e7b"
+    },
+    "latency-24.ndjson": {
+      "case_count": 24,
+      "sha256": "c50ddba7e230bd82b0bf7d339335e671ab9b3b1323e569e2c84e7bda547cc029"
+    }
+  },
+  "case_identity": {
+    "WB08R-F-001": "9a0c50fd030181ea192b9acb0d70b3f0b2725d9563ed35f1affacad4dc8ca82f",
+    "WB08R-F-002": "2c29123b417403be2857b5d72d14f5963de68a79e67841515a2533055efec837",
+    "WB08R-F-003": "087e198c0da69b215f1f59a5b38a79aebc2d478e7573f2f1ea9a3a16f011450a",
+    "WB08R-F-004": "654891e85d1c346690d415c9e2e6bbe2856d25b81644c6f431a823add9d89633",
+    "WB08R-F-005": "83e8180c472722bbdd51f31b0a38e2ba7529d1d14f81c66bfc3016f25e0b5cd8",
+    "WB08R-F-006": "df61f5570d0603a8aab6c650c3e4e771840a7b9447f96811da18a208dfdc79db",
+    "WB08R-F-007": "135af68ad09183eb886e8bb949c8524f27004a1c3e73c2c4dbe6d33998542827",
+    "WB08R-F-008": "8430dd1729077fc0bb1624964cac42f056da17cc3da98f90a1ee24b75229868d",
+    "WB08R-F-009": "1f4b3c11a6ee6436aede0fc1154fc527134284c928d854481218a7c4c8650323",
+    "WB08R-F-010": "5d81ee29dba8bd4ce4c9873da2c99116749108b662959305648d5e6432ac2cf7",
+    "WB08R-F-011": "fed0372e9468c901a3e4e1eba2806620608ca2da3d947ee6a43b23404b8f8f4f",
+    "WB08R-F-012": "c4a7d0d1be56631e43a70b81abd772e1b6641702569444516e5535a554f060b9",
+    "WB08R-F-013": "2f2dbf114c12964668a518ed464972c011a5854d490201cfa4fcb0b2ed07bc1b",
+    "WB08R-F-014": "b85c21d97d0c99af6a5eb5b02524348dabda2af0b86102a35d7f862c7e1c91a7",
+    "WB08R-F-015": "4c52a4f4674dc8d0fff177a87f43b320603b8d907b3d94a5c269317617e6d642",
+    "WB08R-F-016": "95b2967ce8643ff88650b0e27a42d9ed54e9bc3446087fbc72e0e1e6163479c9",
+    "WB08R-F-017": "29cdf8cc9134211e1ad6118aaf7c95bb81d0af11eb8bed1d91bf2ce0b9f9e0c8",
+    "WB08R-F-018": "82eaab1da0b11bb36ab8e1cf03b305d4da2c8d3e7d3d241010c5ce88ca218986",
+    "WB08R-F-019": "5a84c106f2248fd0a6c8d4d95f5d2d0b81b79afac88ec867df5f8a58b9de32d0",
+    "WB08R-F-020": "0c95b0ea4182b155e713f09ac62e853e29fca49810bd1e0ba033a20ad740aed4",
+    "WB08R-F-021": "4c0d25cccce85afbec43b16849349baf25d3273641e84693c68f9af8d5656224",
+    "WB08R-F-022": "b1771a199f4c53368c877111afc86276db57d98f12de2f5c30bbe859f99cf605",
+    "WB08R-F-023": "81fe070aba4bddfdb9e1a8e6f27cdf72b6d70cce8e867f85965c2ff91c9c890b",
+    "WB08R-F-024": "eb8247b1d25bfb76324181be9920fdd1f7671c26d7d9dd19985ff284329c6a74",
+    "WB08R-F-025": "f7889044a66084e6045fa01f997dd5e74571657643f450beba9a65bcbb96b6c7",
+    "WB08R-F-026": "b26eea011a83ca397c6edef7f0aab6fb552f32c8b53585df89abfbafdc81b9e3",
+    "WB08R-F-027": "76f354510e71d178ad3cf5d81c90420b4d0cb27a2c813dc5017fb3cb91124f6d",
+    "WB08R-F-028": "2e2d1c860c025e0e4758f889c18c70f6d5ed17ac58db21ba91844b1e11181074",
+    "WB08R-F-029": "3098d502228d0084742686d34144a9a14149439a5d3c2f19aeb933fc0cd2f44e",
+    "WB08R-F-030": "801786d0a4d795ca623f21f3da069a356961e2ed42aa82a4347bbf393c672bfb",
+    "WB08R-F-031": "b9249cf4dfefba90ce387fbcd429b6195938d336a667fe4fca6d4fb2bc9dccca",
+    "WB08R-F-032": "ff188d2b5277fe5b6686104c69deaf353ffcf67cc109048ea590acfd3a08e817",
+    "WB08R-F-033": "296c7e90ff4e80f9ba60aaf83c4cf151f028b0181dd968abdf9a0dde21c8325a",
+    "WB08R-F-034": "d10f06603d8f6bafbcf74184d1c69cf3484d87426debf5004ce0d2542a0dac20",
+    "WB08R-F-035": "9388d5b6836aa818e16e778a29937c61533cb643a20c8b8b939b8da0d18af19d",
+    "WB08R-F-036": "9f071673d33f4e77d7396c71b460b0b2d08e752ea4a9dae7b6bf2efdf44a50a2",
+    "WB08R-F-037": "687eb2b944f9607ac701ea277ef1a18fd1e383e0d8fe6a2a2025fd61e53abfc5",
+    "WB08R-F-038": "c94685d01d524085ed1020c36c8669c0436a5bb8bed21db6a3b4399aafd30b51",
+    "WB08R-F-039": "eba5d3687f9ee29cd0e182875e2a5af5661e518e4684a41960c1cee03d1db91e",
+    "WB08R-F-040": "ac239a7d063933101ef006ce21f7289caa441795747f941da00f4e495b23b5a2",
+    "WB08R-F-041": "c87d6d2603d63e174d64c0395e8d0a26724cb3ec24e0fe2f74bc2840638f6988",
+    "WB08R-F-042": "3f25dc0bacd1e75b3982bb627481d15fc38def37c62c5c870069553191eef33c",
+    "WB08R-F-043": "e4cbc9c3a5a84a3e62257841f0ca2cc0e714cdd20eff253e4f0e68113a15a5e3",
+    "WB08R-F-044": "97cd14774eaa7dad22b84d6381ded89da82d2f751cba0b61f33257ab620dd39a",
+    "WB08R-F-045": "1a7ce730b17422ca92aed8a67805710e947fa03ffc1c00a98e22d081f2df2854",
+    "WB08R-F-046": "cfbe0c8be128275f0c30531d98af733a342a61df6f1a6b23bf6b795bab36f87a",
+    "WB08R-F-047": "cc6842d3cb951653671401fa9ec367ac729c36cb4ab30abfa4a6ef1b77271222",
+    "WB08R-F-048": "d0751f42487920d46ada9e562bd1e40f2906674bca935a7fc527c42d296550cc",
+    "WB08R-F-049": "3265014dc21f9b0fcc8640c89bd2f25b3c54845b7be08b20a3866fc6f433d4c2",
+    "WB08R-F-050": "157cce54c410dafd33561bd222d6497e0f3f8b67d52a07b26dff097af6c7a2d3",
+    "WB08R-F-051": "1fb7b0a1a8095ef33344b9bed8c0d30130d6c1b7dc719b759f7434f21fe4b3a9",
+    "WB08R-F-052": "2454a29ce0ea031a6df788e8544794691b4c8659e44eee6a84e8dd02d52914bd",
+    "WB08R-F-053": "62c9d78697892d6bb8756796e06e9d069d610b993013e071de7227e3eca1545d",
+    "WB08R-F-054": "f2b6aa84d63bef57c11b3b83625363dc2a80ee337f6c22c82748db445d89b306",
+    "WB08R-N-001": "7fa8e242cdccd227a2abe2ce9cdc857a86b902067d90ba49364d6acaa81869e8",
+    "WB08R-N-002": "a472657d4ef7b121b142d0d8d09f16e77be64277a31eb53304137398513ec503",
+    "WB08R-N-003": "1e9a819a521b9b7a395d4ba50d8430a33f350a85c0046b2776e5c5015fa23f87",
+    "WB08R-N-004": "e5c436a962f00a1be694b32ea2d96d8360c66975a4429ad910d036879fc3902d",
+    "WB08R-N-005": "f5d15d4f4813d011eea40c00ae543d07d91743310f3937f073aaa14bd1e4fe9f",
+    "WB08R-N-006": "b5afc02ceabbcfa79a2f0b9c1fb951100d754ad827b714378fa33bc2134d1b85",
+    "WB08R-N-007": "cf21d57afa49388db62af3bdf97c90e61813554becb5732e19254eb1977547bd",
+    "WB08R-N-008": "4938c028e0c7b904d0206fe6da8cab03bee8d89a068ac95c16923a02205dcf34",
+    "WB08R-N-009": "78126ca13da273fc8e074b1f573147584075511b14f8ceb0171ecf9659d3a744",
+    "WB08R-N-010": "54eb119a787ec43ba858238ec626bed912fea6f3ce3f9af0f4fdeb01cd3c23fd",
+    "WB08R-N-011": "5216e36e0f08b2d1da0a68e4f9daf61a898d6fb95dc0547151e1d58325b84099",
+    "WB08R-N-012": "99e940196a7fd91541499bc9fc0a5db25282a6aba2153556abc1adac648f076a",
+    "WB08R-N-013": "a748c7bc278d16b09d3bcb59bccc79d0b6dfd64a1b2abf4f8e94bfe12218d9b0",
+    "WB08R-N-014": "39b96b9ac3282bf984b1e026688fedeabecc303e18a36df945939734ea36ff1f",
+    "WB08R-N-015": "2e2d858e2478398beb8e80ad466801d2758a42bb18a0ace8d12948962c5795e9",
+    "WB08R-N-016": "51efe0df4e513c7fd8b7679bf285c31e26bae3713f90bf4d2a6569ccf3a3a516",
+    "WB08R-N-017": "f26c2a707e2e18fa586614b0dcebadbe2ce05f9b093748a0d25d47b262cf4737",
+    "WB08R-N-018": "15f26ccf522563850ef4ad928b883962748bd8bf6df9d96086983a8e30ebb694",
+    "WB08R-N-019": "6b473cfc7d4540d67fc6c8fdb4d403cec282612891278d91e11005433975075c",
+    "WB08R-N-020": "4831f57257f7b07393ec7f9acea76e3249179e21f48073f385091eb73d1f0134",
+    "WB08R-N-021": "393798f7c08bf8ad410e1dfb98a7a7698107f1b4e4eac92a1899dbfd58364a6f",
+    "WB08R-N-022": "bb0b9c101fe815f077aa7194d724a4d9f725cca43dec1291c272299bdbd6c991",
+    "WB08R-N-023": "674813c3c3b6dfb8504a11b6d70e5f3583252add936969fd3c8982ecd876637b",
+    "WB08R-N-024": "039573361b98ffebe5e5f733cbf75610d1176554545b4726e5070b487bd49a83",
+    "WB08R-N-025": "7d6fec412483223dc611e263e142aca2193d46a1c6833912c08e2c5d50e35811",
+    "WB08R-N-026": "a762631c2cf9374c62bfe75e9e1760207a54457bb3a3d96da6763121d923efcc",
+    "WB08R-N-027": "23153111a23195c9c80935b7a9677e7849488388b728d01e5177aac6a4a82b08",
+    "WB08R-N-028": "c337e1e84145e11754ec214cff8b8cee48842cebc86f900721c1835089fdc3c1",
+    "WB08R-N-029": "1e4122d9c5085cac77c77269803d9a2cfe42d2302d96fa12b668724ed51b09ea",
+    "WB08R-N-030": "516807e6f3d46a97d0dd2b1bc64efbd35210dbee0d1f1d61047bbaf23a8763ac",
+    "WB08R-N-031": "073e40860ed7f569b31dabf1d211cabed827e2989faf7267fa16e8b3832f1498",
+    "WB08R-N-032": "661081291c553d30c37590dad09e587d027e5054818b0b67d82de14f6d046e72",
+    "WB08R-N-033": "163680c74b59b50d668e366273fde44c11c0f5f6d07c2f07637ecfc3fb6bfe71",
+    "WB08R-N-034": "99ad443b1da5acf9ffea80cd49eb20da2d5b225e962ff1f44319d8a2cf44fe32",
+    "WB08R-N-035": "ee4625f426b130bcaf2184741be33f1cea90d54f7d9577cb5003ff0d2384dea4",
+    "WB08R-N-036": "0d928becfbe71f5f034b9b337883fb99c99bb0a5e648d33cec766b7b6903acb1",
+    "WB08R-N-037": "7b5a2df0625992812df3046a60dbd71e455ccc4646233fd609f70e0f68501053",
+    "WB08R-N-038": "6ac06cff4b343ed242fccecc68c4b4dd1deb646129e2635991f0d034e4956db0",
+    "WB08R-N-039": "877e689d899e9cf096e3ed50040c85b1e85d18cc916294d7d73cc0773890436e",
+    "WB08R-N-040": "23718ad3e635e2b3b5558841a3a447aeecf8cdb4615a01093e1bc0545d972cbc",
+    "WB08R-N-041": "3dc62e5fbc5c36e66bcbf8af06c9896b0b33f86497f72a78a530f5d1419719bc",
+    "WB08R-N-042": "22b473f68f512491231aae7b8d2c5bbc2e7a0781f9615b9f4193e76937642e8e",
+    "WB08R-N-043": "2621c01bcea62d0b3512e7c422bc60d945e1c0bcbbcd86e718b5a18206034227",
+    "WB08R-N-044": "0be0f27eeb9eb8e7290fc6e2b1835a946f2c6505b880bd1795992cc0f495a0fa",
+    "WB08R-N-045": "350e8e67557ae0afd47522145c23f988bf6ccd45975f9dc0dd57df04e3e7ef6a",
+    "WB08R-N-046": "66dc6b21e98fc871c9998baec7e98869ba06557117d7cf8cea4710fa041393e6",
+    "WB08R-N-047": "b776f15446350480f60e725ec32a3a829a0a5a552526028656f8c52f4a1de8cd",
+    "WB08R-N-048": "0053e1af9942766e982d9cf3ba8c0967824da89659d283cfcab5b12e0aa74ac8",
+    "WB08R-N-049": "c179f9311ec92547228146c1c3c81797f3ce7948d1a29fa5f6b4461d27549bf0",
+    "WB08R-N-050": "0bb94968f28fef9fe792ecb356a40bfb731fdbc19e80a1ae20ca2db27a816ec6",
+    "WB08R-N-051": "aec53ff32e9d74cba528bdd93fdb96ac615fc88ce76c770d8532575829342cf4",
+    "WB08R-N-052": "07053fce7b748a172717031f2e3958c93ce2cf3e81f8eb0189312f972eb58aca",
+    "WB08R-N-053": "7d3790ba1c6fe235363f6dad686bfe6483654b73f1c63f3100a858b07533f45b",
+    "WB08R-N-054": "17f420ebbb2fe96e9e516acd53a337ecc8e963778062224d9e3b87cb18d7f41b",
+    "WB08R-N-055": "3430b7d0f5d741b460aef78e440911e06ed8eb7d1a38eacf9553a6b311759be7",
+    "WB08R-N-056": "2858144b153c45ec63bd8eb92bf21209b2cfae3506f2e0528eb2c138a3f20f05",
+    "WB08R-N-057": "514d17c4fd33e302aeffe59119fe6d8e005a06edfe927a17f01f882d4ecc5119",
+    "WB08R-N-058": "f47c7534ea6d0c7e405b16422aa33398fe56ae24079f9c5867a84bce339c3b2c",
+    "WB08R-N-059": "6925f33be3af0df7a64b89c46789920aa3cd223317207ee87b1502404da87eb2",
+    "WB08R-N-060": "abb6b1f1cd8535295fc2ac8de921a734f90c18f6eeb0c04128db0a7f4beb032b",
+    "WB08R-A-001": "562e06f94e1c4db4ae9f7e5bdc132ac1e198296f38cda115b972544ba378aa0d",
+    "WB08R-A-002": "5e96505938e9eaf3ea5e1910bc0410c870d7693e6155d24a59f936dc03822a62",
+    "WB08R-A-003": "ca1650c63ebda7966140d015d2b757c0d4b8dd49611944b7ec8feb2d4c7f296f",
+    "WB08R-A-004": "b28b58debf7f1cf22d593c87a945ca2279e379ca3f6dfaac8140851a271db0db",
+    "WB08R-A-005": "b230766185d99ba28f7dda4321d3de76befcf5c8757b8b7fbe7e3ba7affb6120",
+    "WB08R-A-006": "58a1e7b5ab424e63136b7fb2f8a75a5631f1b8892b024ae5ee950c5150ce0da5",
+    "WB08R-A-007": "55030e50ec89ad20124aa1ea9e95d593f9a27f13b85ec327c6fe7b7f3096eecf",
+    "WB08R-A-008": "8a6f66918055d14f5c2c9240d29dcc81739ef27b1cebd9a29eadec22aa0b68b4",
+    "WB08R-A-009": "c3c0f6b0d7cc18d526d81ccba70a3d7147d8c5312b50b8a4769ef1838eae5dbb",
+    "WB08R-A-010": "c8c9c4aed340c46bb30732e0b183a1978669068207487e1d8d83a751c68319d3",
+    "WB08R-A-011": "65e8fc57dd64817d11c55593dcb1d19aece925c3b52c7d0559646884aae709d8",
+    "WB08R-A-012": "64819241ce4e37a642a88c5d97642130d5623de084296fe341bc6af8ab0185ab",
+    "WB08R-A-013": "2ae639d9e0f2fc885ba1ef6009713cb0e6d41a5ffc42475930db606564a592fa",
+    "WB08R-A-014": "e5b907b1d59bac329fa4ef02a59b687944190add665a4eda0b15a66396b249aa",
+    "WB08R-A-015": "3c0991fc6e69f1cfab3884590e1b66f03d1b151ad2857c81208da87fbc562950",
+    "WB08R-A-016": "69683a7fbd45225b4a4274f95b47164a8db154357e77a994de30f3b541c48178",
+    "WB08R-A-017": "255571bd9d33acb0b2b09c571c9ea716399ed01790715601fa8ee9b7d0305491",
+    "WB08R-A-018": "27147d746003b3753d7460e84a36c6d4711b9feb627df8b70afc1d9f74824890",
+    "WB08R-A-019": "28530a776679c471f3ea50881a72c6bd5755e27229ec725b77c31363662fe9b7",
+    "WB08R-A-020": "2e2fea600239b11c4772adc3d9a9622a3ebcc3e0ecdaaa9c19e8b259ea5c2b4d",
+    "WB08R-A-021": "3ae7ca2f68b3710d672faedee389b33f38737e6e2f9371295c48b2a8b0944192",
+    "WB08R-A-022": "92342fbe3bb29e33b8018451a02f5c19553bf4def120de687018aa32c915cfa2",
+    "WB08R-A-023": "0d9f5da396febd335ec0d643702e9727323a652ac1f78efe7148ce056d876f97",
+    "WB08R-A-024": "3b5f5a0fde50cc1124d5b22ae351a5d7fa2989861797dd61edbb0c7012257fd3",
+    "WB08R-A-025": "a5f6b6e0c2099f8a172e413f48cdf750a8244a93c944c9f62cf7122525b8b274",
+    "WB08R-A-026": "9631df4906851710f2337a97a8afbe21dfdd0f3974f5fed5515e864e8fc7eaf5",
+    "WB08R-A-027": "fc4c00fb2a930a36049fe138c16acab6de9e303d64afa9622dac4f32416769e5",
+    "WB08R-A-028": "f4033be98f73392543f6a85eaf3b48a32041073900425a06605bc7fc1205d638",
+    "WB08R-A-029": "3ae157d9da6eda9fa974a2bf1f31ef4eb0765ae12b72cd500458e329962400f5",
+    "WB08R-A-030": "14da2a355b7624e05ccb95b04aebc5dbc031e720a0f59029e2d3a65d906c9424"
+  },
+  "provenance": {
+    "external_references": [
+      {
+        "filename": "03_REFERENCE_真实用户评测设计.md",
+        "sha256": "f534a581082749dc817adbd2af23aa50da042b52f4f43236ab764ab62646f6b4"
+      },
+      {
+        "filename": "WB08-00_Goal_冻结评测集与诊断合同.txt",
+        "sha256": "1de3dd1f4c80e57469dd7a6fd5d64cc995169bec8f0de2455eb6969996ede4df"
+      },
+      {
+        "filename": "01_REFERENCE_19_CASE_DECISIONS.txt",
+        "sha256": "a520284fab31f9c32ac5f67ece9ea28458394ad927c447bd3812df6ebbbe199e"
+      }
+    ],
+    "formal_question_bank": {
+      "filename": ".wb07r-question-bank-149-v4-all-real.json",
+      "sha256": "ba975a9578c3f4ee1a8eed0cf39b7f78c76e10cc058a2db896b9cf4662a92632"
+    },
+    "five_wb07r_rounds": [
+      {
+        "filename": ".wb07r-question-bank-149-v4-all-real.ndjson",
+        "sha256": "aa8d6f6d4db3d6442de38280f74670292b0db83c4cd3fda26c0a5f0aa6313a00"
+      },
+      {
+        "filename": ".wb07r-question-bank-149-v5-rerun-d4b711d.ndjson",
+        "sha256": "147954dc7ce73709076ac86da9f35df0e6126a3b9eed6cbc2377f2f33ac5e8a9"
+      },
+      {
+        "filename": ".wb07r-question-bank-149-v6-02f1ca3.ndjson",
+        "sha256": "0068e3bc0ce2137ff1952408e8d6ebcb84fde47333feefabcf01196a499fa620"
+      },
+      {
+        "filename": ".wb07r-question-bank-149-eb8aa27.ndjson",
+        "sha256": "a1cb0258b863ff5681f8183dfa7021b1c935a57c48732b85464756dc2a6c7b11"
+      },
+      {
+        "filename": ".wb07r-question-bank-149-a89935a.ndjson",
+        "sha256": "73672841e7cc7c17fd8a48f2c511cb650ac5f443d6d9c2608de7ef660a875c66"
+      }
+    ],
+    "selection_rule": "17 必答、2 有限、14 模板正文拒答、1 时效拒答、20 五轮同题有引用哨兵",
+    "historical_id_drift": "旧版题库曾同 ID 换题；本版所有 Formal 改用新的 WB08R-F ID，seed_case_id 保留旧 ID",
+    "natural_semantic_review": "Codex 逐题核对 Seed 意图与来源；未取得独立人工复核记录；不保存答案正文"
+  },
+  "distribution": {
+    "formal_styles": {
+      "formal_diagnostic": 17,
+      "formal_limited": 2,
+      "formal_refusal": 15,
+      "formal_regression": 20
+    },
+    "natural_styles": {
+      "short_ellipsis": 18,
+      "colloquial": 15,
+      "typo_abbreviation": 9,
+      "multi_turn": 9,
+      "compound": 9
+    },
+    "natural_personas": {
+      "employee": 13,
+      "tech_operations": 20,
+      "project_manager": 18,
+      "new_employee": 9
+    },
+    "natural_short_count": 56,
+    "adversarial_categories": {
+      "missing_or_current_source": 6,
+      "false_premise": 6,
+      "force_without_source": 6,
+      "unindexed_template_body": 6,
+      "ambiguous_scope": 6
+    },
+    "latency_buckets": {
+      "catalog_navigation": 8,
+      "single_fact": 8,
+      "compound_multi_turn": 8
+    }
+  },
+  "standard_answers_stored": false
+}

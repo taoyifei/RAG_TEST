@@ -1,0 +1,156 @@
+{
+  "schema_version": "wb08r03g-v14.1-c5-d3-final-v1",
+  "version": "V14.1-C5-D3",
+  "status": "FAILED",
+  "phase_status": "PAUSED",
+  "merge_allowed": false,
+  "production_publish_allowed": false,
+  "independent_verification_ready": false,
+  "stop_reason": "D3_REAL_PROTOCOL_QUALIFICATION_FAILED_AFTER_STRICT_PLAN_IMPLEMENTATION",
+  "branch": "codex/wb-08r-adaptive-rag",
+  "plan_path": "C:\\Users\\jerry\\Desktop\\湾研院\\湾事通\\V14_1_C5_协议接入收敛与03验收实施方案.md",
+  "plan_sha256": "645e206a66e107f6cb5cd6cd82eed50f1d98c9964a92d8bc75818d7549df0c9f",
+  "implementation_base_sha": "de251f0324b82d8c406a81a616f405629e839c96",
+  "tested_source_sha": "4c981fa4c8579c98c2881bee1106b57f749d19e6",
+  "report_commit_sha": "35ae7435cdd33326c0fbace9738a9f4e9193704a",
+  "source_commits": [
+    {
+      "sha": "d074bde6790448dae9a91113371e6f3fffcbaa56",
+      "subject": "feat(provider): 增加C5有界失败诊断"
+    },
+    {
+      "sha": "fd8cbe056aa6852b5d061a09e689848318f35a1d",
+      "subject": "feat(retrieval): 闭合C5字段协议与失败状态"
+    },
+    {
+      "sha": "4c981fa4c8579c98c2881bee1106b57f749d19e6",
+      "subject": "feat(retrieval): 固定C5字段输出预算与现场资格"
+    }
+  ],
+  "real_chat_calls": {
+    "diagnostic": 2,
+    "qualification": 4,
+    "business": 0,
+    "total": 6,
+    "provider_retry_count": 0
+  },
+  "diagnostic_ab": {
+    "status": "PASSED",
+    "old_400_root_cause_observed": "UNSUPPORTED_UNIQUE_ITEMS_KEYWORD",
+    "transferred_constraint": "LOCAL_VALIDATOR_UNIQUENESS",
+    "transferred_request_http_status": 200
+  },
+  "d3": {
+    "status": "FAILED",
+    "case_count": 5,
+    "passed_case_count": 1,
+    "provider_request_count": 4,
+    "passed_cases": [
+      "AMBIGUOUS"
+    ],
+    "failed_cases": [
+      "PARAPHRASE_TRANSPORT_TIMEOUT",
+      "NOT_FOUND_OUTPUT_INVALID",
+      "TWO_ATOMS_SEMANTIC_MISMATCH",
+      "MAX_SHAPE_INPUT_BUDGET"
+    ],
+    "safe_result_sha256": "0fec7dd32a8b0684e5e990ec6f95e7f9f827e795746b0a760f0eecc153d04066",
+    "private_result_sha256": "fcd7da7732e466b68430a19d8423c287f11c6b9744b0f13685a728bde205ac2c"
+  },
+  "p0_ids": [
+    "P0_V141_C5_D3_PARAPHRASE_TRANSPORT_TIMEOUT",
+    "P0_V141_C5_D3_NOT_FOUND_OUTPUT_INVALID",
+    "P0_V141_C5_D3_TWO_ATOMS_SEMANTIC_MISMATCH",
+    "P0_V141_C5_D3_MAX_SHAPE_INPUT_BUDGET"
+  ],
+  "observability_gaps": [
+    "NOT_FOUND_RAW_MESSAGE_CONTENT_NOT_RETAINED",
+    "PARAPHRASE_SERVER_SIDE_TIMEOUT_ROOT_CAUSE_NOT_OBSERVED",
+    "MAX_SHAPE_PROVIDER_BEHAVIOR_NOT_OBSERVED_BECAUSE_PREFLIGHT_BLOCKED"
+  ],
+  "reports": {
+    "report": "docs/progress/wb08r-03g-v14-1-c5-d3-report.md",
+    "report_sha256": "d4871c4c775b6f24af850435092d9bcba8ab832af651a07175c1f22068bc83c9",
+    "p0_issues": "docs/progress/wb08r-03g-v14-1-c5-d3-p0-issues.md",
+    "p0_issues_sha256": "5af7c1e29f928b53d27cc35373d7b7e390ecb55d8284b2bf330181cc5b2ba804",
+    "safe_evidence": "docs/progress/wb08r-03g-v14-1-c5-d3-evidence.safe.json",
+    "safe_evidence_sha256": "912688c8ded311318cc52ef85fad7af135a8899866c4c62dd98e9a55fadfb671",
+    "code_alignment": "docs/progress/wb08r-03g-v14-1-c5-code-alignment.md",
+    "code_alignment_sha256": "68f4e507b60874fa396d37b11e8828c37e06eda15eb660b539460024e52fd684",
+    "runtime_identity": "docs/progress/wb08r-03g-v14-1-c5-runtime-identity.safe.json",
+    "qualification_definition": "docs/progress/wb08r-03g-v14-1-c5-qualification-definition.safe.json",
+    "state": "docs/progress/wb08r-state.json"
+  },
+  "verification": {
+    "related_pytest": "565 passed, 1 deselected, 1 warning",
+    "final_targeted_pytest": "55 passed, 1 warning",
+    "ruff": "PASSED_29_CHANGED_PYTHON_FILES",
+    "ruff_format": "PASSED_29_CHANGED_PYTHON_FILES",
+    "mypy": "PASSED_407_SOURCE_FILES",
+    "compose_config": "PASSED_WITH_PLACEHOLDER_ENV",
+    "git_diff_check": "PASSED",
+    "business_five_case": "NOT_RUN_D3_FAILED",
+    "preflight_16": "NOT_RUN_D3_FAILED",
+    "a_to_f": "NOT_RUN_D3_FAILED",
+    "unrelated_tests": "NOT_RUN_BY_USER_INSTRUCTION"
+  },
+  "runtime": {
+    "service_identity_sha256": "67bf43e71d4ea2ed6738194ce2cff5baf1645a6747cc92d352c186d8afeeeed6",
+    "qualification_definition_sha256": "54da768d67c9587aadecba994f31fb5aecfeabca67fcaf1fb39d5821c2a7b119",
+    "vllm_version": "0.19.1",
+    "model": "Qwen/Qwen3-8B-AWQ",
+    "mode": "response_format",
+    "backend_identity": "vllm-0.19.1:auto",
+    "max_model_len": 8192,
+    "input_limit": 6144,
+    "field_output_budget": 1280
+  },
+  "final_services": {
+    "candidate_8289_image": "rag-test-wanshitong:wb08r03f-bd00c56",
+    "candidate_8289_image_id": "sha256:621acc792c12169d347fde03a8cfb06dff4ca033bf4867171d35bc46f284b75c",
+    "candidate_8289_container_id": "7d8dfc396fdb7af2e7daea991db134cc3fc71c21dd8ef3e0b655c60b4732591d",
+    "candidate_8289_live": 200,
+    "candidate_8289_ready": 200,
+    "production_60_8288_image": "rag-test-wanshitong:604ef63",
+    "production_60_8288_image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306",
+    "production_60_8288_container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
+    "production_60_8288_health": 200,
+    "production_54_18288_health": 200,
+    "production_modified": false
+  },
+  "cleanup": {
+    "candidate_image_built": false,
+    "candidate_image_deployed": false,
+    "global_prune_used": false,
+    "removed_stale_container": "wanshitong-wb08r02-app",
+    "removed_stale_image": "rag-test-wanshitong:wb08r02-9c3b029",
+    "removed_stale_image_id": "sha256:a3048736b0c243a04e6038cd4c1fbdcdb202de7964dce9512268389bc81d5e5b",
+    "volumes_removed": false,
+    "original_untracked_result_files_preserved": 10,
+    "original_untracked_hashes_match": true
+  },
+  "private_evidence": {
+    "source_path": "/home/jerry/work/RAG-private-evidence/wb08r03-v141-c5-protocol-4c981fa",
+    "tracked_in_git": false,
+    "analysis_json_sha256": "6069206b2ca97a4bdb8931b373ec56750570cfb49033b936749963a048791af6",
+    "vllm_log_excerpt_sha256": "0b877a31ee179dd68664af43c578d08fed6a8ecb4a9780b19677190d1a5517fb"
+  },
+  "local_analysis_bundle": {
+    "status": "ASSEMBLED_AND_INTEGRITY_VERIFIED",
+    "directory": "C:\\Users\\jerry\\Desktop\\湾研院\\湾事通\\WB08R03_V14_1_C5_D3_P0_分析证据_4c981fa",
+    "directory_file_count": 25,
+    "directory_total_bytes": 4600938,
+    "integrity_manifest_sha256": "09b338de6842015d7c6e317b471c92875c8a0866f9db5fd5c0fa7eea33c17eb8",
+    "integrity_entries_verified": 24,
+    "integrity_failures": 0,
+    "archive": "C:\\Users\\jerry\\Desktop\\湾研院\\湾事通\\WB08R03_V14_1_C5_D3_P0_分析证据_4c981fa.zip",
+    "archive_size_bytes": 4306454,
+    "archive_entry_count": 25,
+    "archive_sha256": "19525c30594fbdce07dcc9ec2404629a4219c945d2b3363e7d8248e247566075",
+    "archive_hash_sidecar": "C:\\Users\\jerry\\Desktop\\湾研院\\湾事通\\WB08R03_V14_1_C5_D3_P0_分析证据_4c981fa.zip.sha256",
+    "contains_private_business_text": true,
+    "contains_secrets": false,
+    "tracked_in_git": false,
+    "self_reference_note": "ARCHIVE_CONTAINS_PRE_FINAL_METADATA_MANIFEST; EXTERNAL_SHA256_SIDECAR_IS_AUTHORITATIVE_FOR_ARCHIVE"
+  }
+}

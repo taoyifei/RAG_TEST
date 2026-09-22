@@ -346,6 +346,7 @@ def _certified_table_request() -> GenerationRequest:
                 source_label="合成设备参数表",
                 citation_text=text,
                 source_spans=(span,),
+                document_id="doc_" + "1" * 32,
                 document_version_id="dver_" + "1" * 32,
                 section_id="public-section",
                 table_locator="public-table",

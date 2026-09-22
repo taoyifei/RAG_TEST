@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from rag_app.application.answering.grounded import GroundedOutcome
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.composition.p07_runtime import P07Runtime, build_p07_runtime
 from rag_app.core.errors import (
@@ -21,10 +22,12 @@ from rag_app.core.models import (
     ConfidenceStatus,
     DocumentRef,
     KnowledgeBaseScope,
+    ProviderCall,
     SearchAnswerResult,
     SearchRequest,
 )
 from tests.adapters.parsers.docx_fixtures import build_docx
+from tests.support.grounded_fixture_generator import GroundedFixtureGenerator
 from tests.support.p11_closure_replay import no_network
 
 _PROFILE = Path("configs/profiles/dev-p06-memory.json")
@@ -48,6 +51,10 @@ def runtime(tmp_path: Path) -> Iterator[P07Runtime]:
     project_id = deterministic_id("prj", "related-service")
     kb_id = deterministic_id("kb", "related-service")
     with no_network(), build_p07_runtime(_PROFILE, data_dir=tmp_path) as value:
+        value.retrieval = value.retrieval.with_generation(
+            GroundedFixtureGenerator(),
+            serving_identity="unit-synthetic-related-v1",
+        )
         control = value.persistence.control
         control.put_project(project_id, "Synthetic")
         control.put_knowledge_base(
@@ -148,6 +155,8 @@ def test_switch_preserves_formal_contract_and_provider_calls(
     answerable: bool,
 ) -> None:
     components = runtime.persistence.components
+    assert runtime.retrieval._grounded is not None
+    configured_generator = runtime.retrieval._grounded.generator
     with (
         patch.object(
             components.query_embedding_router,
@@ -158,9 +167,9 @@ def test_switch_preserves_formal_contract_and_provider_calls(
             components.reranker, "rerank", wraps=components.reranker.rerank
         ) as rerank,
         patch.object(
-            components.generator,
+            configured_generator,
             "generate",
-            wraps=components.generator.generate,
+            wraps=configured_generator.generate,
         ) as generator,
     ):
         plain = runtime.retrieval.search_and_answer(_request(query))
@@ -203,6 +212,8 @@ def test_legacy_result_defaults_and_cache_rechecks_deleted_document(
     request = _request("隐私专员联系电话是多少？", related=True)
     first = runtime.retrieval.search_and_answer(request)
     assert first.related_contents
+    # 模型 abstain 不自动缓存；显式旧缓存仅用于检验回读时的身份/删除边界。
+    runtime.cache.put(first.cache_key, first, ttl_seconds=30)
     second = runtime.retrieval.search_and_answer(request)
     assert second.cache_hit
     legacy = first.model_dump(exclude={"related_contents", "display_message"})
@@ -277,6 +288,53 @@ def test_rerank_failure_keeps_lexical_answer_and_is_not_cached(
     assert recovered.status is ConfidenceStatus.ANSWERABLE
     assert not recovered.cache_hit
     assert recovered.rerank_execution_mode != degraded.rerank_execution_mode
+
+
+@pytest.mark.usefixtures("lexical_candidates")
+def test_validation_incomplete_has_public_notice_and_no_negative_cache(
+    runtime: P07Runtime,
+) -> None:
+    """Provider 成功但复核超时应保持原原因、提示重试且禁止负缓存。"""
+    assert runtime.retrieval._grounded is not None
+    outcome = GroundedOutcome(
+        None,
+        "none",
+        calls=(
+            ProviderCall(
+                provider_id="openai-compatible",
+                operation="generation",
+                call_count=1,
+                retry_count=0,
+                elapsed_ms=1,
+                reason_code="OK",
+                status_category="SUCCESS",
+            ),
+        ),
+        reason_code="SEMANTIC_REVIEW_DEADLINE_EXHAUSTED",
+    )
+    request = _request("个人信息更正申请由谁受理？")
+    with patch.object(
+        runtime.retrieval._grounded,
+        "answer",
+        return_value=outcome,
+    ):
+        result = runtime.retrieval.search_and_answer(request)
+
+    assert result.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+    assert result.generation_reason_code == (
+        "SEMANTIC_REVIEW_DEADLINE_EXHAUSTED"
+    )
+    assert result.display_message == (
+        "已找到相关资料，但本次答案生成或核验未完成。你可以稍后重试。"
+    )
+    assert result.related_contents == ()
+    assert runtime.cache.get(result.cache_key) is None
+
+    # 即便未来不再把原因同步进 degraded，显式 guard 仍禁止负缓存。
+    runtime.retrieval.commit_result_cache(
+        result.model_copy(update={"degraded_reason_codes": ()})
+    )
+    assert runtime.cache.get(result.cache_key) is None
 
 
 def test_real_failure_category_controls_notice_without_changing_refusal(

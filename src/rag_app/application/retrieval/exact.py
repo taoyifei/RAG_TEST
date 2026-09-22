@@ -7,6 +7,7 @@ from rag_app.core.models import (
     ChannelHit,
     ExactSearchRequest,
     QueryAnalysis,
+    SourceDocumentIdentity,
 )
 from rag_app.core.ports import ExactStorePort
 
@@ -23,6 +24,7 @@ class ExactChannel:
         analysis: QueryAnalysis,
         *,
         limit: int,
+        allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None,
     ) -> tuple[ChannelHit, ...]:
         """查询已分析 identifier 与显式引号短语。
 
@@ -30,6 +32,7 @@ class ExactChannel:
             snapshot: 请求级 immutable Active Revision。
             analysis: 已提取 identifier 和 quoted phrase 的结果。
             limit: 最大候选数。
+            allowed_documents: 排名截断前允许的成对文档与版本身份。
 
         Returns:
             identifier 优先的身份元数据候选。
@@ -41,6 +44,7 @@ class ExactChannel:
                 identifiers=analysis.identifiers,
                 quoted_phrases=analysis.quoted_phrases,
                 limit=limit,
+                allowed_documents=allowed_documents,
             )
         )
 

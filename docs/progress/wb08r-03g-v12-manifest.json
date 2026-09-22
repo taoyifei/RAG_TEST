@@ -1,0 +1,235 @@
+{
+  "schema_version": "wb08r03g-v12-final-v1",
+  "version": "V12",
+  "status": "FAILED",
+  "phase_status": "PAUSED",
+  "merge_allowed": false,
+  "production_publish_allowed": false,
+  "independent_verification_ready": false,
+  "stop_reason": "THREE_REPAIR_ROUNDS_EXHAUSTED_WITH_PREFLIGHT_FACTUAL_SAFETY_FAILURE",
+  "branch": "codex/wb-08r-adaptive-rag",
+  "audit_base_sha": "3240b42b252408b6408130cbba586bcda6f6395b",
+  "source_head_sha": "4d668b1613a7bd21edef7f9d5c495117befd0870",
+  "report_commit_sha": "b25438064d93e496511e67aa02094540c06c6ce7",
+  "source_commits": [
+    {
+      "sha": "f9237c48ad40a75f469da2a7c95ec8367e07363d",
+      "subject": "fix(rag): 收敛问答为绑定后批量语义复核"
+    },
+    {
+      "sha": "eabda8b17ca3656901af856fb4f5945d009df9ed",
+      "subject": "fix(rag): 保留字面表格证据并校准语义终态"
+    },
+    {
+      "sha": "4d668b1613a7bd21edef7f9d5c495117befd0870",
+      "subject": "fix(rag): 合并同表行证据并收紧时序校验"
+    }
+  ],
+  "candidate_limit": 3,
+  "functional_candidates_built": 3,
+  "functional_deployments": 3,
+  "preflight_records": 48,
+  "synthetic_protocol_requests_observed": 24,
+  "preflight_provider_calls": {
+    "embedding.query": 48,
+    "generation": 91,
+    "query.interpret": 27,
+    "query.rewrite": 0,
+    "reranking": 48
+  },
+  "production_modified": false,
+  "qdrant_modified": false,
+  "reports": {
+    "report": "docs/progress/wb08r-03g-v12-report.md",
+    "report_sha256": "2f99e782b9e9d5dd2b7f389f7577665488a23e08efca5fd1a39cd9adff5716bb",
+    "p0_issues": "docs/progress/wb08r-03g-v12-p0-issues.md",
+    "p0_issues_sha256": "0a85d1ebb63068660145c2cdcbf5b0187d5692d7cc4e3171204bf2bc16645be3",
+    "state": "docs/progress/wb08r-state.json"
+  },
+  "p0_ids": [
+    "P0-01_NAMED_SOURCE_NOT_ENFORCED_AS_DETERMINISTIC_OWNERSHIP",
+    "P0-02_QUESTION_RELATION_LEAKS_INTO_CLAIM_WITHOUT_SOURCE_ANCHOR",
+    "P0-03_SAME_MODEL_SEMANTIC_SELF_REVIEW_ACCEPTS_SEVERE_ERRORS",
+    "P0-04_PARTIAL_PUBLICATION_NOT_CLOSED_AGAINST_COMPLETE_ANSWER_GATE",
+    "P0-05_ROW_GROUPING_FIXES_BUDGET_BUT_NOT_RELEVANCE",
+    "P0-06_THREE_ROUND_LIMIT_REACHED_REMAINING_RESULTS_NOT_APPROVED"
+  ],
+  "candidates": {
+    "c1": {
+      "code_sha": "f9237c48ad40a75f469da2a7c95ec8367e07363d",
+      "image_tag": "rag-test-wanshitong:wb08r03-v12-c1-f9237c4",
+      "image_id": "sha256:a061c20c9b2bd4ac817992b954e7e80bc1f97a40c3167394d08110204c287d95",
+      "runtime_tree_sha256": "16fdebc7bb0e5c028e4f4d98c99e2f8b16aa56b9f511e02c0b5167be8aa09f72",
+      "version_bundle_sha256": "287ec8c235f61a46109be2e4ef0537975c83383a137cb6a3d450866502448171d",
+      "version_file_sha256": "e6c29b1259326f1817d7ae283a0dcf3483d8193b02bf6dcff1caf9146f22e3a3",
+      "asset_manifest_sha256": "333139df84d60f5cc59ceb6b26f7d0ac674066de6bb04733847c8ab78e28febf3",
+      "preflight_statuses": {
+        "ANSWERABLE": 8,
+        "INSUFFICIENT_EVIDENCE": 3,
+        "PROVIDER_UNAVAILABLE": 5,
+        "BUDGET_BLOCKED": 0
+      },
+      "exactly_one_final": 16,
+      "provider_calls": {
+        "embedding.query": 16,
+        "generation": 29,
+        "query.interpret": 9,
+        "query.rewrite": 0,
+        "reranking": 16
+      },
+      "repair_calls": 0,
+      "v8_packet_status": "OBSERVED",
+      "gate": "FAILED",
+      "decisive_failures": [
+        "N031_PROVIDER_UNAVAILABLE_3_OF_3",
+        "N033_EXPECTED_SOURCE_NOT_CITED_3_OF_3",
+        "F013_FALSE_REFUSAL_3_OF_3",
+        "F024_UNSAFE_ANSWER_FROM_WRONG_SOURCE"
+      ]
+    },
+    "c2": {
+      "code_sha": "eabda8b17ca3656901af856fb4f5945d009df9ed",
+      "image_tag": "rag-test-wanshitong:wb08r03-v12-c2-eabda8b",
+      "image_id": "sha256:e7012db81946a7269c1f36216925cb2120956ed6992ab07694f66582ec3c53f5",
+      "runtime_tree_sha256": "3f0b0e172356765e3ee5a47f4b9921f1eef75a449df975d12f9dcf2de00d7ec0",
+      "version_bundle_sha256": "e686ca50bb21ae126818badb7774022977c1d5bd3e596ca77c767549f511a037b",
+      "version_file_sha256": "ddd361882201bd2f8508c91ad323db1e0d2ec221486acc95d5e6da7b511d4eae",
+      "asset_manifest_sha256": "272eaf9ea34ae0dee5458c8d8bc16d67d015f5dfa5a4015c8f6a05f71cfae8632",
+      "p0_p3_status": "PASSED_12_OF_12",
+      "p0_p3_safe_sha256": "8f9e1acf8a362a353c8133daec07e8caf652dd6e39357de94e3a89b4c3e92ed7",
+      "preflight_statuses": {
+        "ANSWERABLE": 13,
+        "INSUFFICIENT_EVIDENCE": 2,
+        "PROVIDER_UNAVAILABLE": 0,
+        "BUDGET_BLOCKED": 1
+      },
+      "exactly_one_final": 16,
+      "provider_calls": {
+        "embedding.query": 16,
+        "generation": 30,
+        "query.interpret": 9,
+        "query.rewrite": 0,
+        "reranking": 16
+      },
+      "repair_calls": 0,
+      "v8_packet_status": "FAILED",
+      "gate": "FAILED",
+      "decisive_failure": "F024_SEMANTIC_REVIEW_PREFLIGHT_BUDGET_EXCEEDED"
+    },
+    "c3": {
+      "code_sha": "4d668b1613a7bd21edef7f9d5c495117befd0870",
+      "image_tag": "rag-test-wanshitong:wb08r03-v12-c3-4d668b1",
+      "image_id": "sha256:a239e36db47d4c69a1be52ea97f5a7ab57f16e32c0d64bbf982f993846bf7178",
+      "runtime_tree_sha256": "35f31fe9969eef31fa77c45cbba99e11ff599f3f65fa0d7d2aa028928d7ee10a",
+      "version_bundle_sha256": "ed705a7eaf5b0b744bf6172e3a1603cc8fafd120d57ce1d57048b15a931ddf90",
+      "version_file_sha256": "3475df34e3e755860d3a45056d8db610967c36621d78551653e0fb2ec818766b",
+      "asset_manifest_sha256": "906b4d1c643187660d4047489f4cc858aaade71079bf2487216e9a650ce32326",
+      "configuration_sha256": "356367b8ec7ffc0186d74c4fab6eed154c97c69e29a3c8b08619795482638802",
+      "serving_fingerprint": "sha256:ff858c8bb682e1620db264984c09fc176e307d933699b95e7d4ceb9fc30a0707",
+      "active_index_revision_id": "irev_0329a35ca9ea700133f7b309160118f0",
+      "p0_p3_status": "PASSED_12_OF_12",
+      "p0_p3_safe_sha256": "f3214193473410b7704785bb75c7de8b59eb8ad906eb64646cf3262297c756e5",
+      "preflight_statuses": {
+        "ANSWERABLE": 14,
+        "INSUFFICIENT_EVIDENCE": 2,
+        "PROVIDER_UNAVAILABLE": 0,
+        "BUDGET_BLOCKED": 0
+      },
+      "exactly_one_final": 16,
+      "provider_calls": {
+        "embedding.query": 16,
+        "generation": 32,
+        "query.interpret": 9,
+        "query.rewrite": 0,
+        "reranking": 16
+      },
+      "repair_calls": 0,
+      "v8_packet_status": "OBSERVED",
+      "v8_gate_status": "FAILED",
+      "preflight_gate_status": "FAILED",
+      "reviewed_summary_sha256": "fd943071b680d098d40405f945e2394cf3fdba2ff5ccce9b8955634a9fa7e0bd",
+      "gate": "FAILED",
+      "decisive_failures": [
+        "F024_SAFE_REFUSAL_VIOLATION_WRONG_SOURCE_TEMPLATE_OVERREACH",
+        "N031_QUESTION_TIMING_UNSUPPORTED_3_OF_3"
+      ],
+      "unreviewed_after_fail_fast": 12
+    }
+  },
+  "revisions": {
+    "grounded_wire": "wb08r-grounded-wire-v9",
+    "prepared_packet": "wb08r-prepared-packet-v3",
+    "evidence_identity": "wb08r-source-key-v1",
+    "semantic_validation": "wb08r-semantic-validation-v3",
+    "generation_evidence_pack": "wb08r-generation-evidence-v13"
+  },
+  "verification": {
+    "question_answering_targeted_pytest": "132 passed, 1 warning",
+    "ruff": "PASSED",
+    "ruff_format": "PASSED",
+    "mypy_related_sources": "PASSED_5_FILES",
+    "git_diff_check": "PASSED",
+    "semantic_review_preflight_tokens": 3865,
+    "A_to_F": "NOT_RUN_C3_PREFLIGHT_FAILED"
+  },
+  "final_runtime": {
+    "candidate_port": 8289,
+    "candidate_status": "ROLLED_BACK_BASELINE_HEALTHY_200",
+    "candidate_container_id": "a4b95d135a7a8a4222d2b7f465ad8220eeedac16edfce8f97545bec354f1d1a6",
+    "candidate_image_tag": "rag-test-wanshitong:wb08r03f-bd00c56",
+    "candidate_image_id": "sha256:621acc792c12169d347fde03a8cfb06dff4ca033bf4867171d35bc46f284b75c",
+    "candidate_live_health": 200,
+    "candidate_ready_health": 200,
+    "production_container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
+    "production_image_tag": "rag-test-wanshitong:604ef63",
+    "production_image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a2384ffc54ffdaf66380306",
+    "production_60_8288_health": 200,
+    "production_54_18288_health": 200,
+    "production_identity_exact_match": true
+  },
+  "cleanup": {
+    "global_prune_used": false,
+    "v12_candidate_images_removed_remote": 3,
+    "v12_candidate_images_removed_local": 3,
+    "remote_remaining_image_tags": [
+      "rag-test-wanshitong:604ef63",
+      "rag-test-wanshitong:wb08r03f-bd00c56",
+      "rag-test-wanshitong:wb08r02-9c3b029"
+    ],
+    "local_remaining_image_tags": [
+      "rag-test-wanshitong:604ef63",
+      "rag-test-wanshitong:wb08r03f-bd00c56"
+    ],
+    "temporary_v12_paths_on_54": "NONE_REMAINING",
+    "temporary_v12_paths_on_60": "NONE_REMAINING",
+    "local_v12_worktrees_and_temporary_files_removed": true,
+    "original_untracked_result_files_preserved": 10,
+    "original_untracked_result_hashes_match_v9": true
+  },
+  "private_evidence": [
+    {
+      "candidate": "c1",
+      "path": "C:/Users/jerry/AppData/Local/Codex/diagnostics/wb08r03-v12-20260920/wb08r03-v12-c1-evidence.private.tar.gz",
+      "sha256": "5a44a0dbdad1cfbbec2d981929d3a1d667d19644c158749348a0ed8a6158cff9",
+      "size_bytes": 112183,
+      "archive_integrity": "PASS",
+      "tracked_in_git": false
+    },
+    {
+      "candidate": "c2",
+      "path": "C:/Users/jerry/AppData/Local/Codex/diagnostics/wb08r03-v12-20260920/wb08r03-v12-c2-evidence.private.tar.gz",
+      "sha256": "08df00a03ad741a5292bde0aceaaf53e71200e1290eaf2707c8b87a00ac2b539",
+      "size_bytes": 81509,
+      "archive_integrity": "PASS",
+      "tracked_in_git": false
+    },
+    {
+      "candidate": "c3",
+      "path": "C:/Users/jerry/AppData/Local/Codex/diagnostics/wb08r03-v12-20260920/wb08r03-v12-c3-evidence.private.tar.gz",
+      "sha256": "2e1009ac7e05e6f257a6c53b37f97a4683f364251742bfbbb1168abc57ce9822",
+      "size_bytes": 85882,
+      "archive_integrity": "PASS",
+      "tracked_in_git": false
+    }
+  ]
+}

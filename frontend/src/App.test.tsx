@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
+import * as authNavigation from "./public/authNavigation";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -73,5 +74,33 @@ describe("产品壳隔离", () => {
     ).toBeVisible();
     expect(screen.queryByText("企业知识助手")).not.toBeInTheDocument();
     expect(document.title).toBe("湾事通");
+  });
+
+  it("kb 前缀下管理员仍使用原令牌登录且不跳 RDMS SSO", async () => {
+    window.history.replaceState({}, "", "/kb/admin");
+    const ssoRedirect = vi.spyOn(authNavigation, "redirectToSso");
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = requestPath(input);
+      if (path === "/kb/api/public/capabilities") {
+        return Promise.resolve(
+          response({ error: { code: "AUTHENTICATION_REQUIRED" } }, 401),
+        );
+      }
+      if (path === "/kb/api/v1/console/session") {
+        return Promise.resolve(
+          response({ error: { code: "AUTHENTICATION_REQUIRED" } }, 401),
+        );
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("管理员控制台")).toBeVisible();
+    expect(
+      await screen.findByRole("dialog", { name: "连接管理控制台" }),
+    ).toBeVisible();
+    expect(ssoRedirect).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/kb/admin");
   });
 });

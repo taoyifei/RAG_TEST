@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 from rag_app.product.feedback import FeedbackReason, ProjectionState
+from rag_app.wanshitong.feedback import FeedbackReasonDetail
 
 _MAX_CONVERSATION_QUERY_CHARS = 2000
 
@@ -27,14 +28,27 @@ class PublicSessionRequest(PublicRequest):
     """无登录公共会话不接受任何客户端身份参数。"""
 
 
+class PublicSessionUser(BaseModel):
+    """前端只需显示的最小 RDMS 用户摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=256)
+
+
 class PublicSessionResponse(BaseModel):
-    """页面可见的匿名会话摘要；不包含内部 owner。"""
+    """页面可见的会话摘要；不包含内部 owner 或授权 claims。"""
 
     model_config = ConfigDict(extra="forbid")
 
     session_id: str = Field(pattern=r"^wstsid_[0-9a-f]{32}$")
     csrf_token: str = Field(pattern=r"^[0-9a-f]{64}$")
     expires_in: int = Field(gt=0)
+    user: PublicSessionUser | None = None
+    deployment_id: str | None = Field(
+        default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,31}$"
+    )
 
 
 class PublicShortcut(BaseModel):
@@ -63,6 +77,7 @@ class PublicCapabilities(BaseModel):
     document_visibility: Literal["all_internal"] = "all_internal"
     conversation_delete: Literal[True] = True
     feedback: Literal[True] = True
+    feedback_details: Literal[True] = True
     shortcuts: tuple[PublicShortcut, ...] = ()
 
 
@@ -110,11 +125,16 @@ class PublicFeedbackRequest(PublicRequest):
     trace_id: str = Field(pattern=r"^trace_[0-9a-f]{32}$")
     useful: bool
     reason_code: FeedbackReason | None = None
+    reason_detail: FeedbackReasonDetail | None = None
+    comment: str | None = Field(default=None, max_length=1000)
 
     @model_validator(mode="after")
     def _validate_reason(self) -> PublicFeedbackRequest:
-        if self.useful and self.reason_code is not None:
-            raise ValueError("有用反馈不应附带负向 reason_code。")
+        if self.useful and any(
+            value is not None
+            for value in (self.reason_code, self.reason_detail, self.comment)
+        ):
+            raise ValueError("有用反馈不应附带负向原因或说明。")
         return self
 
 
@@ -126,6 +146,9 @@ class PublicFeedbackResponse(BaseModel):
     trace_id: str = Field(pattern=r"^trace_[0-9a-f]{32}$")
     useful: bool
     reason_code: FeedbackReason | None
+    reason_detail: FeedbackReasonDetail | None
+    comment_saved: bool
+    feedback_revision: int = Field(ge=1)
     projection_state: ProjectionState
     updated_at: str
 
@@ -138,5 +161,6 @@ __all__ = [
     "PublicFeedbackResponse",
     "PublicSessionRequest",
     "PublicSessionResponse",
+    "PublicSessionUser",
     "PublicShortcut",
 ]

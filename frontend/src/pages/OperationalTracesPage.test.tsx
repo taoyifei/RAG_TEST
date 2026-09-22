@@ -143,9 +143,75 @@ it("列表可筛选，详情提供 waterfall 与候选漏斗", async () => {
     name: "Operational Trace 详情",
   });
   expect(within(panel).getByLabelText("Span waterfall")).toBeVisible();
+  expect(within(panel).getByText(/未采集。这通常表示旧 Trace/)).toBeVisible();
   await user.click(within(panel).getByRole("tab", { name: "候选漏斗" }));
   expect(within(panel).getByText("chunk_test")).toBeVisible();
   expect(within(panel).getByText("rrf: 0.5")).toBeVisible();
+});
+
+it("查询详情展示部门影子建议、实际范围与最终引用部门", async () => {
+  const user = userEvent.setup();
+  vi.mocked(api.operationalTraceDetail).mockResolvedValue({
+    ...detail,
+    spans: [
+      ...detail.spans,
+      {
+        trace_id: root.trace_id,
+        span_id: "3333333333333333",
+        parent_span_id: "1111111111111111",
+        sequence: 3,
+        name: "retrieval.department_route_shadow",
+        kind: "CHAIN",
+        started_at: root.created_at,
+        finished_at: root.finished_at,
+        duration_ms: 2,
+        status: "OK",
+        reason_code: "STARTED",
+        attributes: {
+          route_revision: "wanshitong-department-shadow-v1",
+          profile_revision: "sha256:" + "4".repeat(64),
+          actual_scope_kind: "SOURCE_RESOLVED",
+          top1_department_key: "research",
+          top1_score_bucket: "EXPLICIT",
+          top2_department_key: "finance",
+          top2_score_bucket: "0_30_TO_0_49",
+          confidence: "HIGH",
+          recommended_scope: "TOP1",
+          final_cited_department_keys: ["research"],
+          department_filter_applied: false,
+          embedding_reused: true,
+          extra_provider_calls: 0,
+          status: "COMPUTED",
+          reason_codes: ["EXPLICIT_DEPARTMENT_UNIQUE"],
+        },
+      },
+    ],
+  });
+
+  render(<OperationalTracesPage />);
+  await user.click(await screen.findByRole("button", { name: "查看技术详情" }));
+  const tracePanel = await screen.findByRole("region", {
+    name: "Operational Trace 详情",
+  });
+  const shadowPanel = within(tracePanel).getByRole("region", {
+    name: "部门影子路由",
+  });
+
+  expect(
+    within(shadowPanel).getByText("优先 Top 1 部门 · 高置信"),
+  ).toBeVisible();
+  expect(
+    within(shadowPanel).getByText("research · 显式唯一部门"),
+  ).toBeVisible();
+  expect(within(shadowPanel).getByText("finance · 中分段")).toBeVisible();
+  expect(within(shadowPanel).getByText("显式文档范围（已解析）")).toBeVisible();
+  expect(
+    within(shadowPanel).getByText(
+      "实际检索未使用部门过滤；建议只用于管理员事后评估。",
+    ),
+  ).toBeVisible();
+  expect(within(shadowPanel).getByText("research")).toBeVisible();
+  expect(within(shadowPanel).queryByText(/0\.\d+/)).toBeNull();
 });
 
 it("Artifact 只在管理员点击后读取并按文本渲染", async () => {

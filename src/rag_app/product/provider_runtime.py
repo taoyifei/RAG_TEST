@@ -64,6 +64,9 @@ from rag_app.adapters.providers.http_common import ProviderHttpClient
 from rag_app.adapters.providers.offline_mock_transport import (
     BuiltinOfflineMockTransport,
 )
+from rag_app.adapters.providers.private_http_diagnostics import (
+    PrivateProviderDiagnosticRecorder,
+)
 from rag_app.adapters.providers.validation import (
     finite_score,
     ordered_vectors,
@@ -167,6 +170,9 @@ class ProviderRuntimeRegistry:
         self._transport_factory = transport_factory
         self._budget_ledger_path = budget_ledger_path
         self._local_ocr_adapter = local_ocr_adapter
+        self._private_http_diagnostics = (
+            PrivateProviderDiagnosticRecorder.from_environment()
+        )
         self._clients: dict[tuple[str, int, int, str], httpx.Client] = {}
         self._client_validation_modes: dict[
             tuple[str, int, int, str], Literal["mock", "live"]
@@ -975,6 +981,7 @@ class ProviderRuntimeRegistry:
             use_budget_transport=(
                 connection.provider_type != OPENAI_COMPATIBLE_PROVIDER
             ),
+            private_diagnostic_recorder=self._private_http_diagnostics,
         )
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import sqlite3
 
 import pytest
 
@@ -26,12 +27,14 @@ from rag_app.adapters.chunkers.docx_structural.validation import (
     quote_is_publishable,
     validate_chunks,
 )
+from rag_app.adapters.lexical import DeterministicCjkBigramAnalyzer
+from rag_app.adapters.stores.sqlite_fts5 import build_fts_v2_query
 from rag_app.adapters.tokenizers import (
     ConservativeEstimatedTokenCounter,
     DeterministicUtf8TokenCounter,
 )
 from rag_app.core.errors import RagError
-from rag_app.core.identifiers import deterministic_id
+from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
     ChunkingContext,
     ChunkingPolicy,
@@ -43,6 +46,7 @@ from rag_app.core.models import (
     SourceSpanKind,
     StoryKind,
 )
+from rag_app.core.models.common import freeze_json_object
 from rag_app.core.ports import TokenCounterPort
 from tests.adapters.parsers.docx.fixtures import (
     build_package,
@@ -80,6 +84,106 @@ def _chunk(
 def _paragraph(text: str) -> str:
     """构造不带标题样式的合成段落。"""
     return f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+
+
+def test_existing_search_views_reuse_title_without_metadata_reindex() -> None:
+    document_ir = parse_package(
+        build_package(_paragraph("申请人应在三个工作日内提交材料。")),
+        name="申请指南.docx",
+    ).document_ir
+    baseline = _chunk(document_ir).chunks[0]
+    contextual = _chunk(
+        document_ir.model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        "department_name": "公共服务部",
+                        "category_path": ["办事服务", "材料办理"],
+                        "document_title": "申请指南",
+                    }
+                )
+            }
+        )
+    ).chunks[0]
+
+    assert contextual.citation_text == baseline.citation_text
+    assert contextual.source_spans == baseline.source_spans
+    assert contextual.content_sha256 == baseline.content_sha256
+    assert contextual.embedding_text == baseline.embedding_text
+    assert contextual.lexical_text == baseline.lexical_text
+    assert "文档：申请指南.docx" in contextual.embedding_text
+    assert "公共服务部" not in contextual.embedding_text
+    assert "办事服务" not in contextual.lexical_text
+    assert dict(contextual.metadata)["department_name"] == "公共服务部"
+
+    analyzer = DeterministicCjkBigramAnalyzer()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute(
+            "CREATE VIRTUAL TABLE context_ab USING fts5(lexical_text)"
+        )
+        connection.executemany(
+            "INSERT INTO context_ab(rowid, lexical_text) VALUES (?, ?)",
+            (
+                (
+                    1,
+                    analyzer.analyze_document(
+                        baseline.lexical_text
+                    ).fts_index_text,
+                ),
+                (
+                    2,
+                    analyzer.analyze_document(
+                        contextual.lexical_text
+                    ).fts_index_text,
+                ),
+            ),
+        )
+        expression = build_fts_v2_query(analyzer.analyze_query("申请指南"))
+        matches = connection.execute(
+            "SELECT rowid FROM context_ab WHERE context_ab MATCH ?",
+            (expression,),
+        ).fetchall()
+        assert [row[0] for row in matches] == [1, 2]
+
+
+def test_existing_prefix_is_bounded_and_index_identity_is_unchanged() -> None:
+    document_ir = parse_package(
+        build_package(_paragraph("按流程办理。")),
+        name="流程.docx",
+    ).document_ir.model_copy(
+        update={
+            "metadata": freeze_json_object(
+                {
+                    "department_name": "部门" * 100,
+                    "category_path": ["分类" * 100],
+                    "document_title": "标题" * 100,
+                }
+            )
+        },
+    )
+    chunk = _chunk(document_ir).chunks[0]
+    prefix, citation = chunk.embedding_text.split("\n\n", 1)
+
+    assert len(prefix) <= 160
+    assert citation == chunk.citation_text
+    assert "部门：" not in prefix
+    assert "分类：" not in prefix
+    chunker = DocxStructuralChunker()
+    probe = chunker.token_counter.count("")
+    old_fingerprint = canonical_sha256(
+        {
+            "descriptor": chunker.descriptor.model_copy(
+                update={"version": "3.2.0"}
+            ),
+            "policy": chunker.policy,
+            "token_counter": {
+                "tokenizer_id": probe.tokenizer_id,
+                "exact": probe.exact,
+                "model_compatibility": probe.model_compatibility,
+            },
+        }
+    )
+    assert chunker.fingerprint == old_fingerprint
 
 
 def test_all_p04_fixtures_respect_parser_boundary() -> None:

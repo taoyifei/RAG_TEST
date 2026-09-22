@@ -17,6 +17,17 @@ _PRIVATE_USE_CHARACTER = re.compile(r"[\ue000-\uf8ff]")
 _APPROXIMATE_LABEL_MINIMUM_LENGTH = 6
 _APPROXIMATE_LABEL_MINIMUM_SCORE = 0.8
 _APPROXIMATE_LABEL_MINIMUM_MARGIN = 0.15
+_TABLE_LABEL_QUALIFIER = re.compile(r"[（(]([^）)]+)[）)]")
+_TABLE_LEVEL = re.compile(r"(?<![a-z0-9])[ivx\d一二三四五六七八九十]+级")
+_RELATION_SCOPE_MODIFIER = re.compile(
+    r"之前|之后|以前|以后|期间|过程中|"
+    r"必须|应当|应该|不得|禁止|严禁|无需|不必|"
+    r"至少|至多|仅限|只限|不超过|不低于"
+)
+_MIN_NAMED_LABEL_CHARS = 6
+_MIN_LABEL_BASE_CHARS = 4
+_MIN_LABEL_QUALIFIER_CHARS = 2
+_MIN_TABLE_AXIS_CHARS = 2
 _STRUCTURAL_NUMBER_PREFIX = re.compile(
     r"^\s*(?:(?:第[零一二三四五六七八九十百两\d]+(?:章|节|条|项)\s*)|"
     r"(?:(?:[1-9]\d{0,3}(?:[.．][1-9]\d{0,2}){0,5})|"
@@ -43,6 +54,113 @@ def normalize_semantic_text(value: str) -> str:
 
     """
     return unicodedata.normalize("NFKC", value).translate(_ASCII_CASEFOLD)
+
+
+def named_table_label_in_query(query: str, label: str) -> bool:
+    """同时核对表格行名及其限定词，容纳问句把两者换序。"""
+    normalized_query = "".join(normalize_semantic_text(query).split())
+    qualifier = _TABLE_LABEL_QUALIFIER.search(label)
+    if qualifier is None:
+        normalized_label = "".join(normalize_semantic_text(label).split())
+        return (
+            len(normalized_label) >= _MIN_NAMED_LABEL_CHARS
+            and normalized_label in normalized_query
+        )
+    base = "".join(
+        normalize_semantic_text(_TABLE_LABEL_QUALIFIER.sub("", label)).split()
+    )
+    scoped = "".join(normalize_semantic_text(qualifier[1]).split())
+    if _TABLE_LEVEL.fullmatch(scoped):
+        qualifier_matches = scoped in {
+            match.group() for match in _TABLE_LEVEL.finditer(normalized_query)
+        }
+    else:
+        qualifier_matches = scoped in normalized_query
+    return (
+        len(base) >= _MIN_LABEL_BASE_CHARS
+        and len(scoped) >= _MIN_LABEL_QUALIFIER_CHARS
+        and (
+            base in normalized_query
+            or (
+                len(base) >= _MIN_NAMED_LABEL_CHARS
+                and base[-_MIN_LABEL_BASE_CHARS:] in normalized_query
+            )
+        )
+        and qualifier_matches
+    )
+
+
+def table_axis_label_in_query(query: str, label: str) -> bool:
+    """检查问句是否逐字指定短表格轴标签。
+
+    这个函数只在行名和列名同时命中时用于确定性关系证明。
+    括号内的解释不作为列名命中的必要条件，但不允许单字
+    标签通过，避免宽泛的字面偶合。
+
+    Args:
+        query: 当前 Atom 的原始问句片段。
+        label: 可信物理表格的行名或列名。
+
+    Returns:
+        问句显式包含规范标签时返回 True。
+
+    """
+    normalized_query = normalize_document_label(query)
+    base = _TABLE_LABEL_QUALIFIER.sub("", label)
+    normalized_label = normalize_document_label(base)
+    return (
+        len(normalized_label) >= _MIN_TABLE_AXIS_CHARS
+        and normalized_label in normalized_query
+    )
+
+
+def query_without_source_qualifier(
+    query: str, source_qualifier: str | None
+) -> str:
+    """从关系核验文本中移除已解析的来源标签。
+
+    来源身份已由独立合同保存，不能再让文档标题中的短词被当成
+    用户询问的表格行名或列名。这里只移除第一次逐字命中，不解析
+    新的来源，也不删除正文中其它相同词语。
+
+    Args:
+        query: 当前 Atom 的原始问句片段。
+        source_qualifier: 已由来源解析器确认的文档标签。
+
+    Returns:
+        不含首个来源标签的关系核验文本。
+
+    """
+    if not source_qualifier:
+        return query
+    return query.replace(source_qualifier, "", 1)
+
+
+def literal_relation_modifiers_supported(query: str, source_text: str) -> bool:
+    """限定词只在来源逐字包含时参与确定性关系证明。
+
+    这里不判定自然语言语义；不能逐字证明时仅返回未确定，
+    由后续语义复核处理，不因此拒绝该来源。
+
+    Args:
+        query: 当前 Atom 的原始问句片段。
+        source_text: 表头等可信结构来源文本。
+
+    Returns:
+        问句没有高风险限定词，或这些限定词全部在来源中时
+        返回 True。
+
+    """
+    modifiers = tuple(
+        dict.fromkeys(
+            match.group(0) for match in _RELATION_SCOPE_MODIFIER.finditer(query)
+        )
+    )
+    normalized_source = normalize_document_label(source_text)
+    return all(
+        normalize_document_label(modifier) in normalized_source
+        for modifier in modifiers
+    )
 
 
 def normalize_identifier(identifier: str) -> str:
@@ -102,6 +220,23 @@ def normalize_duty_heading_label(value: str) -> str:
 
     """
     return _DUTY_LABEL_SUFFIX.sub("", normalize_section_heading_label(value))
+
+
+def normalize_role_owner_text(value: str) -> str:
+    """规范化角色所有者，并统一通用的“团队/组”组织后缀。
+
+    Args:
+        value: 查询角色或来源角色的完整名称。
+
+    Returns:
+        保留角色核心名称，只将名称末尾的“团队”折叠为同义的“组”；
+        不会改写正文，也不会把部门、机构、岗位或小组映射为其它类型。
+
+    """
+    normalized = normalize_document_label(value)
+    if normalized.endswith("团队") and len(normalized) > len("团队"):
+        return normalized[: -len("团队")] + "组"
+    return normalized
 
 
 def normalize_section_heading_label(value: str) -> str:
@@ -244,11 +379,16 @@ def select_unique_label_owner(
 __all__ = [
     "context_label_variants",
     "duty_heading_path_owns_target",
+    "literal_relation_modifiers_supported",
+    "named_table_label_in_query",
     "normalize_document_label",
     "normalize_duty_heading_label",
     "normalize_identifier",
+    "normalize_role_owner_text",
     "normalize_section_heading_label",
     "normalize_semantic_text",
+    "query_without_source_qualifier",
     "section_heading_path_owns_target",
     "select_unique_label_owner",
+    "table_axis_label_in_query",
 ]

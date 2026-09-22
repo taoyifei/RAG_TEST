@@ -34,6 +34,7 @@ from rag_app.core.models import (
     LexicalSearchRequest,
     RequestedAnswerType,
     SearchHit,
+    SourceDocumentIdentity,
     StructuralSearchRequest,
 )
 from rag_app.core.models.lexical import AnalyzedLexicalQuery
@@ -82,6 +83,28 @@ _STRUCTURAL_RELATION_ALIASES = {
         r"章节|管理要求|工作要求|规定|要求|说明"
     ),
 }
+
+
+def _document_scope_clause(
+    allowed_documents: tuple[SourceDocumentIdentity, ...] | None,
+    *,
+    alias: str = "c",
+) -> tuple[str, tuple[str, ...]]:
+    """构造排名截断前使用的成对文档/版本许可 SQL。"""
+    if allowed_documents is None:
+        return "", ()
+    if not allowed_documents:
+        return " AND 0", ()
+    pairs = " OR ".join(
+        f"({alias}.document_id=? AND {alias}.document_version_id=?)"
+        for _ in allowed_documents
+    )
+    parameters = tuple(
+        value
+        for identity in allowed_documents
+        for value in (identity.document_id, identity.document_version_id)
+    )
+    return f" AND ({pairs})", parameters
 
 
 def _channel_boundary(
@@ -178,6 +201,9 @@ class SqliteFtsStore:
         """
         self._ensure_open()
         revision = request.revision
+        scope_clause, scope_parameters = _document_scope_clause(
+            request.allowed_documents
+        )
         with self._connections.transaction() as connection:
             table = fts_table_for_revision(
                 connection, revision.index_revision_id
@@ -194,12 +220,14 @@ class SqliteFtsStore:
                 f"WHERE {table} MATCH ? AND c.revision_id=? "
                 "AND r.project_id=? AND r.knowledge_base_id=? "
                 "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
+                f"{scope_clause} "
                 "ORDER BY raw_score ASC, c.chunk_id ASC LIMIT ?"
             )
             scope = (
                 revision.index_revision_id,
                 revision.project_id,
                 revision.knowledge_base_id,
+                *scope_parameters,
                 request.limit,
             )
             rows = connection.execute(
@@ -236,6 +264,9 @@ class SqliteFtsStore:
         """
         self._ensure_open()
         revision = request.revision
+        scope_clause, scope_parameters = _document_scope_clause(
+            request.allowed_documents
+        )
         with self._connections.transaction() as connection:
             table = fts_table_for_revision(
                 connection, revision.index_revision_id
@@ -255,12 +286,14 @@ class SqliteFtsStore:
                 f"WHERE {table} MATCH ? AND c.revision_id=? "
                 "AND r.project_id=? AND r.knowledge_base_id=? "
                 "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
+                f"{scope_clause} "
                 "ORDER BY raw_score ASC, c.chunk_id ASC LIMIT ?"
             )
             scope = (
                 revision.index_revision_id,
                 revision.project_id,
                 revision.knowledge_base_id,
+                *scope_parameters,
                 request.limit,
             )
             rows = connection.execute(
@@ -306,7 +339,12 @@ class SqliteFtsStore:
 
         """
         self._ensure_open()
+        if request.allowed_documents == ():
+            return ()
         revision = request.revision
+        scope_clause, scope_parameters = _document_scope_clause(
+            request.allowed_documents
+        )
         scan_limit = min(
             _STRUCTURAL_SCAN_CAP,
             max(request.limit, request.limit * _STRUCTURAL_SCAN_MULTIPLIER),
@@ -346,12 +384,14 @@ class SqliteFtsStore:
                         "AND r.project_id=? AND r.knowledge_base_id=? "
                         "AND d.deleted_at IS NULL "
                         "AND d.lifecycle_status='active' "
+                        f"{scope_clause} "
                         "ORDER BY lexical_rank ASC, c.chunk_id ASC LIMIT ?",
                         (
                             expression,
                             revision.index_revision_id,
                             revision.project_id,
                             revision.knowledge_base_id,
+                            *scope_parameters,
                             scan_limit,
                         ),
                     ).fetchall()
@@ -368,7 +408,7 @@ class SqliteFtsStore:
             if document_term:
                 rows.extend(
                     connection.execute(
-                        "SELECT c.chunk_json, d.display_name, "
+                        "SELECT c.chunk_json, d.display_name, "  # noqa: S608
                         "0.0 AS lexical_rank FROM chunks c "
                         "JOIN index_revisions r "
                         "ON r.index_revision_id=c.revision_id "
@@ -378,12 +418,14 @@ class SqliteFtsStore:
                         "AND d.deleted_at IS NULL "
                         "AND d.lifecycle_status='active' "
                         "AND d.display_name LIKE ? ESCAPE '\\' "
+                        f"{scope_clause} "
                         "ORDER BY c.row_id ASC LIMIT ?",
                         (
                             revision.index_revision_id,
                             revision.project_id,
                             revision.knowledge_base_id,
                             f"%{_like_literal(document_term)}%",
+                            *scope_parameters,
                             scan_limit,
                         ),
                     ).fetchall()
@@ -419,6 +461,7 @@ class SqliteFtsStore:
                         "AND c.document_id=? AND r.project_id=? "
                         "AND r.knowledge_base_id=? AND d.deleted_at IS NULL "
                         "AND d.lifecycle_status='active' "
+                        f"{scope_clause} "
                         "ORDER BY lexical_rank ASC, c.chunk_id ASC LIMIT ?",
                         (
                             scoped_expression,
@@ -426,6 +469,7 @@ class SqliteFtsStore:
                             document_id,
                             revision.project_id,
                             revision.knowledge_base_id,
+                            *scope_parameters,
                             scan_limit,
                         ),
                     ).fetchall()
@@ -440,7 +484,7 @@ class SqliteFtsStore:
                 if _is_structural_stage_request(request):
                     rows.extend(
                         connection.execute(
-                            "SELECT c.chunk_json, d.display_name, "
+                            "SELECT c.chunk_json, d.display_name, "  # noqa: S608
                             "0.0 AS lexical_rank FROM chunks c "
                             "JOIN index_revisions r "
                             "ON r.index_revision_id=c.revision_id "
@@ -454,6 +498,7 @@ class SqliteFtsStore:
                             "AND r.project_id=? AND r.knowledge_base_id=? "
                             "AND d.deleted_at IS NULL "
                             "AND d.lifecycle_status='active' "
+                            f"{scope_clause} "
                             "ORDER BY c.row_id ASC LIMIT ?",
                             (
                                 revision.index_revision_id,
@@ -461,6 +506,7 @@ class SqliteFtsStore:
                                 revision.index_revision_id,
                                 revision.project_id,
                                 revision.knowledge_base_id,
+                                *scope_parameters,
                                 remaining,
                             ),
                         ).fetchall()
@@ -468,7 +514,7 @@ class SqliteFtsStore:
                 else:
                     rows.extend(
                         connection.execute(
-                            "SELECT c.chunk_json, d.display_name, "
+                            "SELECT c.chunk_json, d.display_name, "  # noqa: S608
                             "0.0 AS lexical_rank FROM chunks c "
                             "JOIN index_revisions r "
                             "ON r.index_revision_id=c.revision_id "
@@ -477,12 +523,14 @@ class SqliteFtsStore:
                             "AND r.project_id=? AND r.knowledge_base_id=? "
                             "AND d.deleted_at IS NULL "
                             "AND d.lifecycle_status='active' "
+                            f"{scope_clause} "
                             "ORDER BY c.row_id ASC LIMIT ?",
                             (
                                 revision.index_revision_id,
                                 document_id,
                                 revision.project_id,
                                 revision.knowledge_base_id,
+                                *scope_parameters,
                                 remaining,
                             ),
                         ).fetchall()
@@ -499,7 +547,7 @@ class SqliteFtsStore:
             for parent_node_id in table_closure_rows:
                 closure_rows.extend(
                     connection.execute(
-                        "SELECT c.chunk_json, d.display_name, "
+                        "SELECT c.chunk_json, d.display_name, "  # noqa: S608
                         "0.0 AS lexical_rank FROM chunks c "
                         "JOIN index_revisions r "
                         "ON r.index_revision_id=c.revision_id "
@@ -508,12 +556,14 @@ class SqliteFtsStore:
                         "AND r.project_id=? AND r.knowledge_base_id=? "
                         "AND d.deleted_at IS NULL "
                         "AND d.lifecycle_status='active' "
+                        f"{scope_clause} "
                         "ORDER BY c.row_id ASC LIMIT ?",
                         (
                             revision.index_revision_id,
                             parent_node_id,
                             revision.project_id,
                             revision.knowledge_base_id,
+                            *scope_parameters,
                             _STRUCTURAL_SCAN_CAP,
                         ),
                     ).fetchall()
@@ -617,7 +667,12 @@ class SqliteFtsStore:
 
         """
         self._ensure_open()
+        if request.allowed_documents == ():
+            return ()
         revision = request.revision
+        scope_clause, scope_parameters = _document_scope_clause(
+            request.allowed_documents
+        )
         found: list[tuple[sqlite3.Row, str, bool]] = []
         seen: set[str] = set()
         with self._connections.transaction() as connection:
@@ -629,7 +684,7 @@ class SqliteFtsStore:
                 if not normalized:
                     continue
                 rows = connection.execute(
-                    "SELECT e.chunk_id, c.document_id, "
+                    "SELECT e.chunk_id, c.document_id, "  # noqa: S608
                     "c.document_version_id, c.role, c.section_id, "
                     "c.content_sha256 FROM exact_identifiers e "
                     "JOIN chunks c ON c.revision_id=e.revision_id "
@@ -640,12 +695,14 @@ class SqliteFtsStore:
                     "WHERE e.revision_id=? AND e.normalized_identifier=? "
                     "AND r.project_id=? AND r.knowledge_base_id=? "
                     "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
+                    f"{scope_clause} "
                     "ORDER BY e.chunk_id LIMIT ?",
                     (
                         revision.index_revision_id,
                         normalized,
                         revision.project_id,
                         revision.knowledge_base_id,
+                        *scope_parameters,
                         request.limit,
                     ),
                 ).fetchall()
@@ -673,12 +730,14 @@ class SqliteFtsStore:
                     f"WHERE {table} MATCH ? AND c.revision_id=? "
                     "AND r.project_id=? AND r.knowledge_base_id=? "
                     "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
+                    f"{scope_clause} "
                     "ORDER BY c.chunk_id LIMIT ?",
                     (
                         expression,
                         revision.index_revision_id,
                         revision.project_id,
                         revision.knowledge_base_id,
+                        *scope_parameters,
                         request.limit,
                     ),
                 ).fetchall()
@@ -992,8 +1051,10 @@ def build_fts_v2_relaxed_query(analysis: AnalyzedLexicalQuery) -> str:
             if len(token) == _CJK_BIGRAM_LENGTH
         )
     )
-    if not _RELAXED_CJK_BIGRAM_MINIMUM <= len(bigrams) <= (
-        _RELAXED_CJK_BIGRAM_CAP
+    if (
+        not _RELAXED_CJK_BIGRAM_MINIMUM
+        <= len(bigrams)
+        <= (_RELAXED_CJK_BIGRAM_CAP)
     ):
         return ""
     return " OR ".join(_fts_quote(token) for token in bigrams)

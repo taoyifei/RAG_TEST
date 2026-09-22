@@ -8,6 +8,7 @@ from rag_app.application.retrieval.semantics import source_qualifier_matches
 from rag_app.core.errors import IndexCorrupt
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
+    ChunkRole,
     HydratedChunk,
     RankedChunk,
     RetrievalPolicy,
@@ -60,19 +61,36 @@ class NeighborExpander:
             # 原命中自身冲突时不能把不一致对象交给后续去重器任选其一。
             return ExpansionOutcome((), ("NEIGHBOR_INDEX_CORRUPT",))
         candidates = tuple(originals.values())
+        reasons: tuple[str, ...] = ()
         try:
             if mode == "none":
                 expanded = candidates
-            elif mode == "section" and _has_table_coordinates(candidates[:1]):
-                # 复杂问句通常选择 section 模式；若首名本身是表格片段，
-                # 仍需先闭合它所在的 canonical 行，避免章节兄弟占满预算后
-                # 只留下职责正文而丢失行名、列名等必要上下文。
-                expanded = self._expand_table_context(
+            elif mode == "section" and _has_table_coordinates(candidates):
+                table_outcome = self._expand_table_context(
                     snapshot,
                     candidates,
                     policy,
                     source_qualifier=source_qualifier,
                 )
+                expanded = table_outcome.candidates
+                reasons = table_outcome.degraded_reason_codes
+                # 文本和列表仍沿原章节语义扩展；表格不借章节首块充当表头。
+                prose = tuple(
+                    candidate
+                    for candidate in candidates
+                    if candidate.hydrated.chunk.role is not ChunkRole.TABLE
+                )
+                if prose:
+                    sections = self._expand_sections(snapshot, prose, policy)
+                    known = {item.hydrated.chunk.chunk_id for item in expanded}
+                    expanded = (
+                        *expanded,
+                        *(
+                            item
+                            for item in sections
+                            if item.hydrated.chunk.chunk_id not in known
+                        ),
+                    )
             elif mode == "section":
                 expanded = self._expand_sections(snapshot, candidates, policy)
             elif (
@@ -80,43 +98,309 @@ class NeighborExpander:
                 and policy.neighbor_count
                 and _has_table_coordinates(candidates)
             ):
-                expanded = self._expand_table_context(
+                table_outcome = self._expand_table_context(
                     snapshot,
                     candidates,
                     policy,
                     source_qualifier=source_qualifier,
                 )
+                expanded = table_outcome.candidates
+                reasons = table_outcome.degraded_reason_codes
             else:
                 expanded = self._expand_links(
                     snapshot, candidates, mode, policy
                 )
-            return ExpansionOutcome(expanded)
+            return ExpansionOutcome(expanded, reasons)
         except IndexCorrupt:
             return ExpansionOutcome(candidates, ("NEIGHBOR_INDEX_CORRUPT",))
 
-    def _expand_table_context(
+    def close_structure(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        candidates: tuple[RankedChunk, ...],
+        policy: RetrievalPolicy,
+    ) -> ExpansionOutcome:
+        """批量沿双向链接补齐列表和表格，限制数据库往返次数。
+
+        Args:
+            snapshot: 请求固定的活动索引版本。
+            candidates: 一次重排及普通邻居扩展后的候选。
+            policy: 单组成员和总候选预算。
+
+        Returns:
+            原候选及有界结构邻居；损坏链接只产生降级标记。
+
+        """
+        try:
+            originals = _original_candidates(candidates)
+        except IndexCorrupt:
+            return ExpansionOutcome((), ("NEIGHBOR_INDEX_CORRUPT",))
+        roles = {ChunkRole.LIST, ChunkRole.TABLE}
+        seeds = tuple(
+            candidate
+            for candidate in originals.values()
+            if candidate.hydrated.chunk.role in roles
+        )[: policy.rerank_candidate_limit]
+        if not seeds:
+            return ExpansionOutcome(candidates)
+        cap = policy.rerank_candidate_limit * policy.group_member_chunk_limit
+        known = dict(originals)
+        context: dict[str, RankedChunk] = {}
+        frontier = seeds
+        try:
+            for _ in range(policy.group_member_chunk_limit):
+                if len(known) >= cap or not frontier:
+                    break
+                neighbor_ids = tuple(
+                    dict.fromkeys(
+                        neighbor_id
+                        for candidate in frontier
+                        for neighbor_id in (
+                            candidate.hydrated.chunk.previous_chunk_id,
+                            candidate.hydrated.chunk.next_chunk_id,
+                        )
+                        if neighbor_id is not None and neighbor_id not in known
+                    )
+                )[: cap - len(known)]
+                if not neighbor_ids:
+                    break
+                hydrated = _hydrated_candidates(
+                    self._source.hydrate_chunks(snapshot, neighbor_ids),
+                    originals,
+                )
+                next_frontier: list[RankedChunk] = []
+                for candidate in frontier:
+                    origin = candidate.hydrated.chunk
+                    for neighbor_id in (
+                        origin.previous_chunk_id,
+                        origin.next_chunk_id,
+                    ):
+                        item = hydrated.get(neighbor_id or "")
+                        if item is None or item.chunk.role is not origin.role:
+                            continue
+                        _validate_neighbor(origin, item.chunk)
+                        if item.chunk.chunk_id in known:
+                            continue
+                        _add_context(
+                            originals,
+                            context,
+                            item,
+                            seed_id=origin.chunk_id,
+                            reason="STRUCTURE_CONTINUITY",
+                        )
+                        expanded = context[item.chunk.chunk_id]
+                        known[item.chunk.chunk_id] = expanded
+                        next_frontier.append(expanded)
+                frontier = tuple(next_frontier)
+        except IndexCorrupt:
+            return ExpansionOutcome(candidates, ("NEIGHBOR_INDEX_CORRUPT",))
+        return ExpansionOutcome((*candidates, *context.values()))
+
+    def close_table_context(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        candidates: tuple[RankedChunk, ...],
+        policy: RetrievalPolicy,
+        *,
+        source_qualifier: str | None = None,
+    ) -> ExpansionOutcome:
+        """从已命中的规范表格坐标有界补齐目标行和原始表头。
+
+        该闭合不依赖查询分析器选择的 ``neighbor_mode``。字段解析需要先
+        看见真实 schema，因此只要召回结果已经给出表格坐标，就使用索引
+        提供的规范关系单元读取器补齐同一物理行；读取器仍负责版本、表身份
+        和成员数量上限，不能退化为整文档扫描。
+
+        Args:
+            snapshot: 请求固定的活动索引版本。
+            candidates: 已通过排序和来源边界校验的候选。
+            policy: 表格关系单元的成员及总候选预算。
+            source_qualifier: 可选来源限定，仅用于多来源时的稳定优先级。
+
+        Returns:
+            原候选及规范表头、目标行成员；损坏或超预算时带原因码降级。
+
+        """
+        if not candidates or not _has_table_coordinates(candidates):
+            return ExpansionOutcome(candidates)
+        try:
+            return self._expand_table_context(
+                snapshot,
+                candidates,
+                policy,
+                source_qualifier=source_qualifier,
+            )
+        except IndexCorrupt:
+            return ExpansionOutcome(candidates, ("TABLE_INDEX_CORRUPT",))
+
+    def close_source_nodes(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        candidates: tuple[RankedChunk, ...],
+        policy: RetrievalPolicy,
+    ) -> ExpansionOutcome:
+        """补齐正文或表格单元格中跨 canonical Chunk 的同一原文节点。"""
+        try:
+            originals = _original_candidates(candidates)
+            seeds = tuple(
+                candidate
+                for candidate in sorted(
+                    originals.values(),
+                    key=lambda item: item.rerank_rank or 2**31,
+                )
+                if candidate.rerank_rank is not None
+                and candidate.hydrated.chunk.role
+                in {ChunkRole.TEXT, ChunkRole.TABLE}
+                and candidate.hydrated.chunk.next_chunk_id is not None
+                and candidate.hydrated.chunk.next_chunk_id not in originals
+            )[: policy.rerank_candidate_limit]
+            if not seeds:
+                return ExpansionOutcome(candidates)
+            ids = tuple(
+                dict.fromkeys(
+                    identifier
+                    for seed in seeds
+                    if (identifier := seed.hydrated.chunk.next_chunk_id)
+                    is not None
+                )
+            )
+            hydrated = _hydrated_candidates(
+                self._source.hydrate_chunks(snapshot, ids), originals
+            )
+            context: dict[str, RankedChunk] = {}
+            for seed in seeds:
+                origin = seed.hydrated.chunk
+                neighbor = hydrated.get(origin.next_chunk_id or "")
+                if neighbor is None or neighbor.chunk.role is not origin.role:
+                    continue
+                _validate_neighbor(origin, neighbor.chunk)
+                origin_nodes = {
+                    span.node_id
+                    for span in origin.source_spans
+                    if span.is_citable and not span.is_repeated and span.node_id
+                }
+                neighbor_nodes = {
+                    span.node_id
+                    for span in neighbor.chunk.source_spans
+                    if span.is_citable and not span.is_repeated and span.node_id
+                }
+                if origin_nodes.isdisjoint(neighbor_nodes):
+                    continue
+                if origin.role is ChunkRole.TABLE and not any(
+                    left.node_id == right.node_id
+                    and left.source_end_char is not None
+                    and left.source_end_char == right.source_start_char
+                    and left.structural_path == right.structural_path
+                    for left in origin.source_spans
+                    for right in neighbor.chunk.source_spans
+                    if left.is_citable
+                    and right.is_citable
+                    and not left.is_repeated
+                    and not right.is_repeated
+                ):
+                    continue
+                _add_context(
+                    originals,
+                    context,
+                    neighbor,
+                    seed_id=origin.chunk_id,
+                    reason="SOURCE_NODE_CONTINUATION",
+                )
+            return ExpansionOutcome((*candidates, *context.values()))
+        except IndexCorrupt:
+            return ExpansionOutcome(candidates, ("SOURCE_NODE_INDEX_CORRUPT",))
+
+    def _expand_table_context(  # noqa: PLR0912
         self,
         snapshot: ActiveRevisionQuerySnapshot,
         candidates: tuple[RankedChunk, ...],
         policy: RetrievalPolicy,
         *,
         source_qualifier: str | None,
-    ) -> tuple[RankedChunk, ...]:
-        """取实际章节开头表头，并在候选上限内闭合被切开的逻辑行。"""
+    ) -> ExpansionOutcome:
+        """按真实表身份整单元补齐规范表头和目标行，预算不足不截半行。"""
         originals = _original_candidates(candidates)
         context: dict[str, RankedChunk] = {}
-        # 表格逻辑行可能比普通融合窗口更长；闭合预算至少要容纳最终证据上限，
-        # 否则重排候选刚好占满 fusion limit 时会永久丢失行首标签。
+        reasons: list[str] = []
         limit = max(
             len(candidates),
             policy.fusion_candidate_limit,
             policy.max_evidence_items,
         )
-        # 每个种子先闭合同组来源链，防止无关章节铺满窗口后留下半个职责行。
         seeds = _prioritize_uniquely_qualified_source(
             candidates, source_qualifier
         )
+        reader = getattr(self._source, "table_context_chunk_ids", None)
+        visited: set[tuple[str, str, int]] = set()
         for seed in seeds:
+            chunk = seed.hydrated.chunk
+            if chunk.role is not ChunkRole.TABLE:
+                continue
+            rows = _table_row_keys(chunk)
+            if reader is not None and rows:
+                for table_node, row in sorted(rows):
+                    key = (chunk.version.document_version_id, table_node, row)
+                    if key in visited:
+                        continue
+                    visited.add(key)
+                    identity = _table_source_identities(chunk, table_node)
+                    if len(identity) != 1:
+                        reasons.append("TABLE_IDENTITY_UNDETERMINED")
+                        continue
+                    ids = reader(
+                        snapshot,
+                        document_version=chunk.version,
+                        table_node_id=table_node,
+                        row_indices=(row,),
+                        limit=min(200, policy.group_member_chunk_limit),
+                    )
+                    if ids is None:
+                        reasons.append("TABLE_RELATION_UNIT_BUDGET_EXCEEDED")
+                        continue
+                    items = tuple(
+                        _hydrated_candidates(
+                            self._source.hydrate_chunks(snapshot, ids),
+                            originals,
+                        ).values()
+                    )
+                    for item in items:
+                        _validate_boundary(
+                            chunk, item.chunk, require_group=False
+                        )
+                        if _table_source_identities(
+                            item.chunk, table_node
+                        ) != identity or (
+                            (table_node, row) not in _table_row_keys(item.chunk)
+                            and not _has_original_header(item.chunk, table_node)
+                        ):
+                            raise IndexCorrupt(
+                                "目标表上下文的 part/story 或表身份不一致。",
+                                stage="retrieval.neighbors",
+                            )
+                    if not any(
+                        _has_original_header(item.chunk, table_node)
+                        for item in items
+                    ):
+                        reasons.append("TABLE_HEADER_MISSING")
+                    new_items = tuple(
+                        item
+                        for item in items
+                        if item.chunk.chunk_id not in originals
+                        and item.chunk.chunk_id not in context
+                    )
+                    if len(originals) + len(context) + len(new_items) > limit:
+                        reasons.append("TABLE_RELATION_UNIT_BUDGET_EXCEEDED")
+                        continue
+                    for item in items:
+                        _add_context(
+                            originals,
+                            context,
+                            item,
+                            seed_id=chunk.chunk_id,
+                            reason="TABLE_CANONICAL_RELATION_UNIT",
+                        )
+                continue
+            # 旧来源未提供规范 atom 映射时只保留真实双向邻居，不能猜表头。
             expanded: tuple[RankedChunk, ...] = (seed,)
             for _ in range(min(policy.max_evidence_items, 8)):
                 additional = self._expand_links(
@@ -125,20 +409,6 @@ class NeighborExpander:
                 if len(additional) == len(expanded):
                     break
                 expanded = additional[: policy.max_evidence_items + 1]
-            expanded = self._expand_sections(
-                snapshot,
-                expanded,
-                policy.model_copy(
-                    update={
-                        "section_chunk_limit": min(
-                            1, policy.section_chunk_limit
-                        )
-                    }
-                ),
-            )
-            # 先补同一个 canonical table row，再用剩余预算补相邻行和表头。
-            # 分段长行常被 reranker 命中尾部；若按链距离直接填充，相邻行会先
-            # 占满预算，使当前行的行名无法进入 Evidence。
             prioritized = _prioritize_same_table_row(seed, expanded)
             for candidate in prioritized:
                 _add_context(
@@ -152,7 +422,9 @@ class NeighborExpander:
                     break
             if len(originals) + len(context) >= limit:
                 break
-        return (*candidates, *context.values())
+        return ExpansionOutcome(
+            (*candidates, *context.values()), tuple(dict.fromkeys(reasons))
+        )
 
     def _expand_links(
         self,
@@ -220,21 +492,64 @@ class NeighborExpander:
                 snapshot,
                 document_version_id=chunk.version.document_version_id,
                 section_id=chunk.section_id,
-                limit=policy.section_chunk_limit,
+                limit=policy.section_search_limit,
             )
-            hydrated = self._source.hydrate_chunks(
-                snapshot, ids[: policy.section_chunk_limit]
+            hydrated = self._source.hydrate_chunks(snapshot, ids)
+            section_items = tuple(
+                _hydrated_candidates(hydrated, originals).values()
             )
-            for item in _hydrated_candidates(hydrated, originals).values():
+            selected = section_items[: policy.section_chunk_limit]
+            expansion_reason = "SECTION_SIBLING"
+            if chunk.role is ChunkRole.LIST:
+                origin_ordinal = _source_ordinal(chunk)
+                if origin_ordinal is not None:
+                    predecessors = tuple(
+                        sorted(
+                            (
+                                item
+                                for item in section_items
+                                if item.chunk.role is ChunkRole.LIST
+                                and item.chunk.neighbor_group_id
+                                != chunk.neighbor_group_id
+                                and (
+                                    item_ordinal := _source_ordinal(item.chunk)
+                                )
+                                is not None
+                                and 0
+                                < origin_ordinal - item_ordinal
+                                <= policy.section_predecessor_max_gap
+                            ),
+                            key=lambda item: (
+                                -(_source_ordinal(item.chunk) or 0),
+                                item.chunk.chunk_id,
+                            ),
+                        )
+                    )
+                    if predecessors:
+                        selected = predecessors[: policy.section_chunk_limit]
+                        expansion_reason = "SECTION_PREDECESSOR"
+            for item in selected:
                 _validate_boundary(chunk, item.chunk, require_group=False)
                 _add_context(
                     originals,
                     context,
                     item,
                     seed_id=chunk.chunk_id,
-                    reason="SECTION_SIBLING",
+                    reason=expansion_reason,
                 )
         return (*candidates, *context.values())
+
+
+def _source_ordinal(chunk: Chunk) -> int | None:
+    """读取可引用来源节点的最早序号，忽略重复上下文。"""
+    ordinals = (
+        span.source_anchor.ordinal
+        for span in chunk.source_spans
+        if span.is_citable
+        and not span.is_repeated
+        and span.source_anchor is not None
+    )
+    return min(ordinals, default=None)
 
 
 def _original_candidates(
@@ -308,6 +623,65 @@ def _table_row_keys(chunk: Chunk) -> frozenset[tuple[str, int]]:
         ):
             rows.add((table_node_id, row_index))
     return frozenset(rows)
+
+
+def _table_source_identities(
+    chunk: Chunk, table_node_id: str, *, header_only: bool = False
+) -> frozenset[tuple[object, ...]]:
+    """以 atom 的真实节点映射连接表身份与原始 part/story/path。"""
+    atoms = dict(chunk.metadata).get("atoms", [])
+    if not isinstance(atoms, (list, tuple)):
+        return frozenset()
+    nodes: set[str] = set()
+    for atom in atoms:
+        metadata = atom.get("metadata") if isinstance(atom, dict) else None
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("table_node_id") != table_node_id
+        ):
+            continue
+        if header_only and metadata.get("header_strategy") != "tblHeader":
+            continue
+        mapping = metadata.get("cell_source_node_ids")
+        if isinstance(mapping, dict):
+            nodes.update(
+                node
+                for values in mapping.values()
+                if isinstance(values, (list, tuple))
+                for node in values
+                if isinstance(node, str)
+            )
+    identities: set[tuple[object, ...]] = set()
+    for span in chunk.source_spans:
+        anchor = span.source_anchor
+        if (
+            not span.is_citable
+            or span.is_repeated
+            or span.node_id not in nodes
+            or anchor is None
+        ):
+            continue
+        table_positions = [
+            index
+            for index, part in enumerate(span.structural_path)
+            if part.startswith("tbl:")
+        ]
+        if table_positions:
+            identities.add(
+                (
+                    anchor.part_uri,
+                    anchor.story_kind,
+                    span.structural_path[: table_positions[-1] + 1],
+                    table_node_id,
+                )
+            )
+    return frozenset(identities)
+
+
+def _has_original_header(chunk: Chunk, table_node_id: str) -> bool:
+    return bool(
+        _table_source_identities(chunk, table_node_id, header_only=True)
+    )
 
 
 def _prioritize_uniquely_qualified_source(

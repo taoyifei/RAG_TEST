@@ -1,0 +1,8 @@
+{"scenario_id":"explicit_department","question":"01 科管负责的外部认证申请有哪些主要管理要求？","question_sha256":"3afd093015d3deaf486035788c1d49bb9622abf2501abe7a35813cb1dbc451f8","expected_reason_code":"EXPLICIT_DEPARTMENT_UNIQUE"}
+{"scenario_id":"title_only","question":"项目交付全流程通常包括哪些主要阶段和交付要求？","question_sha256":"6b665f9cf7024c1ef54d2bd78cd3beff63600e45faaa9d8f935aa2c91f9e545d"}
+{"scenario_id":"cross_department","question":"请分别说明01 科管的外部认证管理要求，以及03 综合的采购询价流程。","question_sha256":"f5111d8a48534f15cff8fdceb723c7aab3a2dfc87939ee11e364d4357c82d122","expected_reason_code":"EXPLICIT_DEPARTMENT_AMBIGUOUS"}
+{"scenario_id":"no_department_term","question":"固定资产投资项目的立项和审批有哪些要求？","question_sha256":"2776acbe4cf20c0f6f35cbadc4f25626a088139873863969ad070d6f630772b7"}
+{"scenario_id":"short_follow_up","question":"那审批时限呢？","question_sha256":"f97f2142f54b841531e18c2814e8f908b0ad3a9430f1920b6dd60b8b4d807321","setup":[{"question":"研发外协项目在立项前需要完成哪些准备？","question_sha256":"17bb2a68808221987bbf10d31d364012537f2b65d82b6efc05ca3fb61713b4b5"}]}
+{"scenario_id":"real_multi_turn","question":"结合刚才的流程，发起询价前应准备哪些材料？","question_sha256":"b8b20086f5660fe02fd14d0bd220eca40241edeab7a38d22b926a674ebd6a615","setup":[{"question":"采购询价流程一般分为哪些步骤？","question_sha256":"048d3216aa9ac2cb79b016bc2dbf5176aae07a1761ed2f2e6b42b0b6cb9aedd1"}]}
+{"scenario_id":"no_evidence","question":"火星基地的员工餐补标准是多少？","question_sha256":"35e9e0b1e485cbc87640ebce1bee1af6c2a470e3ed44ccb35fe840d75cc998cc"}
+{"scenario_id":"explicit_document","question":"根据《中国移动粤港澳大湾区(广东)创新研究院外部认证管理办法(v1.0)》，外部认证申请有哪些要求？","question_sha256":"a722f0d5b1c39733bce0897a550c9087ab3ec92df017eae6d611db501c2a2c83","expected_actual_scope_kind":"SOURCE_RESOLVED","expected_reason_code":"EXPLICIT_SOURCE_DEPARTMENT"}

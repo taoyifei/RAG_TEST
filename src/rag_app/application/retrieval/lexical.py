@@ -12,6 +12,7 @@ from rag_app.core.models import (
     QuerySemantics,
     QueryVariant,
     RequestedAnswerType,
+    SourceDocumentIdentity,
 )
 from rag_app.core.ports import LexicalStorePort
 
@@ -34,6 +35,26 @@ _TYPED_SEARCH_TYPES = frozenset(
         RequestedAnswerType.SECTION_SUMMARY,
     }
 )
+_ORIGINAL_QUERY_PRIORITY_HITS = 3
+
+
+def _merge_question_term_hits(
+    original: tuple[ChannelHit, ...],
+    supplemental: tuple[ChannelHit, ...],
+    limit: int,
+) -> tuple[ChannelHit, ...]:
+    """保留原问前三条命中，再由对象词补齐检索窗口。"""
+    merged: dict[str, ChannelHit] = {}
+    for hit in (
+        *original[:_ORIGINAL_QUERY_PRIORITY_HITS],
+        *supplemental,
+        *original,
+    ):
+        merged.setdefault(hit.chunk_id, hit)
+    return tuple(
+        hit.model_copy(update={"rank": rank})
+        for rank, hit in enumerate(tuple(merged.values())[:limit], 1)
+    )
 
 
 def question_search_terms(
@@ -96,6 +117,7 @@ class LexicalChannel:
         *,
         limit: int,
         analysis: QueryAnalysis | None = None,
+        allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None,
     ) -> tuple[ChannelHit, ...]:
         """返回不携带正文的 FTS5 候选。
 
@@ -104,6 +126,7 @@ class LexicalChannel:
             variant: 原始或唯一 normalized 变体。
             limit: 最大候选数。
             analysis: 当前已接受改写后的共享分析。
+            allowed_documents: 排名截断前允许的成对文档与版本身份。
 
         Returns:
             绑定变体通道名的 FTS5 身份候选。
@@ -114,6 +137,7 @@ class LexicalChannel:
                 revision=snapshot.revision,
                 query=variant.text,
                 limit=limit,
+                allowed_documents=allowed_documents,
             )
         )
         normalized_terms = question_search_terms(
@@ -126,14 +150,12 @@ class LexicalChannel:
                     revision=snapshot.revision,
                     query=normalized_terms,
                     limit=limit,
+                    allowed_documents=allowed_documents,
                 )
             )
-            # 原问句仍实际检索；补充对象词命中避免英文标题独占候选窗口。
-            merged = {hit.chunk_id: hit for hit in (*supplemental, *hits)}
-            hits = tuple(
-                hit.model_copy(update={"rank": rank})
-                for rank, hit in enumerate(tuple(merged.values())[:limit], 1)
-            )
+            # 原问前列直接命中优先；补充对象词只填充剩余窗口。
+            # 否则泛化后的对象词可能把更精确的原问证据挤出重排。
+            hits = _merge_question_term_hits(hits, supplemental, limit)
             used_question_terms = True
         channel = (
             "lexical:fts5"

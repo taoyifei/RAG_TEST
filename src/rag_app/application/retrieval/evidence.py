@@ -12,6 +12,7 @@ from rag_app.application.retrieval.answer_support import (
     evaluate_linked_support,
     evaluate_span_support,
 )
+from rag_app.application.retrieval.evidence_groups import GroupCandidate
 from rag_app.application.retrieval.semantics import source_qualifier_matches
 from rag_app.core.models import (
     Chunk,
@@ -59,6 +60,32 @@ _STAGE_QUERY = re.compile(r"阶段|环节|全流程")
 _LIST_MARKER_ONLY = re.compile(r"^\s*(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*$")
 _MINIMUM_STAGE_MEMBER_COUNT = 2
 _FLOW_ARCHITECTURE_PATH_DEPTH = 2
+_STRUCTURAL_ANSWER_TYPES = frozenset(
+    {
+        RequestedAnswerType.ENUMERATION,
+        RequestedAnswerType.COUNT,
+        RequestedAnswerType.ORDINAL_ITEM,
+        RequestedAnswerType.DUTIES,
+        RequestedAnswerType.PROCEDURE,
+    }
+)
+
+
+def requires_complete_evidence_group(
+    answer_type: RequestedAnswerType,
+) -> bool:
+    """判断答案形状是否必须由闭合结构组支持。
+
+    Args:
+        answer_type: 原问题要求的答案形状。
+
+    Returns:
+        枚举、数量、顺序、职责或流程问题返回真。
+
+    """
+    return answer_type in _STRUCTURAL_ANSWER_TYPES
+
+
 _DOCUMENT_METADATA_KEYS = frozenset(
     {
         "allowed_groups",
@@ -109,6 +136,14 @@ class EvidenceSelectionResult:
     ambiguous: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _TableIntersectionResult:
+    """同表行名、列头和交点值的真实来源片段。"""
+
+    spans: dict[str, set[_SpanKey]]
+    supports: dict[_SpanKey, AnswerSupport]
+
+
 class EvidenceAssembler:
     """只发布可映射到真实来源的单 span quote。"""
 
@@ -151,6 +186,7 @@ class EvidenceAssembler:
         *,
         context: EvidenceSelectionContext | None = None,
         include_model_candidates: bool = False,
+        groups: tuple[GroupCandidate, ...] | None = None,
     ) -> EvidenceSelectionResult:
         """形成互不混淆的模型候选与最小充分支持集。
 
@@ -159,6 +195,7 @@ class EvidenceAssembler:
             policy: Evidence 数量、来源与 token 上限。
             context: 当前共享 QueryAnalysis 与路由身份。
             include_model_candidates: 是否保留相关但未直接支持的模型候选。
+            groups: 结构闭合后的候选组；空值保留原 Evidence 行为。
 
         Returns:
             包含候选淘汰原因和跨文档歧义状态的选择结果。
@@ -170,6 +207,10 @@ class EvidenceAssembler:
             context=context,
             allow_uncertain=include_model_candidates,
         )
+        if groups:
+            model_candidates = _annotate_group_evidence(
+                model_candidates, groups
+            )
         supported = (
             model_candidates
             if context is None
@@ -177,7 +218,24 @@ class EvidenceAssembler:
                 item for item in model_candidates if _support_is_supported(item)
             )
         )
+        structural_group_required = groups is not None and (
+            context is None
+            or requires_complete_evidence_group(
+                context.analysis.semantics.answer_type
+            )
+        )
+        if structural_group_required:
+            supported = tuple(
+                item for item in supported if _group_is_complete(item)
+            )
+            supported = _structurally_supported_group_items(
+                supported, groups or (), context
+            )
         support_set, ambiguous = _minimal_support_set(supported, context)
+        if groups and context is not None:
+            support_set = _complete_structural_support_set(
+                support_set, supported, context
+            )
         selected_keys = {_evidence_key(item) for item in support_set}
         ordered = (
             *support_set,
@@ -195,9 +253,14 @@ class EvidenceAssembler:
                 "AMBIGUOUS_SAME_TARGET_ACROSS_DOCUMENTS"
                 if ambiguous and _support_is_supported(item)
                 else (
-                    "NOT_IN_MINIMUM_SUPPORT_SET"
-                    if _support_is_supported(item)
-                    else "MODEL_EVIDENCE_NOT_DIRECTLY_SUPPORTED"
+                    "INCOMPLETE_EVIDENCE_GROUP"
+                    if structural_group_required
+                    and not _group_is_complete(item)
+                    else (
+                        "NOT_IN_MINIMUM_SUPPORT_SET"
+                        if _support_is_supported(item)
+                        else "MODEL_EVIDENCE_NOT_DIRECTLY_SUPPORTED"
+                    )
                 ),
             )
             for item in model_candidates
@@ -211,7 +274,7 @@ class EvidenceAssembler:
             ambiguous=ambiguous,
         )
 
-    def _assemble_candidates(
+    def _assemble_candidates(  # noqa: PLR0915
         self,
         candidates: tuple[RankedChunk, ...],
         policy: RetrievalPolicy,
@@ -234,10 +297,12 @@ class EvidenceAssembler:
         )
         if descriptive_list is not None:
             return descriptive_list
-        table_spans = _table_intersections(unique_chunks, context)
+        table_result = _table_intersections(unique_chunks, context)
+        table_spans = table_result.spans
         support_overrides = _context_supports(
             unique_chunks, context, table_spans
         )
+        support_overrides.update(table_result.supports)
         documents: Counter[str] = Counter()
         sections: Counter[tuple[str, str]] = Counter()
         chunks: Counter[str] = Counter()
@@ -266,6 +331,17 @@ class EvidenceAssembler:
             )
             for candidate in unique_chunks
         )
+        if context is not None and context.query_kind is QueryKind.COMPLEX:
+            # 复合列表问题先保留同章节紧邻的前序阶段，避免原始重排项
+            # 在有限 Evidence 预算内把阶段开头全部挤掉。
+            ranked_by_chunk = tuple(
+                sorted(
+                    ranked_by_chunk,
+                    key=lambda pair: (
+                        pair[0].expansion_reason != "SECTION_PREDECESSOR"
+                    ),
+                )
+            )
         packing_order = _evidence_packing_order(
             ranked_by_chunk,
             diversify_chunks=allow_uncertain,
@@ -279,7 +355,12 @@ class EvidenceAssembler:
                 continue
             document_id = chunk.version.document_id
             section_key = (document_id, chunk.section_id)
-            if chunks[chunk.chunk_id] >= policy.max_evidence_items_per_chunk:
+            chunk_cap = (
+                max(3, policy.max_evidence_items_per_chunk)
+                if span_key in table_result.supports
+                else policy.max_evidence_items_per_chunk
+            )
+            if chunks[chunk.chunk_id] >= chunk_cap:
                 continue
             if documents[document_id] >= policy.per_document_cap:
                 continue
@@ -322,6 +403,186 @@ class EvidenceAssembler:
             evidence.append(item)
         # 相邻对象标签与属性必须同时装入预算，禁止只发布其中半个支持链。
         return _complete_supports(tuple(evidence))
+
+
+def _annotate_group_evidence(
+    evidence: tuple[EvidenceItem, ...],
+    groups: tuple[GroupCandidate, ...],
+) -> tuple[EvidenceItem, ...]:
+    """按最终 Evidence 成员覆盖率标注结构组完整性。
+
+    Args:
+        evidence: 已通过原有 span、cap 和 token 预算的模型候选。
+        groups: 按检索顺序排列的有界结构组。
+
+    Returns:
+        保持原引用与顺序，并补充结构组状态的模型候选。
+
+    """
+    owners: dict[str, tuple[GroupCandidate, int]] = {}
+    for group in groups:
+        for index, chunk_id in enumerate(group.group.member_chunk_ids, 1):
+            previous = owners.get(chunk_id)
+            if previous is None or len(group.group.member_chunk_ids) > len(
+                previous[0].group.member_chunk_ids
+            ):
+                # 列表导语可同时属于段落组，优先保留覆盖完整结构的组。
+                owners[chunk_id] = (group, index)
+    present_by_group: dict[str, set[str]] = defaultdict(set)
+    present_spans_by_group: dict[str, set[tuple[object, ...]]] = defaultdict(
+        set
+    )
+    for item in evidence:
+        owner = owners.get(item.chunk_id)
+        if owner is not None:
+            present_by_group[owner[0].group_id].add(item.chunk_id)
+            present_spans_by_group[owner[0].group_id].update(
+                _group_span_identity(span) for span in item.source_spans
+            )
+    annotated: list[EvidenceItem] = []
+    for item in evidence:
+        owner = owners.get(item.chunk_id)
+        if owner is None:
+            group_metadata: dict[str, object] = {
+                "evidence_group_id": None,
+                "evidence_group_type": None,
+                "group_member_index": 0,
+                "group_member_count": 0,
+                "group_complete": False,
+                "group_completeness_reason": "NO_GROUP_MEMBERSHIP",
+            }
+        else:
+            group, index = owner
+            missing_members = (
+                set(group.group.member_chunk_ids)
+                - (present_by_group[group.group_id])
+            )
+            required_spans = {
+                _group_span_identity(span)
+                for source_map in group.group.member_source_maps
+                for span in source_map.source_spans
+                if span.is_citable
+            }
+            missing_spans = (
+                required_spans - present_spans_by_group[group.group_id]
+            )
+            reasons = (*group.group.incomplete_reasons,)
+            if missing_members:
+                reasons = (*reasons, "EVIDENCE_MEMBER_NOT_SELECTED")
+            if missing_spans:
+                reasons = (*reasons, "EVIDENCE_SOURCE_SPAN_NOT_SELECTED")
+            group_metadata = {
+                "evidence_group_id": group.group_id,
+                "evidence_group_type": group.group.kind.value,
+                "group_member_index": index,
+                "group_member_count": len(group.group.member_chunk_ids),
+                "group_complete": (
+                    group.complete and not missing_members and not missing_spans
+                ),
+                "group_completeness_reason": (
+                    ";".join(dict.fromkeys(reasons)) if reasons else "COMPLETE"
+                ),
+            }
+        annotated.append(
+            item.model_copy(
+                update={
+                    "metadata": freeze_json_object(
+                        {**dict(item.metadata), **group_metadata}
+                    )
+                }
+            )
+        )
+    return tuple(annotated)
+
+
+def _group_span_identity(span: SourceSpan) -> tuple[object, ...]:
+    """对照真实来源节点与区间，避免一个 Chunk 代表多项事实。"""
+    return (
+        span.node_id,
+        span.source_start_char,
+        span.source_end_char,
+        span.span_type.value,
+    )
+
+
+def group_source_maps_covered(
+    group: GroupCandidate, evidence: tuple[EvidenceItem, ...]
+) -> bool:
+    """最终装包后再次核对组的每个成员和可引用来源跨度。"""
+    if not group.complete:
+        return False
+    member_ids = set(group.group.member_chunk_ids)
+    selected = tuple(item for item in evidence if item.chunk_id in member_ids)
+    present_chunks = {item.chunk_id for item in selected}
+    present_spans = {
+        _group_span_identity(span)
+        for item in selected
+        for span in item.source_spans
+    }
+    required_spans = {
+        _group_span_identity(span)
+        for source_map in group.group.member_source_maps
+        for span in source_map.source_spans
+        if span.is_citable
+    }
+    return member_ids <= present_chunks and required_spans <= present_spans
+
+
+def _group_is_complete(item: EvidenceItem) -> bool:
+    """只有完整组成员可以进入最终支持集。"""
+    return dict(item.metadata).get("group_complete") is True
+
+
+def _structurally_supported_group_items(
+    supported: tuple[EvidenceItem, ...],
+    groups: tuple[GroupCandidate, ...],
+    context: EvidenceSelectionContext | None,
+) -> tuple[EvidenceItem, ...]:
+    """结构问句要求同组全部成员各自具有直接支持。"""
+    if (
+        context is None
+        or context.analysis.semantics.answer_type
+        not in _STRUCTURAL_ANSWER_TYPES
+    ):
+        return supported
+    supported_by_group: dict[str, set[str]] = defaultdict(set)
+    for item in supported:
+        group_id = dict(item.metadata).get("evidence_group_id")
+        if isinstance(group_id, str):
+            supported_by_group[group_id].add(item.chunk_id)
+    complete_ids = {
+        group.group_id
+        for group in groups
+        if set(group.group.member_chunk_ids)
+        <= supported_by_group.get(group.group_id, set())
+    }
+    return tuple(
+        item
+        for item in supported
+        if dict(item.metadata).get("evidence_group_id") in complete_ids
+    )
+
+
+def _complete_structural_support_set(
+    selected: tuple[EvidenceItem, ...],
+    supported: tuple[EvidenceItem, ...],
+    context: EvidenceSelectionContext,
+) -> tuple[EvidenceItem, ...]:
+    """最小支持节点选中结构组时，保留该组所有直接支持成员。"""
+    if (
+        not selected
+        or context.analysis.semantics.answer_type
+        not in _STRUCTURAL_ANSWER_TYPES
+    ):
+        return selected
+    selected_groups = {
+        dict(item.metadata).get("evidence_group_id") for item in selected
+    }
+    return tuple(
+        item
+        for item in supported
+        if dict(item.metadata).get("evidence_group_id") in selected_groups
+    )
 
 
 def _strict_document_label_owner(
@@ -416,6 +677,15 @@ def _evidence_packing_order(
     priorities = priority_keys or set()
 
     def interleave(*, priority: bool) -> tuple[_PackablePiece, ...]:
+        """按 Chunk 交错排列同优先级的可引用片段。
+
+        Args:
+            priority: 是否选择高优先级的来源片段。
+
+        Returns:
+            保持候选来源顺序的交错片段。
+
+        """
         groups = tuple(
             (
                 candidate,
@@ -550,8 +820,8 @@ def semantic_candidate_allowed(
     if actual_space is None and len(spaces) == 1:
         actual_space = spaces[0]
     return actual_space in spaces and any(
-        contribution.channel == f"dense:{context.selected_slot}"
-        for contribution in candidate.contributions
+        channel == f"dense:{context.selected_slot}"
+        for channel in candidate.retrieval_channels
     )
 
 
@@ -565,10 +835,57 @@ def _span_key(chunk: Chunk, span: SourceSpan) -> _SpanKey:
     )
 
 
-def _table_intersections(  # noqa: PLR0912
+def _table_intersection_certificate(
+    context: EvidenceSelectionContext,
+    cells: _TableCells,
+    row: int,
+    column: int,
+) -> tuple[tuple[_SpanKey, _SpanKey, _SpanKey], AnswerSupport] | None:
+    """只有真实且唯一的行名、列头和值才能组成 Atom 支持。"""
+    row_label = cells.get((row, 0), {})
+    column_header = cells.get((0, column), {})
+    value = cells.get((row, column), {})
+    if any(
+        len(parts) != 1 or len(set(parts.values())) != 1
+        for parts in (row_label, column_header, value)
+    ):
+        return None
+    proof = evaluate_span_support(
+        context.analysis,
+        next(iter(value.values())),
+        table_relation=True,
+        table_header=next(iter(column_header.values())),
+    )
+    keys = (
+        next(iter(row_label)),
+        next(iter(column_header)),
+        next(iter(value)),
+    )
+    node_ids = tuple(key[1] for key in keys)
+    if (
+        proof.status is not SupportStatus.SUPPORTED
+        or any(
+            not isinstance(node_id, str) or not node_id for node_id in node_ids
+        )
+        or len(set(node_ids)) != len(node_ids)
+    ):
+        return None
+    return keys, AnswerSupport(
+        status=SupportStatus.SUPPORTED,
+        query_target=proof.query_target,
+        requested_relation_or_attribute=proof.requested_relation_or_attribute,
+        answer_type=proof.answer_type,
+        support_reason="TABLE_INTERSECTION",
+        supporting_span_ids=tuple(
+            node_id for node_id in node_ids if isinstance(node_id, str)
+        ),
+    )
+
+
+def _table_intersections(  # noqa: PLR0912, PLR0915
     candidates: tuple[RankedChunk, ...],
     context: EvidenceSelectionContext | None,
-) -> dict[str, set[_SpanKey]]:
+) -> _TableIntersectionResult:
     """在同表候选中用唯一行名和列头定位原始单元格。
 
     只识别具有第零行表头和第零列行名的规则表。标签必须完整出现在
@@ -576,7 +893,7 @@ def _table_intersections(  # noqa: PLR0912
     仅共享结构信息，不拼接或重写引用；输出仍受现有 cap 和预算约束。
     """
     if context is None or context.query_kind is QueryKind.AMBIGUOUS:
-        return {}
+        return _TableIntersectionResult({}, {})
     tables: dict[_TableKey, dict[tuple[int, int], dict[_SpanKey, str]]] = (
         defaultdict(lambda: defaultdict(dict))
     )
@@ -602,6 +919,7 @@ def _table_intersections(  # noqa: PLR0912
                 tables[table_key][row, column][_span_key(chunk, span)] = quote
     query = normalize_semantic_text(context.analysis.normalized_query)
     selected: dict[str, set[_SpanKey]] = {}
+    certificates: dict[_SpanKey, AnswerSupport] = {}
     for table_key, cells in tables.items():
         context_qualifier = context.analysis.semantics.context_qualifier
         if context_qualifier and not any(
@@ -645,6 +963,15 @@ def _table_intersections(  # noqa: PLR0912
             selected_values.update(values)
         if not selected_values:
             continue
+        if context.include_table_context and not whole_row:
+            certificate = _table_intersection_certificate(
+                context, cells, row, next(iter(columns))
+            )
+            if certificate is None:
+                continue
+            proof_keys, proof = certificate
+            selected_values.update(proof_keys)
+            certificates.update(dict.fromkeys(proof_keys, proof))
         # “对应内容”不是一组失去语义的裸值：行名证明所问对象，最近的
         # 完整前置表头证明每个值的列含义。标题行可以位于表头之前。
         if whole_row:
@@ -661,7 +988,7 @@ def _table_intersections(  # noqa: PLR0912
                     selected_values.update(cells[header_row, column])
         for chunk_id in members[table_key]:
             selected.setdefault(chunk_id, set()).update(selected_values)
-    return selected
+    return _TableIntersectionResult(selected, certificates)
 
 
 def _stage_hierarchy_evidence(  # noqa: PLR0911, PLR0912
@@ -1774,10 +2101,10 @@ def _complete_supports(
     complete: list[EvidenceItem] = []
     for item in evidence:
         support = dict(item.metadata).get("answer_support")
-        if (
-            isinstance(support, dict)
-            and support.get("support_reason") == "LINKED_SUBJECT_ATTRIBUTE"
-        ):
+        if isinstance(support, dict) and support.get("support_reason") in {
+            "LINKED_SUBJECT_ATTRIBUTE",
+            "TABLE_INTERSECTION",
+        }:
             nodes = support.get("supporting_span_ids", [])
             if not isinstance(nodes, list) or any(
                 node not in present for node in nodes
@@ -2071,6 +2398,11 @@ def _evidence_item(
         source_spans=(_relative_span(span, quote, chunk.citation_text),),
         document_id=chunk.version.document_id,
         document_version_id=chunk.version.document_version_id,
+        source_identity_scope=(
+            chunk.project_id,
+            chunk.knowledge_base_id,
+            chunk.index_revision_id,
+        ),
         display_name=candidate.hydrated.display_name,
         heading_path=chunk.heading_path,
         section_id=chunk.section_id,
@@ -2085,9 +2417,7 @@ def _evidence_item(
         selection_reason=(candidate.expansion_reason or "retrieval_candidate"),
         publishable=True,
         metadata=metadata,
-        retrieval_origins=tuple(
-            contribution.channel for contribution in candidate.contributions
-        )
+        retrieval_origins=candidate.retrieval_channels
         + ((candidate.expansion_reason,) if candidate.expansion_reason else ()),
         fusion_rank=candidate.fusion_rank,
         rerank_rank=candidate.rerank_rank,
@@ -2099,13 +2429,65 @@ def _evidence_item(
     )
 
 
+def _logical_table_row(
+    chunk: Chunk, span: SourceSpan
+) -> tuple[str, int] | None:
+    """从规范节点映射核对当前 SourceSpan 唯一所属的表格行。
+
+    一个 canonical Chunk 可以有界容纳表头和多个数据行，不能要求整个
+    Chunk 只有一个 ``row_index``。这里逐个 atom 校验节点映射，只把当前
+    SourceSpan 实际出现的唯一行身份写入证据；节点缺失、跨行复用或映射
+    畸形均保持未确定，禁止根据文本或相邻位置猜测。
+    """
+    atoms = dict(chunk.metadata).get("atoms")
+    if (
+        chunk.role.value != "table"
+        or span.node_id is None
+        or not isinstance(atoms, (list, tuple))
+        or not atoms
+    ):
+        return None
+    identities: set[tuple[str, int]] = set()
+    for atom in atoms:
+        metadata = atom.get("metadata") if isinstance(atom, dict) else None
+        if not isinstance(metadata, dict):
+            return None
+        table_node = metadata.get("table_node_id")
+        row_index = metadata.get("row_index")
+        mapping = metadata.get("cell_source_node_ids")
+        if (
+            not isinstance(table_node, str)
+            or not isinstance(row_index, int)
+            or isinstance(row_index, bool)
+            or not isinstance(mapping, dict)
+        ):
+            return None
+        mapped_nodes: set[str] = set()
+        for values in mapping.values():
+            if not isinstance(values, (list, tuple)) or any(
+                not isinstance(node_id, str) for node_id in values
+            ):
+                return None
+            mapped_nodes.update(
+                node_id for node_id in values if isinstance(node_id, str)
+            )
+        if span.node_id in mapped_nodes:
+            identities.add((table_node, row_index))
+    if len(identities) != 1:
+        return None
+    return next(iter(identities))
+
+
 def _evidence_metadata(chunk: Chunk, span: SourceSpan) -> JsonObject:
-    """只传播受控文档字段，并保留既有 OCR 来源标记。"""
+    """只传播受控文档字段、可核对的逻辑表格行与 OCR 来源标记。"""
     metadata = {
         key: value
         for key, value in chunk.metadata
         if key in _DOCUMENT_METADATA_KEYS
     }
+    if (table_row := _logical_table_row(chunk, span)) is not None:
+        metadata["table_logical_node_id"] = table_row[0]
+        metadata["table_logical_row_index"] = table_row[1]
     if dict(span.metadata).get("origin") == "ocr":
         metadata.update(dict(span.metadata))
     return freeze_json_object(metadata)

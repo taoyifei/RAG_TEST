@@ -7,10 +7,17 @@ import re
 import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from threading import RLock
-from typing import TypeVar
+from time import perf_counter
+from typing import TypedDict, TypeVar
 
-from pydantic import Field, StrictInt, ValidationError, model_validator
+from pydantic import (
+    Field,
+    StrictInt,
+    ValidationError,
+    model_validator,
+)
 
 from rag_app.adapters.providers.aliyun_chat import (
     AliyunChatAdapter,
@@ -22,11 +29,46 @@ from rag_app.adapters.providers.budget_transport import (
     provider_budget_scope,
     provider_data_scope,
 )
+from rag_app.adapters.providers.field_resolution_wire import (
+    FIELD_RESOLUTION_SCHEMA_REVISION,
+    FieldResolutionContractContext,
+    FieldResolutionWireError,
+    build_field_resolution_contract,
+    render_wire_schema,
+    validate_field_response,
+)
+from rag_app.adapters.providers.field_resolution_wire import (
+    request_payload as field_resolution_request_payload,
+)
 from rag_app.adapters.providers.openai_compatible import (
     OpenAICompatibleChatAdapter,
     OpenAICompatibleChatConfig,
 )
+from rag_app.adapters.providers.structured_contract import (
+    wb08r_structured_output_profile,
+)
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
+from rag_app.application.answering.semantic_validation import (
+    SemanticValidationRequest,
+    SemanticValidationResponse,
+)
+from rag_app.application.retrieval.adaptive import (
+    AdaptivePlanOutcome,
+    FieldResolutionExecutionState,
+    FieldResolutionOutcome,
+    ReasoningEffort,
+)
+from rag_app.application.retrieval.context_resolution import (
+    QueryInputSpan,
+    build_input_spans,
+    resolve_root_query,
+)
+from rag_app.application.retrieval.minimal_plan import (
+    MinimalPlanPayload,
+    MinimalPlanValidationError,
+    build_query_atoms,
+    planner_json_schema,
+)
 from rag_app.application.retrieval.rewrite_constraints import (
     interpretation_constraint_reason,
     rewrite_constraint_reason,
@@ -34,7 +76,10 @@ from rag_app.application.retrieval.rewrite_constraints import (
 from rag_app.core.capabilities import ComponentCapabilities, ComponentDescriptor
 from rag_app.core.errors import (
     PolicyDenied,
+    ProviderInputTooLarge,
+    ProviderInvalidResponse,
     ProviderQuotaExhausted,
+    ProviderRequestRejected,
     QueryCancelled,
     RagError,
 )
@@ -42,20 +87,29 @@ from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AnswerClaim,
     AnswerDraft,
+    FieldCandidate,
     ProviderCall,
     ProviderHealth,
     QueryAnalysis,
     QuerySemantics,
     QueryVariant,
     RequestedAnswerType,
+    ResolvedQueryView,
     SearchRequest,
 )
 from rag_app.core.models.common import FrozenModel
+from rag_app.core.models.query_plan import QUERY_PLAN_SCHEMA_REVISION, QueryAtom
+from rag_app.core.models.relation_review import (
+    RelationReviewRequest,
+    RelationReviewResponse,
+)
 from rag_app.core.ports import CancellationPort, GenerationRequest
 from rag_app.core.ports.query_interpret import InterpretOutcome
 from rag_app.core.ports.query_rewrite import RewriteOutcome
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
+from rag_app.product.private_replay import PrivateReplayDraftRecorder
 from rag_app.product.provider_runtime import ProviderRuntimeRegistry
+from rag_app.product.structured_json import extract_json_object
 
 _REWRITE_SIGNAL = re.compile(
     r"这个|那个|它|其中|上述|前者|后者|具体干什么|干啥|干什么|咋|怎么说|说白了|那怎么办"
@@ -68,10 +122,22 @@ _MAX_INTERPRET_FIELD_CHARS = 512
 _MAX_GROUNDED_INPUT_TOKENS = 6_144
 # 内网演示模型的上下文窗口同时容纳输入与输出。回答采用结构化、逐条的
 # claim，固定为输出保留 1536 token；输入预算限制在 6144 token，为 8K
-# 上下文窗口留出固定余量。证据候选由 Provider adapter 按重排顺序裁剪，
-# 不改变引用校验所能看到的完整有界证据包。
+# 上下文窗口留出固定余量。Provider 在发送前固定 PreparedPacket；
+# 模型引用的准入集合严格限制为当前尝试实际发送且对应 Atom 可读的来源。
 _MAX_GROUNDED_OUTPUT_TOKENS = 1536
 _RotationResult = TypeVar("_RotationResult")
+
+
+class _PlannerTelemetry(TypedDict):
+    """记录既有 Planner 计量字段，不让字典展开模糊事实类型。"""
+
+    planner_latency_ms: int
+    planner_input_tokens: int | None
+    planner_output_tokens: int | None
+    planner_finish_reason: str | None
+    planner_transport_timeout_ms: int
+
+
 _LOW_CONFIDENCE_RULE_REASONS = frozenset(
     {
         "AMBIGUOUS_ACTION_QUESTION_SYNTAX",
@@ -145,6 +211,9 @@ class _InterpretPayload(FrozenModel):
         return self
 
 
+_AdaptivePlanPayload = MinimalPlanPayload
+
+
 class ProductGroundedModel:
     """一个知识库的模型引用，每次发送都重新核对来源与持久授权。"""
 
@@ -154,11 +223,27 @@ class ProductGroundedModel:
         knowledge_base_id: str,
         connections: SqliteConnectionFactory,
         providers: ProviderRuntimeRegistry,
+        *,
+        private_replay_recorder: PrivateReplayDraftRecorder | None = None,
     ) -> None:
+        """绑定模型、知识库授权与可选的受控私有草稿记录器。
+
+        Args:
+            settings: 当前知识库的回答模型设置。
+            knowledge_base_id: 当前知识库身份。
+            connections: 产品 SQLite 连接工厂。
+            providers: 已配置 Provider 运行时注册表。
+            private_replay_recorder: 默认关闭的受控私有草稿记录器。
+
+        Returns:
+            无返回值。
+
+        """
         self.settings = settings
         self.knowledge_base_id = knowledge_base_id
         self.connections = connections
         self.providers = providers
+        self._private_replay_recorder = private_replay_recorder
         with connections.transaction() as connection:
             row = connection.execute(
                 "SELECT project_id FROM knowledge_bases "
@@ -226,6 +311,59 @@ class ProductGroundedModel:
         """
         return self._rotation_candidates()[0].health(network=network)
 
+    @property
+    def supplement_timeout_seconds(self) -> float:
+        """补充沿用已配置 HTTP 时限，取最紧限制防止模型选择扩大时限。"""
+        return min(
+            adapter.supplement_timeout_seconds for adapter in self.adapters
+        )
+
+    @property
+    def field_resolution_total_deadline_seconds(self) -> float:
+        """返回一个逻辑请求全部字段小包共享的总时限。"""
+        return self.settings.field_resolution_total_deadline_seconds
+
+    def review_relations(
+        self, request: RelationReviewRequest
+    ) -> RelationReviewResponse:
+        """复核重新核验来源并沿用同一持久授权，不轮换模型或重置预算。"""
+        candidates = tuple(
+            adapter
+            for adapter in self.adapters
+            if request.generation_model == adapter.config.model
+            or (request.generation_model is None and len(self.adapters) == 1)
+        )
+        if len(candidates) != 1:
+            raise PolicyDenied(
+                "关系复核不能变更首次生成使用的模型。",
+                stage="generation.relation_review",
+                code="RELATION_REVIEW_MODEL_IDENTITY_REQUIRED",
+            )
+        hashes = self._source_hashes(request)
+        # _scope只恢复既有campaign和资料身份，全部调用仍在同一持久账本扣账。
+        with self._scope("generation", hashes):
+            return candidates[0].review_relations(request)
+
+    def review_semantics(
+        self, request: SemanticValidationRequest
+    ) -> SemanticValidationResponse:
+        """在首次生成的同一模型和语料授权内执行一次语义复核。"""
+        candidates = tuple(
+            adapter
+            for adapter in self.adapters
+            if request.generation_model == adapter.config.model
+            or (request.generation_model is None and len(self.adapters) == 1)
+        )
+        if len(candidates) != 1:
+            raise PolicyDenied(
+                "语义复核不能变更首次生成使用的模型。",
+                stage="generation.semantic_review",
+                code="SEMANTIC_REVIEW_MODEL_IDENTITY_REQUIRED",
+            )
+        hashes = self._source_hashes(request)
+        with self._scope("generation", hashes):
+            return candidates[0].review_semantics(request)
+
     @contextmanager
     def _scope(
         self, operation: str, source_hashes: tuple[str, ...] = ()
@@ -270,6 +408,14 @@ class ProductGroundedModel:
                 egress_allowed=True,
                 max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
                 max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+                disable_thinking_supported=(
+                    self.settings.disable_thinking_supported
+                ),
+                disable_thinking=self.settings.disable_thinking,
+                structured_output_mode=self.settings.structured_output_mode,
+                structured_output_profile=(
+                    self.settings.structured_output_profile_for(model)
+                ),
             )
         return AliyunChatConfig(
             model=model,
@@ -341,13 +487,17 @@ class ProductGroundedModel:
         hashes = self._source_hashes(request)
         with self._scope("generation", hashes):
             draft, failed_calls = self._call_with_rotation(
-                lambda adapter: adapter.generate(request)
+                lambda adapter: adapter.generate(request),
+                can_rotate=lambda: request.query_plan is None,
             )
-        return draft.model_copy(
+        result = draft.model_copy(
             update={
                 "provider_calls": (*failed_calls, *draft.provider_calls),
             }
         )
+        if self._private_replay_recorder is not None:
+            self._private_replay_recorder.record(request, result)
+        return result
 
     def generate_stream(
         self,
@@ -382,19 +532,59 @@ class ProductGroundedModel:
                     on_claim=_on_claim,
                     cancellation=cancellation,
                 ),
-                can_rotate=lambda: emitted_count == 0,
+                can_rotate=lambda: (
+                    request.query_plan is None and emitted_count == 0
+                ),
             )
-        return draft.model_copy(
+        result = draft.model_copy(
             update={
                 "provider_calls": (*failed_calls, *draft.provider_calls),
             }
         )
+        if self._private_replay_recorder is not None:
+            self._private_replay_recorder.record(request, result)
+        return result
 
-    def _source_hashes(self, request: GenerationRequest) -> tuple[str, ...]:
+    def _source_hashes(
+        self,
+        request: (
+            GenerationRequest
+            | RelationReviewRequest
+            | SemanticValidationRequest
+        ),
+    ) -> tuple[str, ...]:
         """重新核对本次证据仍属于当前活动知识库版本。"""
         hashes: set[str] = set()
+        if isinstance(request, SemanticValidationRequest):
+            bindings = dict(request.sent_packet.read_unit_bindings)
+            selected_keys = {
+                key
+                for unit in request.read_units
+                for key in bindings[unit.unit_id]
+            }
+            source_identities = tuple(
+                (
+                    source.get("document_version_id"),
+                    source.get("document_id"),
+                )
+                for source in request.sent_packet.support_sources
+                if source.get("support_key") in selected_keys
+            )
+        else:
+            source_identities = tuple(
+                (item.document_version_id, item.document_id)
+                for item in request.evidence
+            )
         with self.connections.transaction() as connection:
-            for item in request.evidence:
+            for document_version_id, document_id in source_identities:
+                if not isinstance(document_version_id, str) or not isinstance(
+                    document_id, str
+                ):
+                    raise PolicyDenied(
+                        "生成来源身份不完整。",
+                        stage="generation.scope",
+                        code="GENERATION_SOURCE_UNAVAILABLE",
+                    )
                 row = connection.execute(
                     "SELECT v.content_sha256 FROM document_versions v "
                     "JOIN documents d ON d.document_id=v.document_id "
@@ -402,8 +592,8 @@ class ProductGroundedModel:
                     "AND d.project_id=? AND d.knowledge_base_id=? "
                     "AND d.deleted_at IS NULL AND d.status='active'",
                     (
-                        item.document_version_id,
-                        item.document_id,
+                        document_version_id,
+                        document_id,
                         self.project_id,
                         self.knowledge_base_id,
                     ),
@@ -416,6 +606,504 @@ class ProductGroundedModel:
                     )
                 hashes.add(str(row[0]))
         return tuple(sorted(hashes))
+
+    def plan_adaptive(
+        self,
+        request: SearchRequest,
+        analysis: QueryAnalysis,
+        effort: ReasoningEffort,
+    ) -> AdaptivePlanOutcome:
+        """在同一模型连接上至多发一次最小结构化规划请求。"""
+        if effort is ReasoningEffort.DIRECT:
+            return AdaptivePlanOutcome()
+        if len(request.text) > _MAX_REWRITE_CHARS:
+            return AdaptivePlanOutcome(reason_code="ADAPTIVE_PLAN_INPUT_LIMIT")
+        spans = build_input_spans(request)
+        root = resolve_root_query(request, spans)
+        if root.mode == "CLARIFY":
+            return AdaptivePlanOutcome(
+                standalone_query=root.resolved_query,
+                intent="CLARIFICATION",
+                needs_clarification=True,
+                clarification_question="请明确您所指的对象和要查询的事项。",
+                reason_code="PLANNER_CONTEXT_UNRESOLVED",
+                failure_category="PLANNER_CONTEXT_UNRESOLVED",
+            )
+        try:
+            schema = planner_json_schema(spans)
+        except MinimalPlanValidationError as error:
+            return AdaptivePlanOutcome(
+                reason_code=error.code,
+                failure_category=error.code,
+            )
+        mode = (
+            self.adapter.compatible_config.structured_output_mode
+            if isinstance(self.adapter, OpenAICompatibleChatAdapter)
+            else "none"
+        )
+        outcome = self._plan_adaptive_once(
+            request,
+            analysis,
+            spans=spans,
+            root_query=root.resolved_query,
+            schema=schema,
+            mode=mode,
+        )
+        return replace(
+            outcome,
+            structured_output_mode=mode,
+            schema_revision=QUERY_PLAN_SCHEMA_REVISION,
+            schema_sha256=canonical_sha256(schema),
+        )
+
+    def resolve_fields(  # noqa: PLR0911, PLR0912
+        self,
+        request: SearchRequest,
+        candidates: tuple[FieldCandidate, ...],
+        *,
+        query_view: ResolvedQueryView,
+        atoms: tuple[QueryAtom, ...],
+        timeout_seconds: float | None = None,
+    ) -> FieldResolutionOutcome:
+        """从单一字段合同发送并验证一次 ``query.interpret``。"""
+        if not candidates:
+            return FieldResolutionOutcome()
+        if len(request.text) > _MAX_REWRITE_CHARS:
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_INPUT_LIMIT",
+                failure_category="FIELD_RESOLUTION_INPUT_LIMIT",
+                execution_state=FieldResolutionExecutionState.OUTPUT_INVALID,
+            )
+        try:
+            contract = build_field_resolution_contract(
+                FieldResolutionContractContext(
+                    query_view=query_view,
+                    atoms=atoms,
+                    candidates=candidates,
+                )
+            )
+        except (FieldResolutionWireError, ValidationError, ValueError) as error:
+            reason = getattr(error, "reason_code", type(error).__name__)
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_CONTRACT_INVALID",
+                failure_category=str(reason),
+                execution_state=FieldResolutionExecutionState.OUTPUT_INVALID,
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+            )
+        compatible_adapter = (
+            self.adapter
+            if isinstance(self.adapter, OpenAICompatibleChatAdapter)
+            else None
+        )
+        actual_adapter = compatible_adapter is not None
+        profile = (
+            compatible_adapter.compatible_config.structured_output_profile
+            if compatible_adapter is not None
+            else wb08r_structured_output_profile(
+                profile_revision="domain-unit-test-v1",
+                service_identity_sha256=canonical_sha256("DOMAIN_UNIT_TEST"),
+                model="domain-unit-test",
+                chat_template_revision="domain-unit-test",
+                mode="response_format",
+                grammar_backend="domain-unit-test",
+                deadline_ms=round(
+                    self.settings.field_resolution_transport_timeout_seconds
+                    * 1000
+                ),
+                field_resolution_output_tokens=(
+                    self.settings.field_resolution_max_output_tokens
+                ),
+                qualification_evidence_sha256=canonical_sha256(
+                    "DOMAIN_UNIT_TEST_EVIDENCE"
+                ),
+            )
+        )
+        if profile is None:
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_CAPABILITY_UNQUALIFIED",
+                failure_category="CAPABILITY_PROFILE_MISSING",
+                execution_state=FieldResolutionExecutionState.REQUEST_REJECTED,
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                contract_sha256=contract.contract_sha256,
+            )
+        try:
+            schema = render_wire_schema(contract, profile)
+        except (FieldResolutionWireError, ValueError) as error:
+            reason = getattr(error, "reason_code", str(error))
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_CAPABILITY_UNQUALIFIED",
+                failure_category=str(reason),
+                execution_state=FieldResolutionExecutionState.REQUEST_REJECTED,
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                contract_sha256=contract.contract_sha256,
+                capability_profile_sha256=profile.profile_sha256,
+            )
+        schema_sha256 = canonical_sha256(schema)
+        system = (
+            "只在服务端给出的真实表结构字段候选中解析用户所问的"
+            "基础字段，不回答问题，不判断必须、先后、禁止等附加命题。"
+            "每个 Atom 独立判断：SUPPORTED_PARAPHRASE 必须且只能选择一个"
+            "可确认的等义字段；RELATED_FIELD 必须且只能选择一个只能作为"
+            "相关资料的字段；AMBIGUOUS 仅在至少两个字段都可能回答同一"
+            "子问且无法唯一判断时使用；NOT_FOUND 表示已给出的非空候选"
+            "中没有字段对应当前子问，此时 c 必须为空。候选有两个不等于"
+            "语义上必然歧义。例如问联系电话、候选只有办理部门和材料名称"
+            "时返回 NOT_FOUND；问提交资料且只有申报材料语义对应时只选择"
+            "该字段并返回 SUPPORTED_PARAPHRASE；若只问办理时间，候选同时"
+            "包含开始时间和结束时间且问题未说明起止，两者都可能回答，必须"
+            "返回 AMBIGUOUS 并同时选择二者；若问由谁牵头且候选中只有"
+            "责任人语义对应，必须返回 SUPPORTED_PARAPHRASE 并只选择该"
+            "字段，不能因措辞不同返回 AMBIGUOUS。"
+            "c 只填当前 Atom 给定的短 ID，不能返回 EXACT；"
+            "q 必须逐字摘自当前 Atom 的用户问题片段。"
+            "输出只包含符合字段合同的 JSON 对象。"
+        )
+        if not actual_adapter:
+            system += "输出schema：" + json.dumps(
+                schema, ensure_ascii=False, separators=(",", ":")
+            )
+        messages = (
+            ChatMessage(
+                role="system",
+                content=system,
+            ),
+            ChatMessage(
+                role="user",
+                content=json.dumps(
+                    field_resolution_request_payload(contract),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            ),
+        )
+        started = perf_counter()
+        configured_timeout = (
+            self.settings.field_resolution_transport_timeout_seconds
+        )
+        timeout = (
+            configured_timeout
+            if timeout_seconds is None
+            else min(configured_timeout, timeout_seconds)
+        )
+        if timeout <= 0:
+            return FieldResolutionOutcome(
+                reason_code="FIELD_RESOLUTION_TOTAL_DEADLINE_EXCEEDED",
+                failure_category="FIELD_RESOLUTION_TOTAL_DEADLINE_EXCEEDED",
+                execution_state=(
+                    FieldResolutionExecutionState.TRANSPORT_FAILED
+                ),
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                schema_sha256=schema_sha256,
+                contract_sha256=contract.contract_sha256,
+                capability_profile_sha256=profile.profile_sha256,
+            )
+        calls: tuple[ProviderCall, ...] = ()
+        try:
+            with self._scope("query.interpret"):
+                if compatible_adapter is not None:
+                    completion = compatible_adapter.complete(
+                        messages,
+                        operation="query.interpret",
+                        max_output_tokens=(
+                            profile.field_resolution_output_tokens
+                        ),
+                        timeout_seconds=timeout,
+                        request_label=(
+                            "field-resolution:"
+                            f"{contract.atoms[0].atom_id}:"
+                            f"{contract.contract_sha256[-12:]}"
+                        ),
+                        json_schema=schema,
+                        schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                    )
+                else:
+                    completion = self.adapter.complete(
+                        messages,
+                        operation="query.interpret",
+                        max_output_tokens=(
+                            profile.field_resolution_output_tokens
+                        ),
+                        timeout_seconds=timeout,
+                    )
+            calls = (
+                ()
+                if getattr(completion, "call", None) is None
+                else (completion.call,)
+            )
+            resolutions = validate_field_response(completion.content, contract)
+        except RagError as error:
+            if isinstance(
+                error, (ProviderRequestRejected, ProviderInputTooLarge)
+            ):
+                execution_state = FieldResolutionExecutionState.REQUEST_REJECTED
+            elif isinstance(error, ProviderInvalidResponse):
+                execution_state = FieldResolutionExecutionState.OUTPUT_INVALID
+            else:
+                execution_state = FieldResolutionExecutionState.TRANSPORT_FAILED
+            provider_reason = str(
+                dict(error.details).get("reason_code", error.code)
+            )
+            return FieldResolutionOutcome(
+                calls=_error_provider_calls(error),
+                reason_code="FIELD_RESOLUTION_PROVIDER_UNAVAILABLE",
+                attempted=True,
+                failure_category=provider_reason,
+                execution_state=execution_state,
+                latency_ms=round((perf_counter() - started) * 1000),
+                transport_timeout_ms=round(timeout * 1000),
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                schema_sha256=schema_sha256,
+                contract_sha256=contract.contract_sha256,
+                capability_profile_sha256=profile.profile_sha256,
+            )
+        except FieldResolutionWireError as error:
+            usage = getattr(completion, "usage", None)
+            private_status = (
+                compatible_adapter.record_private_response_contract_failure(
+                    messages,
+                    operation="query.interpret",
+                    max_output_tokens=profile.field_resolution_output_tokens,
+                    json_schema=schema,
+                    schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                    response_content=completion.content,
+                    reason_code=error.reason_code,
+                )
+                if compatible_adapter is not None
+                else None
+            )
+            return FieldResolutionOutcome(
+                calls=calls,
+                reason_code="FIELD_RESOLUTION_OUTPUT_INVALID",
+                attempted=True,
+                failure_category=error.reason_code,
+                execution_state=FieldResolutionExecutionState.OUTPUT_INVALID,
+                latency_ms=round((perf_counter() - started) * 1000),
+                input_tokens=getattr(usage, "prompt_tokens", None),
+                output_tokens=getattr(usage, "completion_tokens", None),
+                finish_reason=getattr(completion, "finish_reason", None),
+                transport_timeout_ms=round(timeout * 1000),
+                schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+                schema_sha256=schema_sha256,
+                contract_sha256=contract.contract_sha256,
+                capability_profile_sha256=profile.profile_sha256,
+                response_content_sha256=canonical_sha256(completion.content),
+                response_content_length=len(completion.content),
+                invalid_atom_id=error.atom_id,
+                invalid_status=error.status,
+                invalid_candidate_count=error.candidate_count,
+                invalid_query_fragment_length=error.query_fragment_length,
+                private_diagnostic_status=private_status,
+            )
+        usage = getattr(completion, "usage", None)
+        return FieldResolutionOutcome(
+            resolutions=resolutions,
+            calls=calls,
+            reason_code="FIELD_RESOLUTION_ACCEPTED",
+            attempted=True,
+            execution_state=FieldResolutionExecutionState.SUCCEEDED,
+            latency_ms=round((perf_counter() - started) * 1000),
+            input_tokens=getattr(usage, "prompt_tokens", None),
+            output_tokens=getattr(usage, "completion_tokens", None),
+            finish_reason=getattr(completion, "finish_reason", None),
+            transport_timeout_ms=round(timeout * 1000),
+            schema_revision=FIELD_RESOLUTION_SCHEMA_REVISION,
+            schema_sha256=schema_sha256,
+            contract_sha256=contract.contract_sha256,
+            capability_profile_sha256=profile.profile_sha256,
+        )
+
+    def _plan_adaptive_once(  # noqa: PLR0913
+        self,
+        request: SearchRequest,
+        analysis: QueryAnalysis,
+        *,
+        spans: tuple[QueryInputSpan, ...],
+        root_query: str,
+        schema: dict[str, object],
+        mode: str,
+    ) -> AdaptivePlanOutcome:
+        """只解释原问；服务端重建所有硬约束与来源范围。"""
+        messages = (
+            ChatMessage(
+                role="system",
+                content=(
+                    "只选择给定 Span ID，将用户问题拆成至多四个可检索事实原子。"
+                    "不得回答问题、创造 Span、补充条件或引用文档。"
+                    "每个独立问句的 Clause ID 至少出现在一个原子 f 中；"
+                    "修饰 Clause 可与问句共用，多个原子也可共用 f。"
+                    "r 必须引用当前问句的 Relation ID。"
+                    "受信上下文已由服务端消歧；输出键 i=意图、a=原子。"
+                    "原子键 f=Clause ID 列表、t=Target ID、"
+                    "r=当前 Relation ID、s=回答形状。"
+                    "只输出符合 JSON Schema 的对象。"
+                ),
+            ),
+            ChatMessage(
+                role="user",
+                content=json.dumps(
+                    {
+                        "current_question": request.text,
+                        "resolved_root": root_query,
+                        "spans": [
+                            {
+                                "id": span.span_id,
+                                "kind": span.kind.value,
+                                "turn": span.turn,
+                                "text": span.text,
+                            }
+                            for span in spans
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+        calls: tuple[ProviderCall, ...] = ()
+        started = perf_counter()
+        timeout = self.settings.planner_transport_timeout_seconds
+        token_limit = self.settings.planner_max_output_tokens
+        try:
+            schema_args = (
+                {
+                    "json_schema": schema,
+                    "schema_revision": QUERY_PLAN_SCHEMA_REVISION,
+                }
+                if isinstance(self.adapter, OpenAICompatibleChatAdapter)
+                else {}
+            )
+            with self._scope("query.interpret"):
+                completion = self.adapter.complete(
+                    messages,
+                    operation="query.interpret",
+                    max_output_tokens=token_limit,
+                    timeout_seconds=timeout,
+                    **schema_args,
+                )
+            calls = (completion.call,)
+            usage = getattr(completion, "usage", None)
+            telemetry: _PlannerTelemetry = {
+                "planner_latency_ms": round((perf_counter() - started) * 1000),
+                "planner_input_tokens": getattr(usage, "prompt_tokens", None),
+                "planner_output_tokens": getattr(
+                    usage, "completion_tokens", None
+                ),
+                "planner_finish_reason": getattr(
+                    completion, "finish_reason", None
+                ),
+                "planner_transport_timeout_ms": round(timeout * 1000),
+            }
+            try:
+                payload_data = (
+                    json.loads(completion.content)
+                    if mode != "none"
+                    else extract_json_object(completion.content)
+                )
+            except (json.JSONDecodeError, ValueError):
+                return AdaptivePlanOutcome(
+                    calls=calls,
+                    reason_code="PLANNER_INVALID_JSON",
+                    attempted=True,
+                    schema_fallback_detail="INVALID_JSON",
+                    failure_category="PLANNER_INVALID_JSON",
+                    **telemetry,
+                )
+            try:
+                payload = _AdaptivePlanPayload.model_validate(payload_data)
+            except ValidationError as error:
+                first = error.errors(include_input=False)[0]
+                location = ".".join(str(part) for part in first["loc"])
+                shape = ""
+                if isinstance(payload_data, dict):
+                    raw_atoms = payload_data.get("a", payload_data.get("atoms"))
+                    raw_intent = payload_data.get(
+                        "i", payload_data.get("intent")
+                    )
+                    intent_kind = (
+                        raw_intent
+                        if raw_intent
+                        in {"SINGLE", "COMPOUND", "FOLLOW_UP", "CLARIFICATION"}
+                        else "OTHER"
+                    )
+                    atom_count = (
+                        str(len(raw_atoms))
+                        if isinstance(raw_atoms, list)
+                        else "INVALID"
+                    )
+                    reason_kind = (
+                        "SET"
+                        if payload_data.get(
+                            "c", payload_data.get("clarification_reason")
+                        )
+                        is not None
+                        else "NONE"
+                    )
+                    shape = (
+                        f":intent={intent_kind}:atoms={atom_count}"
+                        f":reason={reason_kind}"
+                    )
+                return AdaptivePlanOutcome(
+                    calls=calls,
+                    reason_code="PLANNER_INVALID_SCHEMA",
+                    attempted=True,
+                    schema_fallback_detail=(
+                        f"INVALID_SCHEMA:{location}:{first['type']}{shape}"
+                    ),
+                    failure_category="PLANNER_INVALID_SCHEMA",
+                    **telemetry,
+                )
+            try:
+                atoms = build_query_atoms(payload, spans, analysis)
+            except MinimalPlanValidationError as error:
+                return AdaptivePlanOutcome(
+                    calls=calls,
+                    reason_code=error.code,
+                    attempted=True,
+                    schema_fallback_detail=error.code,
+                    failure_category=error.code,
+                    **telemetry,
+                )
+            return AdaptivePlanOutcome(
+                standalone_query=root_query,
+                intent=payload.intent,
+                needs_clarification=False,
+                clarification_question=None,
+                atoms=atoms,
+                route_hints=(),
+                calls=calls,
+                reason_code="ADAPTIVE_PLAN_APPLIED",
+                attempted=True,
+                **telemetry,
+            )
+        except RagError as error:
+            provider_reason = str(
+                dict(error.details).get("reason_code", error.code)
+            )
+            category = (
+                "PLANNER_PROVIDER_TIMEOUT"
+                if "TIMEOUT" in provider_reason
+                else "PLANNER_OUTPUT_TRUNCATED"
+                if provider_reason == "CHAT_OUTPUT_TRUNCATED"
+                else "PLANNER_PROVIDER_UNAVAILABLE"
+            )
+            return AdaptivePlanOutcome(
+                calls=_error_provider_calls(error),
+                reason_code=category,
+                attempted=True,
+                schema_fallback_detail=provider_reason,
+                failure_category=category,
+                planner_latency_ms=round((perf_counter() - started) * 1000),
+                planner_transport_timeout_ms=round(timeout * 1000),
+            )
+        except (ValueError, TypeError):
+            return AdaptivePlanOutcome(
+                calls=calls,
+                reason_code="PLANNER_INTERNAL_VALIDATION",
+                attempted=True,
+                schema_fallback_detail="ATOM_CONSTRUCTION_INVALID",
+                failure_category="PLANNER_INTERNAL_VALIDATION",
+                planner_latency_ms=round((perf_counter() - started) * 1000),
+                planner_transport_timeout_ms=round(timeout * 1000),
+            )
 
     def interpret(  # noqa: PLR0911
         self, request: SearchRequest, analysis: QueryAnalysis

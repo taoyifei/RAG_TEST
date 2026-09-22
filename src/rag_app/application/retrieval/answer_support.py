@@ -170,6 +170,16 @@ def _analysis_query(analysis: QueryAnalysis) -> str:
 def _request(analysis: QueryAnalysis) -> tuple[str, str, str]:
     semantics = analysis.semantics
     if (
+        semantics.source == "SPAN_REFERENCED"
+        and semantics.target
+        and semantics.relation
+    ):
+        return (
+            _normalized(semantics.target),
+            _normalized(semantics.relation),
+            semantics.answer_type.value,
+        )
+    if (
         semantics.target
         and semantics.relation
         and semantics.answer_type in _TYPED_ANSWER_TYPES
@@ -574,7 +584,10 @@ def _clause_supports(  # noqa: PLR0911
             bool(re.search(_VALUES[answer_type], clause, re.IGNORECASE))
             and (
                 relation in clause
-                or answer_type in {"DURATION", "TIME", "VERSION"}
+                or (
+                    analysis.semantics.source != "SPAN_REFERENCED"
+                    and answer_type in {"DURATION", "TIME", "VERSION"}
+                )
             )
             and (
                 not (answer_type == "DURATION" and "期限" in relation)
@@ -619,7 +632,9 @@ def _clause_supports(  # noqa: PLR0911
             )
         ) and bool(_RELATION.search(clause))
     # 未识别关系只能验证完整字面事实；不能用同主题的另一关系补齐。
-    return target in clause
+    return target in clause and (
+        analysis.semantics.source != "SPAN_REFERENCED" or relation in clause
+    )
 
 
 def _descriptive_clause_supports(  # noqa: PLR0911

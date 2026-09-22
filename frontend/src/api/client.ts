@@ -1,4 +1,5 @@
 import type { components } from "./schema";
+import { withAppBase } from "../app/basePath";
 
 export type Project = components["schemas"]["Project"];
 export type KnowledgeBase = components["schemas"]["KnowledgeBase"];
@@ -546,7 +547,7 @@ async function request<T>(
   if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method) && csrfToken) {
     headers.set("X-CSRF-Token", csrfToken);
   }
-  const response = await fetch(path, {
+  const response = await fetch(withAppBase(path), {
     ...init,
     headers,
     credentials: "same-origin",
@@ -582,7 +583,7 @@ async function rawRequest(
   if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method) && csrfToken) {
     headers.set("X-CSRF-Token", csrfToken);
   }
-  const response = await fetch(path, {
+  const response = await fetch(withAppBase(path), {
     ...init,
     headers,
     credentials: "same-origin",
@@ -1419,7 +1420,9 @@ export const api = {
     const headers = new Headers(init.headers);
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
     const response = await fetch(
-      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
+      withAppBase(
+        `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
+      ),
       { ...init, headers, signal, credentials: "same-origin" },
     );
     return readSseResponse(response, handlers, {

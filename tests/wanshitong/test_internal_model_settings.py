@@ -42,6 +42,91 @@ def test_internal_model_settings_normalize_primary_contracts() -> None:
     assert settings.reranker_protocol == "tei"
     assert settings.reranker_path == "/rerank"
     assert settings.embedding_credential.source == "none"
+    assert not settings.llm_disable_thinking_supported
+    assert not settings.llm_disable_thinking
+    assert settings.llm_structured_output_mode == "none"
+    assert settings.llm_field_resolution_max_output_tokens == 512
+    assert settings.llm_field_resolution_timeout_seconds == 12.0
+    assert settings.llm_field_resolution_total_deadline_seconds == 15.0
+
+
+def test_internal_settings_require_explicit_structured_output_mode() -> None:
+    environment = _environment()
+    environment["RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE"] = "response_format"
+    with pytest.raises(ValueError, match="完整能力合同"):
+        InternalModelSettings.from_environment(environment)
+
+    environment.update(
+        {
+            "RAG_WANSHITONG_LLM_STRUCTURED_PROFILE_REVISION": "unit-v1",
+            "RAG_WANSHITONG_LLM_STRUCTURED_SERVICE_IDENTITY_SHA256": (
+                "sha256:" + "1" * 64
+            ),
+            "RAG_WANSHITONG_LLM_STRUCTURED_CHAT_TEMPLATE_REVISION": (
+                "template-v1"
+            ),
+            "RAG_WANSHITONG_LLM_STRUCTURED_GRAMMAR_BACKEND": "xgrammar-v1",
+            "RAG_WANSHITONG_LLM_STRUCTURED_QUALIFICATION_EVIDENCE_SHA256": (
+                "sha256:" + "2" * 64
+            ),
+            "RAG_WANSHITONG_LLM_STRUCTURED_ALLOW_UNIQUE_ITEMS": "false",
+            "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_MAX_OUTPUT_TOKENS": "512",
+        }
+    )
+    assert (
+        InternalModelSettings.from_environment(
+            environment
+        ).llm_structured_output_mode
+        == "response_format"
+    )
+    assert not InternalModelSettings.from_environment(
+        environment
+    ).llm_structured_allow_unique_items
+
+    environment["RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE"] = "auto"
+    with pytest.raises(ValueError, match="STRUCTURED_OUTPUT_MODE"):
+        InternalModelSettings.from_environment(environment)
+
+
+def test_internal_settings_require_explicit_thinking_strategy() -> None:
+    environment = _environment()
+    environment["RAG_WANSHITONG_LLM_DISABLE_THINKING_SUPPORTED"] = "true"
+    supported = InternalModelSettings.from_environment(environment)
+    assert supported.llm_disable_thinking_supported
+    assert not supported.llm_disable_thinking
+
+    environment["RAG_WANSHITONG_LLM_DISABLE_THINKING"] = "true"
+    disabled = InternalModelSettings.from_environment(environment)
+    assert disabled.llm_disable_thinking_supported
+    assert disabled.llm_disable_thinking
+
+    environment["RAG_WANSHITONG_LLM_DISABLE_THINKING_SUPPORTED"] = "maybe"
+    with pytest.raises(ValueError, match="必须为 true 或 false"):
+        InternalModelSettings.from_environment(environment)
+
+    environment = _environment()
+    environment["RAG_WANSHITONG_LLM_DISABLE_THINKING"] = "true"
+    with pytest.raises(ValueError, match="必须确认 LLM 端点支持"):
+        InternalModelSettings.from_environment(environment)
+
+
+def test_internal_settings_validate_field_resolution_deadlines() -> None:
+    environment = _environment()
+    environment["RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TIMEOUT_SECONDS"] = "9.5"
+    environment[
+        "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS"
+    ] = "10"
+
+    settings = InternalModelSettings.from_environment(environment)
+
+    assert settings.llm_field_resolution_timeout_seconds == 9.5
+    assert settings.llm_field_resolution_total_deadline_seconds == 10.0
+
+    environment[
+        "RAG_WANSHITONG_LLM_FIELD_RESOLUTION_TOTAL_DEADLINE_SECONDS"
+    ] = "9"
+    with pytest.raises(ValueError, match="总时限不得小于单次传输时限"):
+        InternalModelSettings.from_environment(environment)
 
 
 def test_internal_model_settings_support_safe_credential_sources(

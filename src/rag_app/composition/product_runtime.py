@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Generic, TypeVar, cast
+from typing import Generic, Literal, TypeVar, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -82,6 +82,7 @@ from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import (
     CancellationPort,
     ChunkValidationPort,
+    DepartmentShadowObserverPort,
     ExactStorePort,
 )
 from rag_app.ocr import OcrClient
@@ -116,6 +117,7 @@ from rag_app.product.ocr_adapters import (
 )
 from rag_app.product.ocr_enrichment import ProductOcrEnrichment
 from rag_app.product.pdf_parsing import ProductPdfParsing
+from rag_app.product.private_replay import PrivateReplayDraftRecorder
 from rag_app.product.provider_runtime import (
     ProviderRuntimeRegistry,
     TransportFactory,
@@ -138,6 +140,7 @@ from rag_app.product.trace_coordinator import ProductTraceCoordinator
 from rag_app.product.verification import profile_specs
 from rag_app.sdk import RagSdk
 from rag_app.tracing import TraceRecorder, TraceStore
+from rag_app.wanshitong.feedback import WanshitongFeedbackService
 
 _MIN_LOCAL_OCR_TOKEN_LENGTH = 32
 _MAX_LOCAL_OCR_TOKEN_LENGTH = 4096
@@ -174,6 +177,7 @@ class ProductRuntimeSettings:
     bootstrap_token_file: Path
     host: str = "127.0.0.1"
     port: int = 8088
+    root_path: str = ""
     master_key_file: Path | None = None
     qdrant_mode: str = "memory"
     qdrant_url: str | None = None
@@ -196,6 +200,8 @@ class ProductRuntimeSettings:
     )
     local_ocr_model: str = "pp-ocrv5-server"
     local_ocr_timeout_seconds: float = 35.0
+    evidence_group_mode: Literal["off", "shadow", "active"] = "off"
+    contextual_rerank_mode: Literal["off", "active"] = "off"
 
     @classmethod
     def from_environment(cls) -> ProductRuntimeSettings:
@@ -225,12 +231,23 @@ class ProductRuntimeSettings:
         manifest = os.environ.get("RAG_COMPATIBILITY_MANIFEST")
         migrations = os.environ.get("RAG_MIGRATIONS_DIR")
         local_ocr_token = os.environ.get("RAG_OCR_API_TOKEN_FILE")
+        evidence_group_mode = os.environ.get("RAG_EVIDENCE_GROUP_MODE", "off")
+        contextual_rerank_mode = os.environ.get(
+            "RAG_CONTEXTUAL_RERANK_MODE", "off"
+        )
+        if evidence_group_mode not in {"off", "shadow", "active"}:
+            raise ValueError(
+                "RAG_EVIDENCE_GROUP_MODE 必须为 off/shadow/active。"
+            )
+        if contextual_rerank_mode not in {"off", "active"}:
+            raise ValueError("RAG_CONTEXTUAL_RERANK_MODE 必须为 off/active。")
         return cls(
             data_dir=Path(os.environ.get("RAG_DATA_DIR", ".data/product")),
             frontend_dir=frontend,
             bootstrap_token_file=Path(bootstrap),
             host=os.environ.get("RAG_HOST", "127.0.0.1"),
             port=int(os.environ.get("RAG_PORT", "8088")),
+            root_path=_parse_root_path(os.environ.get("RAG_ROOT_PATH", "")),
             master_key_file=None if master is None else Path(master),
             qdrant_mode=os.environ.get("RAG_QDRANT_MODE", "memory"),
             qdrant_url=os.environ.get("RAG_QDRANT_URL"),
@@ -281,6 +298,12 @@ class ProductRuntimeSettings:
             local_ocr_model=os.environ.get("RAG_OCR_MODEL", "pp-ocrv5-server"),
             local_ocr_timeout_seconds=float(
                 os.environ.get("RAG_OCR_TIMEOUT_SECONDS", "35")
+            ),
+            evidence_group_mode=cast(
+                Literal["off", "shadow", "active"], evidence_group_mode
+            ),
+            contextual_rerank_mode=cast(
+                Literal["off", "active"], contextual_rerank_mode
             ),
         )
 
@@ -612,6 +635,9 @@ class ProductProfileResolver:
             [RetrievalProfileRevision, EgressPolicy], EgressPolicy
         ]
         | None = None,
+        private_replay_recorder: PrivateReplayDraftRecorder | None = None,
+        evidence_group_mode: Literal["off", "shadow", "active"] = "off",
+        contextual_rerank_mode: Literal["off", "active"] = "off",
     ) -> None:
         """保存产品控制面。
 
@@ -626,6 +652,9 @@ class ProductProfileResolver:
             content_identity: PDF、图片 OCR 与图关系的统一内容身份。
             circuit_factory: 仅测试可注入的 Circuit 工厂。
             acceptance_egress_resolver: 受信任验收入口的有效累计授权解析器。
+            private_replay_recorder: 默认关闭的受控私有模型草稿记录器。
+            evidence_group_mode: 当前实例的结构组 off/shadow/active 开关。
+            contextual_rerank_mode: 当前实例的确定性重排上下文开关。
 
         Returns:
             无返回值。
@@ -647,6 +676,10 @@ class ProductProfileResolver:
         ] = {}
         self._circuit_factory = circuit_factory
         self._acceptance_egress_resolver = acceptance_egress_resolver
+        self._private_replay_recorder = private_replay_recorder
+        self._department_shadow: DepartmentShadowObserverPort | None = None
+        self._evidence_group_mode = evidence_group_mode
+        self._contextual_rerank_mode = contextual_rerank_mode
         self._controlled_scope: ContextVar[_ControlledPilotScope | None] = (
             ContextVar("product_controlled_pilot", default=None)
         )
@@ -661,6 +694,22 @@ class ProductProfileResolver:
         self.singleflight = ProductQuerySingleflight()
         self._lock = RLock()
         self._closed = False
+
+    def configure_department_shadow(
+        self, observer: DepartmentShadowObserverPort | None
+    ) -> None:
+        """绑定不进入服务 generation 或缓存身份的只读观察器。
+
+        Args:
+            observer: 湾事通组合根提供的本地观察器；空值表示关闭。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._lock:
+            self._ensure_open_locked()
+            self._department_shadow = observer
 
     def singleflight_metrics(self) -> SingleflightMetrics:
         """返回不含查询、scope 或 key 的 singleflight 安全计数。
@@ -890,6 +939,7 @@ class ProductProfileResolver:
         settings = KnowledgeBaseModelSettings()
         model_configuration_failed = False
         authorization_status: CorpusAuthorizationStatus | None = None
+        department_shadow: DepartmentShadowObserverPort | None = None
         with self._lock:
             self._ensure_open_locked()
             profile = self.active_profile(knowledge_base_id)
@@ -938,6 +988,7 @@ class ProductProfileResolver:
                 self._acquire_generation_locked(service_generation)
             if model_generation is not None:
                 self._acquire_generation_locked(model_generation)
+            department_shadow = self._department_shadow
         try:
             if model_generation is not None:
                 if generation_identity is None:
@@ -951,7 +1002,7 @@ class ProductProfileResolver:
                 service = service.with_generation(
                     model,
                     serving_identity=generation_identity,
-                    interpreter=model if rewrite_enabled else None,
+                    adaptive_planner=model,
                     rewriter=model if rewrite_enabled else None,
                     critical_ocr_verifier=(
                         None
@@ -966,6 +1017,8 @@ class ProductProfileResolver:
             with_data_plane = getattr(service, "with_data_plane", None)
             if data_plane_context is not None and callable(with_data_plane):
                 service = with_data_plane(data_plane_context)
+            if department_shadow is not None:
+                service = service.with_department_shadow(department_shadow)
             yield service
         finally:
             self._release_query_generations(
@@ -1413,12 +1466,21 @@ class ProductProfileResolver:
         existing = self._grounded_models.get(key)
         if existing is not None:
             return existing
-        model = ProductGroundedModel(
-            settings,
-            knowledge_base_id,
-            self._models.connections,
-            self._providers,
-        )
+        if self._private_replay_recorder is None:
+            model = ProductGroundedModel(
+                settings,
+                knowledge_base_id,
+                self._models.connections,
+                self._providers,
+            )
+        else:
+            model = ProductGroundedModel(
+                settings,
+                knowledge_base_id,
+                self._models.connections,
+                self._providers,
+                private_replay_recorder=self._private_replay_recorder,
+            )
         generation = _ResourceGeneration(
             knowledge_base_id=knowledge_base_id,
             resource=model,
@@ -1713,6 +1775,8 @@ class ProductProfileResolver:
                 "dense_semantic_enabled": bool(spaces),
                 "dense_semantic_calibration_state": readiness,
                 "dense_calibrated_vector_spaces": spaces,
+                "evidence_group_mode": self._evidence_group_mode,
+                "contextual_rerank_mode": self._contextual_rerank_mode,
             }
         )
         egress = _product_egress(profile, self._control)
@@ -1929,6 +1993,7 @@ class ProductRuntime:
     history: ProductQueryHistory
     conversations: ProductConversationStore
     feedback: ProductFeedbackStore
+    wanshitong_feedback: WanshitongFeedbackService
     models: ProductModelSettings
     corpus_authorizations: CorpusAuthorizationStore
     retrieval_authorizations: RetrievalAuthorizationStore
@@ -2119,6 +2184,13 @@ def build_product_runtime(  # noqa: PLR0915
     )
     feedback = ProductFeedbackStore(connections, traces.set_feedback)
     feedback.recover()
+    wanshitong_feedback = WanshitongFeedbackService(
+        connections,
+        feedback,
+        credential_cipher or auth_cipher,
+        history,
+        traces,
+    )
     if (
         transport_factory is None
         and os.environ.get("RAG_TEST_NETWORK") == "offline"
@@ -2173,6 +2245,11 @@ def build_product_runtime(  # noqa: PLR0915
         content_identity=_content_identity,
         circuit_factory=circuit_factory,
         acceptance_egress_resolver=acceptance_egress_resolver,
+        private_replay_recorder=(
+            PrivateReplayDraftRecorder.from_environment()
+        ),
+        evidence_group_mode=settings.evidence_group_mode,
+        contextual_rerank_mode=settings.contextual_rerank_mode,
     )
 
     def _status_overlay(status: SystemStatus) -> SystemStatus:
@@ -2230,6 +2307,7 @@ def build_product_runtime(  # noqa: PLR0915
         history=history,
         conversations=conversations,
         feedback=feedback,
+        wanshitong_feedback=wanshitong_feedback,
         models=models,
         corpus_authorizations=corpus_authorizations,
         retrieval_authorizations=retrieval_authorizations,
@@ -2657,6 +2735,21 @@ def _parse_trusted_origins(value: str) -> tuple[str, ...]:
     if not origins:
         raise ValueError("RAG_TRUSTED_ORIGINS 至少包含一个完整 Origin。")
     return tuple(dict.fromkeys(origins))
+
+
+def _parse_root_path(value: str) -> str:
+    root_path = value.strip().rstrip("/")
+    if not root_path:
+        return ""
+    if (
+        not root_path.startswith("/")
+        or "//" in root_path
+        or "\\" in root_path
+        or "%" in root_path
+        or any(part in {".", ".."} for part in root_path.split("/"))
+    ):
+        raise ValueError("RAG_ROOT_PATH 必须是规范的绝对 URL 路径前缀。")
+    return root_path
 
 
 def _parse_trusted_proxies(value: str) -> frozenset[str]:

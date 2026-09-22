@@ -33,6 +33,7 @@ from rag_app.core.models.query import (
     QueryKind,
     RequestedAnswerType,
 )
+from rag_app.core.models.query_plan import SourceDocumentIdentity
 from rag_app.core.models.retrieval import EvidenceItem
 from rag_app.core.models.revisions import RevisionVectorSpec
 
@@ -47,13 +48,39 @@ class RetrievalPolicy(FrozenModel):
     max_channels: StrictInt = Field(default=6, ge=1, le=8)
     channel_top_k: StrictInt = Field(default=24, gt=0, le=100)
     fusion_candidate_limit: StrictInt = Field(default=48, gt=0, le=200)
+    unit_fusion_candidate_limit: StrictInt = Field(default=32, gt=0, le=48)
+    unit_root_seed_limit: StrictInt = Field(default=6, gt=0, le=12)
+    unit_atom_seed_limit: StrictInt = Field(default=4, gt=0, le=8)
+    unit_root_weight: float = Field(default=1.0, gt=0)
+    unit_atom_total_weight: float = Field(default=1.0, gt=0)
+    atom_group_strong_anchor_threshold: float = Field(default=0.65, gt=0, le=1)
+    atom_group_weak_anchor_threshold: float = Field(default=0.45, gt=0, le=1)
+    atom_group_max_per_atom: StrictInt = Field(default=4, gt=0, le=8)
     rrf_k: StrictInt = Field(default=60, gt=0)
     rerank_candidate_limit: StrictInt = Field(default=24, gt=0, le=100)
+    evidence_group_mode: Literal["off", "shadow", "active"] = "off"
+    contextual_rerank_mode: Literal["off", "active"] = "off"
+    retrieval_context_revision: str = Field(
+        default="wb08r-context-v1", min_length=1, max_length=64
+    )
+    group_member_chunk_limit: StrictInt = Field(default=8, gt=0, le=16)
+    group_retrieval_token_budget: StrictInt = Field(default=8192, gt=0, le=8192)
+    group_retrieval_chunk_limit: StrictInt = Field(default=48, gt=0, le=48)
     neighbor_count: StrictInt = Field(default=1, ge=0, le=4)
     section_chunk_limit: StrictInt = Field(default=2, ge=0, le=8)
+    section_search_limit: StrictInt = Field(default=20, ge=1, le=20)
+    section_predecessor_max_gap: StrictInt = Field(default=4, ge=1, le=16)
     evidence_token_budget: StrictInt = Field(default=1024, gt=0)
     max_evidence_items: StrictInt = Field(default=8, gt=0, le=50)
     max_evidence_items_per_chunk: StrictInt = Field(default=1, gt=0, le=8)
+    generation_root_top_k: StrictInt = Field(default=4, gt=0, le=8)
+    generation_atom_top_k: StrictInt = Field(default=2, gt=0, le=4)
+    generation_max_ordinary_items: StrictInt = Field(default=12, gt=0, le=24)
+    generation_max_group_items: StrictInt = Field(default=32, gt=0, le=32)
+    generation_per_document_cap: StrictInt = Field(default=4, gt=0, le=16)
+    generation_evidence_token_budget: StrictInt = Field(
+        default=4096, gt=0, le=6144
+    )
     minimum_support_items: StrictInt = Field(default=1, gt=0, le=8)
     minimum_span_overlap: float = Field(default=0.2, ge=0.0, le=1.0)
     per_document_cap: StrictInt = Field(default=4, gt=0)
@@ -95,6 +122,16 @@ class RetrievalPolicy(FrozenModel):
 
     @model_validator(mode="after")
     def _validate_dense_requirements(self) -> Self:
+        if (
+            self.atom_group_weak_anchor_threshold
+            > self.atom_group_strong_anchor_threshold
+        ):
+            raise ValueError("Atom 结构组弱锚点阈值不能超过强锚点阈值。")
+        if (
+            self.unit_root_seed_limit + 4 * self.unit_atom_seed_limit
+            > self.unit_fusion_candidate_limit
+        ):
+            raise ValueError("Query Unit 种子配额超过融合候选上限。")
         if self.max_channels < len(self.enabled_channels):
             raise ValueError("max_channels 不能小于 enabled channels 数量。")
         if self.minimum_support_items > self.max_evidence_items:
@@ -189,6 +226,7 @@ class ExactSearchRequest(FrozenModel):
     identifiers: tuple[str, ...] = ()
     quoted_phrases: tuple[str, ...] = ()
     limit: StrictInt = Field(default=20, gt=0, le=100)
+    allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None
 
 
 class StructuralSearchRequest(FrozenModel):
@@ -206,6 +244,17 @@ class StructuralSearchRequest(FrozenModel):
         default=None, max_length=512, repr=False
     )
     limit: StrictInt = Field(default=20, gt=0, le=100)
+    allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None
+
+
+class RetrievalOrigin(FrozenModel):
+    """真实召回路径；与 Root/Atom 的二级评分解释分别保存。"""
+
+    unit_id: str = Field(default="ROOT", min_length=1, max_length=32)
+    logical_channel: str = Field(min_length=1, max_length=80)
+    variant_id: str = Field(min_length=1, max_length=160)
+    source_channel: str = Field(min_length=1, max_length=80)
+    native_rank: StrictInt = Field(gt=0)
 
 
 class ChannelHit(FrozenModel):
@@ -223,6 +272,9 @@ class ChannelHit(FrozenModel):
     raw_score: StrictFloat
     match_type: str | None = Field(default=None, max_length=80)
     must_keep: bool = False
+    retrieval_origins: tuple[RetrievalOrigin, ...] = Field(
+        default=(), exclude=True
+    )
 
     @field_validator("raw_score")
     @classmethod
@@ -255,6 +307,13 @@ class FusedCandidate(FrozenModel):
     best_channel_rank: StrictInt = Field(gt=0)
     must_keep: bool = False
     contributions: tuple[RrfContribution, ...] = Field(min_length=1)
+    unit_rank_contributions: tuple[RrfContribution, ...] = Field(
+        default=(), exclude=True
+    )
+    retrieval_origins: tuple[RetrievalOrigin, ...] = Field(
+        default=(), exclude=True
+    )
+    retention_reasons: tuple[str, ...] = Field(default=(), exclude=True)
 
 
 class HydratedChunk(FrozenModel):
@@ -277,8 +336,40 @@ class RankedChunk(FrozenModel):
     rerank_score: StrictFloat | None = None
     must_keep: bool = False
     contributions: tuple[RrfContribution, ...] = ()
+    unit_rank_contributions: tuple[RrfContribution, ...] = Field(
+        default=(), exclude=True
+    )
+    retrieval_origins: tuple[RetrievalOrigin, ...] = Field(
+        default=(), exclude=True
+    )
+    retention_reasons: tuple[str, ...] = Field(default=(), exclude=True)
     expansion_reason: str | None = None
     expansion_seed_ids: tuple[str, ...] = ()
+
+    @property
+    def retrieval_channels(self) -> tuple[str, ...]:
+        """只返回真实通道；兼容没有新来源字段的历史候选。
+
+        Args:
+            无参数；读取当前候选的独立检索来源。
+
+        Returns:
+            去重后的真实通道；查询单元名称不视为检索通道。
+
+        """
+        channels = (
+            (origin.source_channel for origin in self.retrieval_origins)
+            if self.retrieval_origins
+            else (item.channel for item in self.contributions)
+        )
+        return tuple(
+            dict.fromkeys(
+                channel
+                for channel in channels
+                if channel.split(":", 1)[0]
+                in {"exact", "lexical", "dense", "structural"}
+            )
+        )
 
     @field_validator("rerank_score")
     @classmethod
@@ -296,6 +387,7 @@ class EvidenceSelectionContext(FrozenModel):
     rerank_mode: str = Field(min_length=1)
     selected_slot: str | None = None
     selected_vector_space: str | None = None
+    include_table_context: bool = False
 
 
 class DiagnosticRerankItem(FrozenModel):
@@ -479,6 +571,18 @@ class RelatedContent(FrozenModel):
     rerank_verified: bool = False
 
 
+class CatalogCitation(FrozenModel):
+    """活动文档版本的目录元数据引用，不冒充正文摘录。"""
+
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
+    document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+    chunk_id: str = Field(pattern=r"^chunk_[0-9a-f]{32}$")
+    document_title: str = Field(min_length=1)
+    source_relative_path: str | None = None
+    department_name: str | None = None
+    category_path: tuple[str, ...] = ()
+
+
 class SearchAnswerResult(FrozenModel):
     """实际 revision、route、证据、拒答与回答的统一结果。"""
 
@@ -487,12 +591,16 @@ class SearchAnswerResult(FrozenModel):
     reason_code: str = Field(min_length=1)
     answer: str | None = Field(default=None, repr=False)
     evidence: tuple[EvidenceItem, ...] = ()
+    catalog_citations: tuple[CatalogCitation, ...] = Field(
+        default=(), max_length=3
+    )
     related_contents: tuple[RelatedContent, ...] = Field(
         default=(), max_length=3
     )
     display_message: str | None = None
     confidence: ConfidenceDecision
     query_kind: QueryKind
+    reasoning_effort: Literal["DIRECT", "ASSISTED", "DEEP"] = "DIRECT"
     requested_answer_type: RequestedAnswerType = RequestedAnswerType.UNKNOWN
     query_semantic_source: Literal[
         "RULE", "LLM_INTERPRET", "LLM_REWRITE", "ORIGINAL_FALLBACK"
@@ -532,6 +640,7 @@ class SearchAnswerResult(FrozenModel):
 __all__ = [
     "ActiveRevisionQuerySnapshot",
     "BaseResultCacheKey",
+    "CatalogCitation",
     "ChannelHit",
     "DiagnosticEvidenceItem",
     "DiagnosticExpansionItem",

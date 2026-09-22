@@ -29,6 +29,7 @@ from rag_app.core.models import (
     NamedVectorPoint,
     RevisionVectorSpec,
     SearchHit,
+    SourceDocumentIdentity,
     VectorPointAudit,
     VectorPointPayload,
     VectorRevisionInventory,
@@ -226,6 +227,7 @@ class QdrantRevisionVectorStore:
         query_vector: tuple[float, ...],
         limit: int,
         excluded_document_ids: tuple[str, ...] = (),
+        allowed_documents: tuple[SourceDocumentIdentity, ...] | None = None,
     ) -> tuple[VectorSearchResult, ...]:
         """仅查询 slot 对应的 named vector 并硬过滤 scope。
 
@@ -236,6 +238,7 @@ class QdrantRevisionVectorStore:
             query_vector: 同维度查询向量。
             limit: 最大命中数。
             excluded_document_ids: 排名截断前排除的已删除文档。
+            allowed_documents: 排名截断前允许的成对文档与版本身份。
 
         Returns:
             Qdrant 分数降序命中。
@@ -247,17 +250,40 @@ class QdrantRevisionVectorStore:
             raise IndexCompatibilityError(
                 "Qdrant query 维度不匹配。", stage="qdrant.search"
             )
+        if allowed_documents == ():
+            return ()
         revision = spec.revision
+        scoped_filter = (
+            None
+            if allowed_documents is None
+            else models.Filter(
+                should=[
+                    models.Filter(
+                        must=[
+                            _match("document_id", item.document_id),
+                            _match(
+                                "document_version_id",
+                                item.document_version_id,
+                            ),
+                        ]
+                    )
+                    for item in allowed_documents
+                ]
+            )
+        )
+        must_filters: list[models.Condition] = [
+            _match("project_id", revision.project_id),
+            _match("knowledge_base_id", revision.knowledge_base_id),
+            _match("index_revision_id", revision.index_revision_id),
+        ]
+        if scoped_filter is not None:
+            must_filters.append(scoped_filter)
         response = self._client.query_points(
             collection_name=spec.physical_namespace,
             query=list(query_vector),
             using=vector_name,
             query_filter=models.Filter(
-                must=[
-                    _match("project_id", revision.project_id),
-                    _match("knowledge_base_id", revision.knowledge_base_id),
-                    _match("index_revision_id", revision.index_revision_id),
-                ],
+                must=must_filters,
                 must_not=[
                     models.FieldCondition(
                         key="document_id",
@@ -272,11 +298,31 @@ class QdrantRevisionVectorStore:
             with_vectors=False,
         )
         results = []
+        allowed_pairs = (
+            None
+            if allowed_documents is None
+            else {
+                (item.document_id, item.document_version_id)
+                for item in allowed_documents
+            }
+        )
         for rank, point in enumerate(response.points, start=1):
             payload = VectorPointPayload.model_validate(point.payload or {})
             if payload.index_revision_id != revision.index_revision_id:
                 raise IndexCompatibilityError(
                     "Qdrant payload revision 不匹配。", stage="qdrant.search"
+                )
+            if (
+                allowed_pairs is not None
+                and (
+                    payload.document_id,
+                    payload.document_version_id,
+                )
+                not in allowed_pairs
+            ):
+                raise IndexCompatibilityError(
+                    "Qdrant 来源范围下推返回越界身份。",
+                    stage="qdrant.search",
                 )
             point_id = str(point.id)
             expected_point_id = vector_point_id(

@@ -1737,7 +1737,7 @@ def _supported_draft(
     )
 
 
-def test_changed_role_repairs_before_stream_publish() -> None:
+def test_changed_role_refuses_without_full_repair_or_stream_publish() -> None:
     """首条职责偷换不能形成 partial 前缀，修复尝试仍可安全发布。"""
     wrong_source = (
         "协助总经理制定并落实各部门的质量方针和质量目标；"
@@ -1793,16 +1793,15 @@ def test_changed_role_repairs_before_stream_publish() -> None:
         cancellation=cancellation,
     )
 
-    assert emitted == [correct_claim]
-    assert outcome.answer == "总经理主持质量评审。 [S2]"
-    assert outcome.reason_code == "CLAIMS_VALIDATED"
-    assert len(requests) == 2
+    assert emitted == []
+    assert outcome.answer is None
+    assert outcome.reason_code == "CLAIM_OBJECT_CHANGED"
+    assert len(requests) == 1
     assert requests[0].repair_reason is None
-    assert requests[1].repair_reason == "CLAIM_OBJECT_CHANGED"
 
 
 def test_stream_buffers_valid_prefix_until_whole_draft_is_valid() -> None:
-    """后续事实失败时，前缀不得先发布；修复后只发布终版。"""
+    """后续事实失败时，前缀不得先发布或触发完整重生成。"""
     evidence, valid_draft = _supported_draft(
         "甲部门保存 14 天。", "甲部门保存 14 天。"
     )
@@ -1844,13 +1843,13 @@ def test_stream_buffers_valid_prefix_until_whole_draft_is_valid() -> None:
         cancellation=cancellation,
     )
 
-    assert emitted == [valid_draft.claims[0]]
-    assert outcome.answer == "甲部门保存 14 天。 [S1]"
-    assert outcome.reason_code == "CLAIMS_VALIDATED"
-    assert generator.generate_stream.call_count == 2
+    assert emitted == []
+    assert outcome.answer is None
+    assert outcome.reason_code == "CLAIM_NUMBER_UNSUPPORTED"
+    assert generator.generate_stream.call_count == 1
 
 
-def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls() -> None:
+def test_invalid_claim_refuses_without_full_repair_and_preserves_call() -> None:
     evidence, invalid = _supported_draft(
         "甲部门保存 14 天。", "甲部门保存 4 天。"
     )
@@ -1871,13 +1870,9 @@ def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls() -> None:
         ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
     )
     assert outcome.answer is None
-    assert generator.generate.call_count == 2
+    assert generator.generate.call_count == 1
     assert generator.generate.call_args_list[0].args[0].repair_reason is None
-    assert (
-        generator.generate.call_args_list[1].args[0].repair_reason
-        == "CLAIM_NUMBER_UNSUPPORTED"
-    )
-    assert len(outcome.calls) == 2
+    assert len(outcome.calls) == 1
     assert outcome.answer is None
     assert outcome.mode == "none"
     assert outcome.reason_code == "CLAIM_NUMBER_UNSUPPORTED"
@@ -1956,7 +1951,7 @@ def _abstained_draft() -> AnswerDraft:
                 code="GENERATION_JSON_INVALID",
             ),
             "GENERATION_JSON_INVALID",
-            2,
+            1,
         ),
     ),
 )
@@ -2027,7 +2022,7 @@ def test_model_failure_refuses_when_support_set_is_incomplete() -> None:
 
 
 def test_invalid_generated_claim_shape_is_not_provider_outage() -> None:
-    """两轮无效 claim 不会冒充断线；修复轮收到具体结构原因。"""
+    """无效 claim 不会冒充断线，也不会触发完整重生成。"""
     evidence = _verified_fact_evidence()
     generator = Mock()
     generator.generate.side_effect = ProviderInvalidResponse(
@@ -2046,10 +2041,7 @@ def test_invalid_generated_claim_shape_is_not_provider_outage() -> None:
 
     assert result.answer is None
     assert result.reason_code == "GENERATION_CLAIMS_INVALID"
-    assert generator.generate.call_count == 2
-    assert generator.generate.call_args_list[1].args[0].repair_reason == (
-        "GENERATION_CLAIMS_INVALID"
-    )
+    assert generator.generate.call_count == 1
 
 
 def test_verified_support_set_excludes_broad_distractors_from_model_input() -> (

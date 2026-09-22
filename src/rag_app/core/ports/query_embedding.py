@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from rag_app.core.capabilities import ComponentDescriptor
 from rag_app.core.models import (
@@ -49,4 +49,28 @@ class QueryEmbeddingPort(Protocol):
         ...
 
 
-__all__ = ["QueryEmbeddingPort"]
+@runtime_checkable
+class BatchQueryEmbeddingPort(Protocol):
+    """可选批量能力；一次路由保证所有结果属于同一向量空间。"""
+
+    def embed_queries(
+        self,
+        texts: tuple[str, ...],
+        revision: ActiveRevisionEmbeddingState,
+        egress: EgressPolicy,
+    ) -> tuple[RoutedEmbeddingResult, ...]:
+        """按输入顺序返回批量查询向量。
+
+        Args:
+            texts: 非空查询文本集合。
+            revision: 同一 Active Revision 的 topology 和 coverage。
+            egress: 请求作用域的查询 Embedding 出网策略。
+
+        Returns:
+            同一 slot 的有序结果；Provider 调用审计只由首项携带。
+
+        """
+        ...
+
+
+__all__ = ["BatchQueryEmbeddingPort", "QueryEmbeddingPort"]

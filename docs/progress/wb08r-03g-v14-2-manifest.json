@@ -1,0 +1,274 @@
+{
+  "schema_version": "wb08r03g-v14.2-final-v1",
+  "version": "V14.2",
+  "status": "IMPLEMENTED",
+  "phase_03_execution_status": "DIAGNOSTIC_RUN_COMPLETE",
+  "phase_03_quality_status": "NOT_PASSED",
+  "phase_04_shadow_routing_ready": true,
+  "phase_04_started": false,
+  "production_publish_allowed": false,
+  "production_modified": false,
+  "acceptance_interpretation": {
+    "real_qa_goal": "RUN_FULL_PATH_AND_LOCALIZE_PROBLEMS",
+    "accuracy_threshold_required_for_continuation": false,
+    "quality_failures_preserved": true,
+    "quality_failures_auto_repaired": false
+  },
+  "branch": "codex/wb-08r-adaptive-rag",
+  "implementation_base_sha": "c7b005a614d92329875296d815d2101e5cae3844",
+  "tested_source_sha": "6187be6f0bc9d822101ab5268b0b7eebd1905970",
+  "source_commits": [
+    {
+      "sha": "6187be6f0bc9d822101ab5268b0b7eebd1905970",
+      "subject": "fix(rag): 收敛字段解析执行链路"
+    }
+  ],
+  "implementation_scope": {
+    "changed_files": 25,
+    "insertions": 1808,
+    "deletions": 164,
+    "large_scale_refactor": false,
+    "index_rebuilt": false,
+    "retrieval_weights_changed": false,
+    "compiled_answer_plan_replaced": false
+  },
+  "verification": {
+    "expanded_related_pytest": "586 passed, 1 warning",
+    "final_targeted_pytest": "93 passed, 1 warning",
+    "ruff_check": "PASSED_23_CHANGED_PYTHON_FILES",
+    "ruff_format": "PASSED_23_CHANGED_PYTHON_FILES",
+    "mypy": "PASSED_408_SOURCE_FILES",
+    "py_compile": "PASSED",
+    "compose_config": "PASSED_WITH_PLACEHOLDER_ENV",
+    "git_diff_check": "PASSED",
+    "unrelated_tests_requested": false,
+    "accidental_read_only_scans": {
+      "pytest": 1,
+      "ruff": 2,
+      "counted_as_gates": false,
+      "writes_performed": false
+    }
+  },
+  "field_protocol_qualification": {
+    "attempt_count": 3,
+    "cases_per_attempt": 5,
+    "provider_calls_per_attempt": 7,
+    "provider_calls_total": 21,
+    "retry_count": 0,
+    "attempt_results": [
+      "4_OF_5_AMBIGUITY_SEMANTIC_MISMATCH",
+      "4_OF_5_MAX_SHAPE_SINGLE_ATOM_OUTPUT_INVALID",
+      "5_OF_5_PASSED"
+    ],
+    "final_status": "PASSED",
+    "final_cases": [
+      "PARAPHRASE",
+      "AMBIGUOUS",
+      "NOT_FOUND",
+      "TWO_ATOMS_LOCAL_EXACT",
+      "MAX_SHAPE_FOUR_SINGLE_ATOM_PACKETS"
+    ],
+    "field_resolution_output_tokens": 512,
+    "single_call_atom_limit": 1,
+    "logical_request_atom_limit": 4,
+    "candidate_limit_per_atom": 16,
+    "unique_items_execution": "LOCAL_VALIDATOR"
+  },
+  "business_request_accounting": {
+    "five_case_requests": 11,
+    "preflight_and_a_to_f_requests": 204,
+    "total": 215,
+    "trace_ids_observed": 214,
+    "full_traces_exported": 214,
+    "trace_export_errors": 0,
+    "untraced_requests": 1,
+    "untraced_reason": "FIRST_F024_TRACE_SQLITE_PERMISSION_INTERRUPTION_BEFORE_PERSISTENCE"
+  },
+  "five_case_final": {
+    "request_count": 5,
+    "statuses": {
+      "F024": "INSUFFICIENT_EVIDENCE",
+      "N031": "ANSWERABLE",
+      "EXPLICIT_SOURCE": "ANSWERABLE",
+      "EXPLICIT_COLUMN": "ANSWERABLE",
+      "UNSAFE_TEMPORAL": "ANSWERABLE"
+    },
+    "unsafe_temporal_query_interpret_calls": 1,
+    "accuracy_reviewed": false
+  },
+  "diagnostic_gates": [
+    {
+      "name": "Preflight-16",
+      "records": 16,
+      "status_counts": {
+        "ANSWERABLE": 13,
+        "INSUFFICIENT_EVIDENCE": 3
+      },
+      "packet_status": "OBSERVED",
+      "gate_status": "NOT_REVIEWED"
+    },
+    {
+      "name": "A Evidence-Pack-12",
+      "records": 12,
+      "status_counts": {
+        "ANSWERABLE": 11,
+        "INSUFFICIENT_EVIDENCE": 1
+      },
+      "packet_status": "OBSERVED",
+      "gate_status": "FAILED",
+      "false_refusal_count": 1
+    },
+    {
+      "name": "B Core-Answer-16",
+      "records": 16,
+      "status_counts": {
+        "ANSWERABLE": 13,
+        "INSUFFICIENT_EVIDENCE": 2,
+        "PROVIDER_UNAVAILABLE": 1
+      },
+      "packet_status": "OBSERVED",
+      "gate_status": "FAILED",
+      "failed_checks": [
+        "WB08R-F-048:ANSWER_OR_SOURCE",
+        "WB08R-N-059:ANSWER_OR_SOURCE"
+      ]
+    },
+    {
+      "name": "C Failed-24",
+      "records": 24,
+      "status_counts": {
+        "ANSWERABLE": 17,
+        "INSUFFICIENT_EVIDENCE": 6,
+        "PROVIDER_UNAVAILABLE": 1
+      },
+      "packet_status": "OBSERVED",
+      "gate_status": "FAILED",
+      "failed_check_count": 18,
+      "false_refusal_count": 6
+    },
+    {
+      "name": "D Natural-36",
+      "records": 36,
+      "status_counts": {
+        "ANSWERABLE": 30,
+        "INSUFFICIENT_EVIDENCE": 5,
+        "AMBIGUOUS_NEEDS_CLARIFICATION": 1
+      },
+      "packet_status": "OBSERVED",
+      "gate_status": "FAILED",
+      "answer_or_source_failed_count": 6,
+      "false_refusal_count": 2
+    },
+    {
+      "name": "E Full-96",
+      "records": 96,
+      "status_counts": {
+        "ANSWERABLE": 65,
+        "INSUFFICIENT_EVIDENCE": 28,
+        "PROVIDER_UNAVAILABLE": 2,
+        "AMBIGUOUS_NEEDS_CLARIFICATION": 1
+      },
+      "packet_status": "OBSERVED",
+      "gate_status": "FAILED",
+      "answer_or_limited_rate": 0.5806,
+      "false_refusal_count": 7,
+      "wrong_source_check_count": 9
+    },
+    {
+      "name": "F Concurrency-4",
+      "records": 4,
+      "status_counts": {
+        "ANSWERABLE": 3,
+        "INSUFFICIENT_EVIDENCE": 1
+      },
+      "packet_status": "OBSERVED",
+      "gate_status": "PASSED"
+    }
+  ],
+  "provider_unavailable_diagnosis": {
+    "case_id": "WB08R-F-048",
+    "occurrences": 4,
+    "provider_transport_outage_observed": false,
+    "provider_status_each": "SUCCESS_OK",
+    "wire_items_each": 24,
+    "wire_accepted_each": 1,
+    "wire_rejected_each": 23,
+    "wire_rejection_reason": "UNKNOWN_ATOM",
+    "final_reason": "SEMANTIC_REVIEW_DEADLINE_EXHAUSTED",
+    "public_status": "PROVIDER_UNAVAILABLE"
+  },
+  "plan_external_issue_budget": {
+    "limit": 3,
+    "conservative_consumed": 2,
+    "issues": [
+      "TRACE_SQLITE_MOUNT_PERMISSION",
+      "CANDIDATE_INTERNAL_MODEL_CONFIGURATION_NOT_EXECUTED"
+    ],
+    "limit_reached": false,
+    "quality_observations_counted_as_repairs": false
+  },
+  "runtime": {
+    "candidate_8289": {
+      "image": "rag-test-wanshitong:wb08r03g-6187be6",
+      "image_id": "sha256:8da303c05f71e770be10f8845c0d336ad0feeb72839eb5a1baa6ae9de27cb9c1",
+      "container_id": "67e240a2fa0845135b648342a09880ffd7d55abf274b149c7a84ee089b7e778b",
+      "live": 200,
+      "ready": 200,
+      "read_only_rootfs": true,
+      "pids_limit": 256,
+      "asset_manifest_sha256": "8c1f323bced7ef489962283b4a61cbaaabfe07ad835bd980751421d77cf55b3e4"
+    },
+    "production_60_8288": {
+      "image": "rag-test-wanshitong:604ef63",
+      "image_id": "sha256:97826be2208718be61d37921705f595c3c00566d57a2384ffc54ffdaf66380306",
+      "container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
+      "live": 200,
+      "ready": 200,
+      "modified": false
+    },
+    "production_54_18288": {
+      "url": "http://10.242.180.54:18288",
+      "live": 200,
+      "ready": 200,
+      "modified": false
+    }
+  },
+  "cleanup": {
+    "removed_containers": [
+      "wanshitong-wb08r01-app-v142-adde87a",
+      "wanshitong-wb08r01-app-baseline-bd00c56"
+    ],
+    "removed_images": [
+      "rag-test-wanshitong:wb08r03g-v142-adde87a"
+    ],
+    "retained_images": [
+      "rag-test-wanshitong:wb08r03g-6187be6",
+      "rag-test-wanshitong:wb08r03f-bd00c56"
+    ],
+    "removed_build_directories": 2,
+    "removed_temporary_archives_or_env_files": 3,
+    "local_expired_candidate_images_found": 0,
+    "volumes_removed": false,
+    "global_prune_used": false,
+    "original_untracked_result_files_preserved": 10,
+    "original_untracked_hashes_match": true
+  },
+  "evidence": {
+    "runtime_evidence_files": 304,
+    "runtime_evidence_manifest_entries": 303,
+    "runtime_evidence_manifest_sha256": "4fa11cf537abede49f771189839792099cc9654c6199a56bf6d9ab36af0c8c38a",
+    "full_trace_count": 214,
+    "contains_private_business_text": true,
+    "contains_secrets": false,
+    "tracked_in_git": false,
+    "windows_directory": "C:\\Users\\jerry\\Desktop\\湾区院\\湾事通\\WB08R03_V14_2_03完整问题与Trace_6187be6",
+    "windows_archive": "C:\\Users\\jerry\\Desktop\\湾区院\\湾事通\\WB08R03_V14_2_03完整问题与Trace_6187be6.zip",
+    "archive_sha256_source": "EXTERNAL_SHA256_SIDECAR",
+    "self_reference_note": "ZIP 内 Manifest 不嵌入 ZIP 自身 hash；同名 .sha256 文件为权威归档 hash。"
+  },
+  "reports": {
+    "report": "docs/progress/wb08r-03g-v14-2-report.md",
+    "issues": "docs/progress/wb08r-03g-v14-2-issues.md",
+    "manifest": "docs/progress/wb08r-03g-v14-2-manifest.json"
+  }
+}

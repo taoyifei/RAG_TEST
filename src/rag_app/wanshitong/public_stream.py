@@ -6,7 +6,11 @@ import json
 from collections.abc import Iterator, Mapping
 from typing import cast
 
-from rag_app.core.models import EvidenceItem, SearchAnswerResult
+from rag_app.core.models import (
+    CatalogCitation,
+    EvidenceItem,
+    SearchAnswerResult,
+)
 from rag_app.wanshitong.document_metadata import (
     normalize_source_relative_path,
 )
@@ -45,6 +49,7 @@ _PUBLIC_EVENT_FIELDS = {
         "status",
         "reason_code",
         "answer",
+        "user_message",
         "citations",
     ),
 }
@@ -60,13 +65,22 @@ def render_public_final(result: SearchAnswerResult) -> dict[str, object]:
         不含 Scope、Revision、分数、向量或 Provider 的公开 Final。
 
     """
-    return {
+    final: dict[str, object] = {
         "trace_id": result.trace_id,
         "status": result.status.value,
         "reason_code": result.reason_code,
         "answer": result.answer,
-        "citations": [_public_citation(item) for item in result.evidence],
+        "citations": [
+            *(_public_citation(item) for item in result.evidence),
+            *(
+                _public_catalog_citation(item)
+                for item in result.catalog_citations
+            ),
+        ],
     }
+    if result.display_message is not None:
+        final["user_message"] = result.display_message
+    return final
 
 
 def project_public_stream(frames: Iterator[bytes]) -> Iterator[bytes]:
@@ -90,6 +104,11 @@ def project_public_stream(frames: Iterator[bytes]) -> Iterator[bytes]:
             event_name, payload = _decode_sse(frame)
             projected = _project_event(event_name, payload)
             yield _encode_sse(event_name, projected)
+            if event_name in {"final", "error", "cancelled"}:
+                # 外层 HTTP 已确认发送终态；再推进内部迭代器一次，允许
+                # P09 完成终态确认。直接 close 会把成功 Final 误记为取消。
+                next(frames, None)
+                return
     finally:
         close = getattr(frames, "close", None)
         if callable(close):
@@ -129,6 +148,34 @@ def _public_citation(evidence: EvidenceItem) -> dict[str, object]:
             pass
         else:
             citation["source_relative_path"] = safe_path
+    return citation
+
+
+def _public_catalog_citation(item: CatalogCitation) -> dict[str, object]:
+    """显式标记目录元数据来源，避免冒充 DOCX 正文摘录。"""
+    citation: dict[str, object] = {
+        "document_name": item.document_title,
+        "document_title": item.document_title,
+        "locator": item.source_relative_path or item.document_title,
+        "quote": f"目录元数据：文档《{item.document_title}》",
+        "source_kind": "catalog_metadata",
+        "document_version_id": item.document_version_id,
+    }
+    if item.department_name:
+        citation["department_name"] = item.department_name
+        citation["department"] = item.department_name
+    if item.category_path:
+        citation["category_path"] = item.category_path
+    if item.source_relative_path:
+        try:
+            safe_path, _name = normalize_source_relative_path(
+                item.source_relative_path
+            )
+        except AdminFacadeError:
+            pass
+        else:
+            citation["source_relative_path"] = safe_path
+            citation["locator"] = safe_path
     return citation
 
 

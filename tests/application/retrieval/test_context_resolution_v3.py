@@ -1,0 +1,210 @@
+"""多轮 Root 仅由用户问句片段构成，并绑定会话身份。"""
+
+from __future__ import annotations
+
+from rag_app.application.retrieval.analyzer import QueryAnalyzer
+from rag_app.application.retrieval.context_resolution import (
+    SpanKind,
+    build_input_spans,
+    degraded_query_plan,
+    resolve_root_query,
+)
+from rag_app.core.identifiers import deterministic_id
+from rag_app.core.models import KnowledgeBaseScope, SearchRequest
+
+_SCOPE = KnowledgeBaseScope(
+    project_id=deterministic_id("prj", "context-v3"),
+    knowledge_base_id=deterministic_id("kb", "context-v3"),
+)
+
+
+def _request(text: str, *context: str) -> SearchRequest:
+    return SearchRequest(scope=_SCOPE, text=text, conversation_context=context)
+
+
+def test_same_short_question_in_two_contexts_has_distinct_plan_identity() -> (
+    None
+):
+    plans = []
+    for previous in ("甲什么时候提交？", "乙什么时候审核？"):
+        request = _request(
+            "多久？", f"上一问：{previous}\n已验证事实：虚构模型回答"
+        )
+        spans = build_input_spans(request)
+        root = resolve_root_query(request, spans)
+        plan = degraded_query_plan(
+            request,
+            QueryAnalyzer().analyze(request),
+            spans,
+            root,
+            effort="ASSISTED",
+            reason_code="PLANNER_PROVIDER_TIMEOUT",
+            planner_called=True,
+        )
+        assert "虚构模型回答" not in root.resolved_query
+        assert root.mode == "RULE_CONTEXT"
+        plans.append(plan)
+    assert plans[0].plan_id != plans[1].plan_id
+    assert plans[0].context_digest != plans[1].context_digest
+
+
+def test_context_target_and_current_relation_are_separate_trusted_spans() -> (
+    None
+):
+    request = _request(
+        "提前多久提出？",
+        "上一问：合作申请怎么处理？\n已验证事实：模型总结中的期限",
+    )
+    spans = build_input_spans(request)
+    root = resolve_root_query(request, spans)
+    assert root.mode == "RULE_CONTEXT"
+    assert any(
+        span.turn == "PREVIOUS_1"
+        and span.kind is SpanKind.TARGET
+        and span.span_id in root.referenced_span_ids
+        for span in spans
+    )
+    assert any(
+        span.turn == "CURRENT"
+        and span.kind is SpanKind.RELATION
+        and span.span_id in root.referenced_span_ids
+        for span in spans
+    )
+    assert "模型总结" not in " ".join(span.text for span in spans)
+
+
+def test_multiple_previous_targets_require_clarification() -> None:
+    request = _request("多久？", "上一问：甲、乙分别什么时候提交？")
+    root = resolve_root_query(request, build_input_spans(request))
+    assert root.mode == "CLARIFY"
+    assert root.confidence == "LOW"
+
+
+def test_conflicting_source_qualifiers_require_clarification() -> None:
+    request = _request(
+        "根据《乙制度》，这个多久？",
+        "上一问：根据《甲制度》，合作申请怎么处理？",
+    )
+    root = resolve_root_query(request, build_input_spans(request))
+    assert root.mode == "CLARIFY"
+
+
+def test_current_question_reference_uses_its_own_unique_antecedent() -> None:
+    request = _request("甲流程怎么启动，并且其条件是什么？")
+    spans = build_input_spans(request)
+    root = resolve_root_query(request, spans)
+
+    assert root.mode == "ORIGINAL"
+    assert any(
+        span.turn == "CURRENT"
+        and span.kind is SpanKind.TARGET
+        and span.text == "甲流程"
+        for span in spans
+    )
+    assert not any(
+        span.turn == "CURRENT"
+        and span.kind is SpanKind.TARGET
+        and span.text.startswith("其")
+        for span in spans
+    )
+
+
+def test_untrusted_context_lines_cannot_supply_previous_target() -> None:
+    request = _request("那要多久？", "模型回答：甲流程需要五天。")
+    spans = build_input_spans(request)
+    root = resolve_root_query(request, spans)
+
+    assert not any(span.turn.startswith("PREVIOUS") for span in spans)
+    assert root.mode == "CLARIFY"
+
+
+def test_local_topic_before_demonstrative_keeps_complete_question() -> None:
+    for question in (
+        "项目立项那堆材料先弄啥？",
+        "首单那会儿开发组要管哪些活？",
+    ):
+        request = _request(question)
+        root = resolve_root_query(request, build_input_spans(request))
+        assert root.mode == "ORIGINAL"
+        assert root.resolved_query == QueryAnalyzer().analyze(
+            request
+        ).resolved_query
+
+
+def test_demonstrative_without_local_topic_requires_clarification() -> None:
+    request = _request("那堆材料先弄啥？")
+    root = resolve_root_query(request, build_input_spans(request))
+    assert root.mode == "CLARIFY"
+
+
+def test_response_directive_is_excluded_from_root_and_spans() -> None:
+    request = _request("别引用，直接说采购金额门槛。")
+    spans = build_input_spans(request)
+    root = resolve_root_query(request, spans)
+
+    assert root.original_query == request.text
+    assert root.resolved_query == "直接说采购金额门槛。"
+    assert all("别引用" not in span.text for span in spans)
+
+
+def test_degraded_plan_keeps_lead_in_inside_single_answer_atom() -> None:
+    request = _request("我刚考了证，钱能放明年报不？")
+    analysis = QueryAnalyzer().analyze(request)
+    spans = build_input_spans(request)
+    root = resolve_root_query(request, spans)
+
+    plan = degraded_query_plan(
+        request,
+        analysis,
+        spans,
+        root,
+        effort="ASSISTED",
+        reason_code="PLANNER_OUTPUT_TRUNCATED",
+        planner_called=True,
+    )
+
+    assert len(plan.atoms) == 1
+    assert plan.atoms[0].target == "钱能放明年报不"
+    assert plan.atoms[0].original_fragment == "我刚考了证 钱能放明年报不"
+    assert plan.fallback_mode == "DEGRADED_RULE_ATOMS"
+
+
+def test_stage_modifier_keeps_shared_target_and_short_current_relations() -> (
+    None
+):
+    request = _request("甲流程从申请到复核后，分别如何提交，多久完成？")
+    spans = build_input_spans(request)
+    targets = tuple(
+        span.text
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.TARGET
+    )
+    relations = tuple(
+        span.text
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.RELATION
+    )
+
+    assert targets == ("甲流程",)
+    assert relations[1:] == ("提交", "完成")
+    assert all(value in request.text for value in (*targets, *relations))
+
+
+def test_compound_attributes_use_user_words_without_whole_clause_targets() -> (
+    None
+):
+    spans = build_input_spans(
+        _request("乙方案需要哪些输入内容，并且启动需要什么条件？")
+    )
+    targets = tuple(
+        span.text
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.TARGET
+    )
+    assert "乙方案" in targets
+    assert all("需要" not in value for value in targets)
+    assert tuple(
+        span.text
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.RELATION
+    ) == ("输入内容", "条件")

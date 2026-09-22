@@ -17,6 +17,7 @@ docs/
 evaluation/frozen/
 evaluation/results/
 evaluation/reports/
+/evaluation/wanshitong/v2/results/
 design/evidence/
 design/adr/
 design/acceptance-and-offline-deployment-*.md

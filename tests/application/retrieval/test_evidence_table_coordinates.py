@@ -2,22 +2,50 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from rag_app.adapters.providers.aliyun_chat import (
+    ChatCompletion,
+    ChatUsage,
+    _natural_answer_draft,
+    _natural_messages,
+)
+from rag_app.application.answering.grounded import _validated_natural_claim
 from rag_app.application.retrieval import QueryAnalyzer
+from rag_app.application.retrieval.atom_group_alignment import (
+    qualify_atom_evidence,
+)
 from rag_app.application.retrieval.evidence import EvidenceAssembler
+from rag_app.core.errors import ValidationFailed
 from rag_app.core.models import (
     ChunkRole,
+    ClaimSupport,
     EvidenceSelectionContext,
     KnowledgeBaseScope,
+    ProviderCall,
     QueryKind,
     RankedChunk,
+    RequestedAnswerType,
     RetrievalPolicy,
     SearchRequest,
     SourceSpan,
     SourceSpanKind,
 )
 from rag_app.core.models.common import freeze_json_object
+from rag_app.core.models.generation_packet import stable_support_key
+from rag_app.core.models.query_plan import (
+    AtomAnswerShape,
+    AtomCandidateLink,
+    AtomStatus,
+    AtomSupport,
+    AtomSupportMatrix,
+    QueryAtom,
+    make_query_plan,
+)
+from rag_app.core.models.retrieval import NaturalClaim
+from rag_app.core.ports import GenerationRequest
 from tests.application.retrieval.helpers import make_ranked_chunk
 
 _ROWS = (
@@ -152,6 +180,258 @@ def test_links_header_and_data_chunks_within_the_same_table() -> None:
     assert [item.citation_text for item in evidence] == ["82 ℃"]
 
 
+def test_atom_table_intersection_requires_citable_row_header_and_value() -> (
+    None
+):
+    candidate = _table()
+    context = _context("白桦泵的上限温度是多少")
+    analysis = context.analysis
+    context = context.model_copy(
+        update={
+            "analysis": analysis.model_copy(
+                update={
+                    "semantics": analysis.semantics.model_copy(
+                        update={
+                            "target": "白桦泵",
+                            "relation": "上限温度",
+                            "answer_type": RequestedAnswerType.FACT,
+                            "source": "SPAN_REFERENCED",
+                        }
+                    )
+                }
+            ),
+            "include_table_context": True,
+        }
+    )
+    selected = EvidenceAssembler().assemble_sets(
+        (candidate,), RetrievalPolicy(), context=context
+    )
+    supports = selected.answer_support_set
+    assert {item.citation_text for item in supports} == {
+        "白桦泵",
+        "上限温度",
+        "82 ℃",
+    }
+    assert all(
+        dict(item.metadata)["answer_support"]["support_reason"]
+        == "TABLE_INTERSECTION"
+        for item in supports
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="白桦泵",
+        relation="上限温度",
+        answer_shape=AtomAnswerShape.FACT,
+    )
+    link = AtomCandidateLink(
+        atom_id="A1",
+        unit_id="A1",
+        chunk_id=candidate.hydrated.chunk.chunk_id,
+        channels=("lexical",),
+        best_rank=1,
+        score=1.0,
+    )
+    certified = qualify_atom_evidence(
+        atom,
+        supports[-1],
+        (link,),
+        alignment=None,
+        resolved_root_query="白桦泵 上限温度",
+        supporting_items=supports,
+    )
+    incomplete = qualify_atom_evidence(
+        atom,
+        supports[-1],
+        (link,),
+        alignment=None,
+        resolved_root_query="白桦泵 上限温度",
+        supporting_items=supports[:2],
+    )
+    header = next(item for item in supports if item.citation_text == "上限温度")
+    original_span = header.source_spans[0]
+    foreign_span = original_span.model_copy(
+        update={
+            "structural_path": tuple(
+                "tbl:9" if part.startswith("tbl:") else part
+                for part in original_span.structural_path
+            )
+        }
+    )
+    mixed = tuple(
+        item.model_copy(update={"source_spans": (foreign_span,)})
+        if item is header
+        else item
+        for item in supports
+    )
+    wrong_table = qualify_atom_evidence(
+        atom,
+        supports[-1],
+        (link,),
+        alignment=None,
+        resolved_root_query="白桦泵 上限温度",
+        supporting_items=mixed,
+    )
+    assert certified.publishable
+    assert not incomplete.publishable
+    assert not wrong_table.publishable
+
+    plan = make_query_plan(
+        standalone_query="白桦泵 上限温度",
+        intent="FACT",
+        effort="ASSISTED",
+        atoms=(atom,),
+        reason_code="SYNTHETIC",
+        planner_called=False,
+    )
+    matrix = AtomSupportMatrix(
+        atoms=(
+            AtomSupport(
+                atom_id="A1",
+                status=AtomStatus.SUPPORTED,
+                supporting_support_ids=tuple(
+                    item.support_id for item in supports
+                ),
+            ),
+        )
+    )
+    value = next(item for item in supports if item.citation_text == "82 ℃")
+    with pytest.raises(ValidationFailed) as failure:
+        _validated_natural_claim(
+            NaturalClaim(
+                atom_id="A1",
+                text="白桦泵的上限温度为 82 ℃。",
+                supports=(
+                    ClaimSupport(
+                        support_id=value.support_id,
+                        quote=value.citation_text,
+                    ),
+                ),
+            ),
+            plan,
+            matrix,
+            supports,
+            context.analysis,
+        )
+    assert failure.value.code == "CLAIM_TABLE_DEPENDENCY_INCOMPLETE"
+    accepted = _validated_natural_claim(
+        NaturalClaim(
+            atom_id="A1",
+            text="白桦泵的上限温度为 82 ℃。",
+            supports=tuple(
+                ClaimSupport(
+                    support_id=item.support_id,
+                    quote=item.citation_text,
+                )
+                for item in supports
+            ),
+        ),
+        plan,
+        matrix,
+        supports,
+        context.analysis,
+    )
+    assert accepted.text == "白桦泵的上限温度为 82 ℃。"
+    request = GenerationRequest(
+        query=plan.standalone_query,
+        evidence=supports,
+        citation_protocol="support-id-v2-natural-claims",
+        query_plan=plan,
+        atom_support_matrix=matrix,
+        per_atom_source_certificates=tuple(
+            (
+                "A1",
+                stable_support_key(item),
+                freeze_json_object(dict(item.metadata)["answer_support"]),
+            )
+            for item in supports
+        ),
+    )
+    payload = json.loads(_natural_messages(request)[1].content)
+    assert "table_fact_units" not in payload
+    assert payload["atoms"][0]["allowed_ref_ids"] == [
+        unit["unit_id"] for unit in payload["read_units"]
+    ]
+    projected_text = "\n".join(unit["text"] for unit in payload["read_units"])
+    assert all(item.citation_text in projected_text for item in supports)
+    assert all(
+        unit["source_context"]["structure_scope"] == "literal_table_fragment"
+        and unit["source_context"]["table_relation_complete"] is False
+        for unit in payload["read_units"]
+    )
+    completion = ChatCompletion(
+        content=json.dumps(
+            {
+                "claims": [
+                    {
+                        "atom_id": "A1",
+                        "text": "白桦泵的上限温度为 82 ℃。",
+                        "supports": [
+                            {
+                                "support_id": value.support_id,
+                                "quote": value.citation_text,
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        model="synthetic",
+        usage=ChatUsage(),
+        call=ProviderCall(
+            provider_id="synthetic",
+            operation="generation",
+            call_count=1,
+            retry_count=0,
+            elapsed_ms=1,
+        ),
+    )
+    closed = _natural_answer_draft(completion, request).natural_claims[0]
+    assert {support.support_id for support in closed.supports} == {
+        item.support_id for item in supports
+    }
+
+    header = supports[1]
+    header_only = completion.model_copy(
+        update={
+            "content": json.dumps(
+                {
+                    "claims": [
+                        {
+                            "atom_id": "A1",
+                            "text": header.citation_text,
+                            "supports": [
+                                {
+                                    "support_id": header.support_id,
+                                    "quote": header.citation_text,
+                                }
+                            ],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    unchanged = _natural_answer_draft(header_only, request).natural_claims[0]
+    assert tuple(support.support_id for support in unchanged.supports) == (
+        header.support_id,
+    )
+
+
+def test_atom_table_intersection_does_not_publish_when_cap_breaks_proof() -> (
+    None
+):
+    context = _context("白桦泵的上限温度是多少").model_copy(
+        update={"include_table_context": True}
+    )
+    selected = EvidenceAssembler().assemble_sets(
+        (_table(),), RetrievalPolicy(per_section_cap=2), context=context
+    )
+
+    assert not selected.answer_support_set
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -180,8 +460,10 @@ def test_incomplete_or_ambiguous_coordinates_do_not_choose_a_value(
 @pytest.mark.parametrize(
     "boundary", ["document", "version", "table", "group", "section"]
 )
+@pytest.mark.parametrize("include_table_context", [False, True])
 def test_does_not_join_coordinates_across_identity_boundaries(
     boundary: str,
+    include_table_context: bool,
 ) -> None:
     header = _table(1, rows=_ROWS[:1])
     data = _table(
@@ -210,7 +492,9 @@ def test_does_not_join_coordinates_across_identity_boundaries(
     evidence = EvidenceAssembler().assemble(
         (header, data),
         RetrievalPolicy(),
-        context=_context("白桦泵的上限温度是多少"),
+        context=_context("白桦泵的上限温度是多少").model_copy(
+            update={"include_table_context": include_table_context}
+        ),
     )
 
     assert "82 ℃" not in {item.citation_text for item in evidence}

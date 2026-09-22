@@ -130,6 +130,44 @@ def test_public_final_contains_only_answer_and_citation_dto() -> None:
     }
 
 
+def test_public_final_projects_validation_notice_as_user_message() -> None:
+    result = synthetic_answer(_TRACE_ID).model_copy(
+        update={
+            "display_message": (
+                "已找到相关资料，但本次答案生成或核验未完成。你可以稍后重试。"
+            )
+        }
+    )
+
+    final = render_public_final(result)
+
+    assert final["user_message"] == result.display_message
+    assert "display_message" not in final
+
+
+def test_public_projection_preserves_only_final_user_message() -> None:
+    internal = {
+        "protocol": "rag-answer-sse-v1",
+        "type": "final",
+        "trace_id": _TRACE_ID,
+        "sequence": 1,
+        "status": "INSUFFICIENT_EVIDENCE",
+        "reason_code": "INSUFFICIENT_EVIDENCE",
+        "answer": None,
+        "user_message": "本次答案核验未完成，请稍后重试。",
+        "display_message": "内部字段不应出现",
+        "citations": [],
+    }
+
+    projected = next(
+        iter(project_public_stream(iter([_sse("final", internal)])))
+    )
+    payload = _payload(projected)
+
+    assert payload["user_message"] == "本次答案核验未完成，请稍后重试。"
+    assert "display_message" not in payload
+
+
 def test_projection_passes_heartbeat_and_closes_upstream() -> None:
     closed = False
 
@@ -161,3 +199,58 @@ def test_projection_rejects_unknown_internal_event() -> None:
     frame = _sse("token", {"token": "未经验证正文"})
     with pytest.raises(ValueError, match="未知公共事件"):
         next(iter(project_public_stream(iter([frame]))))
+
+
+@pytest.mark.parametrize("terminal", ["final", "error", "cancelled"])
+def test_public_projection_preserves_one_terminal_event(terminal: str) -> None:
+    payload: dict[str, object] = {
+        "protocol": "rag-answer-sse-v1",
+        "type": terminal,
+        "trace_id": _TRACE_ID,
+        "sequence": 1,
+    }
+    if terminal == "final":
+        payload.update(status="INSUFFICIENT_EVIDENCE", answer="", citations=[])
+    elif terminal == "error":
+        payload.update(
+            code="SYNTHETIC", message="安全错误", stage="answer.stream"
+        )
+    else:
+        payload.update(
+            cancel_requested=True,
+            upstream_close_attempted=False,
+            upstream_stopped="confirmed",
+        )
+    frames = iter([_sse(terminal, payload), _sse("error", payload)])
+    projected = list(project_public_stream(frames))
+    assert len(projected) == 1
+    assert projected[0].startswith(f"event: {terminal}\n".encode())
+
+
+def test_public_final_acknowledges_upstream_before_close() -> None:
+    acknowledged = False
+    closed = False
+
+    def _frames() -> Iterator[bytes]:
+        nonlocal acknowledged, closed
+        try:
+            yield _sse(
+                "final",
+                {
+                    "protocol": "rag-answer-sse-v1",
+                    "type": "final",
+                    "trace_id": _TRACE_ID,
+                    "sequence": 0,
+                    "status": "INSUFFICIENT_EVIDENCE",
+                    "answer": "",
+                    "citations": [],
+                },
+            )
+            acknowledged = True
+        finally:
+            closed = True
+
+    projected = list(project_public_stream(_frames()))
+    assert len(projected) == 1
+    assert acknowledged
+    assert closed

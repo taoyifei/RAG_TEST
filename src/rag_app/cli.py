@@ -45,6 +45,7 @@ from rag_app.runtime import (
 from rag_app.settings import RuntimeSettings
 from rag_app.state import JobKind, JobState
 from rag_app.state.jobs import ReadOnlyJobStore
+from rag_app.wanshitong.access_log import sso_safe_access_log_config
 from rag_app.wanshitong.internal_model_settings import InternalModelSettings
 from rag_app.wanshitong.internal_models import InternalModelConfigurator
 from rag_app.worker_runtime import build_worker_runtime
@@ -252,7 +253,9 @@ def _run_product_command(arguments: argparse.Namespace) -> int | None:
             app,
             host=product_settings.host,
             port=product_settings.port,
+            root_path=product_settings.root_path,
             access_log=True,
+            log_config=sso_safe_access_log_config(),
             log_level="info",
         )
         return 0

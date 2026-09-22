@@ -36,6 +36,8 @@ def test_admin_facade_requires_existing_console_session(
             "/documents",
             "/jobs",
             "/history",
+            "/feedback",
+            "/feedback/statistics",
             "/operational-traces",
             "/models",
             "/system",
@@ -52,6 +54,21 @@ def test_admin_facade_requires_existing_console_session(
         ).status_code == 401
         assert anonymous.post(
             ADMIN_BASE_PATH + "/history-traces:export",
+            json={"trace_ids": [trace_id]},
+        ).status_code == 401
+        assert anonymous.get(
+            ADMIN_BASE_PATH + f"/feedback/{trace_id}"
+        ).status_code == 401
+        assert anonymous.patch(
+            ADMIN_BASE_PATH + f"/feedback/{trace_id}/review",
+            json={
+                "expected_version": 0,
+                "review_status": "NEW",
+                "verification_references": [],
+            },
+        ).status_code == 401
+        assert anonymous.post(
+            ADMIN_BASE_PATH + "/feedback/export",
             json={"trace_ids": [trace_id]},
         ).status_code == 401
 

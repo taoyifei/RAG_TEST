@@ -1,0 +1,468 @@
+{
+  "selection_revision": "wb08r03r2-gate-selection-v1",
+  "source_dataset_revision": "wanshitong-v2-20260917",
+  "gate_selections": {
+    "context_12": {
+      "required_count": 12,
+      "missing_fixture_slots": {
+        "MULTIPLE_TARGETS_CLARIFY": 2,
+        "CONFLICTING_CONTEXT_CLARIFY": 1
+      },
+      "unverified_expectations": [
+        "resolved_target_and_relation",
+        "clarification_class",
+        "cache_identity"
+      ],
+      "cases": [
+        {
+          "case_id": "WB08R-N-043",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "2621c01bcea62d0b3512e7c422bc60d945e1c0bcbbcd86e718b5a18206034227",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-044",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "0be0f27eeb9eb8e7290fc6e2b1835a946f2c6505b880bd1795992cc0f495a0fa",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-045",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "350e8e67557ae0afd47522145c23f988bf6ccd45975f9dc0dd57df04e3e7ef6a",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-046",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "66dc6b21e98fc871c9998baec7e98869ba06557117d7cf8cea4710fa041393e6",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-047",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "b776f15446350480f60e725ec32a3a829a0a5a552526028656f8c52f4a1de8cd",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-048",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "0053e1af9942766e982d9cf3ba8c0967824da89659d283cfcab5b12e0aa74ac8",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-049",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "c179f9311ec92547228146c1c3c81797f3ce7948d1a29fa5f6b4461d27549bf0",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-050",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "0bb94968f28fef9fe792ecb356a40bfb731fdbc19e80a1ae20ca2db27a816ec6",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-051",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "aec53ff32e9d74cba528bdd93fdb96ac615fc88ce76c770d8532575829342cf4",
+          "expected_behavior": "ANSWER"
+        }
+      ],
+      "verified_contract": "case identity, original question hash and existing expected_behavior; source document expectation remains in original frozen dataset",
+      "functional_gate_status": "NOT_OBSERVED"
+    },
+    "evidence_ownership_12": {
+      "required_count": 12,
+      "missing_fixture_slots": {},
+      "unverified_expectations": [
+        "direct_source_span",
+        "group_id",
+        "table_row_identity",
+        "sibling_group_identity"
+      ],
+      "cases": [
+        {
+          "case_id": "WB08R-N-003",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "1e9a819a521b9b7a395d4ba50d8430a33f350a85c0046b2776e5c5015fa23f87",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-044",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "0be0f27eeb9eb8e7290fc6e2b1835a946f2c6505b880bd1795992cc0f495a0fa",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-002",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "a472657d4ef7b121b142d0d8d09f16e77be64277a31eb53304137398513ec503",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-005",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "f5d15d4f4813d011eea40c00ae543d07d91743310f3937f073aaa14bd1e4fe9f",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-014",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "39b96b9ac3282bf984b1e026688fedeabecc303e18a36df945939734ea36ff1f",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-023",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "674813c3c3b6dfb8504a11b6d70e5f3583252add936969fd3c8982ecd876637b",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-001",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "9a0c50fd030181ea192b9acb0d70b3f0b2725d9563ed35f1affacad4dc8ca82f",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-009",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "1f4b3c11a6ee6436aede0fc1154fc527134284c928d854481218a7c4c8650323",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-013",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "2f2dbf114c12964668a518ed464972c011a5854d490201cfa4fcb0b2ed07bc1b",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-017",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "29cdf8cc9134211e1ad6118aaf7c95bb81d0af11eb8bed1d91bf2ce0b9f9e0c8",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-055",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "3430b7d0f5d741b460aef78e440911e06ed8eb7d1a38eacf9553a6b311759be7",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-037",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "687eb2b944f9607ac701ea277ef1a18fd1e383e0d8fe6a2a2025fd61e53abfc5",
+          "expected_behavior": "ANSWER"
+        }
+      ],
+      "verified_contract": "case identity, original question hash and existing expected_behavior; source document expectation remains in original frozen dataset",
+      "functional_gate_status": "NOT_OBSERVED"
+    },
+    "ownership_16": {
+      "required_count": 16,
+      "missing_fixture_slots": {},
+      "unverified_expectations": [
+        "group_id",
+        "table_row_identity",
+        "section_identity",
+        "sibling_exclusion"
+      ],
+      "cases": [
+        {
+          "case_id": "WB08R-F-001",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "9a0c50fd030181ea192b9acb0d70b3f0b2725d9563ed35f1affacad4dc8ca82f",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-002",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "2c29123b417403be2857b5d72d14f5963de68a79e67841515a2533055efec837",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-003",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "087e198c0da69b215f1f59a5b38a79aebc2d478e7573f2f1ea9a3a16f011450a",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-004",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "654891e85d1c346690d415c9e2e6bbe2856d25b81644c6f431a823add9d89633",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-005",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "83e8180c472722bbdd51f31b0a38e2ba7529d1d14f81c66bfc3016f25e0b5cd8",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-006",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "df61f5570d0603a8aab6c650c3e4e771840a7b9447f96811da18a208dfdc79db",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-007",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "135af68ad09183eb886e8bb949c8524f27004a1c3e73c2c4dbe6d33998542827",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-009",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "1f4b3c11a6ee6436aede0fc1154fc527134284c928d854481218a7c4c8650323",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-010",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "5d81ee29dba8bd4ce4c9873da2c99116749108b662959305648d5e6432ac2cf7",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-011",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "fed0372e9468c901a3e4e1eba2806620608ca2da3d947ee6a43b23404b8f8f4f",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-013",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "2f2dbf114c12964668a518ed464972c011a5854d490201cfa4fcb0b2ed07bc1b",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-015",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "4c52a4f4674dc8d0fff177a87f43b320603b8d907b3d94a5c269317617e6d642",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-017",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "29cdf8cc9134211e1ad6118aaf7c95bb81d0af11eb8bed1d91bf2ce0b9f9e0c8",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-037",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "687eb2b944f9607ac701ea277ef1a18fd1e383e0d8fe6a2a2025fd61e53abfc5",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-043",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "e4cbc9c3a5a84a3e62257841f0ca2cc0e714cdd20eff253e4f0e68113a15a5e3",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-048",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "d0751f42487920d46ada9e562bd1e40f2906674bca935a7fc527c42d296550cc",
+          "expected_behavior": "ANSWER"
+        }
+      ],
+      "verified_contract": "case identity, original question hash and existing expected_behavior; source document expectation remains in original frozen dataset",
+      "functional_gate_status": "NOT_OBSERVED"
+    },
+    "claims_16": {
+      "required_count": 16,
+      "missing_fixture_slots": {},
+      "unverified_expectations": [
+        "claim_entailment",
+        "claim_support_id",
+        "supported_claim_accept_rate",
+        "unsupported_claim_reject_rate"
+      ],
+      "cases": [
+        {
+          "case_id": "WB08R-F-004",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "654891e85d1c346690d415c9e2e6bbe2856d25b81644c6f431a823add9d89633",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-008",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "8430dd1729077fc0bb1624964cac42f056da17cc3da98f90a1ee24b75229868d",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-016",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "95b2967ce8643ff88650b0e27a42d9ed54e9bc3446087fbc72e0e1e6163479c9",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-017",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "29cdf8cc9134211e1ad6118aaf7c95bb81d0af11eb8bed1d91bf2ce0b9f9e0c8",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-018",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "82eaab1da0b11bb36ab8e1cf03b305d4da2c8d3e7d3d241010c5ce88ca218986",
+          "expected_behavior": "LIMITED"
+        },
+        {
+          "case_id": "WB08R-F-019",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "5a84c106f2248fd0a6c8d4d95f5d2d0b81b79afac88ec867df5f8a58b9de32d0",
+          "expected_behavior": "LIMITED"
+        },
+        {
+          "case_id": "WB08R-N-043",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "2621c01bcea62d0b3512e7c422bc60d945e1c0bcbbcd86e718b5a18206034227",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-052",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "07053fce7b748a172717031f2e3958c93ce2cf3e81f8eb0189312f972eb58aca",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-A-007",
+          "source_dataset": "adversarial-30.ndjson",
+          "question_sha256": "55030e50ec89ad20124aa1ea9e95d593f9a27f13b85ec327c6fe7b7f3096eecf",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-A-008",
+          "source_dataset": "adversarial-30.ndjson",
+          "question_sha256": "8a6f66918055d14f5c2c9240d29dcc81739ef27b1cebd9a29eadec22aa0b68b4",
+          "expected_behavior": "LIMITED"
+        },
+        {
+          "case_id": "WB08R-A-009",
+          "source_dataset": "adversarial-30.ndjson",
+          "question_sha256": "c3c0f6b0d7cc18d526d81ccba70a3d7147d8c5312b50b8a4769ef1838eae5dbb",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-A-010",
+          "source_dataset": "adversarial-30.ndjson",
+          "question_sha256": "c8c9c4aed340c46bb30732e0b183a1978669068207487e1d8d83a751c68319d3",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-A-011",
+          "source_dataset": "adversarial-30.ndjson",
+          "question_sha256": "65e8fc57dd64817d11c55593dcb1d19aece925c3b52c7d0559646884aae709d8",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-A-013",
+          "source_dataset": "adversarial-30.ndjson",
+          "question_sha256": "2ae639d9e0f2fc885ba1ef6009713cb0e6d41a5ffc42475930db606564a592fa",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-A-015",
+          "source_dataset": "adversarial-30.ndjson",
+          "question_sha256": "3c0991fc6e69f1cfab3884590e1b66f03d1b151ad2857c81208da87fbc562950",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-A-018",
+          "source_dataset": "adversarial-30.ndjson",
+          "question_sha256": "27147d746003b3753d7460e84a36c6d4711b9feb627df8b70afc1d9f74824890",
+          "expected_behavior": "REFUSE"
+        }
+      ],
+      "verified_contract": "case identity, original question hash and existing expected_behavior; source document expectation remains in original frozen dataset",
+      "functional_gate_status": "NOT_OBSERVED"
+    },
+    "answer_shape_12": {
+      "required_count": 12,
+      "missing_fixture_slots": {},
+      "unverified_expectations": [
+        "source_structure_completeness",
+        "generation_gap",
+        "false_limited"
+      ],
+      "cases": [
+        {
+          "case_id": "WB08R-F-001",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "9a0c50fd030181ea192b9acb0d70b3f0b2725d9563ed35f1affacad4dc8ca82f",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-003",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "087e198c0da69b215f1f59a5b38a79aebc2d478e7573f2f1ea9a3a16f011450a",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-006",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "df61f5570d0603a8aab6c650c3e4e771840a7b9447f96811da18a208dfdc79db",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-014",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "b85c21d97d0c99af6a5eb5b02524348dabda2af0b86102a35d7f862c7e1c91a7",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-015",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "4c52a4f4674dc8d0fff177a87f43b320603b8d907b3d94a5c269317617e6d642",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-017",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "29cdf8cc9134211e1ad6118aaf7c95bb81d0af11eb8bed1d91bf2ce0b9f9e0c8",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-F-018",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "82eaab1da0b11bb36ab8e1cf03b305d4da2c8d3e7d3d241010c5ce88ca218986",
+          "expected_behavior": "LIMITED"
+        },
+        {
+          "case_id": "WB08R-F-019",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "5a84c106f2248fd0a6c8d4d95f5d2d0b81b79afac88ec867df5f8a58b9de32d0",
+          "expected_behavior": "LIMITED"
+        },
+        {
+          "case_id": "WB08R-F-034",
+          "source_dataset": "formal-54.ndjson",
+          "question_sha256": "d10f06603d8f6bafbcf74184d1c69cf3484d87426debf5004ce0d2542a0dac20",
+          "expected_behavior": "REFUSE"
+        },
+        {
+          "case_id": "WB08R-N-003",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "1e9a819a521b9b7a395d4ba50d8430a33f350a85c0046b2776e5c5015fa23f87",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-005",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "f5d15d4f4813d011eea40c00ae543d07d91743310f3937f073aaa14bd1e4fe9f",
+          "expected_behavior": "ANSWER"
+        },
+        {
+          "case_id": "WB08R-N-055",
+          "source_dataset": "natural-60.ndjson",
+          "question_sha256": "3430b7d0f5d741b460aef78e440911e06ed8eb7d1a38eacf9553a6b311759be7",
+          "expected_behavior": "ANSWER"
+        }
+      ],
+      "verified_contract": "case identity, original question hash and existing expected_behavior; source document expectation remains in original frozen dataset",
+      "functional_gate_status": "NOT_OBSERVED"
+    }
+  },
+  "interpretation": "选择只锁定已冻结问题及既有期望；缺少来源跨度、结构组和逐 Claim 人工真值时不得报 Gate 通过。"
+}

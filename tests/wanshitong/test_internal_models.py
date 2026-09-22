@@ -173,10 +173,82 @@ def test_internal_model_configurator_rejects_configuration_drift(
             llm_base_url="https://llm.internal.example/v1",
         )
 
-        with pytest.raises(
-            InternalModelConfigurationError, match="配置已变化"
-        ):
+        with pytest.raises(InternalModelConfigurationError, match="配置已变化"):
             configurator.configure(drifted)
+    finally:
+        harness.close()
+
+
+def test_internal_model_configurator_updates_verified_thinking_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """端点能力确认后，只允许更新该能力位并保持配置幂等。"""
+    monkeypatch.setenv("RAG_PRODUCT_MODE", "wanshitong")
+    harness = build_product_harness(
+        tmp_path, transport_factory=_openai_mock_transport
+    )
+    configurator = InternalModelConfigurator(
+        harness.runtime, allow_mock_validation=True
+    )
+    try:
+        first = configurator.configure(_settings())
+        supported = InternalModelSettings(
+            embedding_base_url="https://embedding.internal.example/v1",
+            reranker_base_url="https://reranker.internal.example",
+            llm_base_url="https://llm.internal.example/v1",
+            llm_disable_thinking_supported=True,
+            llm_disable_thinking=True,
+            llm_structured_output_mode="response_format",
+            llm_structured_profile_revision="unit-v1",
+            llm_structured_service_identity_sha256=("sha256:" + "1" * 64),
+            llm_structured_chat_template_revision="template-v1",
+            llm_structured_grammar_backend="xgrammar-v1",
+            llm_structured_qualification_evidence_sha256=("sha256:" + "2" * 64),
+            llm_structured_allow_unique_items=False,
+            llm_field_resolution_max_output_tokens=512,
+        )
+
+        second = configurator.configure(supported)
+        third = configurator.configure(supported)
+
+        assert second == third
+        assert first.knowledge_base_id == second.knowledge_base_id
+        assert harness.runtime.models.get(
+            first.knowledge_base_id
+        ).disable_thinking_supported
+        assert harness.runtime.models.get(
+            first.knowledge_base_id
+        ).disable_thinking
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
+            ).structured_output_mode
+            == "response_format"
+        )
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
+            ).field_resolution_max_output_tokens
+            == 512
+        )
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
+            ).field_resolution_transport_timeout_seconds
+            == 12.0
+        )
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
+            ).field_resolution_total_deadline_seconds
+            == 15.0
+        )
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
+            ).structured_output_allow_unique_items
+            is False
+        )
     finally:
         harness.close()
 

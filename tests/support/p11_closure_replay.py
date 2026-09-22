@@ -20,6 +20,7 @@ from evaluation.p11_pilot import evaluate_pilot
 from evaluation.p11_pilot_data import load_pilot_dataset
 from evaluation.v2.models import SourceRangeExpectation
 from evaluation.v2.observations import ObservationContext, observe_case_result
+from rag_app.application.answering.validation import validate_extractive_draft
 from rag_app.application.retrieval import evidence as evidence_module
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.answer_support import AnswerSupport
@@ -30,7 +31,6 @@ from rag_app.application.retrieval.related import select_related_contents
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
     Chunk,
-    ConfidenceStatus,
     DiagnosticExpansionItem,
     DiagnosticRerankItem,
     EvidenceSelectionContext,
@@ -46,6 +46,10 @@ from rag_app.core.models import (
     SourceSpan,
 )
 from rag_app.core.ports import EvidenceSourcePort
+from rag_app.core.ports.generator import GenerationRequest
+from tests.support.grounded_fixture_generator import (
+    HistoricalExtractiveFixtureGenerator,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = ROOT / "artifacts/p11-final/quality-security-closure/replay"
@@ -363,6 +367,7 @@ def _run_replay(  # noqa: PLR0915
         )
     by_case = {case.case_id: case for case in cases}
     observations: dict[str, tuple[Any, ...]] = {}
+    generator = HistoricalExtractiveFixtureGenerator()
     details = []
     for lane, historical in fixture["observations"].items():
         vector_space = vector_spaces[lane]
@@ -435,17 +440,19 @@ def _run_replay(  # noqa: PLR0915
                 rerank_mode=old["rerank_mode"],
                 selected_vector_space=vector_space,
             )
-            confidence = confidence.model_copy(
-                update={
-                    "status": ConfidenceStatus.CONFIGURATION_REQUIRED,
-                    "score": 0.0,
-                    "reason_codes": (
-                        *confidence.reason_codes,
-                        "GENERATOR_NOT_CONFIGURED",
-                    ),
-                }
-            )
             answer = None
+            if confidence.status.value == "ANSWERABLE":
+                draft = generator.generate(
+                    GenerationRequest(
+                        query=case.query,
+                        evidence=evidence,
+                        citation_protocol="support-id-v1-extractive",
+                        answer_support_set=evidence,
+                    )
+                )
+                # 旧指标只接受逐字摘录行，保留其原协议及真实引用校验。
+                validate_extractive_draft(draft, evidence)
+                answer = draft.text
             diagnostics = RetrievalDiagnostics(
                 channel_chunk_ids=old["channel_chunk_ids"],
                 fused_chunk_ids=old["fused_chunk_ids"],
@@ -494,8 +501,7 @@ def _run_replay(  # noqa: PLR0915
                 selected_vector_name=old["selected_vector_name"],
                 route_reason_code=old["route_reason_code"],
                 rerank_execution_mode=old["rerank_mode"],
-                generation_mode="none",
-                generation_reason_code="GENERATOR_NOT_CONFIGURED",
+                generation_mode="extractive" if answer else "none",
                 cache_key="sha256:" + "0" * 64,
                 diagnostics=diagnostics,
             )
@@ -564,6 +570,8 @@ def _run_replay(  # noqa: PLR0915
         "mode": "offline_regression",
         "classification": "exposed_set_regression",
         "provider_http": 0,
+        "synthetic_generator_calls": generator.calls,
+        "answer_protocol": "historical-validated-extractive-lines",
         "network_guard": "all_socket_connect_blocked",
         "baseline": baseline,
         "missing_fields": fixture["missing_fields"],

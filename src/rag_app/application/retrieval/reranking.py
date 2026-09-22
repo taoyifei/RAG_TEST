@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import zip_longest
 
 from rag_app.application.embedding_router import failure_category
@@ -12,6 +12,8 @@ from rag_app.application.provider_health import (
     EgressGuard,
     ProviderCircuitBreaker,
 )
+from rag_app.application.retrieval.contextual_text import contextual_rerank_text
+from rag_app.application.retrieval.retention import STRUCTURAL_SEED_LIMIT
 from rag_app.core.errors import PolicyDenied, ProviderInvalidResponse, RagError
 from rag_app.core.models import (
     ProviderCall,
@@ -34,6 +36,9 @@ class RerankingOutcome:
     reason_code: str
     provider_calls: tuple[ProviderCall, ...] = ()
     failure_category: ProviderFailureCategory | None = None
+    input_candidates: tuple[RankedChunk, ...] = ()
+    preselection_chunk_ids: tuple[str, ...] = ()
+    retention_decisions: tuple[tuple[str, str], ...] = ()
 
 
 class CircuitAwareReranker:
@@ -74,18 +79,45 @@ class CircuitAwareReranker:
             实际 Provider 或明确 bypass 后的候选与模式。
 
         """
-        rrf_limited = candidates[: policy.rerank_candidate_limit]
+        rrf_limited, preliminary, decisions = _select_input(
+            candidates,
+            policy=policy,
+            required_candidate_ids=required_candidate_ids,
+        )
         output_limit = min(result_limit, len(rrf_limited))
+
+        def observed(
+            outcome: RerankingOutcome, *, sent: bool = False
+        ) -> RerankingOutcome:
+            """把同一次选择的真实输入观察绑定到重排结果。
+
+            Args:
+                outcome: 本次 Provider 或受控旁路结果。
+                sent: 是否实际调用了重排端口。
+
+            Returns:
+                带真实输入集合及选择原因的不可变结果。
+
+            """
+            return replace(
+                outcome,
+                input_candidates=rrf_limited if sent else (),
+                preselection_chunk_ids=preliminary,
+                retention_decisions=decisions,
+            )
+
         if not enabled or not rrf_limited:
-            return _bypass(
-                _restore_protected(
-                    rrf_limited[:output_limit],
-                    rrf_limited,
-                    limit=output_limit,
-                    must_keep_limit=policy.must_keep_limit,
-                    required_candidate_ids=required_candidate_ids,
-                ),
-                "RERANK_DISABLED_BY_PLAN",
+            return observed(
+                _bypass(
+                    _restore_protected(
+                        rrf_limited[:output_limit],
+                        rrf_limited,
+                        limit=output_limit,
+                        must_keep_limit=policy.must_keep_limit,
+                        required_candidate_ids=required_candidate_ids,
+                    ),
+                    "RERANK_DISABLED_BY_PLAN",
+                )
             )
         descriptor = self._reranker.descriptor
         key = CircuitKey(descriptor.name, "reranking", descriptor.version)
@@ -95,7 +127,21 @@ class CircuitAwareReranker:
             except PolicyDenied:
                 if not policy.bypass_policy_denied:
                     raise
-                return _bypass(
+                return observed(
+                    _bypass(
+                        _restore_protected(
+                            rrf_limited[:output_limit],
+                            rrf_limited,
+                            limit=output_limit,
+                            must_keep_limit=policy.must_keep_limit,
+                            required_candidate_ids=required_candidate_ids,
+                        ),
+                        "RERANK_BYPASSED_POLICY_DENIED",
+                    )
+                )
+        if not self._circuit.allow_call(key):
+            return observed(
+                _bypass(
                     _restore_protected(
                         rrf_limited[:output_limit],
                         rrf_limited,
@@ -103,47 +149,32 @@ class CircuitAwareReranker:
                         must_keep_limit=policy.must_keep_limit,
                         required_candidate_ids=required_candidate_ids,
                     ),
-                    "RERANK_BYPASSED_POLICY_DENIED",
+                    "RERANK_BYPASSED_CIRCUIT_OPEN",
+                    category=_circuit_failure_category(
+                        self._circuit.snapshot(key).reason_code
+                    ),
                 )
-        if not self._circuit.allow_call(key):
-            return _bypass(
-                _restore_protected(
-                    rrf_limited[:output_limit],
-                    rrf_limited,
-                    limit=output_limit,
-                    must_keep_limit=policy.must_keep_limit,
-                    required_candidate_ids=required_candidate_ids,
-                ),
-                "RERANK_BYPASSED_CIRCUIT_OPEN",
-                category=_circuit_failure_category(
-                    self._circuit.snapshot(key).reason_code
-                ),
             )
-        limited = _diversified_candidates(
-            candidates,
-            limit=policy.rerank_candidate_limit,
-        )
-        limited = _restore_protected(
-            limited,
-            candidates,
-            limit=len(limited),
-            must_keep_limit=policy.must_keep_limit,
-            required_candidate_ids=required_candidate_ids,
-        )
+        limited = rrf_limited
         request = RerankRequest(
             query=query,
             candidates=tuple(
                 (
                     item.hydrated.chunk.chunk_id,
-                    _bounded_text(item, policy.rerank_text_char_limit),
+                    _bounded_text(
+                        item,
+                        policy.rerank_text_char_limit,
+                        contextual=policy.contextual_rerank_mode == "active",
+                    ),
                 )
                 for item in limited
             ),
-            limit=output_limit,
+            # 取回实际发送集合的全部分数，输出保护只使用真实回包的分数。
+            limit=len(limited),
         )
         try:
             result = self._reranker.rerank(request)
-            ordered = _validate_and_order(result.items, limited, output_limit)
+            ordered = _validate_and_order(result.items, limited, len(limited))
         except (RagError, ValueError) as error:
             category = (
                 failure_category(error)
@@ -151,42 +182,53 @@ class CircuitAwareReranker:
                 else ProviderFailureCategory.RESPONSE_CONTRACT
             )
             self._circuit.record_failure(key, category)
-            return _bypass(
-                _restore_protected(
-                    rrf_limited[:output_limit],
-                    rrf_limited,
-                    limit=output_limit,
-                    must_keep_limit=policy.must_keep_limit,
-                    required_candidate_ids=required_candidate_ids,
+            return observed(
+                _bypass(
+                    _restore_protected(
+                        rrf_limited[:output_limit],
+                        rrf_limited,
+                        limit=output_limit,
+                        must_keep_limit=policy.must_keep_limit,
+                        required_candidate_ids=required_candidate_ids,
+                    ),
+                    "RERANK_BYPASSED_PROVIDER_UNAVAILABLE",
+                    category=category,
                 ),
-                "RERANK_BYPASSED_PROVIDER_UNAVAILABLE",
-                category=category,
+                sent=True,
             )
         self._circuit.record_success(key)
         protected = _restore_protected(
             ordered,
-            limited,
+            ordered,
             limit=output_limit,
             must_keep_limit=policy.must_keep_limit,
             required_candidate_ids=required_candidate_ids,
         )
-        return RerankingOutcome(
-            candidates=tuple(
-                item.model_copy(update={"rerank_rank": rank})
-                for rank, item in enumerate(protected, start=1)
+        return observed(
+            RerankingOutcome(
+                candidates=tuple(
+                    item.model_copy(update={"rerank_rank": rank})
+                    for rank, item in enumerate(protected, start=1)
+                ),
+                mode=result.mode.value,
+                reason_code="RERANK_EXECUTED",
+                provider_calls=result.calls,
             ),
-            mode=result.mode.value,
-            reason_code="RERANK_EXECUTED",
-            provider_calls=result.calls,
+            sent=True,
         )
 
 
-def _bounded_text(candidate: RankedChunk, limit: int) -> str:
+def _bounded_text(
+    candidate: RankedChunk, limit: int, *, contextual: bool = False
+) -> str:
     chunk = candidate.hydrated.chunk
-    display_name = candidate.hydrated.display_name
-    heading = " / ".join(chunk.heading_path)
-    labels = "\n".join(value for value in (display_name, heading) if value)
-    value = f"{labels}\n{chunk.citation_text}"
+    if contextual:
+        value = contextual_rerank_text(candidate).rerank_text
+    else:
+        display_name = candidate.hydrated.display_name
+        heading = " / ".join(chunk.heading_path)
+        labels = "\n".join(value for value in (display_name, heading) if value)
+        value = f"{labels}\n{chunk.citation_text}"
     if len(value) <= limit:
         return value
     head = int(limit * 0.7)
@@ -211,18 +253,22 @@ def _diversified_candidates(
     by_family: dict[str, list[RankedChunk]] = {}
     for candidate in candidates:
         candidate_families = {
-            _channel_family(item.channel) for item in candidate.contributions
+            _channel_family(channel) for channel in candidate.retrieval_channels
         }
         for family in candidate_families:
             by_family.setdefault(family, []).append(candidate)
     if len(by_family) <= 1:
-        return candidates[:limit]
+        return _source_diverse_candidates(candidates)[:limit]
 
     selected: list[RankedChunk] = []
     selected_ids: set[str] = set()
     families = tuple(sorted(by_family))
     for row in zip_longest(
-        *(by_family[family] for family in families), fillvalue=None
+        *(
+            _source_diverse_candidates(tuple(by_family[family]))
+            for family in families
+        ),
+        fillvalue=None,
     ):
         for row_candidate in row:
             if row_candidate is None:
@@ -242,6 +288,148 @@ def _diversified_candidates(
             selected.append(candidate)
             selected_ids.add(chunk_id)
     return tuple(selected)
+
+
+def _source_diverse_candidates(
+    candidates: tuple[RankedChunk, ...],
+) -> tuple[RankedChunk, ...]:
+    """稀有文档和真实表锚点各先得到一个名额，再按 RRF 填充。"""
+    first_documents: list[RankedChunk] = []
+    first_tables: list[RankedChunk] = []
+    rest: list[RankedChunk] = []
+    seen: set[tuple[object, ...]] = set()
+    seen_documents: set[str] = set()
+    for candidate in candidates:
+        chunk = candidate.hydrated.chunk
+        anchor = next(
+            (
+                span.source_anchor
+                for span in chunk.source_spans
+                if span.source_anchor is not None
+            ),
+            None,
+        )
+        table_identity: tuple[object, ...] = ()
+        if chunk.role.value == "table" and anchor is not None:
+            table_path = next(
+                (
+                    anchor.structural_path[: index + 1]
+                    for index in reversed(range(len(anchor.structural_path)))
+                    if anchor.structural_path[index].startswith("tbl:")
+                    and anchor.structural_path[index][4:].isdigit()
+                ),
+                (),
+            )
+            coordinate: tuple[object, ...] = table_path
+            if not coordinate and anchor.pdf_table_id:
+                coordinate = (anchor.pdf_table_id,)
+            if not coordinate and type(anchor.table_index) is int:
+                coordinate = (anchor.table_index,)
+            if coordinate:
+                table_identity = (
+                    anchor.part_uri,
+                    anchor.story_kind,
+                    coordinate,
+                )
+        identity = (chunk.version.document_version_id, *table_identity)
+        if chunk.version.document_version_id not in seen_documents:
+            first_documents.append(candidate)
+            seen_documents.add(chunk.version.document_version_id)
+            seen.add(identity)
+        elif identity in seen:
+            rest.append(candidate)
+        else:
+            first_tables.append(candidate)
+            seen.add(identity)
+    return (*first_documents, *first_tables, *rest)
+
+
+def _select_input(
+    candidates: tuple[RankedChunk, ...],
+    *,
+    policy: RetrievalPolicy,
+    required_candidate_ids: frozenset[str],
+) -> tuple[
+    tuple[RankedChunk, ...], tuple[str, ...], tuple[tuple[str, str], ...]
+]:
+    """共享上限内先分配通道、exact、结构与各 Unit 名额，再填充排名。"""
+    limit = policy.rerank_candidate_limit
+    preliminary = _diversified_candidates(candidates, limit=limit)
+    reasons: dict[str, str] = {}
+    families: set[str] = set()
+    units: dict[str, list[RankedChunk]] = {}
+    structural: list[RankedChunk] = []
+    for candidate in candidates:
+        chunk_id = candidate.hydrated.chunk.chunk_id
+        current_families = {
+            _channel_family(channel) for channel in candidate.retrieval_channels
+        }
+        if current_families - families:
+            reasons.setdefault(chunk_id, "LOGICAL_CHANNEL_QUOTA")
+            families.update(current_families)
+        unit_reasons = tuple(
+            reason
+            for reason in candidate.retention_reasons
+            if reason.startswith("UNIT_SEED:")
+        )
+        for reason in unit_reasons:
+            units.setdefault(reason, []).append(candidate)
+        if "STRUCTURAL_SEED" in candidate.retention_reasons or (
+            chunk_id in required_candidate_ids and not unit_reasons
+        ):
+            structural.append(candidate)
+    for candidate in tuple(item for item in candidates if item.must_keep)[
+        : policy.must_keep_limit
+    ]:
+        reasons.setdefault(candidate.hydrated.chunk.chunk_id, "EXACT_QUOTA")
+    for candidate in structural[:STRUCTURAL_SEED_LIMIT]:
+        reasons.setdefault(
+            candidate.hydrated.chunk.chunk_id, "STRUCTURAL_QUOTA"
+        )
+    unit_names = sorted(
+        units, key=lambda name: (name != "UNIT_SEED:ROOT", name)
+    )
+    for row in zip_longest(
+        *(
+            units[name][
+                : policy.unit_root_seed_limit
+                if name == "UNIT_SEED:ROOT"
+                else policy.unit_atom_seed_limit
+            ]
+            for name in unit_names
+        ),
+        fillvalue=None,
+    ):
+        for unit_candidate in row:
+            if unit_candidate is not None:
+                reasons.setdefault(
+                    unit_candidate.hydrated.chunk.chunk_id, "QUERY_UNIT_QUOTA"
+                )
+    protected = frozenset(tuple(reasons)[:limit])
+    selected = _restore_protected(
+        preliminary,
+        candidates,
+        limit=len(preliminary),
+        must_keep_limit=0,
+        required_candidate_ids=protected,
+    )
+    selected_ids = {item.hydrated.chunk.chunk_id for item in selected}
+    decisions = tuple(
+        (
+            item.hydrated.chunk.chunk_id,
+            reasons.get(item.hydrated.chunk.chunk_id, "DIVERSIFIED_RRF_FILL")
+            if item.hydrated.chunk.chunk_id in selected_ids
+            else "RETENTION_QUOTA_EXHAUSTED"
+            if item.hydrated.chunk.chunk_id in reasons or item.retention_reasons
+            else "RERANK_INPUT_CAP",
+        )
+        for item in candidates
+    )
+    return (
+        selected,
+        tuple(item.hydrated.chunk.chunk_id for item in preliminary),
+        decisions,
+    )
 
 
 def _channel_family(channel: str) -> str:
@@ -366,4 +554,7 @@ def _circuit_failure_category(
         return None
 
 
-__all__ = ["CircuitAwareReranker", "RerankingOutcome"]
+__all__ = [
+    "CircuitAwareReranker",
+    "RerankingOutcome",
+]

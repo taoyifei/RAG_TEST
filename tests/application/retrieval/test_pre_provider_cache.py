@@ -9,11 +9,13 @@ from rag_app.composition.p07_runtime import build_p07_runtime
 from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
     BaseResultCacheKey,
+    ConfidenceStatus,
     DocumentRef,
     KnowledgeBaseScope,
     SearchRequest,
 )
 from tests.adapters.parsers.docx_fixtures import build_docx
+from tests.support.grounded_fixture_generator import GroundedFixtureGenerator
 
 _PROFILE = Path("configs/profiles/dev-p06-memory.json")
 _MEDIA_TYPE = (
@@ -26,9 +28,7 @@ def test_cache_hit_precedes_query_embedding_and_reranker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project_id = deterministic_id("prj", "pre-provider-cache")
-    knowledge_base_id = deterministic_id(
-        "kb", project_id, "pre-provider-cache"
-    )
+    knowledge_base_id = deterministic_id("kb", project_id, "pre-provider-cache")
     document = DocumentRef(
         project_id=project_id,
         knowledge_base_id=knowledge_base_id,
@@ -36,6 +36,10 @@ def test_cache_hit_precedes_query_embedding_and_reranker(
         display_name="cache.docx",
     )
     with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
+        runtime.retrieval = runtime.retrieval.with_generation(
+            GroundedFixtureGenerator(),
+            serving_identity="unit-synthetic-cache-v1",
+        )
         runtime.persistence.control.put_project(project_id, "Cache Project")
         runtime.persistence.control.put_knowledge_base(
             knowledge_base_id,
@@ -66,6 +70,12 @@ def test_cache_hit_precedes_query_embedding_and_reranker(
             text="ABC-123",
         )
         first = runtime.retrieval.search_and_answer(request)
+        assert first.status is ConfidenceStatus.ANSWERABLE
+        assert first.answer is not None
+        assert first.generation_reason_code not in {
+            "GENERATION_CLAIMS_INVALID",
+            "ANSWER_PLAN_LEGACY_PROTOCOL_FORBIDDEN",
+        }
 
         def forbidden(*args: object, **kwargs: object) -> None:
             del args, kwargs
