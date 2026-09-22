@@ -246,8 +246,19 @@ def render_natural_answer(  # noqa: PLR0912
                 lines.append(
                     f"检索到了相关资料，但其中部分表述未能通过引用核验：{subject}。"
                 )
-            else:
+            elif reason is MissingAtomReason.CONTEXT_UNRESOLVED:
                 lines.append("当前问题的指代对象尚不明确。")
+            elif reason is MissingAtomReason.SYSTEM_DEPENDENCY_FAILED:
+                lines.append(
+                    "其余部分因本次系统处理未完成，暂时无法确认。"
+                )
+            else:
+                lines.append("本次未能完成这部分回答。")
+        if any(
+            not isinstance(reason, MissingAtomReason)
+            for reason in missing_atoms.values()
+        ):
+            lines.append("本次未能完成这部分回答。")
     return "\n".join(lines)
 
 
