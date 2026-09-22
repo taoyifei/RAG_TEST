@@ -1,0 +1,107 @@
+{
+  "schema_version": "wb08r-phase06-release-identity-v1",
+  "recorded_at": "2026-09-22T20:17:18+08:00",
+  "status": "AWAITING_USER_ACCEPTANCE",
+  "source": {
+    "branch": "codex/wb-08r-adaptive-rag",
+    "build_revision": "d814f8d58d89418ced99aefe470fff58ee4b6b6c",
+    "remote_revision_at_freeze": "d814f8d58d89418ced99aefe470fff58ee4b6b6c"
+  },
+  "candidate_image": {
+    "tag": "rag-test-wanshitong:wb08r06-d814f8d",
+    "image_id": "sha256:96f1aa48eed69de4a98f48af6f4fa89ebf5b35a6392c30697ee855b105f5ecd9",
+    "repo_digest": null,
+    "registry_published": false,
+    "compressed_archive_sha256": "e55f038b952420a559f512413de56ea0966547a6314af372bcce32c64ba80fdf",
+    "compressed_archive_bytes": 360028259,
+    "archive_retained_after_load": false,
+    "image_inspect_bytes": 361917100,
+    "product_assets": {
+      "schema_version": "product-assets-v1",
+      "manifest_sha256": "933c8ad4dfccaa2226047b311808ac9ddd6f30cc2c65fcf024cafa861bae1468",
+      "verified_files": 38,
+      "verified_bytes": 1143638,
+      "source_revision": "d814f8d58d89418ced99aefe470fff58ee4b6b6c"
+    }
+  },
+  "candidate_runtime": {
+    "public_url": "http://10.242.180.54:8289/kb/",
+    "application_container": {
+      "name": "wanshitong-sso-candidate-app",
+      "id": "e11155e2f426e6d0792ccb2dace43c51b6c28f402746c08cda62b25304bb4636",
+      "status": "running_healthy",
+      "restart_count_after_fix": 0,
+      "started_at": "2026-09-22T12:04:03.925247556Z"
+    },
+    "prefix_proxy_container": {
+      "name": "wanshitong-wb08r06-prefix-proxy",
+      "id": "ebbce6fb09b3f8b4541da75dd8fb40599add3d915cec533bfb82aef4c03e956c",
+      "status": "running_healthy",
+      "started_at": "2026-09-22T12:11:18.111015233Z"
+    },
+    "host_data_root": "/data/tyf/wanshitong-wb08r06-d814f8d/data",
+    "root_path": "/kb",
+    "sso_namespace": "candidate_8289",
+    "topology": [
+      "10.242.180.54:8289",
+      "10.242.180.60:18289",
+      "127.0.0.1:8289",
+      "container:8088"
+    ]
+  },
+  "initial_candidate_data_snapshot": {
+    "source": "/data/tyf/wanshitong-wb08r05-c828673/data",
+    "destination": "/data/tyf/wanshitong-wb08r06-d814f8d/data",
+    "method": "sqlite_online_backup_plus_non_database_copy",
+    "universal_rag": {
+      "bytes": 1372721152,
+      "sha256": "7a0aaeda6a0c46d14528da28d4cd12a566a01ebdb5ef022a237ef1d1a568d793",
+      "quick_check": "ok"
+    },
+    "product_traces": {
+      "bytes": 355586048,
+      "sha256": "5f417aacb13beca9522ee6fd5ed8d2a92d075cb4a48cfc42281b9c60948e044e",
+      "quick_check": "ok"
+    }
+  },
+  "verification": {
+    "backend_related": "124 passed, 1 warning",
+    "frontend_related": "2 files, 31 tests passed",
+    "frontend_lint": "passed",
+    "frontend_build": "passed",
+    "target_ruff": "passed",
+    "target_mypy": "passed",
+    "runtime_guard": "ready=true; 0 missing, 0 mount mismatch, 0 semantic mismatch, 0 unclassified",
+    "fresh_sso_login": "passed",
+    "suggestion_to_terminal_answer": "passed",
+    "citation_expand": "passed",
+    "candidate_http": 200,
+    "relay_probe": "40/40 HTTP 200; 0.297-0.391s; no residual queue",
+    "live_feedback": "NOT_RUN_BY_USER_DIRECTION",
+    "account_switch": "NOT_RUN_BY_USER_DIRECTION",
+    "real_multi_user_trial": "NOT_RUN_BY_USER_DIRECTION"
+  },
+  "repair_rounds": {
+    "recommendation_tuning": 0,
+    "deployment_new_issue": 1,
+    "deployment_issue": "online SQLite backup files required mode 0600",
+    "deployment_resolution": "candidate-copy database modes corrected to 0600; healthy with restart_count 0"
+  },
+  "production": {
+    "public_url": "http://10.242.180.54:18288/",
+    "container_name": "wanshitong-app",
+    "container_id": "7f46e6d98effc008a62d31313b576db9b92b656923f1ca4b2194ffb02860236e",
+    "image_tag": "rag-test-wanshitong:604ef63",
+    "image_id": "sha256:97826be2208718be61d37921705f595c3c0056d57a23884ffc54ffdaf66380306",
+    "started_at": "2026-09-17T01:45:12.001523599Z",
+    "identity_unchanged_before_after_candidate_deploy": true,
+    "modified": false,
+    "cutover": "NOT_EXECUTED_REQUIRES_EXPLICIT_USER_APPROVAL",
+    "future_data_strategy": "PENDING_FINAL_PRODUCTION_SNAPSHOT_AND_USER_APPROVAL"
+  },
+  "user_acceptance": {
+    "approved": false,
+    "state": "AWAITING_USER_ACCEPTANCE",
+    "latest_instruction": "keep_current_8289_online_for_user_review"
+  }
+}
