@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""为私网候选提供单一 `/kb` 前缀反向代理。"""
+"""为私网入口提供单一 `/kb` 前缀反向代理。"""
 
 from __future__ import annotations
 
@@ -137,6 +137,11 @@ class PrefixProxy:
         raw_path = scope.get("raw_path") or str(scope.get("path", "/")).encode(
             "ascii"
         )
+        if bytes(raw_path) == b"/":
+            await self._send_redirect(
+                send, self._external_prefix + b"/"
+            )
+            return
         upstream_path = _strip_external_prefix(
             bytes(raw_path), self._external_prefix
         )
@@ -213,6 +218,28 @@ class PrefixProxy:
                 yield body
             if not message.get("more_body", False):
                 return
+
+    @staticmethod
+    async def _send_redirect(send: Send, location: bytes) -> None:
+        """把旧根入口临时重定向到规范前缀入口。"""
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 307,
+                "headers": [
+                    (b"location", location),
+                    (b"content-length", b"0"),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"",
+                "more_body": False,
+            }
+        )
 
     @staticmethod
     async def _send_json(

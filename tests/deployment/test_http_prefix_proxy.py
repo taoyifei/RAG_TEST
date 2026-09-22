@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 
 import pytest
 
@@ -43,6 +44,45 @@ def test_filter_headers_preserves_end_to_end_and_repeated_headers() -> None:
         (b"host", b"10.242.180.54:8289"),
         (b"set-cookie", b"first=1"),
         (b"set-cookie", b"second=2"),
+    ]
+
+
+def test_proxy_temporarily_redirects_legacy_root_to_prefix() -> None:
+    messages: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        raise AssertionError("根路径重定向不应读取请求体。")
+
+    async def send(message: dict[str, object]) -> None:
+        messages.append(message)
+
+    proxy = http_prefix_proxy.PrefixProxy(
+        upstream_origin="http://127.0.0.1:8289",
+        external_prefix="/kb",
+    )
+    asyncio.run(
+        proxy(
+            {"type": "http", "raw_path": b"/"},
+            receive,
+            send,
+        )
+    )
+
+    assert messages == [
+        {
+            "type": "http.response.start",
+            "status": 307,
+            "headers": [
+                (b"location", b"/kb/"),
+                (b"content-length", b"0"),
+                (b"cache-control", b"no-store"),
+            ],
+        },
+        {
+            "type": "http.response.body",
+            "body": b"",
+            "more_body": False,
+        },
     ]
 
 
