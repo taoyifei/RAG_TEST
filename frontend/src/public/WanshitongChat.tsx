@@ -15,6 +15,7 @@ export function WanshitongChat({
   onRetry,
   onStop,
   onSubmit,
+  onSuggestedQuestionSubmit,
   questions,
   turns,
 }: {
@@ -31,6 +32,7 @@ export function WanshitongChat({
   onRetry: (turnId: string, question: string) => void;
   onStop: () => void;
   onSubmit: (question: string) => void;
+  onSuggestedQuestionSubmit: (question: SuggestedQuestion) => void;
   questions: readonly SuggestedQuestion[];
   turns: PublicTurn[];
 }) {
@@ -66,7 +68,7 @@ export function WanshitongChat({
               <SuggestedQuestionCarousel
                 busy={busy}
                 onRefresh={onRefresh}
-                onSubmit={onSubmit}
+                onSubmit={onSuggestedQuestionSubmit}
                 questions={questions}
               />
             )}

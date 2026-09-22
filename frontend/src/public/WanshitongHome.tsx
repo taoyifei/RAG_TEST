@@ -6,6 +6,7 @@ export function WanshitongHome({
   busy,
   initialQuestion,
   onRefresh,
+  onSuggestedQuestionSubmit,
   onStop,
   onSubmit,
   questions,
@@ -13,6 +14,7 @@ export function WanshitongHome({
   busy: boolean;
   initialQuestion?: string;
   onRefresh: () => void;
+  onSuggestedQuestionSubmit: (question: SuggestedQuestion) => void;
   onStop: () => void;
   onSubmit: (question: string) => void;
   questions: readonly SuggestedQuestion[];
@@ -27,7 +29,7 @@ export function WanshitongHome({
         <SuggestedQuestionCarousel
           busy={busy}
           onRefresh={onRefresh}
-          onSubmit={onSubmit}
+          onSubmit={onSuggestedQuestionSubmit}
           questions={questions}
         />
         <PublicChatComposer

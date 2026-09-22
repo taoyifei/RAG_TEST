@@ -16,7 +16,7 @@ export function SuggestedQuestionCarousel({
 }: {
   busy: boolean;
   onRefresh: () => void;
-  onSubmit: (question: string) => void;
+  onSubmit: (question: SuggestedQuestion) => void;
   questions: readonly SuggestedQuestion[];
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
@@ -97,8 +97,8 @@ export function SuggestedQuestionCarousel({
           <button
             className="wst-suggestion"
             disabled={busy}
-            key={item.question}
-            onClick={() => onSubmit(item.question)}
+            key={item.id}
+            onClick={() => onSubmit(item)}
             type="button"
           >
             <span>{item.question}</span>

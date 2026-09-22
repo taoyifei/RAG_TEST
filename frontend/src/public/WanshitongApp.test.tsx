@@ -144,7 +144,9 @@ describe("湾事通公共应用", () => {
       "data-theme",
       "light",
     );
-    expect(screen.getByRole("button", { name: "切换到深色模式" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "切换到深色模式" }),
+    ).toBeVisible();
   });
 
   it("初始化匿名 Session 后渲染无登录首屏", async () => {
@@ -233,18 +235,16 @@ describe("湾事通公共应用", () => {
     await openHome();
 
     expect(screen.getByText("测试用户")).toBeVisible();
-    await userEvent.setup().click(
-      screen.getByRole("button", { name: "退出湾事通" }),
-    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "退出湾事通" }));
 
     expect(
       await screen.findByRole("heading", { name: "已退出" }),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "重新登录" })).toBeVisible();
     expect(
-      fetchMock.mock.calls.filter(
-        ([input]) => pathOf(input) === "/sso/logout",
-      ),
+      fetchMock.mock.calls.filter(([input]) => pathOf(input) === "/sso/logout"),
     ).toHaveLength(1);
   });
 
@@ -303,9 +303,12 @@ describe("湾事通公共应用", () => {
     await userEvent.setup().click(cards[0]);
 
     expect(await screen.findByText("实时生成的回答")).toBeInTheDocument();
-    const chatCall = fetchMock.mock.calls.find(
+    expect(screen.getByText(question)).toBeInTheDocument();
+    const chatCalls = fetchMock.mock.calls.filter(
       ([input]) => pathOf(input) === "/api/public/chat",
     );
+    expect(chatCalls).toHaveLength(1);
+    const chatCall = chatCalls[0];
     const chatBody = chatCall?.[1]?.body;
     expect(typeof chatBody).toBe("string");
     const body = JSON.parse(
@@ -319,6 +322,140 @@ describe("湾事通公共应用", () => {
       const next = screen.getByRole("region", { name: "你可能想问" });
       expect(within(next).queryByRole("button", { name: question })).toBeNull();
     });
+  });
+
+  it("卡片和手工输入同题沿用同一会话与请求合同", async () => {
+    let chatCount = 0;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(Response.json(sessionBody));
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === "/api/public/chat") {
+          chatCount += 1;
+          return Promise.resolve(
+            streamResponse([
+              event("final", 0, {
+                answer: `第 ${chatCount} 次回答`,
+                citations: [],
+              }),
+            ]),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+    const user = userEvent.setup();
+    await openHome();
+    const suggestions = screen.getByRole("region", { name: "你可能想问" });
+    const card = within(suggestions)
+      .getAllByRole("button")
+      .find((button) => button.classList.contains("wst-suggestion"));
+    expect(card).toBeDefined();
+    const question = card?.textContent ?? "";
+
+    await user.click(card!);
+    await screen.findByText("第 1 次回答");
+    const textbox = screen.getByRole("textbox", { name: "向湾事通提问" });
+    await user.type(textbox, question);
+    await user.click(screen.getByRole("button", { name: "发送问题" }));
+    await screen.findByText("第 2 次回答");
+
+    const bodies = fetchMock.mock.calls
+      .filter(([input]) => pathOf(input) === "/api/public/chat")
+      .map(
+        ([, init]) =>
+          JSON.parse(
+            typeof init?.body === "string" ? init.body : "{}",
+          ) as Record<string, unknown>,
+      );
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].conversation_id).toBe(bodies[1].conversation_id);
+    expect(bodies.map((body) => body.query)).toEqual([question, question]);
+    expect(
+      bodies.every(
+        (body) =>
+          JSON.stringify(Object.keys(body).sort()) ===
+          JSON.stringify(["conversation_id", "query"]),
+      ),
+    ).toBe(true);
+  });
+
+  it("推荐卡片快速双击只发起一次问答", async () => {
+    const pending = pendingStream(event("meta", 0));
+    const fetchMock = installFetch(pending.response);
+    const user = userEvent.setup();
+    await openHome();
+    const suggestions = screen.getByRole("region", { name: "你可能想问" });
+    const card = within(suggestions)
+      .getAllByRole("button")
+      .find((button) => button.classList.contains("wst-suggestion"));
+    expect(card).toBeDefined();
+
+    await user.dblClick(card!);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.filter(
+          ([input]) => pathOf(input) === "/api/public/chat",
+        ),
+      ).toHaveLength(1);
+    });
+    await user.click(screen.getByRole("button", { name: "停止" }));
+    await waitFor(() => expect(pending.wasCancelled()).toBe(true));
+  });
+
+  it("必须、否定和工作日限定从卡片原样进入气泡与query", async () => {
+    const fetchMock = installFetch(
+      streamResponse([
+        event("final", 0, { answer: "已按限定回答。", citations: [] }),
+      ]),
+    );
+    const user = userEvent.setup();
+    const question = "标前公示截止日必须是工作日吗，至少要公示几天？";
+    await openHome();
+
+    let card = screen.queryByRole("button", { name: question });
+    for (let index = 0; !card && index < 2; index += 1) {
+      await user.click(screen.getByRole("button", { name: "换一换推荐问题" }));
+      card = screen.queryByRole("button", { name: question });
+    }
+    expect(card).not.toBeNull();
+    await user.click(card!);
+
+    expect(await screen.findByText("已按限定回答。")).toBeInTheDocument();
+    expect(screen.getByText(question)).toBeInTheDocument();
+    const chatCall = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === "/api/public/chat",
+    );
+    const body = JSON.parse(
+      typeof chatCall?.[1]?.body === "string" ? chatCall[1].body : "{}",
+    ) as Record<string, unknown>;
+    expect(body.query).toBe(question);
+  });
+
+  it("停用或模板题不主动展示，但用户仍可手工提问", async () => {
+    const fetchMock = installFetch(
+      streamResponse([
+        event("final", 0, { answer: "已查找相关资料。", citations: [] }),
+      ]),
+    );
+    const question = "是否有测试报告模板可供参考？";
+    await openHome();
+
+    expect(screen.queryByRole("button", { name: question })).toBeNull();
+    await ask(question);
+    expect(await screen.findByText("已查找相关资料。")).toBeInTheDocument();
+    const chatCall = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === "/api/public/chat",
+    );
+    const body = JSON.parse(
+      typeof chatCall?.[1]?.body === "string" ? chatCall[1].body : "{}",
+    ) as Record<string, unknown>;
+    expect(body.query).toBe(question);
   });
 
   it("每轮结束及手动换一换都换新组，且不推荐任何已问问题", async () => {
@@ -751,9 +888,7 @@ describe("湾事通公共应用", () => {
     );
     expect(reason).toHaveValue("INCOMPLETE");
     expect(comment).toHaveValue("缺少办理时限。");
-    await user.click(
-      screen.getByRole("button", { name: "重新提交反馈" }),
-    );
+    await user.click(screen.getByRole("button", { name: "重新提交反馈" }));
 
     expect(await screen.findByText("感谢你的反馈")).toBeInTheDocument();
     expect(feedbackCalls).toBe(2);

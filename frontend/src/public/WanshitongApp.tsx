@@ -2,6 +2,7 @@ import { LogIn, LogOut, Moon, RotateCcw, Sun } from "lucide-react";
 import { useState } from "react";
 
 import { consumeLoginDraft } from "./authNavigation";
+import type { SuggestedQuestion } from "./suggestedQuestions";
 import { WanshitongChat } from "./WanshitongChat";
 import { WanshitongHome } from "./WanshitongHome";
 import { usePublicChat } from "./usePublicChat";
@@ -19,7 +20,14 @@ export function WanshitongApp() {
     }
   });
   const chat = usePublicChat();
-  const suggestions = useSuggestedQuestions(chat.turns);
+  const suggestionIdentityKey =
+    chat.deploymentId && chat.user
+      ? `${chat.deploymentId}:${chat.user.userId}`
+      : undefined;
+  const suggestions = useSuggestedQuestions(chat.turns, suggestionIdentityKey);
+  const submitSuggestedQuestion = (question: SuggestedQuestion) => {
+    chat.submit(question.question);
+  };
   const themeToggle = (
     <button
       aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
@@ -35,7 +43,11 @@ export function WanshitongApp() {
       }}
       type="button"
     >
-      {theme === "dark" ? <Sun aria-hidden="true" size={17} /> : <Moon aria-hidden="true" size={17} />}
+      {theme === "dark" ? (
+        <Sun aria-hidden="true" size={17} />
+      ) : (
+        <Moon aria-hidden="true" size={17} />
+      )}
       <span>{theme === "dark" ? "浅色" : "深色"}</span>
     </button>
   );
@@ -63,7 +75,11 @@ export function WanshitongApp() {
 
   if (!chat.sessionReady) {
     return (
-      <main className="wst-root wst-session-screen" data-theme={theme} id="main-content">
+      <main
+        className="wst-root wst-session-screen"
+        data-theme={theme}
+        id="main-content"
+      >
         <div className="wst-toolbar">{themeToggle}</div>
         <div className="wst-session-card">
           <span className="wst-wordmark">湾事通</span>
@@ -119,6 +135,7 @@ export function WanshitongApp() {
           busy={chat.busy}
           initialQuestion={restoredDraft}
           onRefresh={suggestions.refresh}
+          onSuggestedQuestionSubmit={submitSuggestedQuestion}
           onStop={chat.stop}
           onSubmit={chat.submit}
           questions={suggestions.questions}
@@ -134,6 +151,7 @@ export function WanshitongApp() {
           onRetry={chat.retry}
           onStop={chat.stop}
           onSubmit={chat.submit}
+          onSuggestedQuestionSubmit={submitSuggestedQuestion}
           questions={suggestions.questions}
           turns={chat.turns}
         />
