@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { PublicCitations } from "./PublicCitations";
 import { PublicFeedback } from "./PublicFeedback";
 import { PUBLIC_STAGE_LABELS } from "./publicSse";
+import type { PublicFeedbackSubmission } from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
 
 const PROGRESS_STAGES = [
@@ -41,11 +42,15 @@ function progressHint(
 }
 
 export function PublicAnswer({
+  feedbackDetailsEnabled = true,
   onFeedback,
+  onFeedbackLogin,
   onRetry,
   turn,
 }: {
-  onFeedback: (useful: boolean) => void;
+  feedbackDetailsEnabled?: boolean;
+  onFeedback: (feedback: PublicFeedbackSubmission) => void;
+  onFeedbackLogin?: () => void;
   onRetry: () => void;
   turn: PublicTurn;
 }) {
@@ -156,10 +161,18 @@ export function PublicAnswer({
         {turn.status === "completed" && (
           <>
             <PublicCitations citations={turn.citations} />
-            {turn.traceId && (
-              <PublicFeedback onSubmit={onFeedback} status={turn.feedback} />
-            )}
           </>
+        )}
+        {(turn.status === "completed" ||
+          (turn.status === "failed" && !turn.partial)) &&
+          turn.traceId && (
+          <PublicFeedback
+            detailsEnabled={feedbackDetailsEnabled}
+            errorMessage={turn.feedbackError}
+            onLogin={onFeedbackLogin}
+            onSubmit={onFeedback}
+            status={turn.feedback}
+          />
         )}
       </div>
     </section>

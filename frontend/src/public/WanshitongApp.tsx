@@ -126,8 +126,10 @@ export function WanshitongApp() {
       ) : (
         <WanshitongChat
           busy={chat.busy}
+          feedbackDetailsEnabled={chat.feedbackDetailsEnabled}
           initialQuestion={restoredDraft}
           onFeedback={chat.submitFeedback}
+          onFeedbackLogin={chat.login}
           onRefresh={suggestions.refresh}
           onRetry={chat.retry}
           onStop={chat.stop}

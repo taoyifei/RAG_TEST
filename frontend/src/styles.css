@@ -2111,10 +2111,12 @@ label:has(input[type="checkbox"]) {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.wst-feedback-block {
+  margin-top: 24px;
+}
 .wst-feedback {
   display: flex;
   flex-wrap: wrap;
-  margin-top: 24px;
   align-items: center;
   gap: 8px;
   color: #9da5a2;
@@ -2145,6 +2147,66 @@ label:has(input[type="checkbox"]) {
 }
 .wst-feedback-status.is-error {
   color: #e4bd85;
+}
+.wst-feedback-form {
+  display: grid;
+  max-width: 560px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--wst-border);
+  border-radius: 14px;
+  gap: 8px;
+  background: rgb(255 255 255 / 2%);
+}
+.wst-feedback-form label {
+  color: #cbd0ce;
+  font-size: 12px;
+}
+.wst-feedback-form select,
+.wst-feedback-form textarea {
+  width: 100%;
+  border: 1px solid var(--wst-border);
+  border-radius: 10px;
+  color: #e6ebe8;
+  background: #202426;
+  font: inherit;
+}
+.wst-feedback-form select {
+  min-height: 40px;
+  padding: 0 10px;
+}
+.wst-feedback-form textarea {
+  min-height: 88px;
+  padding: 10px;
+  resize: vertical;
+}
+.wst-feedback-form select:focus-visible,
+.wst-feedback-form textarea:focus-visible {
+  outline: 2px solid var(--wst-accent);
+  outline-offset: 2px;
+}
+.wst-feedback-form-actions,
+.wst-feedback-status.is-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wst-feedback-form-actions {
+  justify-content: space-between;
+  color: #8f9995;
+  font-size: 11px;
+}
+.wst-feedback-form-actions button,
+.wst-feedback-status.is-error button {
+  display: inline-flex;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--wst-border);
+  border-radius: 10px;
+  align-items: center;
+  gap: 6px;
+  color: #dce3df;
+  background: transparent;
 }
 .wst-chat-composer {
   position: sticky;
@@ -2331,6 +2393,23 @@ label:has(input[type="checkbox"]) {
 }
 .wst-root[data-theme="light"] .wst-feedback-status.is-error {
   color: #865b1d;
+}
+.wst-root[data-theme="light"] .wst-feedback-form {
+  background: #fff;
+}
+.wst-root[data-theme="light"] .wst-feedback-form label,
+.wst-root[data-theme="light"] .wst-feedback-form-actions {
+  color: #596b60;
+}
+.wst-root[data-theme="light"] .wst-feedback-form select,
+.wst-root[data-theme="light"] .wst-feedback-form textarea {
+  color: #202b27;
+  background: #f7f9f7;
+}
+.wst-root[data-theme="light"] .wst-feedback-form-actions button,
+.wst-root[data-theme="light"] .wst-feedback-status.is-error button {
+  color: #3c5145;
+  background: #fff;
 }
 .wst-root[data-theme="light"] .wst-chat-composer {
   background: linear-gradient(to bottom, transparent, #f7f9f7 24%);

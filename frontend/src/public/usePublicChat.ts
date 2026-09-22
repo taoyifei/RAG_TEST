@@ -8,6 +8,7 @@ import {
   PublicApiError,
   publicErrorMessage,
   sendPublicFeedback,
+  type PublicFeedbackSubmission,
   type PublicSessionUser,
 } from "./publicApi";
 import * as authNavigation from "./authNavigation";
@@ -57,6 +58,7 @@ export interface PublicTurn {
   traceId?: string;
   feedback: "idle" | "submitting" | "sent" | "failed";
   feedbackUseful?: boolean;
+  feedbackError?: string;
 }
 
 interface StreamTracker {
@@ -130,6 +132,7 @@ function resetTurn(turn: PublicTurn): PublicTurn {
     partial: false,
     traceId: undefined,
     feedback: "idle",
+    feedbackError: undefined,
     feedbackUseful: undefined,
   };
 }
@@ -142,6 +145,7 @@ export function usePublicChat() {
   const [loggedOut, setLoggedOut] = useState(false);
   const [user, setUser] = useState<PublicSessionUser>();
   const [deploymentId, setDeploymentId] = useState<string>();
+  const [feedbackDetailsEnabled, setFeedbackDetailsEnabled] = useState(false);
   const [turns, setTurns] = useState<PublicTurn[]>([]);
   const csrfRef = useRef<string | undefined>(undefined);
   const conversationRef = useRef(randomId("wst"));
@@ -172,6 +176,7 @@ export function usePublicChat() {
     setSessionError(undefined);
     setLogoutError(undefined);
     setUser(undefined);
+    setFeedbackDetailsEnabled(false);
     setLoggedOut(showLoggedOut);
     setPhase(showLoggedOut ? "idle" : "creating_session");
   }, []);
@@ -187,10 +192,11 @@ export function usePublicChat() {
 
   const initializeSession = useCallback(async (signal: AbortSignal) => {
     const session = await createPublicSession(signal);
-    await getPublicCapabilities(signal);
+    const capabilities = await getPublicCapabilities(signal);
     csrfRef.current = session.csrfToken;
     setUser(session.user);
     setDeploymentId(session.deploymentId);
+    setFeedbackDetailsEnabled(capabilities.feedback_details === true);
     setLoggedOut(false);
     if (session.deploymentId && session.user) {
       identityChangedRef.current = recordPublicIdentity(
@@ -500,29 +506,44 @@ export function usePublicChat() {
   }, [updateTurn]);
 
   const submitFeedback = useCallback(
-    (turnId: string, traceId: string, useful: boolean) => {
+    (
+      turnId: string,
+      traceId: string,
+      feedback: PublicFeedbackSubmission,
+    ) => {
       const csrfToken = csrfRef.current;
       if (!csrfToken || feedbackAttemptsRef.current.has(turnId)) return;
       feedbackAttemptsRef.current.add(turnId);
       updateTurn(turnId, (turn) => {
-        if (turn.feedback !== "idle" || turn.status !== "completed")
+        if (
+          turn.feedback === "submitting" ||
+          turn.feedback === "sent" ||
+          !["completed", "failed"].includes(turn.status)
+        )
           return turn;
-        return { ...turn, feedback: "submitting", feedbackUseful: useful };
+        return {
+          ...turn,
+          feedback: "submitting",
+          feedbackError: undefined,
+          feedbackUseful: feedback.useful,
+        };
       });
-      void sendPublicFeedback({ csrfToken, traceId, useful })
+      void sendPublicFeedback({ csrfToken, traceId, feedback })
         .then(() => {
           updateTurn(turnId, (turn) => ({ ...turn, feedback: "sent" }));
         })
         .catch((error: unknown) => {
-          if (isSessionExpired(error)) {
-            clearLocalSession(false);
-            authNavigation.redirectToSso();
-            return;
-          }
-          updateTurn(turnId, (turn) => ({ ...turn, feedback: "failed" }));
+          feedbackAttemptsRef.current.delete(turnId);
+          updateTurn(turnId, (turn) => ({
+            ...turn,
+            feedback: "failed",
+            feedbackError: isSessionExpired(error)
+              ? "登录会话已过期，请重新登录后再次提交。"
+              : "反馈暂未提交成功，已保留你的选择和说明。",
+          }));
         });
     },
-    [clearLocalSession, updateTurn],
+    [updateTurn],
   );
 
   const logout = useCallback(() => {
@@ -558,6 +579,7 @@ export function usePublicChat() {
     announcement,
     busy,
     deploymentId,
+    feedbackDetailsEnabled,
     loggedOut,
     login: () => authNavigation.redirectToSso(),
     logout,

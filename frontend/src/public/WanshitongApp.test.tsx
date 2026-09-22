@@ -61,6 +61,7 @@ const capabilitiesBody = {
   stream_protocol: "wanshitong-public-sse-v1",
   document_visibility: "all_internal",
   feedback: true,
+  feedback_details: true,
   shortcuts: [],
 };
 
@@ -658,6 +659,139 @@ describe("湾事通公共应用", () => {
     expect(
       screen.queryByRole("button", { name: "没帮助" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("负反馈可选原因和说明并提交兼容字段", async () => {
+    const fetchMock = installFetch(
+      streamResponse([
+        event("final", 0, { answer: "来源待核对答案", citations: [] }),
+      ]),
+    );
+    await openHome();
+    const user = await ask();
+    await screen.findByText("来源待核对答案");
+
+    await user.click(screen.getByRole("button", { name: "没帮助" }));
+    await user.selectOptions(
+      screen.getByLabelText("主要原因（可选）"),
+      "WRONG_SOURCE",
+    );
+    await user.type(
+      screen.getByLabelText("补充说明（可选）"),
+      "应该引用最新办事指南。",
+    );
+    await user.click(screen.getByRole("button", { name: "提交反馈" }));
+
+    expect(await screen.findByText("感谢你的反馈")).toBeInTheDocument();
+    const feedbackCall = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === "/api/public/feedback",
+    );
+    expect(
+      JSON.parse(
+        typeof feedbackCall?.[1]?.body === "string"
+          ? feedbackCall[1].body
+          : "{}",
+      ),
+    ).toEqual({
+      trace_id: "trace_11111111111111111111111111111111",
+      useful: false,
+      reason_code: "WRONG_SOURCE",
+      reason_detail: "WRONG_SOURCE",
+      comment: "应该引用最新办事指南。",
+    });
+  });
+
+  it("反馈失败保留选项与输入并允许原样重试", async () => {
+    let feedbackCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (input: RequestInfo | URL) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(Response.json(sessionBody));
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === "/api/public/chat") {
+          return Promise.resolve(
+            streamResponse([
+              event("final", 0, { answer: "可重试反馈答案", citations: [] }),
+            ]),
+          );
+        }
+        if (path === "/api/public/feedback") {
+          feedbackCalls += 1;
+          return Promise.resolve(
+            feedbackCalls === 1
+              ? Response.json(
+                  { error: { code: "FEEDBACK_STORE_UNAVAILABLE" } },
+                  { status: 503 },
+                )
+              : Response.json({ useful: false }),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      },
+    );
+    await openHome();
+    const user = await ask();
+    await screen.findByText("可重试反馈答案");
+    await user.click(screen.getByRole("button", { name: "没帮助" }));
+    const reason = screen.getByLabelText("主要原因（可选）");
+    const comment = screen.getByLabelText("补充说明（可选）");
+    await user.selectOptions(reason, "INCOMPLETE");
+    await user.type(comment, "缺少办理时限。");
+    await user.click(screen.getByRole("button", { name: "提交反馈" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "已保留你的选择和说明",
+    );
+    expect(reason).toHaveValue("INCOMPLETE");
+    expect(comment).toHaveValue("缺少办理时限。");
+    await user.click(
+      screen.getByRole("button", { name: "重新提交反馈" }),
+    );
+
+    expect(await screen.findByText("感谢你的反馈")).toBeInTheDocument();
+    expect(feedbackCalls).toBe(2);
+  });
+
+  it("反馈时会话过期不丢失说明并提供重新登录", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (input: RequestInfo | URL) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(Response.json(sessionBody));
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === "/api/public/chat") {
+          return Promise.resolve(
+            streamResponse([
+              event("final", 0, { answer: "会话过期反馈答案", citations: [] }),
+            ]),
+          );
+        }
+        if (path === "/api/public/feedback") {
+          return Promise.resolve(new Response(null, { status: 401 }));
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      },
+    );
+    await openHome();
+    const user = await ask();
+    await screen.findByText("会话过期反馈答案");
+    await user.click(screen.getByRole("button", { name: "没帮助" }));
+    const comment = screen.getByLabelText("补充说明（可选）");
+    await user.type(comment, "需要重新登录后提交。");
+    await user.click(screen.getByRole("button", { name: "提交反馈" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "登录会话已过期",
+    );
+    expect(comment).toHaveValue("需要重新登录后提交。");
+    expect(screen.getByRole("button", { name: "重新登录" })).toBeVisible();
   });
 
   it("429 读取 Retry-After 后显示限流文案且不自动重试", async () => {
