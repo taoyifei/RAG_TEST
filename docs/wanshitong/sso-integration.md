@@ -1,9 +1,9 @@
 # 湾事通 SSO 集成说明
 
 本实现以《03_阶段SSO_登录与会话_实施方案》为准，`SSO-SPEC.md` 仅作为
-RDMS CAS Ticket v1.3 接口参考。当前状态为 `REGISTRATION_INPUTS_PENDING`；
-这表示 KB 侧合同和部署门禁可验证，但真实 RDMS 注册参数仍不完整，不能标记
-`AUTH_INTERNAL_READY`。
+RDMS CAS Ticket v1.3 接口参考。测试注册参数已经到位，8289 单账号真实登录已于
+2026-09-22 通过，当前状态为 `AUTH_LOGIN_VERIFIED`。这不等于完整 S-01～S-12
+或用户试用完成，因此仍不能标记 `AUTH_INTERNAL_READY`。
 
 ## 边界
 
@@ -53,16 +53,21 @@ service、return_to 和入口 ID 为服务端权威；前端存储只用于恢�
 - 端口、网络、挂载、只读根文件系统和其余应用环境继续与旧 8289 基准一致。
 
 缺少 authorize URL、validate URL、clientId、secret 或精确 callback 注册任一项，
-候选启动即停止，不允许切回匿名模式制造通过。
+候选启动即停止，不允许切回匿名模式制造通过。测试输入现已通过文件和环境配置
+注入；Client Secret 不写入 Compose、环境变量、文档或 Git。
 
 ## 验收状态
 
 本地自动化已覆盖设置、pending/session、validate 客户端、callback、公共主体、
-CSRF、`/kb` 前缀、401 整页登录、本地退出及管理员隔离。真实 S-01～S-12 仍需
-以 8289 的浏览器和 RDMS 完成；其中 S-08 账号切换还需要第二个测试账号。
-外网入口未提供时最终状态只能是 `EXTERNAL_NOT_RUN`。
+CSRF、`/kb` 前缀、401 整页登录、本地退出及管理员隔离。8289 的单账号真实
+happy path、公共会话、退出和管理员隔离已经通过；其余 S-01～S-12 仍需按方案
+执行，其中 S-08 账号切换还需要第二个测试账号。外网入口未提供时最终状态只能
+是 `EXTERNAL_NOT_RUN`。
 
-## 2026-09-22 实际交付证据
+## 2026-09-22 初次工程交付（历史快照）
+
+以下记录是测试注册参数到位前的工程交付状态，已被下一节的真实联调结果取代；
+保留它用于解释旧候选的来源和当时为何没有启动。
 
 - SSO-A：`5bcfd7f`；SSO-B：`ba5508b`；SSO-C：`36529b4`。
 - Python SSO、访问日志和候选守卫定向门禁：45 passed；Ruff 与目标 mypy
@@ -83,8 +88,17 @@ CSRF、`/kb` 前缀、401 整页登录、本地退出及管理员隔离。真实
   未被容器引用的旧 SSO 候选镜像也已清理；包含 SSO 与反馈闭环的阶段 05 镜像
   已加载但未启动。旧 8289 当前仍是唯一运行回退点，不能在新候选未启动时误删。
 
-用户已确认测试回调精确登记为
-`http://10.242.180.54:8289/kb/sso/callback`。真实 SSO 仍缺 4 项：浏览器可达
-authorize URL、60 可达 validate URL、已登记的 `clientId`、安全交付的 client
-secret。这些是实施方案第 2 节的开工前输入，不属于客户端代码修复轮次；取得前
-不能使用测试账号执行真实登录。
+## 2026-09-22 8289 真实联调补充
+
+- authorize、validate、测试 `clientId`、文件注入的 Client Secret 及精确 callback
+  已到位。60 对 RDMS 的路由冲突解除后，authorize 正常返回登录跳转，validate
+  可达。
+- 应用容器 `wanshitong-sso-candidate-app` 使用镜像
+  `rag-test-wanshitong:wb08r05-48e346a`，只绑定回环 8289；54 的测试入口经 60
+  的专用前缀代理剥离一次 `/kb`。
+- 真实浏览器完成 RDMS 登录和 Ticket callback，返回 8289 工作台并取得受信用户
+  会话；公共会话接口 HTTP 200，`deployment_id=candidate_8289`。
+- 同一 SSO 会话访问管理员 overview API 为 HTTP 401；退出页面明确只清理本地
+  会话。账号、密码、Client Secret、Ticket、Cookie 和回调 query 均未写入文档。
+- 完整证据边界和清理记录见
+  `docs/progress/wb08r-05-feedback.md`。生产 8288/18288 未改动、未做功能测试。

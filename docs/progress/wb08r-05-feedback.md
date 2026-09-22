@@ -7,14 +7,14 @@
 | 维度 | 状态 | 说明 |
 | --- | --- | --- |
 | 工程实现 | `ENGINEERING_READY` | 05-A～05-D 已实现，相关离线门禁通过 |
-| 内部 SSO | `AUTH_INTERNAL_PENDING` | 测试 callback 已登记，仍缺 4 项真实连接参数 |
+| 内部 SSO | `AUTH_LOGIN_VERIFIED` | 8289 单账号真实登录、会话、退出及管理员隔离已验证；完整 S-01～S-12 尚未执行 |
 | 真实试用 | `USER_PILOT_PENDING` | 尚未完成 3～5 名内部用户、每人至少 2 个真实问题与反馈 |
-| 阶段终态 | `NOT_FEEDBACK_READY` | 真实 SSO 和用户试用未完成，不声明 `FEEDBACK_READY` |
-| 8289 运行态 | `IMAGE_STAGED_NOT_STARTED` | 新镜像已加载到 60，但当前 8289 仍运行阶段 04 镜像 |
+| 阶段终态 | `NOT_FEEDBACK_READY` | 单账号登录通过不等于完整 SSO 验收或真实用户试用完成 |
+| 8289 运行态 | `CANDIDATE_RUNNING_HEALTHY` | 阶段 05 候选运行于 60 的回环 8289，并经 54 的专用 8289 入口访问 |
 
-阶段 05 的工程实现已完成，但实施方案把普通用户开放前的
-`AUTH_INTERNAL_READY` 作为前置条件。为避免用匿名模式伪造真实登录通过，本次只将
-候选镜像加载和发布文件暂存到 60，没有启动或替换 8289。
+阶段 05 的工程实现和单账号 SSO happy path 已完成。当前可以继续在专用 8289
+做内部测试，但在完整 SSO 用例和用户试用完成前，不声明 `AUTH_INTERNAL_READY`
+或 `FEEDBACK_READY`，也不替换生产 8288/18288。
 
 ## 已完成范围
 
@@ -43,55 +43,96 @@
 | F-07 | 导出不含问题、答案、用户说明、管理员备注、完整 Trace 或 secret |
 | F-08 | 冻结依赖的 5 条问答在反馈前后输入、答案、结果和状态逐项相同 |
 
-实际执行结果：
+工程门禁实际结果：
 
-- 后端相关回归：16 passed，1 warning。
-- 前端相关回归：10 个测试文件，50 passed。
+- 阶段 05 后端相关回归：16 passed，1 warning。
+- 阶段 05 前端相关回归：10 个测试文件，50 passed。
 - 目标 Python 文件 Ruff、mypy 通过。
-- 前端目标 ESLint、TypeScript 检查通过；`npm run build`（含 OpenAPI 检查与
-  Vite 生产构建）通过。
+- 前端目标 ESLint、TypeScript 检查及生产构建通过。
+- 部署修正定向门禁：前缀代理与候选守卫合计 22 passed；前缀代理 Ruff、mypy、
+  `git diff --check` 通过。
 
-以上是代码与离线自动化证据，不是 8289 真实 SSO、真实用户试用或生产证据。
+以上工程结果不替代真实用户试用或生产证据。
 
-## 候选镜像与运行边界
+## 8289 实际部署
 
-- 阶段 05 代码 revision：`c8286736745dc2b3b97b0a21417f82bb76165583`。
-- 已加载到 60 的候选：`rag-test-wanshitong:wb08r05-c828673`；镜像 ID
-  `sha256:3d725515839143994b89ec6e83dcdedc3703236589223f14e1506edc014c718a`。
+- 应用镜像代码 revision：
+  `48e346a58b2d1764628c254c74f062930b735154`；镜像
+  `rag-test-wanshitong:wb08r05-48e346a`，ID
+  `sha256:c34c631e1f75b082e712f0c66d7a5670c85981febd6ed66e1dcc3703e731901f`。
 - 镜像内产品资产：38 个文件、1,141,311 bytes；manifest SHA-256
-  `2840310b16be185164f8f93f576f74d7cb734fa41e52003f6b7901d2a3d2a4bb`。
-- 60 上的发布文件：`/data/tyf/wanshitong-wb08r05-c828673/release`；加载前后镜像
-  归档 SHA-256 均为
-  `114f6ee672ad2fde47a3837c5864f7d85b9cb13838d8ef64b9db2b1741beeb78`。
-- 当前 8289 未改变：容器 `wanshitong-prep-candidate-app` 仍运行阶段 04 镜像
-  `rag-test-wanshitong:wb08r04-8f794efe2fd2`，绑定 `127.0.0.1:8289->8088`，
-  只读核对时 live/ready 均为 HTTP 200。
-- 生产 `wanshitong-app` 仍使用 `rag-test-wanshitong:604ef63`；本阶段没有停止、
-  重建、替换或发起功能测试到 8288/18288。
+  `4b0ea3a670482de61157309a7a6acc7a551027e48827139009102df39d2063b0`。
+- 运行容器 `wanshitong-sso-candidate-app` 为 `healthy`，只绑定
+  `127.0.0.1:8289->8088`；发布目录为
+  `/data/tyf/wanshitong-wb08r05-c828673/release`。
+- 外部测试链路为 54 `10.242.180.54:8289` TCP 转发到 60
+  `10.242.180.60:18289`，再由容器
+  `wanshitong-wb08r05-prefix-proxy` 精确剥离一次 `/kb` 后转发到
+  `127.0.0.1:8289`。代理代码 revision 为
+  `49fbc1a6133e7920aca113cfa3db8b1c8fce9c02`。
+- 路径门禁实测：`/kb/live` 为 HTTP 200，未带前缀的 `/live` 为 HTTP 404，
+  `/kb/sso/entry` 为 HTTP 302 并跳转到实际 RDMS authorize 地址。
 
-本文件的文档提交晚于镜像 revision；文档变化不改变镜像内运行代码，因此镜像仍
-以 `c828673` 为准确代码身份。
+应用仍保持回环绑定；54/60 的转发和前缀代理仅服务测试 8289，不复用也不修改
+生产 18288/8288。
+
+## 真实 SSO 登录证据
+
+2026-09-22 使用用户提供的测试账号，通过真实 Firefox 浏览器执行：
+
+1. 从 `http://10.242.180.54:8289/kb/` 整页跳转到 RDMS 登录页；
+2. RDMS 登录成功后携带一次性 Ticket 回调登记地址；
+3. KB 后端从 60 调用 validate，浏览器最终回到 8289 的 `/kb/`；
+4. 页面显示受信用户“陶逸非”，公共会话 POST 返回 HTTP 200，且
+   `deployment_id=candidate_8289`；
+5. 同一 SSO 会话访问管理员 overview API 返回 HTTP 401，证明普通 SSO 身份没有
+   获得管理员权限；
+6. 点击退出后页面显示“已退出”，仅清理 KB 本地会话，符合不做 RDMS 全局注销
+   的合同。
+
+文档不保存账号密码、Client Secret、Ticket、Cookie、CSRF 或完整回调查询串。
+
+本次只验证用户要求的单账号登录闭环，没有执行与目标无关的问答或反馈测试。
+完整 S-01～S-12、第二账号切换 S-08、外网入口及正式入口均仍未运行，因此状态
+保持 `AUTH_LOGIN_VERIFIED`，不提升为 `AUTH_INTERNAL_READY`。
+
+## 两轮现场修正
+
+1. 候选守卫原先只允许部门影子配置从 `false` 变为 `true`，却错误拒绝基准和
+   候选均为 `true`。修正为允许继承既有值，同时继续限制真实启用差异；定向
+   11 tests passed。
+2. 两跳 TCP 转发不会剥离外部 `/kb`，导致带前缀 API 被 SPA fallback 接管。
+   新增测试专用 HTTP 前缀代理，只接受 `/kb`，严格剥离一次并保留 Host、Cookie
+   和重复响应头；外部路径和真实登录随后通过。
+
+没有发生第三轮修正，也没有触发三轮失败后的 P0 冻结规则。
+
+## 网络冲突与恢复信息
+
+60 原有 Docker 网络 `pdf2md_default` 使用 `172.24.0.0/16`，把 RDMS 地址
+`172.24.7.172` 错路由到 Docker bridge，导致 validate 无法访问。经用户明确授权，
+已使用原 Compose 项目执行 `down`：三个 `pdf2md` 容器和该网络已停止/删除，未加
+`-v`，未删除镜像或业务数据。原配置路径为
+`/home/user4a/datasupply-plan-a/pdf2md/docker-compose.yaml`；如需恢复，应先解决与
+RDMS 私网的网段冲突，不能直接恢复同一 `172.24.0.0/16` 网络。
 
 ## 清理结果
 
-- 60 上无容器引用的旧 SSO 候选镜像
-  `rag-test-wanshitong:wb08r-sso-36529b4` 已删除。
-- 正在运行的阶段 04 镜像、生产镜像以及仍被停止容器引用的阶段 03g 回退镜像均
-  保留，没有把运行态或回退点当成过期镜像删除。
-- 本地阶段 05 镜像、临时构建目录以及 54/60 的传输压缩包均已删除；60 上保留
-  唯一待启动的阶段 05 候选镜像和发布文件。
+- 60 上已删除过期的停止容器 `wanshitong-prep-candidate-app`、
+  `wanshitong-wb08r01-app`，未删除任何数据卷。
+- 60 上已删除未使用/过期镜像 `wb08r05-c828673`、
+  `wb08r04-8f794efe2fd2`、`wb08r03g-6187be6` 及本次传输归档；只保留正在运行的
+  `wb08r05-48e346a` 和生产 `604ef63`。
+- 54 的中转脚本临时副本、本地构建目录、镜像归档、浏览器临时证据和本次本地
+  `wb08r05-48e346a` 镜像已删除。
+- 54 的 8289 测试转发、60 的 18289 前缀代理和当前候选属于正在使用的测试链路，
+  未作为过期资源删除。
 
-## 尚需外部提供与后续验收
+## 尚需完成
 
-测试 callback 已确认登记为
-`http://10.242.180.54:8289/kb/sso/callback`。真实 SSO 仍需：
-
-1. 浏览器可达的完整 authorize URL；
-2. 60 可达的完整 validate URL；
-3. 已登记的 `clientId`；
-4. 通过安全渠道交付并以文件注入的 client secret。
-
-取得以上 4 项后，才能启动阶段 05 镜像到专用 8289，使用已提供的测试账号验证
-真实登录，并执行 S-01～S-12。S-08 账号切换另需第二个测试账号。最后还需 3～5
-名内部用户各提至少 2 个真实问题并提交反馈；完成前保持
-`AUTH_INTERNAL_PENDING` / `USER_PILOT_PENDING`，不标记 `FEEDBACK_READY`。
+- 取得第二个测试账号后执行 S-08，并按实施方案补齐 S-01～S-12 的其余正反向
+  用例；正式 8288/18288 回调登记和切换必须另行授权。
+- 组织 3～5 名内部用户，每人至少提出 2 个真实问题并提交反馈，完成阶段 05
+  用户试用门禁。
+- 54 的 8289 当前为测试专用进程级转发，服务器重启后需按发布记录恢复；它不是
+  正式生产入口配置。
