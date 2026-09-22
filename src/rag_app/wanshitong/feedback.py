@@ -443,8 +443,9 @@ class WanshitongFeedbackService:
         try:
             with self._connections.transaction(write=True) as connection:
                 row = connection.execute(
-                    "SELECT f.trace_id, d.feedback_revision, "
-                    "r.review_version FROM product_feedback f JOIN "
+                    "SELECT f.trace_id, "
+                    "COALESCE(d.feedback_revision, 1) AS feedback_revision, "
+                    "r.review_version FROM product_feedback f LEFT JOIN "
                     "wanshitong_feedback_details d USING(trace_id) "
                     "LEFT JOIN wanshitong_feedback_reviews r USING(trace_id) "
                     "WHERE f.trace_id=? AND f.project_id=? "
@@ -537,7 +538,8 @@ class WanshitongFeedbackService:
                     "SELECT COUNT(*) AS evaluated, "
                     "SUM(CASE WHEN f.useful=1 THEN 1 ELSE 0 END) AS helpful, "
                     "SUM(CASE WHEN f.useful=0 AND (r.trace_id IS NULL OR "
-                    "r.review_status='NEW' OR d.feedback_revision>"
+                    "r.review_status='NEW' OR "
+                    "COALESCE(d.feedback_revision, 1)>"
                     "r.reviewed_feedback_revision) THEN 1 ELSE 0 END) "
                     "AS pending, "
                     "SUM(CASE WHEN r.root_cause IN ('WRONG_SOURCE', "
@@ -545,7 +547,7 @@ class WanshitongFeedbackService:
                     "AS wrong_source, "
                     "SUM(CASE WHEN r.root_cause='FALSE_REFUSAL' THEN 1 "
                     "ELSE 0 END) AS false_refusal "
-                    "FROM product_feedback f JOIN "
+                    "FROM product_feedback f LEFT JOIN "
                     "wanshitong_feedback_details d USING(trace_id) "
                     "LEFT JOIN wanshitong_feedback_reviews r USING(trace_id) "
                     "WHERE f.project_id=? AND f.knowledge_base_id=?",
@@ -649,15 +651,23 @@ class WanshitongFeedbackService:
         comment: str | None,
     ) -> int:
         previous_revision = (
-            0 if previous is None else int(previous["feedback_revision"] or 0)
+            0 if previous is None else int(previous["feedback_revision"] or 1)
         )
         previous_comment = self._stored_comment(previous)
+        previous_detail = (
+            None if previous is None else previous["reason_detail"]
+        )
+        if (
+            previous is not None
+            and previous_detail is None
+            and previous["reason_code"] in _REASON_DETAILS
+        ):
+            previous_detail = previous["reason_code"]
         unchanged = bool(
             previous is not None
-            and previous_revision > 0
             and bool(previous["useful"]) == canonical.useful
             and previous["reason_code"] == canonical.reason_code
-            and previous["reason_detail"] == reason_detail
+            and previous_detail == reason_detail
             and previous_comment is not _UNREADABLE
             and previous_comment == comment
         )
@@ -909,6 +919,10 @@ def project_feedback_trace(
             "fallback": fallback,
         },
         "validation_coverage": {
+            "provider_statuses": _provider_statuses(trace),
+            "application_validation_status": _application_validation_status(
+                history
+            ),
             "accepted_claim_count": _first_value(
                 sources, "accepted_claim_count", "accepted_count"
             ),
@@ -967,12 +981,23 @@ def _normalize_user_feedback(
         ):
             raise ValueError("有帮助的反馈不得携带负向原因或说明。")
         return None, None, None
-    detail = reason_detail or cast(
-        FeedbackReasonDetail,
-        reason_code if reason_code in _REASON_DETAILS else "OTHER",
-    )
-    canonical = reason_code or _DETAIL_TO_CANONICAL[detail]
-    if reason_detail is not None and _DETAIL_TO_CANONICAL[detail] != canonical:
+    if reason_detail is not None:
+        detail: FeedbackReasonDetail | None = reason_detail
+    elif reason_code in _REASON_DETAILS:
+        detail = cast(FeedbackReasonDetail, reason_code)
+    elif reason_code is None:
+        detail = "OTHER"
+    else:
+        # OUTDATED 等旧 canonical 原因继续按原值读写，不伪装成 OTHER。
+        detail = None
+    if reason_code is None:
+        canonical = _DETAIL_TO_CANONICAL[cast(FeedbackReasonDetail, detail)]
+    else:
+        canonical = reason_code
+    if (
+        reason_detail is not None
+        and _DETAIL_TO_CANONICAL[reason_detail] != canonical
+    ):
         raise ValueError("reason_code 与 reason_detail 不一致。")
     return canonical, detail, normalized_comment
 
@@ -1061,25 +1086,36 @@ def _history_citations(
     result = history.get("result")
     if not isinstance(result, Mapping):
         return []
-    evidence = result.get("evidence")
-    if not isinstance(evidence, list):
-        return []
     citations: list[dict[str, object]] = []
-    for item in evidence:
-        if not isinstance(item, Mapping):
+    seen: set[tuple[str | None, str | None]] = set()
+    for field_name in ("evidence", "catalog_citations"):
+        values = result.get(field_name)
+        if not isinstance(values, list):
             continue
-        document_id = item.get("document_id")
-        version_id = item.get("document_version_id")
-        citations.append(
-            {
-                "document_id": document_id,
-                "document_version_id": version_id,
-                "display_name": item.get("display_name"),
-                "source_label": item.get("source_label"),
-                "selected_source_eligible": isinstance(document_id, str)
-                and isinstance(version_id, str),
-            }
-        )
+        for item in values:
+            if not isinstance(item, Mapping):
+                continue
+            document_id = item.get("document_id")
+            version_id = item.get("document_version_id")
+            identity = (
+                document_id if isinstance(document_id, str) else None,
+                version_id if isinstance(version_id, str) else None,
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            citations.append(
+                {
+                    "document_id": document_id,
+                    "document_version_id": version_id,
+                    "display_name": item.get("display_name")
+                    or item.get("document_title"),
+                    "source_label": item.get("source_label")
+                    or item.get("source_relative_path"),
+                    "selected_source_eligible": isinstance(document_id, str)
+                    and isinstance(version_id, str),
+                }
+            )
     return citations
 
 
@@ -1120,6 +1156,38 @@ def _generation_evidence_count(
         return None
     evidence = result.get("evidence")
     return len(evidence) if isinstance(evidence, list) else None
+
+
+def _provider_statuses(
+    trace: Mapping[str, object] | None,
+) -> dict[str, dict[str, object | None]] | None:
+    if trace is None or not isinstance(trace.get("spans"), list):
+        return None
+    statuses: dict[str, dict[str, object | None]] = {}
+    for item in cast(list[object], trace["spans"]):
+        if not isinstance(item, Mapping):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.startswith("provider."):
+            continue
+        statuses[name.removeprefix("provider.")] = {
+            "status": item.get("status"),
+            "reason_code": item.get("reason_code"),
+        }
+    return statuses or None
+
+
+def _application_validation_status(
+    history: Mapping[str, object] | None,
+) -> dict[str, object | None] | None:
+    if history is None or not isinstance(history.get("result"), Mapping):
+        return None
+    result = cast(Mapping[str, object], history["result"])
+    status = result.get("status")
+    reason_code = result.get("reason_code")
+    if status is None and reason_code is None:
+        return None
+    return {"status": status, "reason_code": reason_code}
 
 
 def _answer_path_from_metadata(value: object) -> object | None:

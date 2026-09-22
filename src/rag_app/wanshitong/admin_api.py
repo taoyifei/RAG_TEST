@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from typing import Annotated, cast
 from urllib.parse import urlsplit
@@ -40,6 +41,9 @@ from rag_app.tracing.store import (
 from rag_app.wanshitong.admin_models import (
     WanshitongDocumentPage,
     WanshitongDocumentView,
+    WanshitongFeedbackExportRequest,
+    WanshitongFeedbackQuery,
+    WanshitongFeedbackReviewRequest,
     WanshitongTraceQuery,
     WanshitongUploadReceipt,
 )
@@ -79,6 +83,7 @@ def register_admin_routes(
     )
     _register_job_routes(app, runtime, scope_service)
     _register_history_routes(app, runtime, scope_service)
+    _register_feedback_routes(app, runtime, scope_service)
     _register_trace_routes(app, runtime, scope_service)
     _register_status_routes(app, runtime, scope_service, document_metadata)
 
@@ -559,6 +564,131 @@ def _register_trace_routes(
                 "X-Content-Type-Options": "nosniff",
                 "X-Artifact-SHA256": artifact.metadata.sha256,
             },
+        )
+
+
+def _register_feedback_routes(
+    app: FastAPI,
+    runtime: ProductRuntime,
+    scope_service: FixedScopeService,
+) -> None:
+    """注册复用现有管理员认证的反馈待办接口。"""
+
+    @app.get(ADMIN_BASE_PATH + "/feedback", tags=["wanshitong-admin"])
+    def _feedback_list(
+        request: Request,
+        filters: Annotated[WanshitongFeedbackQuery, Query()],
+    ) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        return runtime.wanshitong_feedback.list_feedback(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            reason=filters.reason,
+            review_status=filters.review_status,
+            created_from=(
+                None
+                if filters.created_from is None
+                else filters.created_from.isoformat()
+            ),
+            created_to=(
+                None
+                if filters.created_to is None
+                else filters.created_to.isoformat()
+            ),
+            page_size=filters.page_size,
+            offset=filters.offset,
+        )
+
+    @app.get(
+        ADMIN_BASE_PATH + "/feedback/statistics",
+        tags=["wanshitong-admin"],
+    )
+    def _feedback_statistics(request: Request) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        return runtime.wanshitong_feedback.statistics(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+        )
+
+    @app.post(
+        ADMIN_BASE_PATH + "/feedback/export",
+        tags=["wanshitong-admin"],
+    )
+    def _feedback_export(
+        body: WanshitongFeedbackExportRequest, request: Request
+    ) -> Response:
+        binding = _admin_scope(request, scope_service)
+        items = runtime.wanshitong_feedback.export_metadata(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            trace_ids=body.trace_ids,
+        )
+        payload = json.dumps(
+            {
+                "schema_version": "wanshitong-feedback-export-v1",
+                "content_policy": "metadata_only",
+                "items": items,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return Response(
+            payload,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="wanshitong-feedback.json"'
+                ),
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get(
+        ADMIN_BASE_PATH + "/feedback/{trace_id}",
+        tags=["wanshitong-admin"],
+    )
+    def _feedback_detail(
+        trace_id: Annotated[
+            str, Path(pattern=r"^trace_[0-9a-f]{32}$")
+        ],
+        request: Request,
+    ) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        return runtime.wanshitong_feedback.detail(
+            trace_id,
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+        )
+
+    @app.patch(
+        ADMIN_BASE_PATH + "/feedback/{trace_id}/review",
+        tags=["wanshitong-admin"],
+    )
+    def _feedback_review(
+        trace_id: Annotated[
+            str, Path(pattern=r"^trace_[0-9a-f]{32}$")
+        ],
+        body: WanshitongFeedbackReviewRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        principal = str(request.state.product_principal)
+        return runtime.wanshitong_feedback.review(
+            trace_id,
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            expected_version=body.expected_version,
+            review_status=body.review_status,
+            root_cause=body.root_cause,
+            note=body.note,
+            selected_source_document_id=body.selected_source_document_id,
+            selected_source_version_id=body.selected_source_version_id,
+            evaluation_candidate=body.evaluation_candidate,
+            fix_reference=body.fix_reference,
+            verification_references=body.verification_references,
+            reviewed_by_admin=principal,
         )
 
 

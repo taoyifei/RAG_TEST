@@ -3,12 +3,27 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, StringConstraints, model_validator
 
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.management import DocumentStatus, Job
 from rag_app.tracing.models import TraceMode, TraceStatus
+from rag_app.wanshitong.feedback import (
+    FeedbackReviewStatus,
+    FeedbackRootCause,
+)
+
+_TraceId = Annotated[
+    str, StringConstraints(pattern=r"^trace_[0-9a-f]{32}$")
+]
+_Reference = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=500
+    ),
+]
 
 
 class WanshitongDocumentView(FrozenModel):
@@ -77,9 +92,57 @@ class WanshitongTraceQuery(FrozenModel):
     feedback_useful: bool | None = None
 
 
+class WanshitongFeedbackReviewRequest(FrozenModel):
+    """管理员复核的乐观锁与有界字段。"""
+
+    expected_version: int = Field(ge=0)
+    review_status: FeedbackReviewStatus
+    root_cause: FeedbackRootCause | None = None
+    note: str | None = Field(default=None, max_length=2000)
+    selected_source_document_id: str | None = Field(
+        default=None, pattern=r"^doc_[0-9a-f]{32}$"
+    )
+    selected_source_version_id: str | None = Field(
+        default=None, pattern=r"^dver_[0-9a-f]{32}$"
+    )
+    evaluation_candidate: bool = False
+    fix_reference: str | None = Field(default=None, max_length=500)
+    verification_references: tuple[_Reference, ...] = Field(
+        default=(), max_length=20
+    )
+
+    @model_validator(mode="after")
+    def _source_identity_is_complete(self) -> WanshitongFeedbackReviewRequest:
+        if (self.selected_source_document_id is None) != (
+            self.selected_source_version_id is None
+        ):
+            raise ValueError("选中来源必须同时提供文档和版本 ID。")
+        return self
+
+
+class WanshitongFeedbackExportRequest(FrozenModel):
+    """可选限定 Trace 的安全元数据导出请求。"""
+
+    trace_ids: tuple[_TraceId, ...] = Field(default=(), max_length=1000)
+
+
+class WanshitongFeedbackQuery(FrozenModel):
+    """反馈待办列表的有界筛选和分页。"""
+
+    reason: str | None = Field(default=None, max_length=40)
+    review_status: FeedbackReviewStatus | None = None
+    created_from: datetime | None = None
+    created_to: datetime | None = None
+    page_size: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
 __all__ = [
     "WanshitongDocumentPage",
     "WanshitongDocumentView",
+    "WanshitongFeedbackExportRequest",
+    "WanshitongFeedbackQuery",
+    "WanshitongFeedbackReviewRequest",
     "WanshitongTraceQuery",
     "WanshitongUploadReceipt",
 ]
