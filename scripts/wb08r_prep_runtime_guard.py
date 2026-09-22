@@ -341,8 +341,18 @@ def _compare_environment(
                 candidate=candidate_value,
             )
     if allow_sso_enable:
-        ignored_keys.update(_SSO_TRANSITION_KEYS)
-        _compare_sso_environment(report, baseline, candidate)
+        inherited_sso = all(
+            baseline.get(key) == candidate.get(key)
+            for key in _SSO_TRANSITION_KEYS
+        )
+        if not inherited_sso:
+            ignored_keys.update(_SSO_TRANSITION_KEYS)
+        _compare_sso_environment(
+            report,
+            baseline,
+            candidate,
+            inherited_sso=inherited_sso,
+        )
     baseline_keys = set(baseline) - ignored_keys
     candidate_keys = set(candidate) - ignored_keys
     for key in sorted(baseline_keys - candidate_keys):
@@ -368,12 +378,12 @@ def _compare_environment(
         )
 
 
-def _compare_sso_environment(
+def _compare_sso_transition_baseline(
     report: _Report,
     baseline: dict[str, str],
     candidate: dict[str, str],
 ) -> None:
-    """校验匿名旧候选到固定 `/kb` SSO 候选的唯一声明差异。"""
+    """校验首次启用 SSO 前的基准确实处于未启用状态。"""
     baseline_inactive_values = {
         _ROOT_PATH_KEY: {None, ""},
         _SSO_AUTH_MODE_KEY: {None, "", "anonymous"},
@@ -392,6 +402,18 @@ def _compare_sso_environment(
                 baseline=baseline.get(key),
                 candidate=candidate.get(key),
             )
+
+
+def _compare_sso_environment(
+    report: _Report,
+    baseline: dict[str, str],
+    candidate: dict[str, str],
+    *,
+    inherited_sso: bool,
+) -> None:
+    """校验 SSO 首次启用，或校验候选完整继承既有 SSO 配置。"""
+    if not inherited_sso:
+        _compare_sso_transition_baseline(report, baseline, candidate)
     for key in sorted(_SSO_REQUIRED_KEYS):
         if not candidate.get(key):
             report.add_problem(
@@ -495,13 +517,14 @@ def _compare_sso_environment(
             candidate=candidate.get(_TRUSTED_ORIGINS_KEY),
         )
 
-    for key in sorted(_SSO_TRANSITION_KEYS):
-        report.allow(
-            f"services.app.environment.{key}",
-            "阶段 03 显式启用固定 `/kb` SSO 登录所需的声明差异。",
-            baseline=baseline.get(key),
-            candidate=candidate.get(key),
-        )
+    if not inherited_sso:
+        for key in sorted(_SSO_TRANSITION_KEYS):
+            report.allow(
+                f"services.app.environment.{key}",
+                "阶段 03 显式启用固定 `/kb` SSO 登录所需的声明差异。",
+                baseline=baseline.get(key),
+                candidate=candidate.get(key),
+            )
 
 
 def _baseline_mounts(container: dict[str, Any]) -> dict[str, dict[str, object]]:

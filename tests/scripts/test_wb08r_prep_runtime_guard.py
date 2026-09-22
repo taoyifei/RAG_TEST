@@ -381,6 +381,76 @@ def test_sso_guard_accepts_only_complete_registered_configuration(
     )
 
 
+def test_later_candidate_preserves_enabled_sso_configuration(
+    tmp_path: Path,
+) -> None:
+    rendered = _rendered()
+    _enable_sso(rendered)
+    candidate_environment = rendered["services"]["app"]["environment"]
+    baseline_value = _container(candidate=False)
+    baseline_value["Config"]["Env"] = [
+        f"{key}={value}" for key, value in candidate_environment.items()
+    ] + ["PATH=/usr/local/bin"]
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    image = tmp_path / "image.json"
+    _write_json(baseline, [baseline_value])
+    _write_json(candidate, rendered)
+    _write_json(image, [_target_image()])
+
+    report = guard.compare_runtime(
+        stage="rendered_spec",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+        allow_sso_enable=True,
+    )
+
+    assert report["ready"] is True, report
+    assert report["semantic_mismatches"] == []
+    assert not any(
+        item["field_path"].endswith("RAG_WANSHITONG_AUTH_MODE")
+        for item in report["allowed_changes"]
+    )
+
+
+def test_later_candidate_rejects_changes_to_enabled_sso_configuration(
+    tmp_path: Path,
+) -> None:
+    rendered = _rendered()
+    _enable_sso(rendered)
+    candidate_environment = rendered["services"]["app"]["environment"]
+    baseline_value = _container(candidate=False)
+    baseline_value["Config"]["Env"] = [
+        f"{key}={value}" for key, value in candidate_environment.items()
+    ] + ["PATH=/usr/local/bin"]
+    candidate_environment["RAG_WANSHITONG_SSO_CLIENT_ID"] = "changed"
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    image = tmp_path / "image.json"
+    _write_json(baseline, [baseline_value])
+    _write_json(candidate, rendered)
+    _write_json(image, [_target_image()])
+
+    report = guard.compare_runtime(
+        stage="rendered_spec",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+        allow_sso_enable=True,
+    )
+
+    assert report["ready"] is False
+    assert any(
+        item["field_path"].endswith("RAG_WANSHITONG_SSO_CLIENT_ID")
+        for item in report["semantic_mismatches"]
+    )
+
+
 def test_sso_guard_rejects_untrusted_entry_origin(tmp_path: Path) -> None:
     rendered = _rendered()
     _enable_sso(rendered)
