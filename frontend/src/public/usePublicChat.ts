@@ -3,11 +3,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createPublicSession,
   getPublicCapabilities,
+  logoutPublicSession,
   openPublicChat,
   PublicApiError,
   publicErrorMessage,
   sendPublicFeedback,
+  type PublicSessionUser,
 } from "./publicApi";
+import * as authNavigation from "./authNavigation";
+import {
+  openPublicSessionChannel,
+  recordPublicIdentity,
+  type PublicSessionChannel,
+} from "./sessionCoordination";
 import {
   consumePublicSse,
   publicStageLabel,
@@ -130,6 +138,10 @@ export function usePublicChat() {
   const [phase, setPhase] = useState<PublicChatPhase>("idle");
   const [sessionReady, setSessionReady] = useState(false);
   const [sessionError, setSessionError] = useState<string>();
+  const [logoutError, setLogoutError] = useState<string>();
+  const [loggedOut, setLoggedOut] = useState(false);
+  const [user, setUser] = useState<PublicSessionUser>();
+  const [deploymentId, setDeploymentId] = useState<string>();
   const [turns, setTurns] = useState<PublicTurn[]>([]);
   const csrfRef = useRef<string | undefined>(undefined);
   const conversationRef = useRef(randomId("wst"));
@@ -139,6 +151,30 @@ export function usePublicChat() {
   const requestIdRef = useRef(0);
   const busyRef = useRef(false);
   const feedbackAttemptsRef = useRef(new Set<string>());
+  const sessionChannelRef = useRef<PublicSessionChannel | undefined>(
+    undefined,
+  );
+  const identityChangedRef = useRef(false);
+
+  const clearLocalSession = useCallback((showLoggedOut: boolean) => {
+    requestIdRef.current += 1;
+    busyRef.current = false;
+    sessionControllerRef.current?.abort();
+    streamControllerRef.current?.abort();
+    sessionControllerRef.current = undefined;
+    streamControllerRef.current = undefined;
+    activeTurnRef.current = undefined;
+    csrfRef.current = undefined;
+    conversationRef.current = randomId("wst");
+    feedbackAttemptsRef.current.clear();
+    setTurns([]);
+    setSessionReady(false);
+    setSessionError(undefined);
+    setLogoutError(undefined);
+    setUser(undefined);
+    setLoggedOut(showLoggedOut);
+    setPhase(showLoggedOut ? "idle" : "creating_session");
+  }, []);
 
   const updateTurn = useCallback(
     (turnId: string, update: (turn: PublicTurn) => PublicTurn) => {
@@ -153,6 +189,15 @@ export function usePublicChat() {
     const session = await createPublicSession(signal);
     await getPublicCapabilities(signal);
     csrfRef.current = session.csrfToken;
+    setUser(session.user);
+    setDeploymentId(session.deploymentId);
+    setLoggedOut(false);
+    if (session.deploymentId && session.user) {
+      identityChangedRef.current = recordPublicIdentity(
+        session.deploymentId,
+        session.user.userId,
+      );
+    }
     setSessionReady(true);
     setSessionError(undefined);
     return session.csrfToken;
@@ -170,6 +215,11 @@ export function usePublicChat() {
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
+        if (isSessionExpired(error)) {
+          clearLocalSession(false);
+          authNavigation.redirectToSso();
+          return;
+        }
         setSessionReady(false);
         setPhase("failed");
         setSessionError(
@@ -178,7 +228,7 @@ export function usePublicChat() {
             : "湾事通暂时无法初始化，请重试。",
         );
       });
-  }, [initializeSession]);
+  }, [clearLocalSession, initializeSession]);
 
   useEffect(() => {
     startSession();
@@ -193,14 +243,24 @@ export function usePublicChat() {
     };
   }, [startSession]);
 
-  const refreshExpiredSession = useCallback(async (signal: AbortSignal) => {
-    setPhase("creating_session");
-    const session = await createPublicSession(signal);
-    csrfRef.current = session.csrfToken;
-    setSessionReady(true);
-    setSessionError(undefined);
-    return session.csrfToken;
-  }, []);
+  useEffect(() => {
+    if (!deploymentId) return;
+    const channel = openPublicSessionChannel(deploymentId, (event) => {
+      clearLocalSession(event === "logout");
+      if (event === "account-changed") startSession();
+    });
+    sessionChannelRef.current = channel;
+    if (identityChangedRef.current) {
+      identityChangedRef.current = false;
+      channel.publish("account-changed");
+    }
+    return () => {
+      channel.close();
+      if (sessionChannelRef.current === channel) {
+        sessionChannelRef.current = undefined;
+      }
+    };
+  }, [clearLocalSession, deploymentId, startSession, user?.userId]);
 
   const runTurn = useCallback(
     async (turnId: string, question: string, retry: boolean) => {
@@ -241,26 +301,19 @@ export function usePublicChat() {
 
       const isCurrent = () => requestIdRef.current === requestId;
       try {
-        let csrfToken = csrfRef.current;
-        if (!csrfToken)
-          csrfToken = await refreshExpiredSession(controller.signal);
-        let response: Response | undefined;
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          try {
-            response = await openPublicChat({
-              conversationId: conversationRef.current,
-              csrfToken,
-              question,
-              signal: controller.signal,
-            });
-            break;
-          } catch (error) {
-            if (attempt !== 0 || !isSessionExpired(error)) throw error;
-            csrfToken = await refreshExpiredSession(controller.signal);
-            setPhase("submitting");
-          }
+        const csrfToken = csrfRef.current;
+        if (!csrfToken) {
+          clearLocalSession(false);
+          authNavigation.redirectToSso(question);
+          return;
         }
-        if (!response?.body) {
+        const response = await openPublicChat({
+          conversationId: conversationRef.current,
+          csrfToken,
+          question,
+          signal: controller.signal,
+        });
+        if (!response.body) {
           throw new TypeError("public stream body missing");
         }
         if (!isCurrent()) return;
@@ -383,6 +436,11 @@ export function usePublicChat() {
           throw new TypeError("public stream disconnected before terminal");
         }
       } catch (error) {
+        if (isSessionExpired(error)) {
+          clearLocalSession(false);
+          authNavigation.redirectToSso(question);
+          return;
+        }
         if (!isCurrent() || controller.signal.aborted) return;
         tracker.terminal = true;
         updateTurn(turnId, (turn) => {
@@ -405,7 +463,7 @@ export function usePublicChat() {
         }
       }
     },
-    [refreshExpiredSession, sessionReady, updateTurn],
+    [clearLocalSession, sessionReady, updateTurn],
   );
 
   const submit = useCallback(
@@ -455,12 +513,37 @@ export function usePublicChat() {
         .then(() => {
           updateTurn(turnId, (turn) => ({ ...turn, feedback: "sent" }));
         })
-        .catch(() => {
+        .catch((error: unknown) => {
+          if (isSessionExpired(error)) {
+            clearLocalSession(false);
+            authNavigation.redirectToSso();
+            return;
+          }
           updateTurn(turnId, (turn) => ({ ...turn, feedback: "failed" }));
         });
     },
-    [updateTurn],
+    [clearLocalSession, updateTurn],
   );
+
+  const logout = useCallback(() => {
+    const csrfToken = csrfRef.current;
+    if (!csrfToken || !user) return;
+    const controller = new AbortController();
+    setLogoutError(undefined);
+    void logoutPublicSession(csrfToken, controller.signal)
+      .then(() => {
+        sessionChannelRef.current?.publish("logout");
+        clearLocalSession(true);
+      })
+      .catch((error: unknown) => {
+        if (isSessionExpired(error)) {
+          sessionChannelRef.current?.publish("logout");
+          clearLocalSession(true);
+          return;
+        }
+        setLogoutError("暂时无法退出，请稍后重试。");
+      });
+  }, [clearLocalSession, user]);
 
   const busy =
     phase === "creating_session" ||
@@ -474,6 +557,11 @@ export function usePublicChat() {
   return {
     announcement,
     busy,
+    deploymentId,
+    loggedOut,
+    login: () => authNavigation.redirectToSso(),
+    logout,
+    logoutError,
     phase,
     retry,
     retrySession: startSession,
@@ -483,5 +571,6 @@ export function usePublicChat() {
     submit,
     submitFeedback,
     turns,
+    user,
   };
 }

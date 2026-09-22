@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
 
+import {
+  applicationPath,
+  appHistoryLocation,
+  withAppBase,
+} from "./basePath";
+
 export const routes = {
   workspace: "/admin",
   projects: "/admin/projects",
@@ -88,24 +94,26 @@ function isWanshitongRoute(value: string): value is WanshitongRoute {
 }
 
 export function isLegacyConsolePath(pathname: string): boolean {
-  return pathname !== "/" && pathname in legacyAdminRoutes;
+  const path = applicationPath(pathname);
+  return path !== "/" && path in legacyAdminRoutes;
 }
 
 export function isWanshitongAdminPath(pathname: string): boolean {
+  const path = applicationPath(pathname);
   return (
-    pathname === "/admin" ||
-    pathname.startsWith("/admin/") ||
-    pathname in wanshitongAliases
+    path === "/admin" ||
+    path.startsWith("/admin/") ||
+    path in wanshitongAliases
   );
 }
 
 export function useRouter() {
   const [path, setPath] = useState<AppRoute>(() =>
-    resolveAppRoute(window.location.pathname),
+    resolveAppRoute(applicationPath()),
   );
   useEffect(() => {
     const listener = () => {
-      setPath(resolveAppRoute(window.location.pathname));
+      setPath(resolveAppRoute(applicationPath()));
     };
     window.addEventListener("popstate", listener);
     return () => window.removeEventListener("popstate", listener);
@@ -113,9 +121,7 @@ export function useRouter() {
   const go = (next: string) => {
     const resolved = isAppRoute(next) ? next : legacyAdminRoutes[next];
     if (!resolved) throw new Error(`未知页面路径：${next}`);
-    const url = new URL(window.location.href);
-    url.pathname = resolved;
-    window.history.pushState({}, "", `${url.pathname}${url.search}`);
+    window.history.pushState({}, "", appHistoryLocation(resolved));
     setPath(resolved);
   };
   return { path, go };
@@ -128,15 +134,13 @@ function resolveWanshitongRoute(pathname: string): WanshitongRoute {
 
 export function useWanshitongRouter() {
   const [path, setPath] = useState<WanshitongRoute>(() =>
-    resolveWanshitongRoute(window.location.pathname),
+    resolveWanshitongRoute(applicationPath()),
   );
   useEffect(() => {
     const synchronize = () => {
-      const resolved = resolveWanshitongRoute(window.location.pathname);
-      if (window.location.pathname !== resolved) {
-        const url = new URL(window.location.href);
-        url.pathname = resolved;
-        window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+      const resolved = resolveWanshitongRoute(applicationPath());
+      if (window.location.pathname !== withAppBase(resolved)) {
+        window.history.replaceState({}, "", appHistoryLocation(resolved));
       }
       setPath(resolved);
     };
@@ -146,9 +150,7 @@ export function useWanshitongRouter() {
   }, []);
   const go = (next: string) => {
     const resolved = resolveWanshitongRoute(next);
-    const url = new URL(window.location.href);
-    url.pathname = resolved;
-    window.history.pushState({}, "", `${url.pathname}${url.search}`);
+    window.history.pushState({}, "", appHistoryLocation(resolved));
     setPath(resolved);
   };
   return { path, go };

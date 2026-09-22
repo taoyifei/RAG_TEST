@@ -73,6 +73,30 @@ sudo sh -c 'umask 077; exec cat /data/tyf/wanshitong/secrets/admin-bootstrap-tok
 不要把命令输出粘贴到日志、工单、Git 或最终部署报告。若 Secret bundle 只剩
 部分文件，不要补写或覆盖；先停止依赖步骤并调查文件来源。
 
+## SSO 候选与管理员边界
+
+SSO 候选只使用 8289，并固定外部前缀 `/kb`。在 RDMS 管理员逐字符登记
+`<8289 浏览器 origin>/kb/sso/callback` 前不得启动真实 SSO 候选；authorize
+URL、validate URL、`clientId` 和 secret 均没有可猜测的默认值。secret 只放在
+宿主受限 Secret 目录，容器内固定读取
+`/run/rag-secrets/sso-client-secret`，文件权限为 0600。
+
+普通工作台 `/kb/` 使用 RDMS SSO；管理员页面 `/kb/admin` 和
+`/kb/api/v1/...` 始终继续使用原 KB Bootstrap Token / 管理员 Cookie。不得
+依据 RDMS 返回的 `roles` 或 `permissions` 授予管理员权限。管理员 Cookie
+Path 为 `/kb`，普通用户 Cookie 与管理员 Cookie 不互相降级。
+
+退出仅删除 KB 本地用户会话，不猜测或调用 RDMS 全局注销。entry/callback
+响应禁缓存，Uvicorn 访问日志会从这两个路径删除完整 query，避免 ticket 和
+state 落盘。真实验收顺序为：前缀路由、HTTP、Cookie、RDMS 登录、SSE
+问答、引用、反馈、原管理员入口。没有真实 RDMS 证据时不得标记
+`AUTH_INTERNAL_READY`。
+
+`deploy-candidate.sh` 只允许由旧 8289 切换到独立的
+`wanshitong-sso-candidate-app`；不会操作 8288，也不会操作 54 上的 18288
+转发。清理仅在新候选验收或明确停止后，针对已核对 ID 的旧 8289 容器和
+旧候选镜像执行；禁止使用通配符或 `docker system prune`。
+
 ## 受控 TCP 转发
 
 如果跳板机没有 `socat`，可把 `tcp_forward.py` 复制到跳板机专用的

@@ -6,8 +6,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repository_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 compose_file="${script_dir}/compose.candidate.yaml"
 guard="${repository_root}/scripts/wb08r_prep_runtime_guard.py"
-project="wanshitong-candidate"
-candidate_container="wanshitong-prep-candidate-app"
+project="wanshitong-sso-candidate"
+candidate_container="wanshitong-sso-candidate-app"
 
 fail() {
   echo "candidate_deploy=failed reason=$1" >&2
@@ -81,6 +81,12 @@ if grep -Eq \
   "${env_file}"; then
   shadow_guard_args+=(--allow-department-shadow-enable)
 fi
+sso_guard_args=()
+if grep -Eq \
+  "^RAG_WANSHITONG_AUTH_MODE=(sso|'sso'|\"sso\")$" \
+  "${env_file}"; then
+  sso_guard_args+=(--allow-sso-enable)
+fi
 
 report_ready() {
   python3 - "$1" <<'PY'
@@ -116,6 +122,7 @@ PY
       --candidate-root "${candidate_root}" \
       --forbidden-root /data/tyf/wanshitong \
       "${shadow_guard_args[@]}" \
+      "${sso_guard_args[@]}" \
       --output "${rendered_guard}"
     ;;
   create)
@@ -135,6 +142,7 @@ PY
       --candidate-root "${candidate_root}" \
       --forbidden-root /data/tyf/wanshitong \
       "${shadow_guard_args[@]}" \
+      "${sso_guard_args[@]}" \
       --output "${created_guard}"
     ;;
   start)
@@ -148,11 +156,11 @@ with open(sys.argv[1], encoding="utf-8") as stream:
     print(json.load(stream)[0]["Id"])
 PY
     } )"
-    current_id="$(
-      docker inspect -f '{{.Id}}' wanshitong-wb08r01-app 2>/dev/null || true
+    baseline_running="$(
+      docker inspect -f '{{.State.Running}}' "${baseline_id}" 2>/dev/null || true
     )"
-    [[ "${current_id}" = "${baseline_id}" ]] || \
-      fail "baseline-container-identity-changed"
+    [[ "${baseline_running}" = true ]] || \
+      fail "baseline-container-not-running"
     mapfile -t port_owners < <(
       docker ps --no-trunc --filter publish=8289 --format '{{.ID}}'
     )

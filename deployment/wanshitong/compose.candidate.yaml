@@ -1,10 +1,10 @@
-name: wanshitong-candidate
+name: wanshitong-sso-candidate
 
 services:
   app:
     image: ${RAG_APP_IMAGE:?required}
     pull_policy: never
-    container_name: wanshitong-prep-candidate-app
+    container_name: wanshitong-sso-candidate-app
     restart: unless-stopped
     environment:
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?required}
@@ -20,6 +20,7 @@ services:
       RAG_MASTER_KEY_FILE: ${RAG_MASTER_KEY_FILE:?required}
       RAG_MIGRATIONS_DIR: ${RAG_MIGRATIONS_DIR:?required}
       RAG_PORT: ${RAG_PORT:?required}
+      RAG_ROOT_PATH: ${RAG_ROOT_PATH:?required}
       RAG_PRIVATE_PROVIDER_DIAGNOSTIC_ACK: ${RAG_PRIVATE_PROVIDER_DIAGNOSTIC_ACK:?required}
       RAG_PRIVATE_PROVIDER_DIAGNOSTIC_DIR: ${RAG_PRIVATE_PROVIDER_DIAGNOSTIC_DIR:?required}
       RAG_PRIVATE_PROVIDER_DIAGNOSTIC_MAX_FILES: ${RAG_PRIVATE_PROVIDER_DIAGNOSTIC_MAX_FILES:?required}
@@ -33,6 +34,12 @@ services:
       RAG_TRUST_LOOPBACK_HOST_PROXY: ${RAG_TRUST_LOOPBACK_HOST_PROXY:?required}
       RAG_WANSHITONG_DEMO_ALLOW_HTTP: ${RAG_WANSHITONG_DEMO_ALLOW_HTTP:?required}
       RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED: ${RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED:-false}
+      RAG_WANSHITONG_AUTH_MODE: ${RAG_WANSHITONG_AUTH_MODE:?required}
+      RAG_WANSHITONG_SSO_CLIENT_ID: ${RAG_WANSHITONG_SSO_CLIENT_ID:?required}
+      RAG_WANSHITONG_SSO_CLIENT_SECRET_FILE: ${RAG_WANSHITONG_SSO_CLIENT_SECRET_FILE:?required}
+      RAG_WANSHITONG_SSO_DEPLOYMENT_ID: ${RAG_WANSHITONG_SSO_DEPLOYMENT_ID:?required}
+      RAG_WANSHITONG_SSO_ENTRIES: ${RAG_WANSHITONG_SSO_ENTRIES:?required}
+      RAG_WANSHITONG_SSO_VALIDATE_URL: ${RAG_WANSHITONG_SSO_VALIDATE_URL:?required}
       RAG_WANSHITONG_EMBEDDING_API_KEY_FILE: ${RAG_WANSHITONG_EMBEDDING_API_KEY_FILE-}
       RAG_WANSHITONG_EMBEDDING_BASE_URL: ${RAG_WANSHITONG_EMBEDDING_BASE_URL:?required}
       RAG_WANSHITONG_EMBEDDING_CREDENTIAL_ENV: ${RAG_WANSHITONG_EMBEDDING_CREDENTIAL_ENV-}
@@ -70,10 +77,10 @@ services:
     networks:
       candidate-internal:
         aliases:
-          - wanshitong-prep-candidate-app
+          - wanshitong-sso-candidate-app
       candidate-egress:
         aliases:
-          - wanshitong-prep-candidate-app
+          - wanshitong-sso-candidate-app
     ports:
       - ${CANDIDATE_BIND_ADDRESS:?required}:${CANDIDATE_PORT:?required}:8088
     read_only: true

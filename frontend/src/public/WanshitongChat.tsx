@@ -6,6 +6,7 @@ import type { PublicTurn } from "./usePublicChat";
 
 export function WanshitongChat({
   busy,
+  initialQuestion,
   onFeedback,
   onRefresh,
   onRetry,
@@ -15,6 +16,7 @@ export function WanshitongChat({
   turns,
 }: {
   busy: boolean;
+  initialQuestion?: string;
   onFeedback: (turnId: string, traceId: string, useful: boolean) => void;
   onRefresh: () => void;
   onRetry: (turnId: string, question: string) => void;
@@ -60,6 +62,7 @@ export function WanshitongChat({
           <PublicChatComposer
             busy={busy}
             compact
+            initialQuestion={initialQuestion}
             onStop={onStop}
             onSubmit={onSubmit}
           />

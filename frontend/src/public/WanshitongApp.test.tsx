@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WanshitongApp } from "./WanshitongApp";
+import * as authNavigation from "./authNavigation";
 
 const encoder = new TextEncoder();
 
@@ -108,7 +109,8 @@ async function ask(question = "材料多久完成核验？") {
 afterEach(() => {
   vi.restoreAllMocks();
   window.history.replaceState({}, "", "/");
-  window.localStorage.removeItem("wanshitong-theme");
+  window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 describe("湾事通公共应用", () => {
@@ -183,6 +185,66 @@ describe("湾事通公共应用", () => {
       await screen.findByRole("heading", { name: "你的内部知识助手" }),
     ).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("未登录 bootstrap 只触发整页 SSO，不显示匿名降级", async () => {
+    const redirect = vi
+      .spyOn(authNavigation, "redirectToSso")
+      .mockImplementation(() => undefined);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "public login required" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    render(<WanshitongApp />);
+
+    await waitFor(() => expect(redirect).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole("heading", { name: "你的内部知识助手" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("SSO 用户本地退出后清空工作台并提供重新登录", async () => {
+    const ssoSession = {
+      ...sessionBody,
+      deployment_id: "candidate_8289",
+      user: { user_id: "1001", display_name: "测试用户" },
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(Response.json(ssoSession));
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === "/sso/logout") {
+          return Promise.resolve(
+            Response.json({ status: "logged_out", scope: "kb_local" }),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+    await openHome();
+
+    expect(screen.getByText("测试用户")).toBeVisible();
+    await userEvent.setup().click(
+      screen.getByRole("button", { name: "退出湾事通" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "已退出" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "重新登录" })).toBeVisible();
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => pathOf(input) === "/sso/logout",
+      ),
+    ).toHaveLength(1);
   });
 
   it("不显示部门筛选、管理能力或不可见快捷入口", async () => {
@@ -637,50 +699,38 @@ describe("湾事通公共应用", () => {
     expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toBeEnabled();
   });
 
-  it("Session 过期时只重建一次并重试原问题", async () => {
+  it("Session 过期时整页登录且不自动重发原问题", async () => {
     let sessionCalls = 0;
     let chatCalls = 0;
+    const redirect = vi
+      .spyOn(authNavigation, "redirectToSso")
+      .mockImplementation(() => undefined);
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
         const path = pathOf(input);
         if (path === "/api/public/session") {
           sessionCalls += 1;
-          return Promise.resolve(
-            Response.json({
-              ...sessionBody,
-              csrf_token: (sessionCalls === 1 ? "a" : "b").repeat(64),
-            }),
-          );
+          return Promise.resolve(Response.json(sessionBody));
         }
         if (path === "/api/public/capabilities") {
           return Promise.resolve(Response.json(capabilitiesBody));
         }
         if (path === "/api/public/chat") {
           chatCalls += 1;
-          if (chatCalls === 1) {
-            return Promise.resolve(new Response(null, { status: 401 }));
-          }
-          return Promise.resolve(
-            streamResponse([
-              event("final", 0, { answer: "重试成功", citations: [] }),
-            ]),
-          );
+          return Promise.resolve(new Response(null, { status: 401 }));
         }
         return Promise.resolve(new Response(null, { status: 404 }));
       });
     await openHome();
     await ask("会话过期测试");
 
-    expect(await screen.findByText("重试成功")).toBeInTheDocument();
-    expect(sessionCalls).toBe(2);
-    expect(chatCalls).toBe(2);
-    const chatHeaders = fetchMock.mock.calls
-      .filter(([input]) => pathOf(input) === "/api/public/chat")
-      .map(
-        ([, init]) => (init?.headers as Record<string, string>)["X-CSRF-Token"],
-      );
-    expect(chatHeaders).toEqual(["a".repeat(64), "b".repeat(64)]);
+    await waitFor(() => {
+      expect(redirect).toHaveBeenCalledWith("会话过期测试");
+    });
+    expect(sessionCalls).toBe(1);
+    expect(chatCalls).toBe(1);
+    expect(fetchMock.mock.calls).toHaveLength(3);
   });
 
   it("pagehide 取消仍在进行的请求", async () => {

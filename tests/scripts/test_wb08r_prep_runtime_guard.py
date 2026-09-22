@@ -14,6 +14,7 @@ def _environment() -> dict[str, str]:
         "FORWARDED_ALLOW_IPS": "127.0.0.1",
         "RAG_PRODUCT_MODE": "wanshitong",
         "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_DIR": "/private-diagnostics",
+        "RAG_TRUSTED_ORIGINS": "http://127.0.0.1:8288",
         "RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE": "guided_json",
     }
 
@@ -86,7 +87,7 @@ def _container(*, candidate: bool) -> dict[str, object]:
         "internal": {
             "NetworkID": "a" * 64,
             "Aliases": (
-                ["wanshitong-prep-candidate-app", "app"]
+                ["wanshitong-sso-candidate-app", "app"]
                 if candidate
                 else ["wanshitong-app"]
             ),
@@ -94,7 +95,7 @@ def _container(*, candidate: bool) -> dict[str, object]:
         "egress": {
             "NetworkID": "b" * 64,
             "Aliases": (
-                ["wanshitong-prep-candidate-app", "app"]
+                ["wanshitong-sso-candidate-app", "app"]
                 if candidate
                 else ["wanshitong-app"]
             ),
@@ -104,12 +105,12 @@ def _container(*, candidate: bool) -> dict[str, object]:
     if candidate:
         config["Labels"] = {
             **config["Labels"],
-            "com.docker.compose.project": "wanshitong-candidate",
+            "com.docker.compose.project": "wanshitong-sso-candidate",
         }
     return {
         "Id": "candidate-id" if candidate else "baseline-id",
         "Name": (
-            "/wanshitong-prep-candidate-app"
+            "/wanshitong-sso-candidate-app"
             if candidate
             else "/wanshitong-wb08r01-app"
         ),
@@ -173,6 +174,38 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+def _enable_sso(rendered: dict[str, object]) -> None:
+    environment = rendered["services"]["app"]["environment"]
+    environment.update(
+        {
+            "RAG_ROOT_PATH": "/kb",
+            "RAG_TRUSTED_ORIGINS": (
+                "http://127.0.0.1:8288,http://kb.test:8289"
+            ),
+            "RAG_WANSHITONG_AUTH_MODE": "sso",
+            "RAG_WANSHITONG_SSO_CLIENT_ID": "kb",
+            "RAG_WANSHITONG_SSO_CLIENT_SECRET_FILE": (
+                "/run/rag-secrets/sso-client-secret"
+            ),
+            "RAG_WANSHITONG_SSO_DEPLOYMENT_ID": "candidate_8289",
+            "RAG_WANSHITONG_SSO_ENTRIES": json.dumps(
+                [
+                    {
+                        "id": "internal",
+                        "origin": "http://kb.test:8289",
+                        "authorize_url": (
+                            "http://rdms.test:21000/sso/authorize"
+                        ),
+                    }
+                ]
+            ),
+            "RAG_WANSHITONG_SSO_VALIDATE_URL": (
+                "http://rdms.test:21000/sso/validate"
+            ),
+        }
+    )
+
+
 def _inputs(tmp_path: Path, candidate: object) -> tuple[Path, Path, Path]:
     baseline = tmp_path / "baseline.json"
     candidate_path = tmp_path / "candidate.json"
@@ -197,7 +230,7 @@ def test_rendered_candidate_preserves_semantics_and_isolates_writes(
         forbidden_root=PurePosixPath("/production"),
     )
 
-    assert report["ready"] is True
+    assert report["ready"] is True, report
     assert report["missing_required_keys"] == []
     assert report["semantic_mismatches"] == []
     assert report["mount_mismatches"] == []
@@ -264,6 +297,80 @@ def test_phase04_rejects_declared_shadow_enable_without_true_value(
     assert report["ready"] is False
     assert report["semantic_mismatches"][0]["field_path"].endswith(
         "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+    )
+
+
+def test_sso_changes_require_explicit_guard_flag(tmp_path: Path) -> None:
+    rendered = _rendered()
+    _enable_sso(rendered)
+    baseline, candidate, image = _inputs(tmp_path, rendered)
+
+    report = guard.compare_runtime(
+        stage="rendered_spec",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+    )
+
+    assert report["ready"] is False
+    changed_fields = {
+        item["field_path"] for item in report["unclassified_changes"]
+    }
+    assert (
+        "services.app.environment.RAG_WANSHITONG_AUTH_MODE"
+        in changed_fields
+    )
+
+
+def test_sso_guard_accepts_only_complete_registered_configuration(
+    tmp_path: Path,
+) -> None:
+    rendered = _rendered()
+    _enable_sso(rendered)
+    baseline, candidate, image = _inputs(tmp_path, rendered)
+
+    report = guard.compare_runtime(
+        stage="rendered_spec",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+        allow_sso_enable=True,
+    )
+
+    assert report["ready"] is True, report
+    assert report["semantic_mismatches"] == []
+    assert any(
+        item["field_path"].endswith("RAG_WANSHITONG_AUTH_MODE")
+        for item in report["allowed_changes"]
+    )
+
+
+def test_sso_guard_rejects_untrusted_entry_origin(tmp_path: Path) -> None:
+    rendered = _rendered()
+    _enable_sso(rendered)
+    rendered["services"]["app"]["environment"]["RAG_TRUSTED_ORIGINS"] = (
+        "http://127.0.0.1:8288"
+    )
+    baseline, candidate, image = _inputs(tmp_path, rendered)
+
+    report = guard.compare_runtime(
+        stage="rendered_spec",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+        allow_sso_enable=True,
+    )
+
+    assert report["ready"] is False
+    assert any(
+        item["field_path"].endswith("RAG_TRUSTED_ORIGINS")
+        for item in report["semantic_mismatches"]
     )
 
 

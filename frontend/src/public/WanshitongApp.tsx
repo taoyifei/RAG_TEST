@@ -1,12 +1,14 @@
-import { Moon, RotateCcw, Sun } from "lucide-react";
+import { LogIn, LogOut, Moon, RotateCcw, Sun } from "lucide-react";
 import { useState } from "react";
 
+import { consumeLoginDraft } from "./authNavigation";
 import { WanshitongChat } from "./WanshitongChat";
 import { WanshitongHome } from "./WanshitongHome";
 import { usePublicChat } from "./usePublicChat";
 import { useSuggestedQuestions } from "./useSuggestedQuestions";
 
 export function WanshitongApp() {
+  const [restoredDraft] = useState(consumeLoginDraft);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try {
       return window.localStorage.getItem("wanshitong-theme") === "light"
@@ -38,10 +40,31 @@ export function WanshitongApp() {
     </button>
   );
 
+  if (chat.loggedOut) {
+    return (
+      <main
+        className="wst-root wst-session-screen"
+        data-theme={theme}
+        id="main-content"
+      >
+        <div className="wst-toolbar">{themeToggle}</div>
+        <div className="wst-session-card">
+          <span className="wst-wordmark">湾事通</span>
+          <h1>已退出</h1>
+          <p>本机的湾事通会话已清理，RDMS 登录状态未改变。</p>
+          <button onClick={chat.login} type="button">
+            <LogIn aria-hidden="true" size={16} />
+            重新登录
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   if (!chat.sessionReady) {
     return (
       <main className="wst-root wst-session-screen" data-theme={theme} id="main-content">
-        {themeToggle}
+        <div className="wst-toolbar">{themeToggle}</div>
         <div className="wst-session-card">
           <span className="wst-wordmark">湾事通</span>
           {chat.sessionError ? (
@@ -69,10 +92,32 @@ export function WanshitongApp() {
       <a className="skip-link wst-skip-link" href="#main-content">
         跳到主要内容
       </a>
-      {themeToggle}
+      <div className="wst-toolbar">
+        {chat.user ? (
+          <>
+            <span className="wst-account-name">{chat.user.displayName}</span>
+            <button
+              aria-label="退出湾事通"
+              className="wst-session-action"
+              onClick={chat.logout}
+              type="button"
+            >
+              <LogOut aria-hidden="true" size={16} />
+              退出
+            </button>
+          </>
+        ) : null}
+        {themeToggle}
+      </div>
+      {chat.logoutError ? (
+        <p className="wst-toolbar-error" role="alert">
+          {chat.logoutError}
+        </p>
+      ) : null}
       {chat.turns.length === 0 ? (
         <WanshitongHome
           busy={chat.busy}
+          initialQuestion={restoredDraft}
           onRefresh={suggestions.refresh}
           onStop={chat.stop}
           onSubmit={chat.submit}
@@ -81,6 +126,7 @@ export function WanshitongApp() {
       ) : (
         <WanshitongChat
           busy={chat.busy}
+          initialQuestion={restoredDraft}
           onFeedback={chat.submitFeedback}
           onRefresh={suggestions.refresh}
           onRetry={chat.retry}

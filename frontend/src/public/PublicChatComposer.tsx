@@ -6,15 +6,17 @@ const PLACEHOLDER = "今天想了解什么？我会从内部资料中查找并�
 export function PublicChatComposer({
   busy,
   compact = false,
+  initialQuestion = "",
   onStop,
   onSubmit,
 }: {
   busy: boolean;
   compact?: boolean;
+  initialQuestion?: string;
   onStop: () => void;
   onSubmit: (question: string) => void;
 }) {
-  const [question, setQuestion] = useState("");
+  const [question, setQuestion] = useState(initialQuestion);
   const send = () => {
     const value = question.trim();
     if (!value || busy) return;

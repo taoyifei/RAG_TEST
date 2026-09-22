@@ -6,13 +6,15 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 
 Stage = Literal["rendered_spec", "created_container"]
 
-_CANDIDATE_CONTAINER = "wanshitong-prep-candidate-app"
+_CANDIDATE_CONTAINER = "wanshitong-sso-candidate-app"
 _ISOLATED_MOUNTS = {
     "/data": "data",
     "/logs": "logs",
@@ -25,6 +27,30 @@ _BASE_IMAGE_LABELS = (
     "org.opencontainers.image.base.name",
 )
 _DEPARTMENT_SHADOW_KEY = "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+_ROOT_PATH_KEY = "RAG_ROOT_PATH"
+_TRUSTED_ORIGINS_KEY = "RAG_TRUSTED_ORIGINS"
+_SSO_AUTH_MODE_KEY = "RAG_WANSHITONG_AUTH_MODE"
+_SSO_DEPLOYMENT_ID_KEY = "RAG_WANSHITONG_SSO_DEPLOYMENT_ID"
+_SSO_ENTRIES_KEY = "RAG_WANSHITONG_SSO_ENTRIES"
+_SSO_VALIDATE_URL_KEY = "RAG_WANSHITONG_SSO_VALIDATE_URL"
+_SSO_CLIENT_ID_KEY = "RAG_WANSHITONG_SSO_CLIENT_ID"
+_SSO_SECRET_FILE_KEY = "RAG_WANSHITONG_SSO_CLIENT_SECRET_FILE"  # noqa: S105
+_SSO_SECRET_FILE = "/run/rag-secrets/sso-client-secret"  # noqa: S105
+_SSO_MAX_CLIENT_ID_CHARS = 64
+_SSO_DEPLOYMENT_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+_SSO_ENTRY_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_SSO_REQUIRED_KEYS = frozenset(
+    {
+        _ROOT_PATH_KEY,
+        _SSO_AUTH_MODE_KEY,
+        _SSO_DEPLOYMENT_ID_KEY,
+        _SSO_ENTRIES_KEY,
+        _SSO_VALIDATE_URL_KEY,
+        _SSO_CLIENT_ID_KEY,
+        _SSO_SECRET_FILE_KEY,
+    }
+)
+_SSO_TRANSITION_KEYS = _SSO_REQUIRED_KEYS | {_TRUSTED_ORIGINS_KEY}
 
 
 def _load_json(path: Path) -> object:
@@ -83,6 +109,90 @@ def _normalized_text(value: object) -> str:
 
 def _is_within(path: PurePosixPath, root: PurePosixPath) -> bool:
     return path == root or root in path.parents
+
+
+def _sso_endpoint(value: str, *, suffix: str) -> str:
+    parsed = urlsplit(value)
+    try:
+        _port = parsed.port
+    except ValueError as error:
+        raise ValueError("端点端口无效") from error
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.path.endswith(suffix)
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"端点必须是以 {suffix} 结尾的 HTTP(S) URL")
+    return value
+
+
+def _sso_origin(value: str) -> str:
+    parsed = urlsplit(value)
+    try:
+        _port = parsed.port
+    except ValueError as error:
+        raise ValueError("入口 origin 端口无效") from error
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("入口 origin 必须是无路径的完整 HTTP(S) origin")
+    return value.rstrip("/")
+
+
+def _sso_entry_origins(value: str) -> frozenset[str]:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise ValueError("入口注册表必须是 JSON") from error
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("入口注册表必须是非空 JSON 数组")
+    entry_ids: set[str] = set()
+    origins: set[str] = set()
+    for raw_entry in payload:
+        if not isinstance(raw_entry, dict) or set(raw_entry) != {
+            "id",
+            "origin",
+            "authorize_url",
+        }:
+            raise ValueError("每个入口必须只含 id/origin/authorize_url")
+        entry_id = raw_entry["id"]
+        origin = raw_entry["origin"]
+        authorize_url = raw_entry["authorize_url"]
+        if not all(
+            isinstance(item, str)
+            for item in (entry_id, origin, authorize_url)
+        ):
+            raise ValueError("入口字段必须是字符串")
+        if not _SSO_ENTRY_ID_PATTERN.fullmatch(entry_id):
+            raise ValueError("入口 ID 格式不安全")
+        normalized_origin = _sso_origin(origin)
+        _sso_endpoint(authorize_url, suffix="/sso/authorize")
+        if entry_id in entry_ids or normalized_origin in origins:
+            raise ValueError("入口 ID 与 origin 均不得重复")
+        entry_ids.add(entry_id)
+        origins.add(normalized_origin)
+    return frozenset(origins)
+
+
+def _trusted_origins(value: str) -> frozenset[str]:
+    origins: set[str] = set()
+    for item in value.split(","):
+        candidate = item.strip()
+        if candidate:
+            origins.add(_sso_origin(candidate))
+    if not origins:
+        raise ValueError("可信 Origin 至少包含一项")
+    return frozenset(origins)
 
 
 @dataclass(slots=True)
@@ -195,6 +305,7 @@ def _compare_environment(
     candidate: dict[str, str],
     *,
     allow_department_shadow_enable: bool = False,
+    allow_sso_enable: bool = False,
 ) -> None:
     ignored_keys: set[str] = set()
     if allow_department_shadow_enable:
@@ -224,6 +335,9 @@ def _compare_environment(
                 baseline=baseline_value,
                 candidate=candidate_value,
             )
+    if allow_sso_enable:
+        ignored_keys.update(_SSO_TRANSITION_KEYS)
+        _compare_sso_environment(report, baseline, candidate)
     baseline_keys = set(baseline) - ignored_keys
     candidate_keys = set(candidate) - ignored_keys
     for key in sorted(baseline_keys - candidate_keys):
@@ -246,6 +360,142 @@ def _compare_environment(
             baseline[key],
             candidate[key],
             "候选应用键值与旧 8289 有效值不一致。",
+        )
+
+
+def _compare_sso_environment(
+    report: _Report,
+    baseline: dict[str, str],
+    candidate: dict[str, str],
+) -> None:
+    """校验匿名旧候选到固定 `/kb` SSO 候选的唯一声明差异。"""
+    baseline_inactive_values = {
+        _ROOT_PATH_KEY: {None, ""},
+        _SSO_AUTH_MODE_KEY: {None, "", "anonymous"},
+        _SSO_DEPLOYMENT_ID_KEY: {None, ""},
+        _SSO_ENTRIES_KEY: {None, ""},
+        _SSO_VALIDATE_URL_KEY: {None, ""},
+        _SSO_CLIENT_ID_KEY: {None, ""},
+        _SSO_SECRET_FILE_KEY: {None, ""},
+    }
+    for key, accepted_values in baseline_inactive_values.items():
+        if baseline.get(key) not in accepted_values:
+            report.add_problem(
+                "semantic_mismatches",
+                f"services.app.environment.{key}",
+                "SSO 切换基准必须处于匿名或未配置状态。",
+                baseline=baseline.get(key),
+                candidate=candidate.get(key),
+            )
+    for key in sorted(_SSO_REQUIRED_KEYS):
+        if not candidate.get(key):
+            report.add_problem(
+                "missing_required_keys",
+                f"services.app.environment.{key}",
+                "SSO 候选缺少必填环境变量。",
+                baseline=baseline.get(key),
+                candidate=candidate.get(key),
+            )
+
+    checks: tuple[tuple[str, bool, str], ...] = (
+        (
+            _ROOT_PATH_KEY,
+            candidate.get(_ROOT_PATH_KEY) == "/kb",
+            "SSO 候选 RAG_ROOT_PATH 必须精确为 /kb。",
+        ),
+        (
+            _SSO_AUTH_MODE_KEY,
+            candidate.get(_SSO_AUTH_MODE_KEY) == "sso",
+            "SSO 候选鉴权模式必须精确为 sso。",
+        ),
+        (
+            _SSO_DEPLOYMENT_ID_KEY,
+            bool(
+                _SSO_DEPLOYMENT_ID_PATTERN.fullmatch(
+                    candidate.get(_SSO_DEPLOYMENT_ID_KEY, "")
+                )
+            ),
+            "SSO deployment ID 格式不安全。",
+        ),
+        (
+            _SSO_CLIENT_ID_KEY,
+            bool(candidate.get(_SSO_CLIENT_ID_KEY, "").strip())
+            and len(candidate.get(_SSO_CLIENT_ID_KEY, ""))
+            <= _SSO_MAX_CLIENT_ID_CHARS,
+            "SSO client ID 必须非空且不超过 64 字符。",
+        ),
+        (
+            _SSO_SECRET_FILE_KEY,
+            candidate.get(_SSO_SECRET_FILE_KEY) == _SSO_SECRET_FILE,
+            "SSO client secret 只能来自固定只读挂载文件。",
+        ),
+    )
+    for key, valid, reason in checks:
+        if not valid:
+            report.add_problem(
+                "semantic_mismatches",
+                f"services.app.environment.{key}",
+                reason,
+                baseline=baseline.get(key),
+                candidate=candidate.get(key),
+            )
+
+    entry_origins: frozenset[str] = frozenset()
+    entries_valid = False
+    try:
+        entry_origins = _sso_entry_origins(
+            candidate.get(_SSO_ENTRIES_KEY, "")
+        )
+        entries_valid = True
+    except ValueError as error:
+        report.add_problem(
+            "semantic_mismatches",
+            f"services.app.environment.{_SSO_ENTRIES_KEY}",
+            f"SSO 入口注册表无效：{error}。",
+            baseline=baseline.get(_SSO_ENTRIES_KEY),
+            candidate=candidate.get(_SSO_ENTRIES_KEY),
+        )
+    try:
+        _sso_endpoint(
+            candidate.get(_SSO_VALIDATE_URL_KEY, ""),
+            suffix="/sso/validate",
+        )
+    except ValueError as error:
+        report.add_problem(
+            "semantic_mismatches",
+            f"services.app.environment.{_SSO_VALIDATE_URL_KEY}",
+            f"SSO validate 地址无效：{error}。",
+            baseline=baseline.get(_SSO_VALIDATE_URL_KEY),
+            candidate=candidate.get(_SSO_VALIDATE_URL_KEY),
+        )
+
+    try:
+        baseline_origins = _trusted_origins(
+            baseline.get(_TRUSTED_ORIGINS_KEY, "")
+        )
+        candidate_origins = _trusted_origins(
+            candidate.get(_TRUSTED_ORIGINS_KEY, "")
+        )
+        missing_origins = baseline_origins - candidate_origins
+        if entries_valid:
+            missing_origins |= entry_origins - candidate_origins
+        if missing_origins:
+            raise ValueError("不得删除基准 Origin，且必须包含全部 SSO 入口")
+    except ValueError as error:
+        report.add_problem(
+            "semantic_mismatches",
+            f"services.app.environment.{_TRUSTED_ORIGINS_KEY}",
+            f"SSO 可信 Origin 配置无效：{error}。",
+            baseline=baseline.get(_TRUSTED_ORIGINS_KEY),
+            candidate=candidate.get(_TRUSTED_ORIGINS_KEY),
+        )
+
+    for key in sorted(_SSO_TRANSITION_KEYS):
+        report.allow(
+            f"services.app.environment.{key}",
+            "阶段 03 显式启用固定 `/kb` SSO 登录所需的声明差异。",
+            baseline=baseline.get(key),
+            candidate=candidate.get(key),
         )
 
 
@@ -684,6 +934,7 @@ def compare_runtime(  # noqa: PLR0913
     candidate_root: PurePosixPath,
     forbidden_root: PurePosixPath,
     allow_department_shadow_enable: bool = False,
+    allow_sso_enable: bool = False,
 ) -> dict[str, object]:
     """比较候选描述或创建后容器，返回无秘密的字段级报告。
 
@@ -695,6 +946,7 @@ def compare_runtime(  # noqa: PLR0913
         candidate_root: 本批独立宿主根目录。
         forbidden_root: 不得写入的生产宿主根目录。
         allow_department_shadow_enable: 是否允许唯一的 Shadow 开关启用差异。
+        allow_sso_enable: 是否允许并严格校验阶段 03 的 SSO 切换差异。
 
     Returns:
         含逐类差异、各层摘要和 `ready` 判定的安全报告。
@@ -736,6 +988,7 @@ def compare_runtime(  # noqa: PLR0913
         baseline_environment,
         candidate_environment,
         allow_department_shadow_enable=allow_department_shadow_enable,
+        allow_sso_enable=allow_sso_enable,
     )
     _compare_mounts(
         report,
@@ -873,6 +1126,7 @@ def _parser() -> argparse.ArgumentParser:
         "--allow-department-shadow-enable",
         action="store_true",
     )
+    compare.add_argument("--allow-sso-enable", action="store_true")
     return parser
 
 
@@ -901,6 +1155,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_department_shadow_enable=(
             arguments.allow_department_shadow_enable
         ),
+        allow_sso_enable=arguments.allow_sso_enable,
     )
     _write_report(arguments.output, report)
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))

@@ -1467,12 +1467,18 @@ label:has(input[type="checkbox"]) {
   --wst-panel: #1d1f20;
   --wst-panel-raised: #222526;
 }
-.wst-theme-toggle {
+.wst-toolbar {
   position: fixed;
   z-index: 30;
   top: max(16px, env(safe-area-inset-top));
   right: max(20px, env(safe-area-inset-right));
   display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.wst-theme-toggle,
+.wst-session-action {
+  position: static;
   min-width: 88px;
   min-height: 44px;
   padding: 0 14px;
@@ -1490,9 +1496,31 @@ label:has(input[type="checkbox"]) {
   font-weight: 600;
   transition: background-color 180ms ease, transform 180ms ease;
 }
-.wst-theme-toggle:hover {
+.wst-theme-toggle:hover,
+.wst-session-action:hover {
   background: #35403c;
   transform: translateY(-1px);
+}
+.wst-account-name {
+  max-width: min(240px, 32vw);
+  overflow: hidden;
+  color: var(--wst-muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wst-session-action {
+  min-width: auto;
+  cursor: pointer;
+}
+.wst-toolbar-error {
+  position: fixed;
+  z-index: 29;
+  top: 70px;
+  right: max(20px, env(safe-area-inset-right));
+  margin: 0;
+  color: #ffb4ab;
+  font-size: 13px;
 }
 .wst-root *,
 .wst-root *::before,
@@ -2144,12 +2172,14 @@ label:has(input[type="checkbox"]) {
   --wst-panel: #fff;
   --wst-panel-raised: #fff;
 }
-.wst-root[data-theme="light"] .wst-theme-toggle {
+.wst-root[data-theme="light"] .wst-theme-toggle,
+.wst-root[data-theme="light"] .wst-session-action {
   color: #34443c;
   background: rgb(255 255 255 / 94%);
   box-shadow: 0 8px 24px rgb(36 69 52 / 9%);
 }
-.wst-root[data-theme="light"] .wst-theme-toggle:hover {
+.wst-root[data-theme="light"] .wst-theme-toggle:hover,
+.wst-root[data-theme="light"] .wst-session-action:hover {
   background: #ecf4ee;
 }
 .wst-root[data-theme="light"] .wst-wordmark,
