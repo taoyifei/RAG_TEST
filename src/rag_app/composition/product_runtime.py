@@ -140,6 +140,7 @@ from rag_app.product.trace_coordinator import ProductTraceCoordinator
 from rag_app.product.verification import profile_specs
 from rag_app.sdk import RagSdk
 from rag_app.tracing import TraceRecorder, TraceStore
+from rag_app.wanshitong.feedback import WanshitongFeedbackService
 
 _MIN_LOCAL_OCR_TOKEN_LENGTH = 32
 _MAX_LOCAL_OCR_TOKEN_LENGTH = 4096
@@ -1992,6 +1993,7 @@ class ProductRuntime:
     history: ProductQueryHistory
     conversations: ProductConversationStore
     feedback: ProductFeedbackStore
+    wanshitong_feedback: WanshitongFeedbackService
     models: ProductModelSettings
     corpus_authorizations: CorpusAuthorizationStore
     retrieval_authorizations: RetrievalAuthorizationStore
@@ -2182,6 +2184,13 @@ def build_product_runtime(  # noqa: PLR0915
     )
     feedback = ProductFeedbackStore(connections, traces.set_feedback)
     feedback.recover()
+    wanshitong_feedback = WanshitongFeedbackService(
+        connections,
+        feedback,
+        credential_cipher or auth_cipher,
+        history,
+        traces,
+    )
     if (
         transport_factory is None
         and os.environ.get("RAG_TEST_NETWORK") == "offline"
@@ -2298,6 +2307,7 @@ def build_product_runtime(  # noqa: PLR0915
         history=history,
         conversations=conversations,
         feedback=feedback,
+        wanshitong_feedback=wanshitong_feedback,
         models=models,
         corpus_authorizations=corpus_authorizations,
         retrieval_authorizations=retrieval_authorizations,

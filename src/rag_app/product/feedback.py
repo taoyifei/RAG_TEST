@@ -33,7 +33,7 @@ _REASONS = frozenset(
         "OTHER",
     }
 )
-_TERMINAL_QUERY_STATES = frozenset({"ANSWERED", "REFUSED"})
+_TERMINAL_QUERY_STATES = frozenset({"ANSWERED", "REFUSED", "FAILED"})
 _MAX_RECOVERY_BATCH: Final = 1000
 
 
@@ -108,56 +108,17 @@ class ProductFeedbackStore:
 
         """
         canonical = normalize_trace_id(trace_id)
-        reason = _validate_reason(useful, reason_code)
-        now = datetime.now(UTC).isoformat()
         try:
             with self._connections.transaction(write=True) as connection:
-                trace = _query_trace(connection, canonical)
-                if trace is None or str(trace["status"]) not in (
-                    _TERMINAL_QUERY_STATES
-                ):
-                    raise NotFound(
-                        "只允许对已完成的 Query 提交反馈。",
-                        stage="feedback.validate",
-                    )
-                if (
-                    str(trace["project_id"]) != project_id
-                    or str(trace["knowledge_base_id"]) != knowledge_base_id
-                ):
-                    raise PolicyDenied(
-                        "反馈资源范围不匹配。", stage="feedback.scope"
-                    )
-                if not actor_is_admin and str(trace["owner_id"]) != (
-                    actor_owner_id
-                ):
-                    raise PolicyDenied(
-                        "只能提交当前主体自己的反馈。",
-                        stage="feedback.owner",
-                    )
-                connection.execute(
-                    "INSERT INTO product_feedback(trace_id, project_id, "
-                    "knowledge_base_id, owner_id, useful, reason_code, "
-                    "projection_state, projection_version, "
-                    "projection_attempts, "
-                    "projection_error_code, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 1, 0, NULL, ?, ?) "
-                    "ON CONFLICT(trace_id) DO UPDATE SET "
-                    "useful=excluded.useful, "
-                    "reason_code=excluded.reason_code, "
-                    "projection_state='PENDING', projection_attempts=0, "
-                    "projection_version=product_feedback.projection_version+1, "
-                    "projection_error_code=NULL, "
-                    "updated_at=excluded.updated_at",
-                    (
-                        canonical,
-                        project_id,
-                        knowledge_base_id,
-                        str(trace["owner_id"]),
-                        int(useful),
-                        reason,
-                        now,
-                        now,
-                    ),
+                self._upsert_in_transaction(
+                    connection,
+                    canonical,
+                    project_id=project_id,
+                    knowledge_base_id=knowledge_base_id,
+                    actor_owner_id=actor_owner_id,
+                    actor_is_admin=actor_is_admin,
+                    useful=useful,
+                    reason_code=reason_code,
                 )
         except sqlite3.Error as error:
             raise _unavailable("feedback.upsert") from error
@@ -172,6 +133,87 @@ class ProductFeedbackStore:
         if value is None:
             raise RuntimeError("反馈提交后无法在同一主库回读。")
         return value
+
+    def _upsert_in_transaction(  # noqa: PLR0913
+        self,
+        connection: sqlite3.Connection,
+        trace_id: str,
+        *,
+        project_id: str,
+        knowledge_base_id: str,
+        actor_owner_id: str,
+        actor_is_admin: bool,
+        useful: bool,
+        reason_code: FeedbackReason | None,
+    ) -> ProductFeedback:
+        """在调用方的同一写事务内校验并写入 canonical 反馈。
+
+        Args:
+            connection: 已开启写事务的 Product 主库连接。
+            trace_id: canonical 或旧格式 Query Trace ID。
+            project_id: 路由已绑定的项目 ID。
+            knowledge_base_id: 路由已绑定的知识库 ID。
+            actor_owner_id: 当前 Session 或 Access Token 主体。
+            actor_is_admin: 是否允许管理员代原 owner 提交。
+            useful: 有用或没用信号。
+            reason_code: 可选有限原因。
+
+        Returns:
+            待投影的 canonical 反馈。
+
+        Raises:
+            NotFound: Trace 不存在或不是可反馈终态。
+            PolicyDenied: scope 或 owner 不匹配。
+            ValueError: ID 或 reason 合同无效。
+
+        """
+        canonical = normalize_trace_id(trace_id)
+        reason = _validate_reason(useful, reason_code)
+        now = datetime.now(UTC).isoformat()
+        trace = _query_trace(connection, canonical)
+        if trace is None or str(trace["status"]) not in _TERMINAL_QUERY_STATES:
+            raise NotFound(
+                "只允许对已完成的 Query 提交反馈。",
+                stage="feedback.validate",
+            )
+        if (
+            str(trace["project_id"]) != project_id
+            or str(trace["knowledge_base_id"]) != knowledge_base_id
+        ):
+            raise PolicyDenied("反馈资源范围不匹配。", stage="feedback.scope")
+        if not actor_is_admin and str(trace["owner_id"]) != actor_owner_id:
+            raise PolicyDenied(
+                "只能提交当前主体自己的反馈。",
+                stage="feedback.owner",
+            )
+        connection.execute(
+            "INSERT INTO product_feedback(trace_id, project_id, "
+            "knowledge_base_id, owner_id, useful, reason_code, "
+            "projection_state, projection_version, projection_attempts, "
+            "projection_error_code, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 1, 0, NULL, ?, ?) "
+            "ON CONFLICT(trace_id) DO UPDATE SET useful=excluded.useful, "
+            "reason_code=excluded.reason_code, projection_state='PENDING', "
+            "projection_attempts=0, "
+            "projection_version=product_feedback.projection_version+1, "
+            "projection_error_code=NULL, updated_at=excluded.updated_at",
+            (
+                canonical,
+                project_id,
+                knowledge_base_id,
+                str(trace["owner_id"]),
+                int(useful),
+                reason,
+                now,
+                now,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM product_feedback WHERE trace_id=?", (canonical,)
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("canonical 反馈写入后无法回读。")
+        return _feedback(row)
 
     def get(
         self,

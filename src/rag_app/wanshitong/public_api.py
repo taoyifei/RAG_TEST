@@ -306,19 +306,23 @@ def register_public_routes(
         _reject_query_parameters(request)
         principal, _ = _authenticate_public_request(request, sessions)
         binding = scope_service.binding()
-        value = runtime.feedback.upsert(
+        value = runtime.wanshitong_feedback.upsert(
             body.trace_id,
             project_id=binding.project_id,
             knowledge_base_id=binding.knowledge_base_id,
             actor_owner_id=principal.owner_id,
-            actor_is_admin=False,
             useful=body.useful,
             reason_code=body.reason_code,
+            reason_detail=body.reason_detail,
+            comment=body.comment,
         )
         return PublicFeedbackResponse(
             trace_id=value.trace_id,
             useful=value.useful,
             reason_code=value.reason_code,
+            reason_detail=value.reason_detail,
+            comment_saved=value.comment_saved,
+            feedback_revision=value.feedback_revision,
             projection_state=value.projection_state,
             updated_at=value.updated_at,
         )

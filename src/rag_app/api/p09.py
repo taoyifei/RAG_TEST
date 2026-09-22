@@ -73,6 +73,7 @@ _ERROR_STATUS = {
     "TRACE_PERSISTENCE_UNAVAILABLE": 503,
     "TRACE_FULL_UNAVAILABLE": 503,
     "TRACE_ARTIFACT_CORRUPT": 503,
+    "FEEDBACK_STORE_UNAVAILABLE": 503,
 }
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status: {"model": ErrorEnvelope, "description": "统一安全错误结构"}
