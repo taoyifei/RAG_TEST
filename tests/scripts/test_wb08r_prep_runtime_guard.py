@@ -300,6 +300,38 @@ def test_phase04_rejects_declared_shadow_enable_without_true_value(
     )
 
 
+def test_later_candidate_preserves_enabled_department_shadow(
+    tmp_path: Path,
+) -> None:
+    baseline_value = _container(candidate=False)
+    baseline_value["Config"]["Env"].append(
+        "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED=true"
+    )
+    rendered = _rendered()
+    rendered["services"]["app"]["environment"][
+        "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+    ] = "true"
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    image = tmp_path / "image.json"
+    _write_json(baseline, [baseline_value])
+    _write_json(candidate, rendered)
+    _write_json(image, [_target_image()])
+
+    report = guard.compare_runtime(
+        stage="rendered_spec",
+        baseline_inspect=baseline,
+        candidate_input=candidate,
+        target_image_inspect=image,
+        candidate_root=PurePosixPath("/candidate"),
+        forbidden_root=PurePosixPath("/production"),
+        allow_department_shadow_enable=True,
+    )
+
+    assert report["ready"] is True, report
+    assert report["semantic_mismatches"] == []
+
+
 def test_sso_changes_require_explicit_guard_flag(tmp_path: Path) -> None:
     rendered = _rendered()
     _enable_sso(rendered)

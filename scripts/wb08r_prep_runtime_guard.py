@@ -311,8 +311,11 @@ def _compare_environment(
     if allow_department_shadow_enable:
         baseline_value = baseline.get(_DEPARTMENT_SHADOW_KEY)
         candidate_value = candidate.get(_DEPARTMENT_SHADOW_KEY)
-        ignored_keys.add(_DEPARTMENT_SHADOW_KEY)
-        if baseline_value not in (None, "false"):
+        if baseline_value == candidate_value:
+            # 后续阶段可保持已经验收的 Shadow，不应重复判定为本次新启用。
+            pass
+        elif baseline_value not in (None, "false"):
+            ignored_keys.add(_DEPARTMENT_SHADOW_KEY)
             report.add_problem(
                 "semantic_mismatches",
                 f"services.app.environment.{_DEPARTMENT_SHADOW_KEY}",
@@ -321,6 +324,7 @@ def _compare_environment(
                 candidate=candidate_value,
             )
         elif candidate_value != "true":
+            ignored_keys.add(_DEPARTMENT_SHADOW_KEY)
             report.add_problem(
                 "semantic_mismatches",
                 f"services.app.environment.{_DEPARTMENT_SHADOW_KEY}",
@@ -329,6 +333,7 @@ def _compare_environment(
                 candidate=candidate_value,
             )
         else:
+            ignored_keys.add(_DEPARTMENT_SHADOW_KEY)
             report.allow(
                 f"services.app.environment.{_DEPARTMENT_SHADOW_KEY}",
                 "阶段 04 只启用观察型部门 Shadow，不改变实际检索范围。",
