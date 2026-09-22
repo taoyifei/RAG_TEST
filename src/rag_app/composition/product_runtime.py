@@ -176,6 +176,7 @@ class ProductRuntimeSettings:
     bootstrap_token_file: Path
     host: str = "127.0.0.1"
     port: int = 8088
+    root_path: str = ""
     master_key_file: Path | None = None
     qdrant_mode: str = "memory"
     qdrant_url: str | None = None
@@ -245,6 +246,7 @@ class ProductRuntimeSettings:
             bootstrap_token_file=Path(bootstrap),
             host=os.environ.get("RAG_HOST", "127.0.0.1"),
             port=int(os.environ.get("RAG_PORT", "8088")),
+            root_path=_parse_root_path(os.environ.get("RAG_ROOT_PATH", "")),
             master_key_file=None if master is None else Path(master),
             qdrant_mode=os.environ.get("RAG_QDRANT_MODE", "memory"),
             qdrant_url=os.environ.get("RAG_QDRANT_URL"),
@@ -2723,6 +2725,21 @@ def _parse_trusted_origins(value: str) -> tuple[str, ...]:
     if not origins:
         raise ValueError("RAG_TRUSTED_ORIGINS 至少包含一个完整 Origin。")
     return tuple(dict.fromkeys(origins))
+
+
+def _parse_root_path(value: str) -> str:
+    root_path = value.strip().rstrip("/")
+    if not root_path:
+        return ""
+    if (
+        not root_path.startswith("/")
+        or "//" in root_path
+        or "\\" in root_path
+        or "%" in root_path
+        or any(part in {".", ".."} for part in root_path.split("/"))
+    ):
+        raise ValueError("RAG_ROOT_PATH 必须是规范的绝对 URL 路径前缀。")
+    return root_path
 
 
 def _parse_trusted_proxies(value: str) -> frozenset[str]:

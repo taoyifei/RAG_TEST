@@ -27,14 +27,27 @@ class PublicSessionRequest(PublicRequest):
     """无登录公共会话不接受任何客户端身份参数。"""
 
 
+class PublicSessionUser(BaseModel):
+    """前端只需显示的最小 RDMS 用户摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=256)
+
+
 class PublicSessionResponse(BaseModel):
-    """页面可见的匿名会话摘要；不包含内部 owner。"""
+    """页面可见的会话摘要；不包含内部 owner 或授权 claims。"""
 
     model_config = ConfigDict(extra="forbid")
 
     session_id: str = Field(pattern=r"^wstsid_[0-9a-f]{32}$")
     csrf_token: str = Field(pattern=r"^[0-9a-f]{64}$")
     expires_in: int = Field(gt=0)
+    user: PublicSessionUser | None = None
+    deployment_id: str | None = Field(
+        default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,31}$"
+    )
 
 
 class PublicShortcut(BaseModel):
@@ -138,5 +151,6 @@ __all__ = [
     "PublicFeedbackResponse",
     "PublicSessionRequest",
     "PublicSessionResponse",
+    "PublicSessionUser",
     "PublicShortcut",
 ]

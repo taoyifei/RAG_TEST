@@ -52,6 +52,11 @@ def build_product_harness(  # noqa: PLR0913
     qdrant_api_key_file: Path | None = None,
     local_ocr_endpoints: tuple[str, ...] = (),
     local_ocr_token_file: Path | None = None,
+    root_path: str = "",
+    trusted_origins: tuple[str, ...] = (
+        "http://127.0.0.1:8088",
+        "http://localhost:8088",
+    ),
 ) -> ProductHarness:
     """构建不访问网络的完整产品测试环境。
 
@@ -64,6 +69,8 @@ def build_product_harness(  # noqa: PLR0913
         qdrant_api_key_file: Qdrant URL 模式的 0600 Key 文件。
         local_ocr_endpoints: 可选内部 OCR 服务端点。
         local_ocr_token_file: 可选内部 OCR Bearer 的 0600 文件。
+        root_path: 可选外部路径前缀。
+        trusted_origins: 浏览器允许使用的精确 Origin。
 
     Returns:
         已登录的 Product Harness。
@@ -85,12 +92,14 @@ def build_product_harness(  # noqa: PLR0913
         data_dir=tmp_path / "data",
         frontend_dir=frontend,
         bootstrap_token_file=bootstrap,
+        root_path=root_path,
         master_key_file=key_path if master_key else None,
         qdrant_mode="memory" if qdrant_url is None else "url",
         qdrant_url=qdrant_url,
         qdrant_api_key_file=qdrant_api_key_file,
         local_ocr_endpoints=local_ocr_endpoints,
         local_ocr_token_file=local_ocr_token_file,
+        trusted_origins=trusted_origins,
     )
     runtime = build_product_runtime(
         settings,
@@ -99,7 +108,7 @@ def build_product_harness(  # noqa: PLR0913
     )
     client = TestClient(create_product_app(runtime))
     response = client.post(
-        "/api/v1/console/session",
+        f"{root_path}/api/v1/console/session",
         json={"bootstrap_token": bootstrap_token},
     )
     response.raise_for_status()

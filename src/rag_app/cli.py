@@ -252,6 +252,7 @@ def _run_product_command(arguments: argparse.Namespace) -> int | None:
             app,
             host=product_settings.host,
             port=product_settings.port,
+            root_path=product_settings.root_path,
             access_log=True,
             log_level="info",
         )

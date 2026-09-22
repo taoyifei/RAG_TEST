@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rag_app.wanshitong.mode import ProductMode
+from rag_app.wanshitong.sso_settings import SsoSettings
 
 _PRODUCT_MODE_ENVIRONMENT_KEY = "RAG_PRODUCT_MODE"
 _DEMO_ALLOW_HTTP_ENVIRONMENT_KEY = "RAG_WANSHITONG_DEMO_ALLOW_HTTP"
@@ -22,6 +23,7 @@ class WanshitongSettings:
     product_mode: ProductMode = ProductMode.UNIVERSAL
     demo_allow_http: bool = False
     department_shadow_enabled: bool = False
+    sso: SsoSettings = field(default_factory=SsoSettings)
 
     @property
     def enabled(self) -> bool:
@@ -82,6 +84,14 @@ class WanshitongSettings:
             department_shadow_enabled=(
                 product_mode is ProductMode.WANSHITONG
                 and raw_department_shadow == "true"
+            ),
+            sso=(
+                SsoSettings.from_environment(
+                    source,
+                    root_path=source.get("RAG_ROOT_PATH", "").strip(),
+                )
+                if product_mode is ProductMode.WANSHITONG
+                else SsoSettings()
             ),
         )
 

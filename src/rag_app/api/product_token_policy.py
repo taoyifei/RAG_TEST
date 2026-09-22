@@ -9,6 +9,7 @@ from starlette.routing import compile_path
 
 from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import NotFound, PolicyDenied
+from rag_app.product.http_security import application_path
 from rag_app.tracing.store import TraceNotFoundError
 
 _BASE = "/api/v1/projects/{project_id}/knowledge-bases/{kb_id}"
@@ -98,7 +99,7 @@ def resolve_token_route(  # noqa: PLR0912
         ),
     )
     for method, template, scope in routes:
-        match = compile_path(template)[0].fullmatch(request.url.path)
+        match = compile_path(template)[0].fullmatch(application_path(request))
         if request.method != method or match is None:
             continue
         params = match.groupdict()

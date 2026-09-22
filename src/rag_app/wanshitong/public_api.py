@@ -26,12 +26,12 @@ from rag_app.wanshitong.public_models import (
     PublicFeedbackResponse,
     PublicSessionRequest,
     PublicSessionResponse,
+    PublicSessionUser,
     PublicShortcut,
 )
 from rag_app.wanshitong.public_session import (
-    PUBLIC_SESSION_COOKIE,
     PublicSessionPrincipal,
-    PublicSessionService,
+    PublicSessionProvider,
 )
 from rag_app.wanshitong.public_stream import (
     project_public_stream,
@@ -86,7 +86,7 @@ def register_public_routes(
     *,
     runtime: ProductRuntime,
     scope_service: FixedScopeService,
-    sessions: PublicSessionService,
+    sessions: PublicSessionProvider,
 ) -> None:
     """注册固定 Scope 的匿名 Facade，不新增查询或存储服务。
 
@@ -102,6 +102,7 @@ def register_public_routes(
         PUBLIC_SESSION_PATH,
         tags=["wanshitong-public"],
         response_model=PublicSessionResponse,
+        response_model_exclude_none=True,
     )
     def _session(
         request: Request,
@@ -110,25 +111,43 @@ def register_public_routes(
     ) -> PublicSessionResponse:
         del body
         _reject_query_parameters(request)
-        issue = sessions.issue_or_resume(
-            request.cookies.get(PUBLIC_SESSION_COOKIE)
-        )
-        response.set_cookie(
-            PUBLIC_SESSION_COOKIE,
-            issue.cookie_value,
-            httponly=True,
-            secure=secure_cookie_for_request(
-                request,
-                trusted_proxies=runtime.settings.trusted_proxies,
-            ),
-            samesite="strict",
-            max_age=issue.expires_in,
-            path="/api/public",
-        )
+        try:
+            issue = sessions.bootstrap(
+                request.cookies.get(sessions.cookie_name)
+            )
+        except PolicyDenied:
+            raise HTTPException(
+                status_code=401, detail="public login required"
+            ) from None
+        if sessions.set_cookie_on_bootstrap:
+            response.set_cookie(
+                sessions.cookie_name,
+                issue.cookie_value,
+                httponly=True,
+                secure=secure_cookie_for_request(
+                    request,
+                    trusted_proxies=runtime.settings.trusted_proxies,
+                ),
+                samesite=sessions.cookie_samesite,
+                max_age=issue.expires_in,
+                path=sessions.cookie_path,
+            )
+        user = None
+        if issue.principal.user_id is not None:
+            user = PublicSessionUser(
+                user_id=issue.principal.user_id,
+                display_name=(
+                    issue.principal.nick_name
+                    or issue.principal.username
+                    or issue.principal.user_id
+                ),
+            )
         return PublicSessionResponse(
             session_id=issue.principal.session_id,
             csrf_token=issue.csrf_token,
             expires_in=issue.expires_in,
+            user=user,
+            deployment_id=sessions.deployment_id,
         )
 
     @app.get(
@@ -138,6 +157,7 @@ def register_public_routes(
     )
     def _capabilities(request: Request) -> PublicCapabilities:
         _reject_query_parameters(request)
+        _authenticate_public_cookie(request, sessions)
         scope_service.binding()
         return PublicCapabilities(
             shortcuts=tuple(
@@ -305,15 +325,41 @@ def register_public_routes(
 
 
 def _authenticate_public_request(
-    request: Request, sessions: PublicSessionService
+    request: Request, sessions: PublicSessionProvider
 ) -> tuple[PublicSessionPrincipal, str]:
-    cookie_value = request.cookies.get(PUBLIC_SESSION_COOKIE)
+    cookie_value = request.cookies.get(sessions.cookie_name)
     if cookie_value is None:
         raise HTTPException(status_code=401, detail="public session required")
+    try:
+        sessions.validate_cookie(cookie_value)
+    except PolicyDenied:
+        raise HTTPException(
+            status_code=401, detail="public session invalid"
+        ) from None
     csrf_token = request.headers.get("X-CSRF-Token")
     if csrf_token is None:
         raise HTTPException(status_code=403, detail="public csrf required")
-    return sessions.authenticate(cookie_value, csrf_token), cookie_value
+    try:
+        principal = sessions.authenticate(cookie_value, csrf_token)
+    except PolicyDenied:
+        raise HTTPException(
+            status_code=403, detail="public csrf invalid"
+        ) from None
+    return principal, cookie_value
+
+
+def _authenticate_public_cookie(
+    request: Request, sessions: PublicSessionProvider
+) -> PublicSessionPrincipal:
+    cookie_value = request.cookies.get(sessions.cookie_name)
+    if cookie_value is None:
+        raise HTTPException(status_code=401, detail="public session required")
+    try:
+        return sessions.validate_cookie(cookie_value)
+    except PolicyDenied:
+        raise HTTPException(
+            status_code=401, detail="public session invalid"
+        ) from None
 
 
 def _reject_query_parameters(request: Request) -> None:
@@ -322,7 +368,7 @@ def _reject_query_parameters(request: Request) -> None:
 
 
 def _validate_stream_session(
-    sessions: PublicSessionService,
+    sessions: PublicSessionProvider,
     cookie_value: str,
     expected: PublicSessionPrincipal,
 ) -> None:

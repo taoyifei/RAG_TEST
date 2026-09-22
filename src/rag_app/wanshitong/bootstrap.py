@@ -20,10 +20,16 @@ from rag_app.wanshitong.document_metadata import (
 )
 from rag_app.wanshitong.errors import ScopeBindingError
 from rag_app.wanshitong.public_api import register_public_routes
-from rag_app.wanshitong.public_session import PublicSessionService
+from rag_app.wanshitong.public_session import (
+    PublicSessionProvider,
+    PublicSessionService,
+)
 from rag_app.wanshitong.scope_service import FixedScopeService
 from rag_app.wanshitong.scope_store import ScopeBindingStore
 from rag_app.wanshitong.settings import WanshitongSettings
+from rag_app.wanshitong.sso_api import register_sso_routes
+from rag_app.wanshitong.sso_client import SsoClient, load_client_secret
+from rag_app.wanshitong.sso_session import SsoSessionService
 
 
 def configure_wanshitong_app(
@@ -54,7 +60,42 @@ def configure_wanshitong_app(
     master_key_file = runtime.settings.master_key_file
     if master_key_file is None:
         raise ValueError("湾事通公共会话必须配置 RAG_MASTER_KEY_FILE。")
-    public_sessions = PublicSessionService(load_master_key(master_key_file))
+    master_key = load_master_key(master_key_file)
+    public_sessions: PublicSessionProvider
+    if resolved.sso.enabled:
+        if (
+            resolved.sso.deployment_id is None
+            or resolved.sso.validate_url is None
+            or resolved.sso.client_id is None
+            or resolved.sso.client_secret_file is None
+        ):
+            raise AssertionError("SSO 设置未完成 fail-fast 校验。")
+        unknown_origins = {
+            entry.origin for entry in resolved.sso.entries
+        }.difference(runtime.settings.trusted_origins)
+        if unknown_origins:
+            raise ValueError("SSO 入口必须同时列入 RAG_TRUSTED_ORIGINS。")
+        public_sessions = SsoSessionService(
+            master_key,
+            deployment_id=resolved.sso.deployment_id,
+            base_path=resolved.sso.base_path,
+        )
+        sso_client = SsoClient(
+            validate_url=resolved.sso.validate_url,
+            client_id=resolved.sso.client_id,
+            client_secret=load_client_secret(
+                resolved.sso.client_secret_file
+            ),
+        )
+        register_sso_routes(
+            app,
+            runtime=runtime,
+            settings=resolved.sso,
+            sessions=public_sessions,
+            client=sso_client,
+        )
+    else:
+        public_sessions = PublicSessionService(master_key)
     service = FixedScopeService(
         runtime.sdk, ScopeBindingStore(runtime.connections)
     )
