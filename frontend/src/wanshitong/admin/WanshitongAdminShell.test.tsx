@@ -86,6 +86,33 @@ function installReadyApi() {
         }),
       );
     }
+    if (path.startsWith("/api/v1/admin/wanshitong/feedback/statistics")) {
+      return Promise.resolve(
+        response({
+          evaluated_count: 0,
+          helpful_count: 0,
+          helpful_rate: null,
+          pending_count: 0,
+          confirmed_wrong_source_count: 0,
+          confirmed_false_refusal_count: 0,
+          latency_ms: {
+            actual_sso_users: { count: 0, p50: null, p95: null },
+            non_sso_or_replay: { count: 0, p50: null, p95: null },
+          },
+        }),
+      );
+    }
+    if (path.startsWith("/api/v1/admin/wanshitong/feedback")) {
+      return Promise.resolve(
+        response({
+          items: [],
+          total: 0,
+          page_size: 20,
+          offset: 0,
+          next_offset: null,
+        }),
+      );
+    }
     if (path.startsWith("/api/v1/admin/wanshitong/operational-traces")) {
       return Promise.resolve(
         response({ items: [], page: 1, page_size: 30, total: 0 }),
@@ -117,7 +144,7 @@ describe("湾事通管理员壳", () => {
     expect(screen.getByText("登录后自动检查并绑定湾事通固定知识范围。")).toBeVisible();
   });
 
-  it("固定 Scope 就绪后只显示七项导航且没有空间选择器", async () => {
+  it("固定 Scope 就绪后显示八项导航且没有空间选择器", async () => {
     window.history.replaceState({}, "", "/admin");
     installReadyApi();
     render(
@@ -130,12 +157,13 @@ describe("湾事通管理员壳", () => {
       name: "管理员导航",
     });
     await waitFor(() => expect(screen.getByText("湾事通知识库")).toBeVisible());
-    expect(within(navigation).getAllByRole("button")).toHaveLength(7);
+    expect(within(navigation).getAllByRole("button")).toHaveLength(8);
     for (const label of [
       "概览",
       "文档管理",
       "处理任务",
       "问答历史",
+      "反馈 / 优化待办",
       "Operational Trace",
       "模型与服务状态",
       "系统状态",
@@ -183,7 +211,7 @@ describe("湾事通管理员壳", () => {
     expect(screen.queryByText("固定知识范围概览")).not.toBeInTheDocument();
   });
 
-  it("History 与 Trace 只调用 fixed-scope Facade", async () => {
+  it("History、反馈与 Trace 只调用 fixed-scope Facade", async () => {
     window.history.replaceState({}, "", "/admin");
     const calls = installReadyApi();
     const user = userEvent.setup();
@@ -204,6 +232,20 @@ describe("湾事通管理员壳", () => {
     expect(screen.queryByLabelText("知识库")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "清理湾事通知识库历史" }),
+    ).toBeVisible();
+
+    await user.click(
+      within(navigation).getByRole("button", { name: "反馈 / 优化待办" }),
+    );
+    await waitFor(() =>
+      expect(
+        calls.some((path) =>
+          path.startsWith("/api/v1/admin/wanshitong/feedback"),
+        ),
+      ).toBe(true),
+    );
+    expect(
+      screen.getByRole("heading", { name: "反馈 / 优化待办", level: 2 }),
     ).toBeVisible();
 
     await user.click(

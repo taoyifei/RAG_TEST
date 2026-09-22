@@ -186,6 +186,115 @@ export interface WanshitongSystem {
   frontend_build_id: string;
 }
 
+export type FeedbackReviewStatus =
+  | "NEW"
+  | "REVIEWED"
+  | "FIX_PLANNED"
+  | "RESOLVED"
+  | "EXPECTED_BEHAVIOR";
+
+export interface FeedbackListItem {
+  trace_id: string;
+  created_at: string;
+  updated_at: string;
+  question_summary: string | null;
+  question_sha256: string | null;
+  final_status: string | null;
+  useful: boolean;
+  reason_code: string | null;
+  reason_detail: string | null;
+  comment_present: boolean;
+  feedback_revision: number;
+  answer_path: string | null;
+  duration_ms: number | null;
+  review_status: FeedbackReviewStatus;
+  root_cause: string | null;
+  review_version: number;
+  new_feedback_pending: boolean;
+}
+
+export interface FeedbackStatistics {
+  evaluated_count: number;
+  helpful_count: number;
+  helpful_rate: number | null;
+  pending_count: number;
+  confirmed_wrong_source_count: number;
+  confirmed_false_refusal_count: number;
+  latency_ms: {
+    actual_sso_users: { count: number; p50: number | null; p95: number | null };
+    non_sso_or_replay: {
+      count: number;
+      p50: number | null;
+      p95: number | null;
+    };
+  };
+}
+
+export interface FeedbackCitation {
+  document_id: string | null;
+  document_version_id: string | null;
+  display_name: string | null;
+  source_label: string | null;
+  selected_source_eligible: boolean;
+}
+
+export interface FeedbackDetail {
+  trace_id: string;
+  feedback: {
+    useful: boolean;
+    reason_code: string | null;
+    reason_detail: string | null;
+    comment: string | null;
+    comment_available: boolean;
+    comment_unavailable_reason: string | null;
+    feedback_revision: number;
+    projection_state: string;
+    created_at: string;
+    updated_at: string;
+  };
+  review: {
+    review_status: FeedbackReviewStatus;
+    root_cause: string | null;
+    note: string | null;
+    note_available: boolean;
+    note_unavailable_reason: string | null;
+    selected_source_document_id: string | null;
+    selected_source_version_id: string | null;
+    reviewed_feedback_revision: number;
+    evaluation_candidate: boolean;
+    fix_reference: string | null;
+    verification_references: string[];
+    review_version: number;
+    reviewed_by_admin: string | null;
+    updated_at: string | null;
+    new_feedback_pending: boolean;
+  };
+  history: {
+    available: boolean;
+    unavailable_reason: string | null;
+    question: string | null;
+    answer: string | null;
+    final_status: string | null;
+    duration_ms: number | null;
+  };
+  citations: FeedbackCitation[];
+  trace_projection: Record<string, Record<string, unknown>>;
+  operational_trace: Record<string, unknown> | null;
+  operational_trace_unavailable_reason: string | null;
+}
+
+export interface FeedbackReviewInput {
+  expected_version: number;
+  review_status: FeedbackReviewStatus;
+  root_cause: string | null;
+  note: string | null;
+  selected_source_document_id: string | null;
+  selected_source_version_id: string | null;
+  evaluation_candidate: boolean;
+  fix_reference: string | null;
+  verification_references: string[];
+}
+
 function queryPath<T extends object>(
   path: string,
   values: T,
@@ -200,7 +309,7 @@ function queryPath<T extends object>(
   return query ? `${path}?${query}` : path;
 }
 
-function jsonInit(method: "POST", body?: object): RequestInit {
+function jsonInit(method: "PATCH" | "POST", body?: object): RequestInit {
   return {
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -348,6 +457,42 @@ export const wanshitongAdminApi = {
       sha256: response.headers.get("X-Artifact-SHA256") ?? "",
       body: await response.text(),
     };
+  },
+  listFeedback: (
+    filters: {
+      reason?: string;
+      review_status?: FeedbackReviewStatus;
+      created_from?: string;
+      created_to?: string;
+      page_size?: number;
+      offset?: number;
+    } = {},
+    signal?: AbortSignal,
+  ) =>
+    consoleRequest<CursorPage<FeedbackListItem>>(
+      queryPath(`${BASE_PATH}/feedback`, filters),
+      { signal },
+    ),
+  feedbackStatistics: (signal?: AbortSignal) =>
+    consoleRequest<FeedbackStatistics>(`${BASE_PATH}/feedback/statistics`, {
+      signal,
+    }),
+  feedbackDetail: (traceId: string, signal?: AbortSignal) =>
+    consoleRequest<FeedbackDetail>(
+      `${BASE_PATH}/feedback/${encodeURIComponent(traceId)}`,
+      { signal },
+    ),
+  reviewFeedback: (traceId: string, body: FeedbackReviewInput) =>
+    consoleRequest<FeedbackDetail>(
+      `${BASE_PATH}/feedback/${encodeURIComponent(traceId)}/review`,
+      jsonInit("PATCH", body),
+    ),
+  exportFeedback: async (traceIds: string[] = []) => {
+    const response = await consoleRawRequest(
+      `${BASE_PATH}/feedback/export`,
+      jsonInit("POST", { trace_ids: traceIds }),
+    );
+    return downloadResponse(response, "wanshitong-feedback.json");
   },
   models: (signal?: AbortSignal) =>
     consoleRequest<WanshitongModels>(`${BASE_PATH}/models`, { signal }),

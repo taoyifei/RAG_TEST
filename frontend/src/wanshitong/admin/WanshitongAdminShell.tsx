@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageSquareWarning,
   Network,
   RefreshCw,
   Route,
@@ -29,6 +30,7 @@ import {
 import { useConsole } from "../../state/console-context";
 import { AdminDashboardPage } from "./AdminDashboardPage";
 import { AdminDocumentsPage } from "./AdminDocumentsPage";
+import { AdminFeedbackPage } from "./AdminFeedbackPage";
 import { AdminJobsPage } from "./AdminJobsPage";
 import { AdminModelsPage } from "./AdminModelsPage";
 import { AdminSystemPage } from "./AdminSystemPage";
@@ -39,6 +41,7 @@ const navItems = [
   [wanshitongRoutes.documents, "文档管理", Database],
   [wanshitongRoutes.jobs, "处理任务", Activity],
   [wanshitongRoutes.history, "问答历史", History],
+  [wanshitongRoutes.feedback, "反馈 / 优化待办", MessageSquareWarning],
   [wanshitongRoutes.traces, "Operational Trace", Route],
   [wanshitongRoutes.models, "模型与服务状态", KeyRound],
   [wanshitongRoutes.system, "系统状态", Network],
@@ -184,6 +187,7 @@ export function WanshitongAdminShell() {
               {path === wanshitongRoutes.history && (
                 <HistoryPage fixedScope go={go} services={historyServices} />
               )}
+              {path === wanshitongRoutes.feedback && <AdminFeedbackPage />}
               {path === wanshitongRoutes.traces && (
                 <OperationalTracesPage
                   fixedScope

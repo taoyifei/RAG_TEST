@@ -68,3 +68,49 @@ it("问答批量下载走湾事通固定范围接口并请求完整原文", asyn
   const headers = new Headers(fetchMock.mock.calls[0][1]?.headers);
   expect(headers.get("X-CSRF-Token")).toBe("synthetic-csrf");
 });
+
+it("反馈复核与安全导出复用管理员会话和 CSRF", async () => {
+  setBrowserCsrfToken("synthetic-csrf");
+  const traceId = `trace_${"3".repeat(32)}`;
+  const reviewBody = {
+    expected_version: 2,
+    review_status: "REVIEWED" as const,
+    root_cause: "WRONG_SOURCE",
+    note: "确认来源错误。",
+    selected_source_document_id: null,
+    selected_source_version_id: null,
+    evaluation_candidate: true,
+    fix_reference: null,
+    verification_references: [],
+  };
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(new Response("{}"))
+    .mockResolvedValueOnce(
+      new Response("{}", {
+        headers: {
+          "Content-Disposition":
+            'attachment; filename="wanshitong-feedback.json"',
+        },
+      }),
+    );
+
+  await wanshitongAdminApi.reviewFeedback(traceId, reviewBody);
+  const file = await wanshitongAdminApi.exportFeedback([traceId]);
+
+  expect(fetchMock.mock.calls[0][0]).toBe(
+    `/api/v1/admin/wanshitong/feedback/${traceId}/review`,
+  );
+  expect(fetchMock.mock.calls[0][1]?.method).toBe("PATCH");
+  expect(fetchMock.mock.calls[0][1]?.body).toBe(JSON.stringify(reviewBody));
+  const reviewHeaders = new Headers(fetchMock.mock.calls[0][1]?.headers);
+  expect(reviewHeaders.get("X-CSRF-Token")).toBe("synthetic-csrf");
+  expect(reviewHeaders.has("Authorization")).toBe(false);
+  expect(fetchMock.mock.calls[1][0]).toBe(
+    "/api/v1/admin/wanshitong/feedback/export",
+  );
+  expect(fetchMock.mock.calls[1][1]?.body).toBe(
+    JSON.stringify({ trace_ids: [traceId] }),
+  );
+  expect(file.filename).toBe("wanshitong-feedback.json");
+});
