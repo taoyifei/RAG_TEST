@@ -3,12 +3,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   SUGGESTED_QUESTIONS,
   type SuggestedQuestion,
+  type SuggestedQuestionStyle,
 } from "./suggestedQuestions";
 import type { PublicTurn } from "./usePublicChat";
 
 const VISIBLE_COUNT = 5;
+const STYLE_QUOTAS: readonly [SuggestedQuestionStyle, number][] = [
+  ["SHORT", 3],
+  ["STANDARD", 1],
+  ["COMPOUND", 1],
+];
 
-// 暂不主动推荐模板问题；题池保留原题，用户仍可自行提问。
+// 暂不主动推荐模板问题；题池保留时仍允许用户自行提问。
 const TEMPLATE_DOCUMENT_IDS = new Set([
   "DOCX-028",
   "DOCX-029",
@@ -43,78 +49,156 @@ function shuffle<T>(items: readonly T[], random: () => number): T[] {
   return result;
 }
 
-function addDiverseQuestions(
+function deduplicateQuestions(
   candidates: readonly SuggestedQuestion[],
-  selected: SuggestedQuestion[],
-  count: number,
+): SuggestedQuestion[] {
+  const ids = new Set<string>();
+  const questions = new Set<string>();
+  return candidates.filter((item) => {
+    const normalizedQuestion = questionKey(item.question);
+    if (ids.has(item.id) || questions.has(normalizedQuestion)) return false;
+    ids.add(item.id);
+    questions.add(normalizedQuestion);
+    return true;
+  });
+}
+
+function chooseDiverseQuestion(
+  candidates: readonly SuggestedQuestion[],
+  selected: readonly SuggestedQuestion[],
   random: () => number,
-): void {
-  const shuffled = shuffle(candidates, random);
-  const chosenQuestions = new Set(selected.map((item) => item.question));
-  const chosenDocuments = new Set(selected.map((item) => item.documentId));
-  for (const item of shuffled) {
-    if (selected.length >= count) return;
+  style?: SuggestedQuestionStyle,
+): SuggestedQuestion | undefined {
+  const selectedIds = new Set(selected.map((item) => item.id));
+  const selectedQuestions = new Set(
+    selected.map((item) => questionKey(item.question)),
+  );
+  const selectedDocuments = new Set(selected.map((item) => item.documentId));
+  const selectedTopics = new Set(selected.map((item) => item.topicKey));
+  let best: SuggestedQuestion | undefined;
+  let bestScore = -1;
+
+  for (const item of shuffle(candidates, random)) {
     if (
-      chosenQuestions.has(item.question) ||
-      chosenDocuments.has(item.documentId)
+      (style && item.style !== style) ||
+      selectedIds.has(item.id) ||
+      selectedQuestions.has(questionKey(item.question))
     ) {
       continue;
     }
-    selected.push(item);
-    chosenQuestions.add(item.question);
-    chosenDocuments.add(item.documentId);
+    const score =
+      (selectedDocuments.has(item.documentId) ? 0 : 2) +
+      (selectedTopics.has(item.topicKey) ? 0 : 1);
+    if (score > bestScore) {
+      best = item;
+      bestScore = score;
+    }
   }
-  for (const item of shuffled) {
-    if (selected.length >= count) return;
-    if (chosenQuestions.has(item.question)) continue;
+  return best;
+}
+
+function addQuestionsFromPool(
+  candidates: readonly SuggestedQuestion[],
+  selected: SuggestedQuestion[],
+  random: () => number,
+): void {
+  for (const [style, quota] of STYLE_QUOTAS) {
+    while (
+      selected.length < VISIBLE_COUNT &&
+      selected.filter((item) => item.style === style).length < quota
+    ) {
+      const item = chooseDiverseQuestion(candidates, selected, random, style);
+      if (!item) break;
+      selected.push(item);
+    }
+  }
+
+  while (selected.length < VISIBLE_COUNT) {
+    const item = chooseDiverseQuestion(candidates, selected, random);
+    if (!item) break;
     selected.push(item);
-    chosenQuestions.add(item.question);
   }
 }
 
 export function pickSuggestedQuestions(
   askedQuestions: readonly string[],
   previous: readonly SuggestedQuestion[],
-  seenQuestions: ReadonlySet<string>,
+  seenQuestionIds: ReadonlySet<string>,
   random: () => number = Math.random,
+  catalog: readonly SuggestedQuestion[] = SUGGESTED_QUESTIONS,
 ): SuggestedQuestion[] {
   const asked = new Set(askedQuestions.map(questionKey));
-  const previousQuestions = new Set(previous.map((item) => item.question));
-  const available = SUGGESTED_QUESTIONS.filter(
-    (item) =>
-      !TEMPLATE_DOCUMENT_IDS.has(item.documentId) &&
-      !asked.has(questionKey(item.question)) &&
-      !previousQuestions.has(item.question),
+  const previousIds = new Set(previous.map((item) => item.id));
+  const previousQuestions = new Set(
+    previous.map((item) => questionKey(item.question)),
   );
-  const fresh = available.filter((item) => !seenQuestions.has(item.question));
+  const available = deduplicateQuestions(
+    catalog
+      .filter((item) => item.enabled)
+      .filter((item) => !TEMPLATE_DOCUMENT_IDS.has(item.documentId))
+      .filter((item) => !asked.has(questionKey(item.question)))
+      .filter(
+        (item) =>
+          !previousIds.has(item.id) &&
+          !previousQuestions.has(questionKey(item.question)),
+      ),
+  );
+  const fresh = available.filter((item) => !seenQuestionIds.has(item.id));
   const selected: SuggestedQuestion[] = [];
-  addDiverseQuestions(fresh, selected, VISIBLE_COUNT, random);
+
+  addQuestionsFromPool(fresh, selected, random);
   if (selected.length < VISIBLE_COUNT) {
-    addDiverseQuestions(available, selected, VISIBLE_COUNT, random);
+    addQuestionsFromPool(available, selected, random);
   }
   return selected;
 }
 
-export function useSuggestedQuestions(turns: readonly PublicTurn[]) {
+export function useSuggestedQuestions(
+  turns: readonly PublicTurn[],
+  identityKey?: string,
+  random: () => number = Math.random,
+) {
   const [questions, setQuestions] = useState<readonly SuggestedQuestion[]>(() =>
-    pickSuggestedQuestions([], [], new Set()),
+    pickSuggestedQuestions([], [], new Set(), random),
   );
   const previousRef = useRef(questions);
-  const seenQuestionsRef = useRef(
-    new Set(questions.map((item) => item.question)),
-  );
+  const seenQuestionIdsRef = useRef(new Set(questions.map((item) => item.id)));
   const rotatedTurnRef = useRef("");
+  const identityKeyRef = useRef(identityKey);
 
-  const rotate = useCallback((askedQuestions: readonly string[]) => {
-    const next = pickSuggestedQuestions(
-      askedQuestions,
-      previousRef.current,
-      seenQuestionsRef.current,
-    );
+  const reset = useCallback(() => {
+    const next = pickSuggestedQuestions([], [], new Set(), random);
     previousRef.current = next;
-    for (const item of next) seenQuestionsRef.current.add(item.question);
+    seenQuestionIdsRef.current = new Set(next.map((item) => item.id));
+    rotatedTurnRef.current = "";
     setQuestions(next);
-  }, []);
+  }, [random]);
+
+  const rotate = useCallback(
+    (askedQuestions: readonly string[]) => {
+      const next = pickSuggestedQuestions(
+        askedQuestions,
+        previousRef.current,
+        seenQuestionIdsRef.current,
+        random,
+      );
+      previousRef.current = next;
+      for (const item of next) seenQuestionIdsRef.current.add(item.id);
+      setQuestions(next);
+    },
+    [random],
+  );
+
+  useEffect(() => {
+    if (!identityKey) return;
+    if (!identityKeyRef.current) {
+      identityKeyRef.current = identityKey;
+      return;
+    }
+    if (identityKeyRef.current === identityKey) return;
+    identityKeyRef.current = identityKey;
+    reset();
+  }, [identityKey, reset]);
 
   useEffect(() => {
     const lastTurn = turns.at(-1);
