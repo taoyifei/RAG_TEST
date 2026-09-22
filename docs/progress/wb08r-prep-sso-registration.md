@@ -21,8 +21,8 @@
 | RDMS 后端 validate URL | 后端直连 21000 或实际 `/prod-api/sso/validate` 完整 URL | 待提供 | RDMS / 网络 |
 | `clientId` | 已登记的 KB 应用 ID；明确测试与生产是否分别注册 | 待登记 | RDMS 管理员 |
 | `clientSecret` 交付 | 只记录安全注入来源和是否到位，不填写明文 | 待提供 | RDMS / 部署负责人 |
-| 8289 浏览器 origin | 实际 scheme、host 和 port，不按容器地址猜测 | 待确认 | KB 负责人 |
-| 8289 callback | `<测试浏览器 origin>/kb/sso/callback` | 待登记 | 双方 |
+| 8289 浏览器 origin | `http://10.242.180.54:8289` | 用户已确认 | KB 负责人 |
+| 8289 callback | `http://10.242.180.54:8289/kb/sso/callback` | 用户已确认登记 | 双方 |
 | 正式浏览器 origin | 以用户实际访问的 18288 或正式域名为准 | 待确认 | KB / 网关 |
 | 正式 callback | `<正式浏览器 origin>/kb/sso/callback` | 待登记 | 双方 |
 | 外网 origin | 无外网环境时明确写本期不实测 | 待确认 / 可后置 | 网关 |
@@ -56,7 +56,8 @@
 - 54 的 18288 仍是转发到 60 的 8288，属于正在使用的服务，本阶段禁止停止、
   替换或重建。
 - 60 的旧 8289 候选健康，但未发现监听 21000 的 RDMS/SSO 服务，也没有取得
-  authorize URL、validate URL、`clientId`、secret 或已登记 callback 的证据。
+  authorize URL、validate URL、`clientId` 或 secret。测试 callback 已由用户确认
+  登记，本仓库不保存 IdP 登记表或 secret。
 - 因此真实登录输入仍为 `REGISTRATION_INPUTS_PENDING`；代码和候选配置可以
   完成，但不能用占位地址启动后冒充真实 SSO 登录通过。
 - `/kb/admin` 明确保留原 Bootstrap Token / 管理员 Cookie。即使 SSO 身份携带

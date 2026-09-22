@@ -2,7 +2,7 @@
 
 本实现以《03_阶段SSO_登录与会话_实施方案》为准，`SSO-SPEC.md` 仅作为
 RDMS CAS Ticket v1.3 接口参考。当前状态为 `REGISTRATION_INPUTS_PENDING`；
-这表示 KB 侧合同和部署门禁可验证，但真实 RDMS 注册参数尚未取得，不能标记
+这表示 KB 侧合同和部署门禁可验证，但真实 RDMS 注册参数仍不完整，不能标记
 `AUTH_INTERNAL_READY`。
 
 ## 边界
@@ -72,19 +72,19 @@ CSRF、`/kb` 前缀、401 整页登录、本地退出及管理员隔离。真实
   内置 revision 为 `36529b4b7de6abdb1f0c62620731e6aa14aa8906`。产品资产自检为
   37 个文件、1,117,585 bytes，manifest SHA-256 为
   `c0a1b67748e492b9e5f153d0481721dc65320de135be90b991a1bb5a57d9c689`。
-- 60 的候选发布文件位于
+- SSO 阶段的候选发布文件位于
   `/data/tyf/wanshitong-wb08r-sso-36529b4/release`，旧 8289 inspect 基准保存在
-  同级权限受限的 `evidence/baseline.private.json`。尚未创建
+  同级权限受限的 `evidence/baseline.private.json`。当时未创建
   `wanshitong-sso-candidate-app`，因为真实注册输入和 secret 不完整。
 - 60 的 `wanshitong-app` 仍运行镜像 `rag-test-wanshitong:604ef63`；旧 8289
   `wanshitong-prep-candidate-app` 仍 running/healthy。54 的 18288 live/ready
   均为 HTTP 200，本阶段没有停止、重建或替换这两项服务。
-- 本地候选镜像、构建目录以及 54/60 的传输压缩包已经删除。新的 60 候选镜像
-  不是过期镜像，作为取得注册输入后的唯一待启动版本保留；旧 8289 当前仍是
-  唯一运行回退点，不能在新候选未启动时误删。
+- 本地候选镜像、构建目录以及 54/60 的传输压缩包已经删除。阶段 05 收尾时，
+  未被容器引用的旧 SSO 候选镜像也已清理；包含 SSO 与反馈闭环的阶段 05 镜像
+  已加载但未启动。旧 8289 当前仍是唯一运行回退点，不能在新候选未启动时误删。
 
-真实 SSO 仍缺：浏览器可达 authorize URL、60 可达 validate URL、已登记的
-`clientId`、安全交付的 client secret，以及精确登记的
-`http://10.242.180.54:8289/kb/sso/callback`（若最终 8289 浏览器入口不是该地址，
-须以实际 origin 为准）。这些是实施方案第 2 节的开工前输入，不属于客户端代码
-修复轮次；取得前不能使用测试账号执行真实登录。
+用户已确认测试回调精确登记为
+`http://10.242.180.54:8289/kb/sso/callback`。真实 SSO 仍缺 4 项：浏览器可达
+authorize URL、60 可达 validate URL、已登记的 `clientId`、安全交付的 client
+secret。这些是实施方案第 2 节的开工前输入，不属于客户端代码修复轮次；取得前
+不能使用测试账号执行真实登录。
