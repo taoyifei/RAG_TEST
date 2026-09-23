@@ -251,8 +251,19 @@ def test_table_fact_cannot_borrow_another_explicit_level_row() -> None:
     assert same_row.relation_complete
 
 
-def test_semantic_review_cannot_supply_an_action_absent_from_source() -> None:
-    evidence = _evidence("开发中心需在2个工作日内提交配置库")
+@pytest.mark.parametrize(
+    "question_fragment",
+    (
+        "收到申请后，几个工作日内完成审核？",
+        "收到申请后，几个工作日内审核完成？",
+        "收到申请后，审核完成需要多久？",
+    ),
+)
+def test_equivalent_action_order_keeps_the_same_source_fact(
+    question_fragment: str,
+) -> None:
+    sentence = "收到申请后，应在2个工作日内审核完成。"
+    evidence = _evidence(sentence)
     item = evidence[0]
     unit = EvidenceReadUnit(
         unit_id="E1",
@@ -263,9 +274,7 @@ def test_semantic_review_cannot_supply_an_action_absent_from_source() -> None:
     )
     bound = bind_wire_claim(
         GroundedWireClaim(
-            atom_id="A1",
-            text="设计文档在2个工作日内反馈。",
-            refs=("E1",),
+            atom_id="A1", text="2个工作日内完成审核。", refs=("E1",)
         ),
         claim_id="C1",
         read_units=(unit,),
@@ -273,16 +282,62 @@ def test_semantic_review_cannot_supply_an_action_absent_from_source() -> None:
         allowed_unit_ids=frozenset({"E1"}),
     )
 
-    with pytest.raises(
-        SourceProjectionError, match="QUESTION_ACTION_NOT_IN_SOURCE"
-    ):
-        project_bound_claim(
-            bound,
-            read_units=(unit,),
-            evidence=evidence,
-            semantic_relation_supported=True,
-            question_fragment="设计文档几天内反馈？",
-        )
+    projected = project_bound_claim(
+        bound,
+        read_units=(unit,),
+        evidence=evidence,
+        semantic_relation_supported=True,
+        question_fragment=question_fragment,
+    )
+
+    assert projected.render_origin == "source_sentence"
+    assert projected.text == f"《{item.display_name}》记载：{sentence}"
+    assert projected.relation_complete
+
+
+@pytest.mark.parametrize("days", (2, 3, 5))
+def test_source_sentence_restores_time_start_and_document_scope(
+    days: int,
+) -> None:
+    sentence = f"发布甲文件到乙截止时间，不得少于{days}日。"
+    item = _evidence(sentence)[0].model_copy(
+        update={"display_name": "甲类流程规定"}
+    )
+    unit = EvidenceReadUnit(
+        unit_id="E1",
+        kind="paragraph",
+        text=item.citation_text,
+        support_ids=(item.support_id,),
+        source_complete=True,
+    )
+    bound = bind_wire_claim(
+        GroundedWireClaim(
+            atom_id="A1",
+            text=f"乙截止时间不得少于{days}日。",
+            refs=("E1",),
+        ),
+        claim_id="C1",
+        read_units=(unit,),
+        evidence=(item,),
+        allowed_unit_ids=frozenset({"E1"}),
+    )
+
+    before_review = project_bound_claim(
+        bound, read_units=(unit,), evidence=(item,)
+    )
+    after_review = project_bound_claim(
+        before_review,
+        read_units=(unit,),
+        evidence=(item,),
+        semantic_relation_supported=True,
+    )
+
+    assert before_review.text == sentence
+    assert not before_review.relation_complete
+    assert after_review.text == f"《甲类流程规定》记载：{sentence}"
+    assert after_review.relation_complete
+    assert after_review.draft_text_sha256 == bound.draft_text_sha256
+    assert after_review.draft_text_sha256 != after_review.published_text_sha256
 
 
 def test_table_fragment_can_only_publish_literal_fragment() -> None:

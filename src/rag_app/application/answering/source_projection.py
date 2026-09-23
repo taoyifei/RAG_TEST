@@ -27,19 +27,14 @@ from rag_app.core.query_text import (
     literal_relation_modifiers_supported,
 )
 
-SOURCE_PROJECTION_REVISION = "wb08r-source-projection-v3"
+SOURCE_PROJECTION_REVISION = "wb08r-source-projection-v4"
 _MAX_CLAIM_TEXT_CHARS = 6000
+_MIN_EXTRACTIVE_SENTENCE_CHARS = 8
+_MAX_EXTRACTIVE_SENTENCE_CHARS = 320
+_MAX_SOURCE_TITLE_CHARS = 120
 _QUANTITY = re.compile(
     r"\d+(?:\.\d+)?(?:个)?(?:工作日|自然日|分钟|小时|日|天|周|月|年)"
 )
-_PARTY_ACTION = re.compile(
-    r"(?:由|归)?谁(?:来)?(?P<action>[\u4e00-\u9fff]{2,8})$"
-)
-_DURATION_ACTION = re.compile(
-    r"(?:几|多少)(?:个)?(?:工作日|自然日|日|天|小时|分钟|周|月|年)"
-    r"(?:内|前|后)?(?P<action>[\u4e00-\u9fff]{2,8})$"
-)
-_ACTION_INTERROGATIVES = ("什么", "哪些", "怎么", "如何", "谁")
 
 
 class SourceProjectionError(ValueError):
@@ -48,18 +43,6 @@ class SourceProjectionError(ValueError):
     def __init__(self, failure_code: str) -> None:
         self.failure_code = failure_code
         super().__init__(failure_code)
-
-
-def _explicit_question_action(fragment: str) -> str | None:
-    """仅提取明确写在责任或时限子问题末尾的动作。"""
-    question = fragment.strip().rstrip("？?！!。． ")
-    match = _PARTY_ACTION.search(question) or _DURATION_ACTION.search(question)
-    if match is None:
-        return None
-    action = match["action"]
-    if any(word in action for word in _ACTION_INTERROGATIVES):
-        return None
-    return action
 
 
 def _ordered_texts(
@@ -171,6 +154,43 @@ def _finish_projection(  # noqa: PLR0913
     )
 
 
+def _extractive_time_fact(
+    selected: tuple[EvidenceReadUnit, ...],
+    registry: dict[str, EvidenceItem],
+) -> tuple[str, EvidenceItem] | None:
+    """仅从一个完整正文来源恢复逐字时限事实，不拼接相邻来源。"""
+    if len(selected) != 1:
+        return None
+    unit = selected[0]
+    if (
+        unit.kind not in {"paragraph", "list_item"}
+        or not unit.source_complete
+        or len(unit.support_ids) != 1
+    ):
+        return None
+    item = registry[unit.support_ids[0]]
+    sentence = item.citation_text.strip()
+    if (
+        item.table_context
+        or "\n" in sentence
+        or not _MIN_EXTRACTIVE_SENTENCE_CHARS
+        <= len(sentence)
+        <= _MAX_EXTRACTIVE_SENTENCE_CHARS
+        or _QUANTITY.search(sentence) is None
+        or sum(sentence.count(mark) for mark in "。！？!?") > 1
+    ):
+        return None
+    return sentence, item
+
+
+def _source_sentence_text(sentence: str, item: EvidenceItem) -> str:
+    """只标识真实来源文档，不从标题推断正文未写出的条件。"""
+    title = (item.display_name or "").strip()
+    if title and len(title) <= _MAX_SOURCE_TITLE_CHARS:
+        return f"《{title}》记载：{sentence}"
+    return f"资料记载：{sentence}"
+
+
 def project_bound_claim(  # noqa: PLR0913
     claim: BoundClaim,
     *,
@@ -185,8 +205,8 @@ def project_bound_claim(  # noqa: PLR0913
 ) -> BoundClaim:
     """对表格、表格片段和目录项使用服务端最终表述。
 
-    普通段落仍保留模型文本。表格先核对物理闭合，再用当前子问题的
-    语义复核与逐字限定共同决定能否保留自然表达。
+    对单个完整正文时限事实保留来源原句。表格先核对物理闭合，
+    再用当前子问题的语义复核与逐字限定决定能否保留自然表达。
     """
     units_by_id = {unit.unit_id: unit for unit in read_units}
     try:
@@ -195,16 +215,6 @@ def project_bound_claim(  # noqa: PLR0913
         raise SourceProjectionError("PROJECTION_READ_UNIT_MISSING") from error
     registry = {item.support_id: item for item in evidence}
     facts = {fact.fact_id: fact for fact in physical_table_facts}
-    if semantic_relation_supported and (
-        action := _explicit_question_action(question_fragment)
-    ) is not None:
-        selected_source_text = " ".join(
-            registry[support_id].citation_text
-            for unit in selected
-            for support_id in unit.support_ids
-        )
-        if action not in selected_source_text:
-            raise SourceProjectionError("QUESTION_ACTION_NOT_IN_SOURCE")
     table_units = tuple(unit for unit in selected if unit.fact_id is not None)
     if table_units:
         selected_fact_ids = tuple(
@@ -327,6 +337,28 @@ def project_bound_claim(  # noqa: PLR0913
                 None if existence_only else "CATALOG_BODY_UNAVAILABLE"
             ),
             selected_units=catalog_units,
+        )
+    time_fact = _extractive_time_fact(selected, registry)
+    if time_fact is not None:
+        sentence, item = time_fact
+        return _finish_projection(
+            claim,
+            text=(
+                _source_sentence_text(sentence, item)
+                if semantic_relation_supported
+                else sentence
+            ),
+            render_origin="source_sentence",
+            selected_assertion_ids=(
+                canonical_sha256(
+                    {
+                        "revision": SOURCE_PROJECTION_REVISION,
+                        "source": item.support_id,
+                        "sentence": sentence,
+                    }
+                ),
+            ),
+            relation_complete=semantic_relation_supported,
         )
     return _finish_projection(
         claim,

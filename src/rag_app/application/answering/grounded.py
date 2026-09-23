@@ -3261,8 +3261,13 @@ class GroundedAnsweringService:
                         }
                     )
                 )
-                if bound not in pending_relations:
-                    pending_relations.append(bound)
+                candidate = (
+                    projected
+                    if projected.render_origin == "source_sentence"
+                    else bound
+                )
+                if candidate not in pending_relations:
+                    pending_relations.append(candidate)
 
         def review_legacy_pending() -> None:  # noqa: PLR0912, PLR0915
             """仅为旧 V8 协议保留原有关系复核行为。"""
@@ -3809,10 +3814,9 @@ class GroundedAnsweringService:
                             original_query=query_plan.original_query,
                         )
                     except SourceProjectionError as error:
-                        if error.failure_code in {
-                            "QUESTION_ACTION_NOT_IN_SOURCE",
-                            "QUESTION_TABLE_ROW_LEVEL_CONFLICT",
-                        }:
+                        if error.failure_code == (
+                            "QUESTION_TABLE_ROW_LEVEL_CONFLICT"
+                        ):
                             rejected_atoms[bound.atom_id] += 1
                             claim_rejections[error.failure_code] += 1
                             observed(bound, result.status, error.failure_code)

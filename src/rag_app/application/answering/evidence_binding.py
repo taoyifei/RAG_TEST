@@ -26,6 +26,7 @@ from rag_app.core.source_scope import evidence_allowed_for_atom
 
 RenderOrigin = Literal[
     "model_text",
+    "source_sentence",
     "physical_table_fact",
     "literal_table_fragment",
     "catalog_entry",

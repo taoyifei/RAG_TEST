@@ -349,6 +349,38 @@ def test_yes_no_matching_role_and_source_remain_answerable(
     )
 
 
+def test_review_reads_complete_source_time_fact_before_publication() -> None:
+    source = "发布甲文件到乙截止时间，不得少于5日。"
+    question = "发布甲文件到乙截止时间的间隔多久？"
+    plan = _plan(question)
+    evidence = tuple(
+        item.model_copy(update={"display_name": "甲类流程规定"})
+        for item in _evidence(source)
+    )
+    draft = _draft(
+        (_claim("C1", "乙截止时间不得少于5日。", "A1", "S1", source),),
+        plan,
+    )
+    review_bodies: list[dict[str, object]] = []
+    generator = fixed_review_generator(
+        draft,
+        on_review=review_bodies.append,
+    )
+
+    outcome = _answer_with_pack(
+        generator, plan, evidence, ((AtomStatus.MISSING, ()),)
+    )
+
+    assert len(review_bodies) == 1, (
+        outcome.reason_code,
+        outcome.raw_failures,
+        outcome.claim_rejection_codes,
+    )
+    assert review_bodies[0]["candidates"][0]["claim"] == source
+    assert outcome.answer is not None
+    assert f"《甲类流程规定》记载：{source}" in outcome.answer
+
+
 @pytest.mark.parametrize(
     "question,source,document",
     [

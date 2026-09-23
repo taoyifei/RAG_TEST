@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 
@@ -39,12 +41,14 @@ def fixed_review_generator(
     draft: AnswerDraft,
     *,
     statuses: tuple[str, ...] | None = None,
+    on_review: Callable[[dict[str, Any]], None] | None = None,
 ) -> OpenAICompatibleChatAdapter:
     """首调用返回 Wire Claim，第二调用返回固定三态语义结果。
 
     Args:
         draft: 测试原有未经接受的固定事实草稿。
         statuses: 可选的逐候选复核状态；默认全部 supported。
+        on_review: 可选的真实复核请求体观察器。
 
     Returns:
         使用 Fake HTTP 的真实兼容模型适配器。
@@ -85,6 +89,8 @@ def fixed_review_generator(
             }
         else:
             assert "candidates" in data
+            if on_review is not None:
+                on_review(data)
             review_statuses = (
                 statuses or ("supported",) * len(data["candidates"])
             )
