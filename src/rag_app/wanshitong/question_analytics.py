@@ -30,11 +30,11 @@ from rag_app.product.query_history import (
     _source_unavailable_reason,
 )
 from rag_app.product.usage_audit import usage_audit_view
+from rag_app.wanshitong.question_recommendations import approved_alias_snapshot
 
 _LOGGER = logging.getLogger(__name__)
 _SCHEMA_VERSION = "wst-question-stats-v1"
 _NORMALIZER_REVISION = "nfc-conservative-v1"
-_ALIAS_REVISION = "none"
 _POLICY_REVISION = "f05-v1"
 _BUSINESS_TIMEZONE = "Asia/Shanghai"
 _WINDOW_DAYS = 7
@@ -184,6 +184,7 @@ class _Snapshot:
     rows: list[dict[str, object]]
     classification_digest: str
     source_revision: tuple[object, ...]
+    alias_map: dict[str, str]
     limit_code: str | None
 
 
@@ -310,6 +311,12 @@ class QuestionAnalyticsService:
         run_id = "qrun_" + uuid.uuid4().hex
         try:
             with self._connections.transaction(write=True) as connection:
+                alias_revision, _ = approved_alias_snapshot(
+                    connection,
+                    self.deployment_id,
+                    project_id=project_id,
+                    knowledge_base_id=knowledge_base_id,
+                )
                 connection.execute(
                     "UPDATE question_stats_runs SET state='FAILED', "
                     "failure_code='PROCESS_INTERRUPTED', finished_at=? "
@@ -345,7 +352,7 @@ class QuestionAnalyticsService:
                         _BUSINESS_TIMEZONE,
                         now.isoformat(),
                         _NORMALIZER_REVISION,
-                        _ALIAS_REVISION,
+                        alias_revision,
                         _POLICY_REVISION,
                         now.isoformat(),
                         (now + timedelta(days=self.retention_days)).isoformat(),
@@ -410,6 +417,7 @@ class QuestionAnalyticsService:
                 knowledge_base_id=knowledge_base_id,
             )
             snapshot = self._snapshot(run)
+            run["_alias_map"] = snapshot.alias_map
             counts, groups = self._calculate(snapshot.rows, run)
             state = "COMPLETE"
             failure_code = snapshot.limit_code
@@ -455,6 +463,7 @@ class QuestionAnalyticsService:
         total_bytes = 0
         limit_code: str | None = None
         source_revision: tuple[object, ...] = (None,)
+        alias_map: dict[str, str] = {}
         parameters = (
             run["project_id"],
             run["knowledge_base_id"],
@@ -503,6 +512,14 @@ class QuestionAnalyticsService:
                         project_id=str(run["project_id"]),
                         knowledge_base_id=str(run["knowledge_base_id"]),
                     )
+                    alias_revision, alias_map = approved_alias_snapshot(
+                        connection,
+                        self.deployment_id,
+                        project_id=str(run["project_id"]),
+                        knowledge_base_id=str(run["knowledge_base_id"]),
+                    )
+                    if alias_revision != run["alias_revision"]:
+                        limit_code = "ALIAS_CHANGED"
         except sqlite3.OperationalError as error:
             if error.sqlite_errorcode != sqlite3.SQLITE_INTERRUPT:
                 raise
@@ -511,6 +528,7 @@ class QuestionAnalyticsService:
             rows=rows,
             classification_digest=_classification_digest(rows),
             source_revision=source_revision,
+            alias_map=alias_map,
             limit_code=limit_code,
         )
 
@@ -577,9 +595,15 @@ class QuestionAnalyticsService:
         snapshot: _Snapshot,
     ) -> bool:
         """在发布写事务内有界复核来源与整个窗口的分类版本。"""
+        alias_revision, _ = approved_alias_snapshot(
+            connection,
+            self.deployment_id,
+            project_id=str(run["project_id"]),
+            knowledge_base_id=str(run["knowledge_base_id"]),
+        )
         if (
             run["normalizer_revision"] != _NORMALIZER_REVISION
-            or run["alias_revision"] != _ALIAS_REVISION
+            or run["alias_revision"] != alias_revision
             or run["policy_revision"] != _POLICY_REVISION
         ):
             return False
@@ -630,6 +654,7 @@ class QuestionAnalyticsService:
         self, rows: list[dict[str, object]], run: dict[str, object]
     ) -> tuple[_RunCounts, list[_Group]]:
         """逐 trace 映射终态、分类、正文和最新反馈后再做 distinct。"""
+        alias_map = cast(dict[str, str], run.get("_alias_map", {}))
         counts = _RunCounts()
         groups: dict[str, _Group] = {}
         seen_trace_ids: set[str] = set()
@@ -658,11 +683,20 @@ class QuestionAnalyticsService:
                 normalized,
                 context_digest,
             )
+            canonical_key = (
+                alias_map.get(key, key) if context_digest is None else key
+            )
             group = groups.setdefault(
-                key,
+                canonical_key,
                 _Group(
-                    group_key=key,
-                    group_kind="CONTEXT" if context_digest else "EXACT",
+                    group_key=canonical_key,
+                    group_kind=(
+                        "CONTEXT"
+                        if context_digest
+                        else "APPROVED_ALIAS"
+                        if canonical_key != key
+                        else "EXACT"
+                    ),
                 ),
             )
             self._apply_row(

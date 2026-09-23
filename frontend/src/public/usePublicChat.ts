@@ -518,13 +518,17 @@ export function usePublicChat() {
   }, [resetConversationState]);
 
   const submitNewTopic = useCallback(
-    (question: string, recommendationId?: string) => {
+    (
+      question: string,
+      recommendationId?: string,
+      entrypoint: "suggestion" | "popular" = "suggestion",
+    ) => {
       const value = question.trim();
       if (!value) return;
       const nextConversationId = resetConversationState();
       if (!nextConversationId) return;
       void runTurn(randomId("turn"), value, nextConversationId, false, {
-        entrypoint: recommendationId ? "suggestion" : "manual",
+        entrypoint: recommendationId ? entrypoint : "manual",
         ...(recommendationId ? { recommendation_id: recommendationId } : {}),
       });
     },

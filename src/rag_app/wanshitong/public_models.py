@@ -82,6 +82,27 @@ class PublicCapabilities(BaseModel):
     shortcuts: tuple[PublicShortcut, ...] = ()
 
 
+class PublicPopularQuestion(BaseModel):
+    """公开榜只给可见题面，不暴露原问、人数或样本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^pq_[0-9a-f]{32}$")
+    question: str = Field(min_length=1, max_length=500)
+    topic_key: str = Field(min_length=1, max_length=100)
+
+
+class PublicPopularQuestions(BaseModel):
+    """无完整热榜时由现有 F01 客户端显示静态示例。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["POPULAR", "EMPTY"]
+    generated_at: str | None
+    window_days: Literal[7]
+    items: tuple[PublicPopularQuestion, ...] = Field(max_length=5)
+
+
 class PublicChatRequest(PublicRequest):
     """公共问答接受问题、会话 ID 和不可信的可选入口提示。"""
 
@@ -161,6 +182,8 @@ __all__ = [
     "PublicConversationClearResponse",
     "PublicFeedbackRequest",
     "PublicFeedbackResponse",
+    "PublicPopularQuestion",
+    "PublicPopularQuestions",
     "PublicSessionRequest",
     "PublicSessionResponse",
     "PublicSessionUser",

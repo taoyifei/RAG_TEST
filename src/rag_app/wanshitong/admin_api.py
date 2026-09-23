@@ -41,6 +41,8 @@ from rag_app.tracing.store import (
     TraceNotFoundError,
 )
 from rag_app.wanshitong.admin_models import (
+    RecommendationCreateRequest,
+    RecommendationUpdateRequest,
     WanshitongDocumentPage,
     WanshitongDocumentView,
     WanshitongFeedbackExportRequest,
@@ -62,6 +64,9 @@ from rag_app.wanshitong.document_metadata import (
 from rag_app.wanshitong.errors import AdminFacadeError, ScopeBindingError
 from rag_app.wanshitong.models import ScopeBinding
 from rag_app.wanshitong.question_analytics import QuestionAnalyticsService
+from rag_app.wanshitong.question_recommendations import (
+    QuestionRecommendationService,
+)
 from rag_app.wanshitong.scope_service import FixedScopeService
 from rag_app.wanshitong.template_catalog import searchable_upload_content
 from rag_app.wanshitong.upload_validation import (
@@ -73,13 +78,14 @@ ADMIN_BASE_PATH = "/api/v1/admin/wanshitong"
 _ADMIN_PRINCIPALS = frozenset({"admin_session", "legacy_admin"})
 
 
-def register_admin_routes(
+def register_admin_routes(  # noqa: PLR0913
     app: FastAPI,
     *,
     runtime: ProductRuntime,
     scope_service: FixedScopeService,
     document_metadata: WanshitongDocumentMetadataStore,
     question_analytics: QuestionAnalyticsService,
+    question_recommendations: QuestionRecommendationService,
 ) -> None:
     """注册复用唯一 Product Runtime 的管理员 Facade。"""
     _register_error_handler(app)
@@ -88,6 +94,9 @@ def register_admin_routes(
     _register_history_routes(app, runtime, scope_service)
     _register_feedback_routes(app, runtime, scope_service)
     _register_question_analytics_routes(app, scope_service, question_analytics)
+    _register_question_recommendation_routes(
+        app, scope_service, question_recommendations
+    )
     _register_trace_routes(app, runtime, scope_service)
     _register_status_routes(app, runtime, scope_service, document_metadata)
 
@@ -817,6 +826,62 @@ def _register_question_analytics_routes(
             group_key=group_key,
             project_id=binding.project_id,
             knowledge_base_id=binding.knowledge_base_id,
+        )
+
+
+def _register_question_recommendation_routes(
+    app: FastAPI,
+    scope_service: FixedScopeService,
+    service: QuestionRecommendationService,
+) -> None:
+    """目录管理沿用管理员会话或 Token 和现有 CSRF 中间件。"""
+
+    @app.get(
+        ADMIN_BASE_PATH + "/recommendations",
+        tags=["wanshitong-admin"],
+    )
+    def _recommendations(request: Request) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        return service.list_admin(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+        )
+
+    @app.post(
+        ADMIN_BASE_PATH + "/recommendations",
+        tags=["wanshitong-admin"],
+        status_code=201,
+    )
+    def _create_recommendation(
+        body: RecommendationCreateRequest, request: Request
+    ) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        return service.create(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            body=body,
+        )
+
+    @app.patch(
+        ADMIN_BASE_PATH + "/recommendations/{recommendation_id}",
+        tags=["wanshitong-admin"],
+    )
+    def _update_recommendation(
+        recommendation_id: Annotated[str, Path(pattern=r"^pq_[0-9a-f]{32}$")],
+        body: RecommendationUpdateRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        approved_by = str(
+            getattr(request.state, "product_session_id", None)
+            or request.state.product_principal
+        )
+        return service.update(
+            recommendation_id,
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            body=body,
+            approved_by=approved_by,
         )
 
 

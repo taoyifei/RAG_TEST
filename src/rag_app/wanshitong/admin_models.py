@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import Field, StrictInt, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StringConstraints,
+    model_validator,
+)
 
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.management import DocumentStatus, Job
@@ -16,14 +24,10 @@ from rag_app.wanshitong.feedback import (
     FeedbackRootCause,
 )
 
-_TraceId = Annotated[
-    str, StringConstraints(pattern=r"^trace_[0-9a-f]{32}$")
-]
+_TraceId = Annotated[str, StringConstraints(pattern=r"^trace_[0-9a-f]{32}$")]
 _Reference = Annotated[
     str,
-    StringConstraints(
-        strip_whitespace=True, min_length=1, max_length=500
-    ),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
 ]
 
 
@@ -155,7 +159,70 @@ class WanshitongTrafficOverrideRequest(FrozenModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class RecommendationSource(BaseModel):
+    """管理员实际核查的当前文档版本，不参与公共检索过滤。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
+    version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+
+
+class RecommendationCreateRequest(BaseModel):
+    """从 F05 精确题组复制供编辑的公共候选。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_group_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    question_text: str = Field(min_length=1, max_length=500)
+    question_style: Literal["SHORT", "STANDARD", "COMPOUND"] = "SHORT"
+    topic_key: str = Field(min_length=1, max_length=100)
+
+
+class RecommendationUpdateRequest(BaseModel):
+    """全字段版本更新；批准必须同时确认题面、映射和来源。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    question_text: str = Field(min_length=1, max_length=500)
+    question_style: Literal["SHORT", "STANDARD", "COMPOUND"]
+    topic_key: str = Field(min_length=1, max_length=100)
+    state: Literal["DRAFT", "APPROVED", "DISABLED", "NEEDS_REVIEW"]
+    alias_keys: tuple[str, ...] = Field(max_length=20)
+    validated_sources: tuple[RecommendationSource, ...] = Field(max_length=20)
+    review_confirmed: bool = False
+    disabled_reason: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _validate_content(self) -> RecommendationUpdateRequest:
+        if not self.question_text.strip() or not self.topic_key.strip():
+            raise ValueError("题面与主题不能为空。")
+        if len(set(self.alias_keys)) != len(self.alias_keys):
+            raise ValueError("等义键不可重复。")
+        if any(
+            re.fullmatch(r"[0-9a-f]{64}", key) is None
+            for key in self.alias_keys
+        ):
+            raise ValueError("问题键格式无效。")
+        if (
+            self.state == "DISABLED"
+            and not (self.disabled_reason or "").strip()
+        ):
+            raise ValueError("下架须记录原因。")
+        if self.state == "APPROVED" and (
+            not self.review_confirmed
+            or not self.alias_keys
+            or not self.validated_sources
+        ):
+            raise ValueError("审核须确认题面、等义键和已核对资料版本。")
+        return self
+
+
 __all__ = [
+    "RecommendationCreateRequest",
+    "RecommendationSource",
+    "RecommendationUpdateRequest",
     "WanshitongDocumentPage",
     "WanshitongDocumentView",
     "WanshitongFeedbackExportRequest",

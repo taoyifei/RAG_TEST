@@ -2,10 +2,12 @@ import { LogIn, LogOut, Moon, RotateCcw, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { consumeLoginDraft } from "./authNavigation";
+import type { PublicPopularQuestion } from "./publicApi";
 import type { SuggestedQuestion } from "./suggestedQuestions";
 import { WanshitongChat } from "./WanshitongChat";
 import { WanshitongHome } from "./WanshitongHome";
 import { usePublicChat } from "./usePublicChat";
+import { usePopularQuestions } from "./usePopularQuestions";
 import { useSuggestedQuestions } from "./useSuggestedQuestions";
 
 export function WanshitongApp() {
@@ -31,6 +33,11 @@ export function WanshitongApp() {
       ? `${chat.deploymentId}:${chat.user.userId}`
       : undefined;
   const suggestions = useSuggestedQuestions(chat.turns, suggestionIdentityKey);
+  const popular = usePopularQuestions(
+    chat.sessionReady,
+    suggestionIdentityKey,
+    chat.retrySession,
+  );
   const submitSuggestedQuestion = (question: SuggestedQuestion) => {
     setRestoredDraft("");
     chat.submitNewTopic(question.question, question.id);
@@ -38,6 +45,10 @@ export function WanshitongApp() {
   const submitCurrentQuestion = (question: string) => {
     setRestoredDraft("");
     chat.submit(question);
+  };
+  const submitPopularQuestion = (question: PublicPopularQuestion) => {
+    setRestoredDraft("");
+    chat.submitNewTopic(question.question, question.id, "popular");
   };
   const startNewTopic = () => {
     setRestoredDraft("");
@@ -154,10 +165,12 @@ export function WanshitongApp() {
           conversationId={chat.conversationId}
           initialQuestion={restoredDraft}
           onRefresh={suggestions.refresh}
+          onPopularQuestionSubmit={submitPopularQuestion}
           onSuggestedQuestionSubmit={submitSuggestedQuestion}
           onStop={chat.stop}
           onSubmit={submitCurrentQuestion}
           questions={suggestions.questions}
+          popular={popular}
         />
       ) : (
         <WanshitongChat
@@ -168,12 +181,14 @@ export function WanshitongApp() {
           onFeedback={chat.submitFeedback}
           onFeedbackLogin={chat.login}
           onNewTopic={startNewTopic}
+          onPopularQuestionSubmit={submitPopularQuestion}
           onRefresh={suggestions.refresh}
           onRetry={chat.retry}
           onStop={chat.stop}
           onSubmit={submitCurrentQuestion}
           onSuggestedQuestionSubmit={submitSuggestedQuestion}
           questions={suggestions.questions}
+          popular={popular}
           turns={chat.turns}
         />
       )}

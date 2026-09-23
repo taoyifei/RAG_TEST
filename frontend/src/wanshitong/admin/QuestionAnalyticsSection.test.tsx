@@ -14,6 +14,8 @@ import {
   type QuestionAnalyticsItem,
   type QuestionAnalyticsPage,
   type QuestionAnalyticsRun,
+  type Recommendation,
+  type WanshitongDocument,
 } from "./adminApi";
 
 const traceId = `trace_${"a".repeat(32)}`;
@@ -259,5 +261,84 @@ describe("问题运营榜", () => {
     expect(await screen.findByText("尚无完整统计快照")).toBeVisible();
     expect(screen.getByText(/READ_LIMIT/)).toBeVisible();
     expect(screen.queryByText("材料怎么提交？")).not.toBeInTheDocument();
+  });
+
+  it("从高频题创建草稿，核对资料后才允许审核通过", async () => {
+    vi.spyOn(wanshitongAdminApi, "questionAnalytics").mockResolvedValue(
+      firstPage,
+    );
+    const draft: Recommendation = {
+      recommendation_id: `pq_${"a".repeat(32)}`,
+      question_text: "材料怎么提交？",
+      question_style: "SHORT",
+      topic_key: "待分类",
+      state: "DRAFT",
+      version: 1,
+      alias_keys: [item.group_key],
+      validated_sources: [],
+      source_current: false,
+      approved_at: null,
+      disabled_reason: null,
+    };
+    const create = vi
+      .spyOn(wanshitongAdminApi, "createRecommendation")
+      .mockResolvedValue(draft);
+    vi.spyOn(wanshitongAdminApi, "recommendations").mockResolvedValue({
+      items: [draft],
+      alias_revision: "none",
+    });
+    vi.spyOn(wanshitongAdminApi, "listDocuments").mockResolvedValue({
+      items: [
+        {
+          document_id: `doc_${"b".repeat(32)}`,
+          current_version_id: `dver_${"c".repeat(32)}`,
+          display_name: "审核依据",
+          retrievable: true,
+        } as WanshitongDocument,
+      ],
+      next_cursor: null,
+    });
+    const update = vi
+      .spyOn(wanshitongAdminApi, "updateRecommendation")
+      .mockImplementation((_, body) => Promise.resolve({
+        ...draft,
+        ...body,
+        state: "APPROVED",
+        version: 2,
+        source_current: true,
+        approved_at: "2026-09-23T00:00:00Z",
+      }));
+    const user = userEvent.setup();
+    render(<QuestionAnalyticsSection onInspectFeedback={vi.fn()} />);
+    await screen.findByText("材料怎么提交？");
+    await user.click(screen.getByRole("button", { name: "作为公共问题候选" }));
+    expect(create).toHaveBeenCalledWith(
+      item.group_key,
+      item.representative_question,
+      "待分类",
+    );
+    expect(await screen.findByDisplayValue("材料怎么提交？")).toBeVisible();
+    expect(screen.getByRole("button", { name: "审核通过" })).toBeDisabled();
+    await user.click(screen.getByLabelText("审核依据"));
+    await user.click(
+      screen.getByLabelText(
+        "我已核对题面、等义关系和所选资料版本，确认可以公开",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "审核通过" }));
+    expect(update).toHaveBeenCalledWith(
+      draft.recommendation_id,
+      expect.objectContaining({
+        state: "APPROVED",
+        alias_keys: [item.group_key],
+        validated_sources: [
+          {
+            document_id: `doc_${"b".repeat(32)}`,
+            version_id: `dver_${"c".repeat(32)}`,
+          },
+        ],
+        review_confirmed: true,
+      }),
+    );
   });
 });

@@ -370,10 +370,44 @@ export interface QuestionAnalyticsSamples {
   items: QuestionAnalyticsSample[];
 }
 
-function queryPath<T extends object>(
-  path: string,
-  values: T,
-): string {
+export type RecommendationState =
+  | "DRAFT"
+  | "APPROVED"
+  | "DISABLED"
+  | "NEEDS_REVIEW";
+
+export interface RecommendationSource {
+  document_id: string;
+  version_id: string;
+}
+
+export interface Recommendation {
+  recommendation_id: string;
+  question_text: string;
+  question_style: "SHORT" | "STANDARD" | "COMPOUND";
+  topic_key: string;
+  state: RecommendationState;
+  version: number;
+  alias_keys: string[];
+  validated_sources: RecommendationSource[];
+  source_current: boolean;
+  approved_at: string | null;
+  disabled_reason: string | null;
+}
+
+export interface RecommendationUpdate {
+  expected_version: number;
+  question_text: string;
+  question_style: Recommendation["question_style"];
+  topic_key: string;
+  state: RecommendationState;
+  alias_keys: string[];
+  validated_sources: RecommendationSource[];
+  review_confirmed: boolean;
+  disabled_reason: string | null;
+}
+
+function queryPath<T extends object>(path: string, values: T): string {
   const parameters = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) {
     if (value !== undefined && value !== "") {
@@ -469,10 +503,7 @@ export const wanshitongAdminApi = {
       `${BASE_PATH}/jobs/${encodeURIComponent(jobId)}:cancel`,
       jsonInit("POST"),
     ),
-  listHistory: (
-    filters: HistoryFilters = {},
-    signal?: AbortSignal,
-  ) =>
+  listHistory: (filters: HistoryFilters = {}, signal?: AbortSignal) =>
     consoleRequest<HistoryPageResult>(
       queryPath(`${BASE_PATH}/history`, filters),
       { signal },
@@ -603,6 +634,30 @@ export const wanshitongAdminApi = {
         group_key: groupKey,
       }),
       { signal },
+    ),
+  recommendations: (signal?: AbortSignal) =>
+    consoleRequest<{ items: Recommendation[]; alias_revision: string }>(
+      `${BASE_PATH}/recommendations`,
+      { signal },
+    ),
+  createRecommendation: (
+    groupKey: string,
+    question: string,
+    topicKey: string,
+  ) =>
+    consoleRequest<Recommendation>(
+      `${BASE_PATH}/recommendations`,
+      jsonInit("POST", {
+        source_group_key: groupKey,
+        question_text: question,
+        topic_key: topicKey,
+        question_style: "SHORT",
+      }),
+    ),
+  updateRecommendation: (id: string, body: RecommendationUpdate) =>
+    consoleRequest<Recommendation>(
+      `${BASE_PATH}/recommendations/${encodeURIComponent(id)}`,
+      jsonInit("PATCH", body),
     ),
   models: (signal?: AbortSignal) =>
     consoleRequest<WanshitongModels>(`${BASE_PATH}/models`, { signal }),

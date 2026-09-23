@@ -25,6 +25,7 @@ from rag_app.wanshitong.public_models import (
     PublicConversationClearResponse,
     PublicFeedbackRequest,
     PublicFeedbackResponse,
+    PublicPopularQuestions,
     PublicSessionRequest,
     PublicSessionResponse,
     PublicSessionUser,
@@ -38,6 +39,9 @@ from rag_app.wanshitong.public_stream import (
     project_public_stream,
     render_public_final,
 )
+from rag_app.wanshitong.question_recommendations import (
+    QuestionRecommendationService,
+)
 from rag_app.wanshitong.scope_service import FixedScopeService
 from rag_app.wanshitong.shortcuts import (
     SHORTCUT_CATALOG,
@@ -49,6 +53,7 @@ PUBLIC_SESSION_PATH = "/api/public/session"
 PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities"
 PUBLIC_CHAT_PATH = "/api/public/chat"
 PUBLIC_FEEDBACK_PATH = "/api/public/feedback"
+PUBLIC_POPULAR_QUESTIONS_PATH = "/api/public/popular-questions"
 PUBLIC_CONVERSATION_PATH = "/api/public/conversations/{conversation_id}"
 _PUBLIC_STREAM_FIRST_CONTENT_SECONDS = 120.0
 _PUBLIC_STREAM_IDLE_SECONDS = 120.0
@@ -83,12 +88,13 @@ class _PublicStreamingResponse(StreamingResponse):
             self._cancel_stream()
 
 
-def register_public_routes(
+def register_public_routes(  # noqa: PLR0915
     app: FastAPI,
     *,
     runtime: ProductRuntime,
     scope_service: FixedScopeService,
     sessions: PublicSessionProvider,
+    recommendations: QuestionRecommendationService,
 ) -> None:
     """注册固定 Scope 的匿名 Facade，不新增查询或存储服务。
 
@@ -97,6 +103,7 @@ def register_public_routes(
         runtime: 唯一 Universal Product Runtime。
         scope_service: WB-01 已校验的固定 Scope 服务。
         sessions: 由部署主密钥派生的匿名会话服务。
+        recommendations: 已审核公共题目录。
 
     """
 
@@ -170,6 +177,22 @@ def register_public_routes(
                     revision=item.revision,
                 )
                 for item in SHORTCUT_CATALOG.public_definitions()
+            )
+        )
+
+    @app.get(
+        PUBLIC_POPULAR_QUESTIONS_PATH,
+        tags=["wanshitong-public"],
+        response_model=PublicPopularQuestions,
+    )
+    def _popular_questions(request: Request) -> PublicPopularQuestions:
+        _reject_query_parameters(request)
+        _authenticate_public_cookie(request, sessions)
+        binding = scope_service.binding()
+        return PublicPopularQuestions.model_validate(
+            recommendations.public_questions(
+                project_id=binding.project_id,
+                knowledge_base_id=binding.knowledge_base_id,
             )
         )
 
@@ -410,6 +433,7 @@ __all__ = [
     "PUBLIC_CHAT_PATH",
     "PUBLIC_CONVERSATION_PATH",
     "PUBLIC_FEEDBACK_PATH",
+    "PUBLIC_POPULAR_QUESTIONS_PATH",
     "PUBLIC_SESSION_PATH",
     "register_public_routes",
 ]

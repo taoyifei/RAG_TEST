@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WanshitongApp } from "./WanshitongApp";
 import * as authNavigation from "./authNavigation";
+import type { PublicPopularQuestions } from "./publicApi";
 
 const encoder = new TextEncoder();
 
@@ -75,7 +76,18 @@ function pathOf(input: RequestInfo | URL): string {
   return new URL(value, "http://localhost").pathname;
 }
 
-function installFetch(chatResponse: Response) {
+function installFetch(
+  chatResponse: Response,
+  popular: PublicPopularQuestions = {
+    mode: "EMPTY",
+    generated_at: null,
+    window_days: 7,
+    items: [],
+  },
+  capabilities: typeof capabilitiesBody & {
+    request_usage_context?: boolean;
+  } = capabilitiesBody,
+) {
   return vi
     .spyOn(globalThis, "fetch")
     .mockImplementation((input: RequestInfo | URL) => {
@@ -84,7 +96,10 @@ function installFetch(chatResponse: Response) {
         return Promise.resolve(Response.json(sessionBody));
       }
       if (path === "/api/public/capabilities") {
-        return Promise.resolve(Response.json(capabilitiesBody));
+        return Promise.resolve(Response.json(capabilities));
+      }
+      if (path === "/api/public/popular-questions") {
+        return Promise.resolve(Response.json(popular));
       }
       if (path === "/api/public/chat") return Promise.resolve(chatResponse);
       if (path === "/api/public/feedback") {
@@ -167,8 +182,52 @@ describe("湾事通公共应用", () => {
     expect(fetchMock.mock.calls.map(([input]) => pathOf(input))).toEqual([
       "/api/public/session",
       "/api/public/capabilities",
+      "/api/public/popular-questions",
     ]);
     expect(screen.queryByText("管理员登录")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "大家常问" })).toBeDisabled();
+    expect(screen.getByText(/当前展示示例问题/)).toBeVisible();
+  });
+
+  it("大家常问只提交审核后的可见题面和 popular 入口", async () => {
+    const question = "办理材料如何提交？";
+    const recommendationId = `pq_${"a".repeat(32)}`;
+    const fetchMock = installFetch(
+      streamResponse([
+        event("final", 0, { answer: "已回答公开问题。", citations: [] }),
+      ]),
+      {
+        mode: "POPULAR",
+        generated_at: "2026-09-23T00:00:00Z",
+        window_days: 7,
+        items: [{ id: recommendationId, question, topic_key: "办理" }],
+      },
+      { ...capabilitiesBody, request_usage_context: true },
+    );
+    const user = userEvent.setup();
+    await openHome();
+    const tab = await screen.findByRole("tab", { name: "大家常问" });
+    await waitFor(() => expect(tab).toBeEnabled());
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => pathOf(input) === "/api/public/chat",
+      ),
+    ).toHaveLength(0);
+    await user.click(tab);
+    await user.click(screen.getByRole("button", { name: question }));
+    await screen.findByText("已回答公开问题。");
+    const chatCalls = fetchMock.mock.calls.filter(
+      ([input]) => pathOf(input) === "/api/public/chat",
+    );
+    expect(chatCalls).toHaveLength(1);
+    const body = chatCalls[0][1]?.body;
+    expect(JSON.parse(typeof body === "string" ? body : "{}")).toMatchObject({
+      query: question,
+      client_context: {
+        entrypoint: "popular",
+        recommendation_id: recommendationId,
+      },
+    });
   });
 
   it("Session 初始化失败时提供可重试页面", async () => {
@@ -187,7 +246,7 @@ describe("湾事通公共应用", () => {
     expect(
       await screen.findByRole("heading", { name: "你的内部知识助手" }),
     ).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("未登录 bootstrap 只触发整页 SSO，不显示匿名降级", async () => {
@@ -796,6 +855,7 @@ describe("湾事通公共应用", () => {
     expect(paths).toEqual([
       "/api/public/session",
       "/api/public/capabilities",
+      "/api/public/popular-questions",
       "/api/public/chat",
     ]);
     const chatBody = fetchMock.mock.calls.find(
@@ -1160,7 +1220,7 @@ describe("湾事通公共应用", () => {
     });
     expect(sessionCalls).toBe(1);
     expect(chatCalls).toBe(1);
-    expect(fetchMock.mock.calls).toHaveLength(3);
+    expect(fetchMock.mock.calls).toHaveLength(4);
   });
 
   it("pagehide 取消仍在进行的请求", async () => {

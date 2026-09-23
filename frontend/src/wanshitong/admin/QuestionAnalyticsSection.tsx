@@ -13,6 +13,7 @@ import {
   type QuestionAnalyticsRun,
   type QuestionAnalyticsSamples,
 } from "./adminApi";
+import { RecommendationCatalogSection } from "./RecommendationCatalogSection";
 
 const PAGE_SIZE = 20;
 const POLL_INTERVAL_MS = 2000;
@@ -86,6 +87,9 @@ export function QuestionAnalyticsSection({
   const [samples, setSamples] = useState<QuestionAnalyticsSamples>();
   const [samplesError, setSamplesError] = useState<unknown>();
   const [samplesLoading, setSamplesLoading] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogSelectedId, setCatalogSelectedId] = useState<string>();
+  const [candidateBusy, setCandidateBusy] = useState(false);
   const samplesController = useRef<AbortController | null>(null);
   const activeRunId = latestRun?.state === "BUILDING" ? latestRun.run_id : null;
 
@@ -241,6 +245,25 @@ export function QuestionAnalyticsSection({
       });
   }
 
+  async function createCandidate(item: QuestionAnalyticsItem) {
+    if (item.group_kind !== "EXACT" || !item.representative_question) return;
+    setCandidateBusy(true);
+    setError(undefined);
+    try {
+      const created = await wanshitongAdminApi.createRecommendation(
+        item.group_key,
+        item.representative_question,
+        "待分类",
+      );
+      setCatalogSelectedId(created.recommendation_id);
+      setCatalogOpen(true);
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setCandidateBusy(false);
+    }
+  }
+
   const published = page?.run?.state === "COMPLETE" ? page.run : null;
   const stateMessage = pollingStalled
     ? "任务状态连续读取失败；点击“刷新显示”重新检查。当前完整快照仍可查看。"
@@ -260,6 +283,14 @@ export function QuestionAnalyticsSection({
           <p>按已完成的统计快照查看真实需求与需要优先处理的问题。</p>
         </div>
         <div className="row-actions">
+          <button
+            aria-expanded={catalogOpen}
+            className="secondary"
+            onClick={() => setCatalogOpen((current) => !current)}
+            type="button"
+          >
+            公共问题审核目录
+          </button>
           <button
             className="secondary"
             disabled={loading}
@@ -427,6 +458,17 @@ export function QuestionAnalyticsSection({
                     </time>
                   </td>
                   <td>
+                    {board === "frequent" &&
+                      item.group_kind === "EXACT" &&
+                      item.representative_question && (
+                        <button
+                          disabled={candidateBusy}
+                          onClick={() => void createCandidate(item)}
+                          type="button"
+                        >
+                          作为公共问题候选
+                        </button>
+                      )}
                     <button
                       aria-expanded={selectedGroup === item.group_key}
                       onClick={() => openSamples(item)}
@@ -514,6 +556,12 @@ export function QuestionAnalyticsSection({
             下一页
           </button>
         </div>
+      )}
+      {catalogOpen && (
+        <RecommendationCatalogSection
+          availableGroups={page?.items ?? []}
+          selectedId={catalogSelectedId}
+        />
       )}
     </section>
   );

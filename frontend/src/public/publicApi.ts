@@ -37,6 +37,19 @@ export interface PublicUsageContext {
   recommendation_id?: string;
 }
 
+export interface PublicPopularQuestion {
+  id: string;
+  question: string;
+  topic_key: string;
+}
+
+export interface PublicPopularQuestions {
+  mode: "POPULAR" | "EMPTY";
+  generated_at: string | null;
+  window_days: 7;
+  items: PublicPopularQuestion[];
+}
+
 export type PublicFeedbackReasonDetail =
   | "INCORRECT"
   | "INCOMPLETE"
@@ -85,6 +98,7 @@ const PUBLIC_SESSION_PATH = "/api/public/session";
 const PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities";
 const PUBLIC_CHAT_PATH = "/api/public/chat";
 const PUBLIC_FEEDBACK_PATH = "/api/public/feedback";
+const PUBLIC_POPULAR_QUESTIONS_PATH = "/api/public/popular-questions";
 
 async function readError(response: Response): Promise<PublicApiError> {
   let body: PublicErrorBody = {};
@@ -153,6 +167,17 @@ export async function getPublicCapabilities(
     signal,
   });
   return requireJson<PublicCapabilities>(response);
+}
+
+export async function getPopularQuestions(
+  signal?: AbortSignal,
+): Promise<PublicPopularQuestions> {
+  const response = await fetch(withAppBase(PUBLIC_POPULAR_QUESTIONS_PATH), {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  return requireJson<PublicPopularQuestions>(response);
 }
 
 export async function openPublicChat(options: {

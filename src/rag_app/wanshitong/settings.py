@@ -11,9 +11,8 @@ from rag_app.wanshitong.sso_settings import SsoSettings
 
 _PRODUCT_MODE_ENVIRONMENT_KEY = "RAG_PRODUCT_MODE"
 _DEMO_ALLOW_HTTP_ENVIRONMENT_KEY = "RAG_WANSHITONG_DEMO_ALLOW_HTTP"
-_DEPARTMENT_SHADOW_ENVIRONMENT_KEY = (
-    "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
-)
+_DEPARTMENT_SHADOW_ENVIRONMENT_KEY = "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+_POPULAR_QUESTIONS_ENVIRONMENT_KEY = "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +22,7 @@ class WanshitongSettings:
     product_mode: ProductMode = ProductMode.UNIVERSAL
     demo_allow_http: bool = False
     department_shadow_enabled: bool = False
+    popular_questions_enabled: bool = True
     sso: SsoSettings = field(default_factory=SsoSettings)
 
     @property
@@ -75,6 +75,16 @@ class WanshitongSettings:
                 "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED "
                 "仅支持 true 或 false。"
             )
+        raw_popular = (
+            source.get(_POPULAR_QUESTIONS_ENVIRONMENT_KEY, "true")
+            .strip()
+            .casefold()
+        )
+        if raw_popular not in {"true", "false"}:
+            raise ValueError(
+                "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED "
+                "仅支持 true 或 false。"
+            )
         return cls(
             product_mode=product_mode,
             demo_allow_http=(
@@ -84,6 +94,9 @@ class WanshitongSettings:
             department_shadow_enabled=(
                 product_mode is ProductMode.WANSHITONG
                 and raw_department_shadow == "true"
+            ),
+            popular_questions_enabled=(
+                product_mode is ProductMode.WANSHITONG and raw_popular == "true"
             ),
             sso=(
                 SsoSettings.from_environment(

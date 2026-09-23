@@ -2,9 +2,13 @@ import { Plus } from "lucide-react";
 
 import { PublicAnswer } from "./PublicAnswer";
 import { PublicChatComposer } from "./PublicChatComposer";
-import { SuggestedQuestionCarousel } from "./SuggestedQuestionCarousel";
+import { PublicQuestionTabs } from "./PublicQuestionTabs";
 import type { SuggestedQuestion } from "./suggestedQuestions";
-import type { PublicFeedbackSubmission } from "./publicApi";
+import type {
+  PublicFeedbackSubmission,
+  PublicPopularQuestion,
+  PublicPopularQuestions,
+} from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
 
 export function WanshitongChat({
@@ -15,12 +19,14 @@ export function WanshitongChat({
   onFeedback,
   onFeedbackLogin,
   onNewTopic,
+  onPopularQuestionSubmit,
   onRefresh,
   onRetry,
   onStop,
   onSubmit,
   onSuggestedQuestionSubmit,
   questions,
+  popular,
   turns,
 }: {
   busy: boolean;
@@ -34,12 +40,14 @@ export function WanshitongChat({
   ) => void;
   onFeedbackLogin: () => void;
   onNewTopic: () => void;
+  onPopularQuestionSubmit: (question: PublicPopularQuestion) => void;
   onRefresh: () => void;
   onRetry: (turnId: string, question: string, conversationId: string) => void;
   onStop: () => void;
   onSubmit: (question: string) => void;
   onSuggestedQuestionSubmit: (question: SuggestedQuestion) => void;
   questions: readonly SuggestedQuestion[];
+  popular: PublicPopularQuestions;
   turns: PublicTurn[];
 }) {
   return (
@@ -82,12 +90,14 @@ export function WanshitongChat({
           {!busy &&
             turns.at(-1)?.status !== "submitting" &&
             turns.at(-1)?.status !== "streaming" && (
-              <SuggestedQuestionCarousel
+              <PublicQuestionTabs
                 busy={busy}
                 heading="换个话题"
+                onPopularSubmit={onPopularQuestionSubmit}
                 onRefresh={onRefresh}
-                onSubmit={onSuggestedQuestionSubmit}
-                questions={questions}
+                onSuggestedSubmit={onSuggestedQuestionSubmit}
+                popular={popular}
+                suggestions={questions}
               />
             )}
           <PublicChatComposer

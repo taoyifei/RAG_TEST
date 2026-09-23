@@ -25,6 +25,9 @@ from rag_app.wanshitong.public_session import (
     PublicSessionService,
 )
 from rag_app.wanshitong.question_analytics import QuestionAnalyticsService
+from rag_app.wanshitong.question_recommendations import (
+    QuestionRecommendationService,
+)
 from rag_app.wanshitong.scope_service import FixedScopeService
 from rag_app.wanshitong.scope_store import ScopeBindingStore
 from rag_app.wanshitong.settings import WanshitongSettings
@@ -116,6 +119,12 @@ def configure_wanshitong_app(
         retention_days=runtime.settings.history_retention_days,
     )
     app.state.wanshitong_question_analytics = question_analytics
+    recommendations = QuestionRecommendationService(
+        runtime.connections,
+        deployment_id=public_sessions.deployment_id or "LEGACY_UNKNOWN",
+        public_enabled=resolved.popular_questions_enabled,
+    )
+    app.state.wanshitong_question_recommendations = recommendations
     document_metadata = WanshitongDocumentMetadataStore(runtime.connections)
     document_metadata.synchronize_legacy_rows()
     app.state.wanshitong_document_metadata = document_metadata
@@ -138,12 +147,14 @@ def configure_wanshitong_app(
         scope_service=service,
         document_metadata=document_metadata,
         question_analytics=question_analytics,
+        question_recommendations=recommendations,
     )
     register_public_routes(
         app,
         runtime=runtime,
         scope_service=service,
         sessions=public_sessions,
+        recommendations=recommendations,
     )
     return service
 
