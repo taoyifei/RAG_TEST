@@ -32,6 +32,7 @@ _CONTEXT_MODIFIER = re.compile(
 )
 _INTERROGATIVE_CLAUSE = re.compile(
     r"谁|什么|啥|哪些|哪(?:个|些|里|一)|多少|多久|怎么|如何|怎样|"
+    r"几(?:个)?(?:工作日|自然日|日|天|小时|分钟|周|月|年)|"
     r"何时|什么时候|是否|能否|可否|[吗呢]$|不$"
 )
 _TARGET_BEFORE_QUESTION = re.compile(
@@ -69,6 +70,25 @@ _MIN_TARGET_CHARS = 2
 _INDEPENDENT_TOPIC_PREFIX = re.compile(
     r"^(?P<topic>[^，,；;。！？?!]{2,80}?)(?:需要|应当|必须|要|须)"
 )
+
+
+def _question_clauses(normalized: str) -> tuple[str, ...]:
+    """顿号两侧各自成问时才拆句；枚举的宾语仍属同一问句。"""
+    raw = tuple(
+        match[0].strip()
+        for match in _CLAUSES.finditer(normalized)
+        if match[0].strip()
+    )
+    clauses: list[str] = []
+    for clause in raw:
+        parts = tuple(part.strip() for part in clause.split("、"))
+        if len(parts) > 1 and all(
+            part and _INTERROGATIVE_CLAUSE.search(part) for part in parts
+        ):
+            clauses.extend(parts)
+        else:
+            clauses.append(clause)
+    return tuple(clauses)
 
 
 class SpanKind(StrEnum):
@@ -137,11 +157,7 @@ def build_input_spans(  # noqa: PLR0912, PLR0915
         normalized = (
             whole_analysis.resolved_query or whole_analysis.normalized_query
         ).strip()
-        clauses = tuple(
-            match[0].strip()
-            for match in _CLAUSES.finditer(normalized)
-            if match[0].strip()
-        )
+        clauses = _question_clauses(normalized)
         _append(spans, prefix, turn, SpanKind.CLAUSE, clauses or (normalized,))
         if whole_analysis.semantics.source_qualifier:
             _append(
@@ -196,7 +212,9 @@ def build_input_spans(  # noqa: PLR0912, PLR0915
                     targets.append(actor)
             # 并列问句中的对象以原文位置分开，Planner 仍只能引用这些片段。
             before_relation = clause.split("分别", 1)[0]
-            if _MULTIPLE.search(before_relation):
+            if re.search(r"分别|各自", normalized) and _MULTIPLE.search(
+                before_relation
+            ):
                 targets.extend(
                     part.strip()
                     for part in before_relation.split("、")

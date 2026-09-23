@@ -303,6 +303,7 @@ _ANSWER_SHAPES = {
     RequestedAnswerType.PROCEDURE: AtomAnswerShape.PROCEDURE,
     RequestedAnswerType.DUTIES: AtomAnswerShape.DUTIES,
     RequestedAnswerType.RESPONSIBLE_PARTY: AtomAnswerShape.RESPONSIBLE_PARTY,
+    RequestedAnswerType.DURATION: AtomAnswerShape.DURATION,
     RequestedAnswerType.COUNT: AtomAnswerShape.COUNT,
 }
 

@@ -40,6 +40,14 @@ _COUNT_QUESTION = re.compile(
     r"(?:有)?多少(?:种|个)?(?:步骤|步|项|阶段|环节)?|(?<!哪)几种|"
     r"几(?:个)?(?:步骤|阶段|环节)"
 )
+_DURATION_QUESTION = re.compile(
+    r"(?:几|多少)(?:个)?(?:工作日|自然日|日|天|小时|分钟|周|月|年)"
+    r"|多长时间|多久"
+)
+_OTHER_INTERROGATIVE = re.compile(r"谁|哪些|什么|怎么|如何|怎样|何时")
+_DURATION_TARGET_SUFFIX = re.compile(
+    r"(?:需要|应当|必须|等待|间隔|持续|要|须|需|应|有|留|等)+$"
+)
 _EXPECTED_COUNT = re.compile(
     rf"(?<!第)(?P<number>{_NUMERAL})(?:种|类|项|步)(?![类型])"
 )
@@ -308,6 +316,24 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
     normalized = strip_trailing_response_directive(normalized)
     request_style = _LEADING_REQUEST.match(normalized) is not None
     core = _question_core(normalized)
+
+    duration = _DURATION_QUESTION.search(core)
+    if duration is not None and not _OTHER_INTERROGATIVE.search(
+        core[: duration.start()] + core[duration.end() :]
+    ):
+        raw_target = _DURATION_TARGET_SUFFIX.sub(
+            "", core[: duration.start()]
+        )
+        target, source = _target_and_source(raw_target)
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source or explicit_source,
+                relation="时限",
+                answer_type=RequestedAnswerType.DURATION,
+                source="RULE",
+                reason_codes=("DURATION_QUESTION_SYNTAX",),
+            )
 
     prerequisite = _PREREQUISITE_ENUMERATION.fullmatch(core)
     if prerequisite is not None:

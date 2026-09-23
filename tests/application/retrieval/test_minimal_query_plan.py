@@ -15,7 +15,7 @@ from rag_app.application.retrieval.minimal_plan import (
 )
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import KnowledgeBaseScope, SearchRequest
-from rag_app.core.models.query_plan import AtomAnswerShape
+from rag_app.core.models.query_plan import AtomAnswerShape, fallback_query_plan
 
 
 def _request(text: str, *, context: tuple[str, ...] = ()) -> SearchRequest:
@@ -257,3 +257,51 @@ def test_each_natural_subquestion_overrides_wrong_planner_count(
         analysis,
         single_atom=False,
     ) is expected
+
+
+def test_responsible_party_question_keeps_one_listed_object() -> None:
+    question = "哪些部门负责制定考核指标的考核标准、考核分数和考核频次？"
+    spans = build_input_spans(_request(question))
+    targets = [span.text for span in spans if span.kind.value == "TARGET"]
+
+    assert targets == [question.rstrip("？")]
+    assert _trusted_answer_shape(
+        question,
+        AtomAnswerShape.FACT,
+        QueryAnalyzer().analyze(_request(question)),
+        single_atom=False,
+    ) is AtomAnswerShape.RESPONSIBLE_PARTY
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "设计文档由谁确认、几天内反馈？",
+        "设计文档几天内反馈、由谁确认？",
+    ),
+)
+def test_parallel_interrogatives_split_without_changing_question_order(
+    question: str,
+) -> None:
+    clauses = [
+        span.text
+        for span in build_input_spans(_request(question))
+        if span.kind.value == "CLAUSE"
+    ]
+
+    assert len(clauses) == 2
+    assert any("谁确认" in clause for clause in clauses)
+    assert any("几天内反馈" in clause for clause in clauses)
+
+
+def test_single_duration_question_does_not_fall_back_to_generic_fact() -> None:
+    analysis = QueryAnalyzer().analyze(_request("采购应答要留几天？"))
+    plan = fallback_query_plan(
+        analysis,
+        effort="DIRECT",
+        reason_code="TEST",
+        planner_called=False,
+    )
+
+    assert analysis.semantics.target == "采购应答"
+    assert plan.atoms[0].answer_shape is AtomAnswerShape.DURATION

@@ -32,6 +32,8 @@ _DURATION_QUESTION = re.compile(
 )
 _RESPONSIBLE_QUESTION = re.compile(
     r"(?:由|归|让)?谁(?:来)?(?:负责|牵头|确认|审批|审核|反馈|提交|执行|处理)"
+    r"|(?:哪些|哪(?:个|些))(?:部门|团队|单位|岗位|人员|机构|角色)"
+    r"(?:负责|承担|执行|管理|制定|审核|提交|确认|牵头)"
 )
 
 _TRUSTED_ANSWER_SHAPES = {
