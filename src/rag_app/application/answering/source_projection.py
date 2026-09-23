@@ -24,11 +24,19 @@ from rag_app.core.models.retrieval import (
 )
 from rag_app.core.query_text import literal_relation_modifiers_supported
 
-SOURCE_PROJECTION_REVISION = "wb08r-source-projection-v2"
+SOURCE_PROJECTION_REVISION = "wb08r-source-projection-v3"
 _MAX_CLAIM_TEXT_CHARS = 6000
 _QUANTITY = re.compile(
     r"\d+(?:\.\d+)?(?:个)?(?:工作日|自然日|分钟|小时|日|天|周|月|年)"
 )
+_PARTY_ACTION = re.compile(
+    r"(?:由|归)?谁(?:来)?(?P<action>[\u4e00-\u9fff]{2,8})$"
+)
+_DURATION_ACTION = re.compile(
+    r"(?:几|多少)(?:个)?(?:工作日|自然日|日|天|小时|分钟|周|月|年)"
+    r"(?:内|前|后)?(?P<action>[\u4e00-\u9fff]{2,8})$"
+)
+_ACTION_INTERROGATIVES = ("什么", "哪些", "怎么", "如何", "谁")
 
 
 class SourceProjectionError(ValueError):
@@ -37,6 +45,18 @@ class SourceProjectionError(ValueError):
     def __init__(self, failure_code: str) -> None:
         self.failure_code = failure_code
         super().__init__(failure_code)
+
+
+def _explicit_question_action(fragment: str) -> str | None:
+    """仅提取明确写在责任或时限子问题末尾的动作。"""
+    question = fragment.strip().rstrip("？?！!。． ")
+    match = _PARTY_ACTION.search(question) or _DURATION_ACTION.search(question)
+    if match is None:
+        return None
+    action = match["action"]
+    if any(word in action for word in _ACTION_INTERROGATIVES):
+        return None
+    return action
 
 
 def _ordered_texts(
@@ -171,6 +191,16 @@ def project_bound_claim(  # noqa: PLR0913
         raise SourceProjectionError("PROJECTION_READ_UNIT_MISSING") from error
     registry = {item.support_id: item for item in evidence}
     facts = {fact.fact_id: fact for fact in physical_table_facts}
+    if semantic_relation_supported and (
+        action := _explicit_question_action(question_fragment)
+    ) is not None:
+        selected_source_text = " ".join(
+            registry[support_id].citation_text
+            for unit in selected
+            for support_id in unit.support_ids
+        )
+        if action not in selected_source_text:
+            raise SourceProjectionError("QUESTION_ACTION_NOT_IN_SOURCE")
     table_units = tuple(unit for unit in selected if unit.fact_id is not None)
     if table_units:
         selected_fact_ids = tuple(

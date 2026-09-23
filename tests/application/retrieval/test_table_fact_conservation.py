@@ -166,3 +166,68 @@ def test_value_match_keeps_exact_row_fact_for_both_question_orders() -> None:
             for atom in plan.atoms
             for fact_id in target_facts
         }
+
+
+def test_action_coverage_selects_unseeded_closed_row() -> None:
+    cells = (
+        _cell(1, 0, 0, "责任主体"),
+        _cell(2, 0, 1, "反馈时限"),
+        _cell(3, 0, 2, "执行动作"),
+        _cell(4, 2, 0, "业务团队"),
+        _cell(5, 2, 1, "收到设计文档后2个工作日内反馈"),
+        _cell(6, 2, 2, "确认设计方向与业务目标一致"),
+        _cell(7, 3, 0, "开发中心"),
+        _cell(8, 3, 1, "设计文档完成后2个工作日内提交配置库"),
+    )
+    candidates = {
+        candidate.hydrated.chunk.chunk_id: candidate
+        for candidate, _ in cells
+    }
+    items = tuple(
+        item.model_copy(update={"rerank_rank": None})
+        if index in {5, 6}
+        else item
+        for index, (_, item) in enumerate(cells, 1)
+    )
+    plan = make_query_plan(
+        standalone_query="设计文档由谁确认、几天内反馈？",
+        intent="FACT",
+        effort="DIRECT",
+        atoms=(
+            QueryAtom(
+                atom_id="A1",
+                target="设计文档",
+                relation="确认",
+                answer_shape=AtomAnswerShape.RESPONSIBLE_PARTY,
+                original_fragment="设计文档由谁确认",
+            ),
+            QueryAtom(
+                atom_id="A2",
+                target="设计文档",
+                relation="内反馈",
+                answer_shape=AtomAnswerShape.DURATION,
+                original_fragment="几天内反馈",
+            ),
+        ),
+        reason_code="TEST",
+        planner_called=False,
+    )
+    priority = _priority_reading_units(
+        query_plan=plan,
+        items=items,
+        candidate_by_id=candidates,
+        root_evidence=(items[7],),
+        atom_candidates_by_atom=(
+            ("A1", (items[7],)),
+            ("A2", (items[7],)),
+        ),
+        policy=RetrievalPolicy(),
+    )
+
+    selected = {
+        owner: {key[0] for key in keys} for owner, keys in priority
+    }
+    correct_row = {stable_support_key(items[index]) for index in (3, 4, 5)}
+    assert correct_row <= selected["A1"]
+    assert correct_row <= selected["A2"]
+    assert stable_support_key(items[7]) not in selected["A1"]

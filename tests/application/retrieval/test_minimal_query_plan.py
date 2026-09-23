@@ -294,6 +294,34 @@ def test_parallel_interrogatives_split_without_changing_question_order(
     assert any("几天内反馈" in clause for clause in clauses)
 
 
+def test_planner_overlapping_fragments_keep_each_question_independent() -> None:
+    request = _request("设计文档由谁确认、几天内反馈？")
+    atoms = _build(
+        _payload(
+            _atom(("Q.C1", "Q.C2"), "Q.T1", "Q.R1", "COUNT"),
+            _atom(("Q.C1", "Q.C2"), "Q.T1", "Q.R2", "COUNT"),
+        ),
+        request,
+    )
+
+    assert [atom.original_fragment for atom in atoms] == [
+        "设计文档由谁确认",
+        "几天内反馈",
+    ]
+    assert [atom.answer_shape for atom in atoms] == [
+        AtomAnswerShape.RESPONSIBLE_PARTY,
+        AtomAnswerShape.DURATION,
+    ]
+
+
+def test_who_performs_an_explicit_action_is_a_party_question() -> None:
+    analysis = QueryAnalyzer().analyze(_request("设计文档由谁确认？"))
+
+    assert analysis.semantics.target == "设计文档"
+    assert analysis.semantics.relation == "确认"
+    assert analysis.semantics.answer_type.value == "RESPONSIBLE_PARTY"
+
+
 def test_single_duration_question_does_not_fall_back_to_generic_fact() -> None:
     analysis = QueryAnalyzer().analyze(_request("采购应答要留几天？"))
     plan = fallback_query_plan(

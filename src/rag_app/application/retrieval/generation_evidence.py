@@ -59,7 +59,7 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v18"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v19"
 _MIN_TABLE_FACT_COLUMNS = 2
 _TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
@@ -72,6 +72,7 @@ _MIN_TABLE_SUBJECT_CHARS = 3
 _MIN_TABLE_ACTION_CHARS = 12
 _MIN_QUESTION_SOURCE_RUN = 4
 _MIN_READING_LABEL_CHARS = 2
+_MIN_RELATION_TERM_CHARS = 2
 _MAX_READING_LABEL_CHARS = 64
 _MIN_READING_LABEL_COVERAGE = 0.5
 _MIN_READING_RELATION_CELLS = 2
@@ -1323,15 +1324,53 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
     readable = {_identity(item): item for item in items}
     for atom in query_plan.atoms:
         focused: list[
-            tuple[tuple[float, int, int], tuple[EvidenceItem, ...]]
+            tuple[tuple[int, int, float, int, int], tuple[EvidenceItem, ...]]
         ] = []
         query = f"{query_plan.original_query} {atom.original_fragment or ''}"
+        relation_terms = tuple(
+            dict.fromkeys(
+                relation
+                for candidate_atom in query_plan.atoms
+                if (
+                    relation := _normalized(candidate_atom.relation)
+                )
+                and len(relation) >= _MIN_RELATION_TERM_CHARS
+                and relation in _normalized(query_plan.original_query)
+            )
+        )
+        own_relation = _normalized(atom.relation)
+        seeded_tables = {
+            table
+            for (table, _row), members in rows.items()
+            if _reading_row_seed_rank(atom, members, candidate_by_id)
+            is not None
+        }
         for (table, _row), members in rows.items():
             row_seed_rank = _reading_row_seed_rank(
                 atom, members, candidate_by_id
             )
-            if row_seed_rank is None:
+            if row_seed_rank is None and table not in seeded_tables:
                 continue
+            row_values = _normalized(
+                " ".join(
+                    member.citation_text
+                    for member in members
+                    if (cell := _reading_table_identity(member)) is not None
+                    and cell[2] != _TABLE_ROW_LABEL_COLUMN
+                )
+            )
+            own_relation_hit = int(
+                bool(own_relation and own_relation in relation_terms
+                     and own_relation in row_values)
+            )
+            relation_hits = sum(
+                relation in row_values for relation in relation_terms
+            )
+            if row_seed_rank is None and not relation_hits:
+                continue
+            effective_seed_rank = (
+                row_seed_rank if row_seed_rank is not None else 2**31
+            )
             labels = [
                 item
                 for item in members
@@ -1397,8 +1436,10 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
                 focused.append(
                     (
                         (
+                            own_relation_hit,
+                            relation_hits,
                             *score,
-                            -row_seed_rank,
+                            -effective_seed_rank,
                         ),
                         related,
                     )
@@ -2286,6 +2327,9 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     }
     per_atom: list[tuple[str, tuple[str, ...]]] = []
     missing: list[str] = []
+    priority_keys_by_atom: dict[str, set[tuple[object, ...]]] = defaultdict(set)
+    for atom_id, unit in selected_priority_units:
+        priority_keys_by_atom[atom_id].update(unit)
     atom_group_ids: dict[str, set[str]] = defaultdict(set)
     for atom_id, items in atom_candidates_by_atom:
         atom_group_ids[atom_id].update(
@@ -2318,6 +2362,8 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                 item.support_id in root_ids
                 or item.source_group_id in root_group_ids
                 or _identity(item.evidence_item) in member_keys
+                or _identity(item.evidence_item)
+                in priority_keys_by_atom[atom.atom_id]
                 or atom.atom_id in item.linked_atom_ids
                 or (
                     item.source_group_id is not None

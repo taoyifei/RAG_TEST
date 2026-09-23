@@ -157,6 +157,31 @@ def build_query_atoms(
             or relation.turn != "CURRENT"
         ):
             raise MinimalPlanValidationError("PLANNER_INVALID_SPAN_KIND")
+        referenced_questions = tuple(
+            span for span in fragments if span in required_clauses
+        )
+        if (
+            len(required_clauses) > 1
+            and len(payload.atoms) == len(required_clauses)
+            and len(referenced_questions) > 1
+        ):
+            relation_matches = tuple(
+                span
+                for span in referenced_questions
+                if relation.text in span.text
+            )
+            selected_question = (
+                relation_matches[0]
+                if len(relation_matches) == 1
+                else required_clauses[index - 1]
+            )
+            if selected_question in referenced_questions:
+                fragments = tuple(
+                    span
+                    for span in fragments
+                    if span not in required_clauses
+                    or span == selected_question
+                )
         referenced_clauses.update(
             span.span_id for span in fragments if span.turn == "CURRENT"
         )

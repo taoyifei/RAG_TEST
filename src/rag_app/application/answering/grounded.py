@@ -3807,7 +3807,24 @@ class GroundedAnsweringService:
                                 candidate.atom.original_fragment or ""
                             ),
                         )
-                    except (EvidenceBindingError, SourceProjectionError):
+                    except SourceProjectionError as error:
+                        if (
+                            error.failure_code
+                            == "QUESTION_ACTION_NOT_IN_SOURCE"
+                        ):
+                            rejected_atoms[bound.atom_id] += 1
+                            claim_rejections[error.failure_code] += 1
+                            observed(bound, result.status, error.failure_code)
+                            continue
+                        observed(
+                            bound,
+                            result.status,
+                            "HARD_BINDING_REVALIDATION_FAILED",
+                        )
+                        raise ValueError(
+                            "语义通过后的来源身份重验失败。"
+                        ) from error
+                    except EvidenceBindingError:
                         observed(
                             bound,
                             result.status,

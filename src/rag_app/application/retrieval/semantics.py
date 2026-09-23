@@ -163,6 +163,9 @@ _INPUT_PREPARATION_RELATIONS = frozenset({"备齐", "备好", "准备"})
 _RESPONSIBLE_PREFIX = re.compile(
     r"^(?:由)?谁(?:来)?(?:负责|牵头|管理|受理)(?P<target>.+)$"
 )
+_RESPONSIBLE_ACTION_SUFFIX = re.compile(
+    r"^(?P<target>.+?)(?:由|归)谁(?:来)?(?P<action>[\u4e00-\u9fff]{2,8})$"
+)
 _PROHIBITION_QUESTION = re.compile(
     r"^(?P<target>.+?)(?:的)?"
     r"(?:禁止|不得|不能|不允许|不可|不准|严禁|不应当|不应该|不应)"
@@ -428,6 +431,19 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 answer_type=RequestedAnswerType.RESPONSIBLE_PARTY,
                 source="RULE",
                 reason_codes=("RESPONSIBLE_PARTY_QUESTION_SYNTAX",),
+            )
+
+    responsible_action = _RESPONSIBLE_ACTION_SUFFIX.fullmatch(core)
+    if responsible_action is not None:
+        target, source = _target_and_source(responsible_action["target"])
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source or explicit_source,
+                relation=responsible_action["action"],
+                answer_type=RequestedAnswerType.RESPONSIBLE_PARTY,
+                source="RULE",
+                reason_codes=("RESPONSIBLE_PARTY_ACTION_SYNTAX",),
             )
 
     conditions = _CONDITION_ENUMERATION.fullmatch(core)

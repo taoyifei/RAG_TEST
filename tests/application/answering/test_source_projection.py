@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from rag_app.application.answering.evidence_binding import bind_wire_claim
-from rag_app.application.answering.source_projection import project_bound_claim
+from rag_app.application.answering.source_projection import (
+    SourceProjectionError,
+    project_bound_claim,
+)
 from rag_app.core.models import EvidenceReadUnit, GroundedWireClaim
 from rag_app.core.models.common import freeze_json_object
 from tests.application.answering.test_evidence_binding import _fixture
@@ -174,6 +179,40 @@ def test_semantically_verified_table_fact_keeps_natural_duration() -> None:
     assert projected.relation_complete
     assert "必须先" not in invented.text
     assert not invented.relation_complete
+
+
+def test_semantic_review_cannot_supply_an_action_absent_from_source() -> None:
+    evidence = _evidence("开发中心需在2个工作日内提交配置库")
+    item = evidence[0]
+    unit = EvidenceReadUnit(
+        unit_id="E1",
+        kind="paragraph",
+        text=item.citation_text,
+        support_ids=(item.support_id,),
+        source_complete=True,
+    )
+    bound = bind_wire_claim(
+        GroundedWireClaim(
+            atom_id="A1",
+            text="设计文档在2个工作日内反馈。",
+            refs=("E1",),
+        ),
+        claim_id="C1",
+        read_units=(unit,),
+        evidence=evidence,
+        allowed_unit_ids=frozenset({"E1"}),
+    )
+
+    with pytest.raises(
+        SourceProjectionError, match="QUESTION_ACTION_NOT_IN_SOURCE"
+    ):
+        project_bound_claim(
+            bound,
+            read_units=(unit,),
+            evidence=evidence,
+            semantic_relation_supported=True,
+            question_fragment="设计文档几天内反馈？",
+        )
 
 
 def test_table_fragment_can_only_publish_literal_fragment() -> None:

@@ -44,7 +44,7 @@ _TARGET_BEFORE_STAGE_RANGE = re.compile(
 )
 _QUESTION_RELATION = re.compile(
     r"(?:多长时间内|多长时间|什么时候|哪些|什么|如何|怎么|怎样|多久|"
-    r"何时|多少|几天|几日)(?P<relation>[^，,；;。！？?!]+)$"
+    r"何时|多少|几天|几日|谁)(?P<relation>[^，,；;。！？?!]+)$"
 )
 _DECLARATIVE_ACTION = re.compile(
     r"准备|计划|打算|申请|办理|提交|采购|签订|使用|参加|开展|"

@@ -187,7 +187,15 @@ def test_unmarked_short_first_row_is_hydrated_and_forms_physical_fact() -> (
         relation="输入",
         answer_shape=AtomAnswerShape.ENUMERATION,
     )
-    pack = _pack(_plan(atom), outcome.candidates)
+    question = "工装试制有哪些输入？"
+    plan = _plan(atom).model_copy(
+        update={
+            "original_query": question,
+            "standalone_query": question,
+            "resolved_root_query": question,
+        }
+    )
+    pack = _pack(plan, outcome.candidates)
     assert any(
         fact.value_column_index == 2 for fact in pack.physical_table_facts
     )
