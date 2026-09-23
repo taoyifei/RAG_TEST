@@ -10,6 +10,7 @@ import {
   sendPublicFeedback,
   type PublicFeedbackSubmission,
   type PublicSessionUser,
+  type PublicUsageContext,
 } from "./publicApi";
 import * as authNavigation from "./authNavigation";
 import {
@@ -147,6 +148,7 @@ export function usePublicChat() {
   const [user, setUser] = useState<PublicSessionUser>();
   const [deploymentId, setDeploymentId] = useState<string>();
   const [feedbackDetailsEnabled, setFeedbackDetailsEnabled] = useState(false);
+  const [usageContextEnabled, setUsageContextEnabled] = useState(false);
   const [turns, setTurns] = useState<PublicTurn[]>([]);
   const [conversationId, setConversationId] = useState(() => randomId("wst"));
   const csrfRef = useRef<string | undefined>(undefined);
@@ -179,6 +181,7 @@ export function usePublicChat() {
     setLogoutError(undefined);
     setUser(undefined);
     setFeedbackDetailsEnabled(false);
+    setUsageContextEnabled(false);
     setLoggedOut(showLoggedOut);
     setPhase(showLoggedOut ? "idle" : "creating_session");
   }, []);
@@ -214,6 +217,7 @@ export function usePublicChat() {
     setUser(session.user);
     setDeploymentId(session.deploymentId);
     setFeedbackDetailsEnabled(capabilities.feedback_details === true);
+    setUsageContextEnabled(capabilities.request_usage_context === true);
     setLoggedOut(false);
     if (session.deploymentId && session.user) {
       identityChangedRef.current = recordPublicIdentity(
@@ -291,6 +295,7 @@ export function usePublicChat() {
       question: string,
       turnConversationId: string,
       retry: boolean,
+      clientContext: PublicUsageContext,
     ) => {
       if (busyRef.current || !sessionReady) return;
       busyRef.current = true;
@@ -341,6 +346,7 @@ export function usePublicChat() {
           csrfToken,
           question,
           signal: controller.signal,
+          clientContext: usageContextEnabled ? clientContext : undefined,
         });
         if (!response.body) {
           throw new TypeError("public stream body missing");
@@ -493,14 +499,16 @@ export function usePublicChat() {
         }
       }
     },
-    [clearLocalSession, sessionReady, updateTurn],
+    [clearLocalSession, sessionReady, updateTurn, usageContextEnabled],
   );
 
   const submit = useCallback(
     (question: string) => {
       const value = question.trim();
       if (!value || busyRef.current) return;
-      void runTurn(randomId("turn"), value, conversationRef.current, false);
+      void runTurn(randomId("turn"), value, conversationRef.current, false, {
+        entrypoint: "manual",
+      });
     },
     [runTurn],
   );
@@ -510,12 +518,15 @@ export function usePublicChat() {
   }, [resetConversationState]);
 
   const submitNewTopic = useCallback(
-    (question: string) => {
+    (question: string, recommendationId?: string) => {
       const value = question.trim();
       if (!value) return;
       const nextConversationId = resetConversationState();
       if (!nextConversationId) return;
-      void runTurn(randomId("turn"), value, nextConversationId, false);
+      void runTurn(randomId("turn"), value, nextConversationId, false, {
+        entrypoint: recommendationId ? "suggestion" : "manual",
+        ...(recommendationId ? { recommendation_id: recommendationId } : {}),
+      });
     },
     [resetConversationState, runTurn],
   );
@@ -524,7 +535,9 @@ export function usePublicChat() {
     (turnId: string, question: string, turnConversationId: string) => {
       if (busyRef.current || conversationRef.current !== turnConversationId)
         return;
-      void runTurn(turnId, question, turnConversationId, true);
+      void runTurn(turnId, question, turnConversationId, true, {
+        entrypoint: "retry",
+      });
     },
     [runTurn],
   );

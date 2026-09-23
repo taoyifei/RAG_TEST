@@ -44,6 +44,7 @@ from rag_app.core.models.management import (
     SystemStatus,
 )
 from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
+from rag_app.core.models.usage_audit import QueryAuditContext
 from rag_app.core.ports import (
     BlobReadResult,
     CancellationPort,
@@ -787,6 +788,7 @@ class RagSdk:
         trace_id: str | None = None,
         conversation_id: str | None = None,
         singleflight_enabled: bool = True,
+        audit_context: QueryAuditContext | None = None,
     ) -> SearchAnswerResult:
         """执行 revision-sticky 检索并保存安全诊断。
 
@@ -801,6 +803,7 @@ class RagSdk:
             trace_id: 宿主在请求开始时分配的安全关联 ID。
             conversation_id: 可选、严格绑定当前 owner/Project/KB 的会话 ID。
             singleflight_enabled: 是否允许合并 SAFE 的非流式等价计算。
+            audit_context: 可选的可信请求来源信息，不进入检索语义参数。
 
         Returns:
             P08.5 实际路由与最小证据结果。
@@ -824,6 +827,7 @@ class RagSdk:
             owner_id=owner_id,
             save_body=history_mode == "full",
             conversation_id=conversation_id,
+            audit_context=audit_context,
         )
 
     def _run_search(  # noqa: PLR0913
@@ -839,6 +843,7 @@ class RagSdk:
         on_started: Callable[[], None] | None = None,
         before_success: Callable[[SearchAnswerResult], None] | None = None,
         conversation_id: str | None = None,
+        audit_context: QueryAuditContext | None = None,
     ) -> SearchAnswerResult:
         """在同一会话 lease 内读取上下文、执行并提交唯一 final。"""
         if conversation_id is None:
@@ -852,6 +857,7 @@ class RagSdk:
                 cache_result=cache_result,
                 on_started=on_started,
                 before_success=before_success,
+                audit_context=audit_context,
             )
         if self._conversation is None:
             raise CapabilityUnavailable(
@@ -882,6 +888,7 @@ class RagSdk:
                 cache_result=cache_result,
                 on_started=on_started,
                 before_success=before_success,
+                audit_context=audit_context,
             )
             self._conversation.commit(
                 request.scope,
@@ -904,6 +911,7 @@ class RagSdk:
         cache_result: bool = True,
         on_started: Callable[[], None] | None = None,
         before_success: Callable[[SearchAnswerResult], None] | None = None,
+        audit_context: QueryAuditContext | None = None,
     ) -> SearchAnswerResult:
         """统一执行历史单次结算与共享检索/生成链。"""
         request_trace_id = request.trace_id
@@ -923,6 +931,7 @@ class RagSdk:
                     if request.conversation_context
                     else None
                 ),
+                audit_context=audit_context,
             )
         result: SearchAnswerResult | None = None
         failure: RagError | None = None
@@ -1020,6 +1029,7 @@ class RagSdk:
         trace_id: str | None = None,
         conversation_id: str | None = None,
         singleflight_enabled: bool = True,
+        audit_context: QueryAuditContext | None = None,
     ) -> SearchAnswerResult:
         """执行与 Search 共用的检索和受控回答链。
 
@@ -1034,6 +1044,7 @@ class RagSdk:
             trace_id: 宿主在请求开始分配的 ID。
             conversation_id: 可选 scoped 多轮会话 ID。
             singleflight_enabled: 是否允许 SAFE 非流式 singleflight。
+            audit_context: 可选的可信请求来源信息。
 
         Returns:
             含回答或明确拒答的结果。
@@ -1050,6 +1061,7 @@ class RagSdk:
             trace_id=trace_id,
             conversation_id=conversation_id,
             singleflight_enabled=singleflight_enabled,
+            audit_context=audit_context,
         )
 
     def answer_stream(  # noqa: PLR0913
@@ -1066,6 +1078,7 @@ class RagSdk:
         owner_id: str = "sdk",
         trace_id: str | None = None,
         conversation_id: str | None = None,
+        audit_context: QueryAuditContext | None = None,
     ) -> SearchAnswerResult:
         """以类型化事件运行与同步 Answer 完全相同的 Application 链。
 
@@ -1081,6 +1094,7 @@ class RagSdk:
             owner_id: 宿主鉴权后的非秘密身份。
             trace_id: 宿主预分配的安全关联 ID。
             conversation_id: 可选 scoped 多轮会话 ID。
+            audit_context: 可选的可信请求来源信息。
 
         Returns:
             唯一 final 所绑定的完整 SearchAnswerResult。
@@ -1245,6 +1259,7 @@ class RagSdk:
             on_started=begin,
             before_success=finish,
             conversation_id=conversation_id,
+            audit_context=audit_context,
         )
 
     def retrieval_diagnostics(self, trace_id: str) -> RetrievalDiagnostics:

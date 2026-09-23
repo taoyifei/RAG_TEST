@@ -31,6 +31,7 @@ from rag_app.core.models.search import (
     RetrievalDiagnostics,
     SearchAnswerResult,
 )
+from rag_app.core.models.usage_audit import QueryAuditContext
 from rag_app.product.feedback import normalize_trace_id
 from rag_app.product.query_history import (
     HistorySnapshotLimitError,
@@ -240,6 +241,7 @@ class ProductTraceCoordinator:
         owner_id: str,
         save_body: bool,
         conversation_context_digest: str | None = None,
+        audit_context: QueryAuditContext | None = None,
     ) -> None:
         """先建立权威 History，再以相同 ID 开始 Operational Trace。
 
@@ -250,6 +252,7 @@ class ProductTraceCoordinator:
             owner_id: 当前主体 ID；技术 Trace 只保存摘要。
             save_body: 是否按 History 政策加密保存正文。
             conversation_context_digest: 可选的会话上下文 SHA256；不保存正文。
+            audit_context: 可选的认证后请求来源审计信息。
 
         Returns:
             无返回值。
@@ -264,6 +267,7 @@ class ProductTraceCoordinator:
                 owner_id=owner_id,
                 save_body=save_body,
                 conversation_context_digest=conversation_context_digest,
+                audit_context=audit_context,
             )
         except BaseException:
             self.recorder.end_query_window(trace_id)
@@ -278,6 +282,7 @@ class ProductTraceCoordinator:
         owner_id: str,
         save_body: bool,
         conversation_context_digest: str | None,
+        audit_context: QueryAuditContext | None,
     ) -> None:
         """在已登记维护互斥窗内建立 History 与 Trace 会话。"""
         mode = self._take_mode(trace_id)
@@ -288,6 +293,7 @@ class ProductTraceCoordinator:
             owner_id=owner_id,
             save_body=save_body,
             conversation_context_digest=conversation_context_digest,
+            audit_context=audit_context,
         )
         identity = self._identity(
             kind="query",

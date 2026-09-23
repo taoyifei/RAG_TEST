@@ -36,8 +36,18 @@ from rag_app.core.events import TraceEvent
 from rag_app.core.models import KnowledgeBaseScope
 from rag_app.core.models.provider import ProviderCall
 from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
+from rag_app.core.models.usage_audit import (
+    USAGE_SCHEMA_VERSION,
+    QueryAuditContext,
+    TrafficClass,
+)
 from rag_app.product.crypto import SecretAad, SecretCipher
 from rag_app.product.feedback import normalize_trace_id
+from rag_app.product.usage_audit import (
+    TrafficOverrideItem,
+    metadata_revision,
+    usage_audit_view,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_PAGE_SIZE = 200
@@ -49,6 +59,9 @@ _WRITE_QUEUE_SIZE = 1_024
 _WRITE_BATCH_SIZE = 64
 _WRITE_BATCH_WINDOW_SECONDS = 0.002
 _WRITE_WAIT_SECONDS = 10.0
+_MAX_TRAFFIC_OVERRIDE_ITEMS = 100
+_MAX_TRAFFIC_OVERRIDE_REASON_CHARS = 1000
+_MAX_TRAFFIC_OVERRIDE_ACTOR_CHARS = 128
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _TRACE_ID_PATTERN = re.compile(r"^(?:trace_)?[0-9a-f]{32}$")
 _SECRET_TEXT = re.compile(
@@ -351,6 +364,7 @@ class ProductQueryHistory:
         owner_id: str,
         save_body: bool,
         conversation_context_digest: str | None = None,
+        audit_context: QueryAuditContext | None = None,
     ) -> None:
         """在模型和快照之前同步写入请求；不可用时不回退内存。
 
@@ -362,6 +376,7 @@ class ProductQueryHistory:
             save_body: 本次是否允许加密保存正文。
             conversation_context_digest: 可选的会话上下文 SHA256；不保存
                 上下文正文。
+            audit_context: 可选认证后冻结的请求来源信息。
 
         Returns:
             STARTED 落盘完成时无返回值。
@@ -372,11 +387,39 @@ class ProductQueryHistory:
             and _SHA256_PATTERN.fullmatch(conversation_context_digest) is None
         ):
             raise ValueError("会话上下文摘要必须是 64 位小写十六进制 SHA256。")
+        if audit_context is not None and (
+            audit_context.trace_id != trace_id
+            or audit_context.project_id != scope.project_id
+            or audit_context.knowledge_base_id != scope.knowledge_base_id
+            or audit_context.owner_id != owner_id
+        ):
+            raise ValueError("请求来源审计身份与 History 不一致。")
         now = datetime.now(UTC)
         body_saved = self.save_body and save_body
         ciphertext, nonce = self._encode(
             trace_id, {"question": question}, enabled=body_saved
         )
+        metadata: dict[str, object] = {
+            "conversation_context_digest": conversation_context_digest,
+            "conversation_context_present": (
+                conversation_context_digest is not None
+            ),
+        }
+        if audit_context is not None:
+            try:
+                usage_audit = audit_context.metadata(
+                    has_context=conversation_context_digest is not None
+                )
+                json.dumps(usage_audit)
+            except (TypeError, ValueError):
+                usage_audit = {
+                    "schema_version": USAGE_SCHEMA_VERSION,
+                    "traffic_class": "LEGACY_UNKNOWN",
+                    "classification_source": "ENCODING_FAILURE",
+                    "entrypoint": "unknown",
+                    "has_context": conversation_context_digest is not None,
+                }
+            metadata["usage_audit"] = usage_audit
         parameters = (
             trace_id,
             scope.project_id,
@@ -391,12 +434,7 @@ class ProductQueryHistory:
             self._instance_id,
             self._process_id,
             json.dumps(
-                {
-                    "conversation_context_digest": conversation_context_digest,
-                    "conversation_context_present": (
-                        conversation_context_digest is not None
-                    ),
-                },
+                metadata,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
@@ -453,6 +491,182 @@ class ProductQueryHistory:
             )
         except (sqlite3.Error, ProviderUnavailable) as failure:
             raise self._unavailable(trace_id) from failure
+
+    def override_traffic(  # noqa: PLR0913
+        self,
+        items: Sequence[TrafficOverrideItem],
+        *,
+        project_id: str,
+        knowledge_base_id: str,
+        traffic_class: TrafficClass,
+        reason: str,
+        actor: str,
+    ) -> list[dict[str, str]]:
+        """预检同一 Scope 的整批 Trace，并原子保存分类修正。
+
+        Args:
+            items: 最多一百个 Trace 及所见元数据版本。
+            project_id: 已授权的项目范围。
+            knowledge_base_id: 已授权的知识库范围。
+            traffic_class: 修正后的有效分类。
+            reason: 管理员填写的修正原因。
+            actor: 已验证的管理员会话摘要。
+
+        Returns:
+            每条 Trace 的新元数据版本。
+
+        Raises:
+            NotFound: 任一 Trace 不存在、过期或不在 Scope 内。
+            Conflict: 元数据已变化或新旧 ID 指向多条记录。
+
+        """
+        if not 1 <= len(items) <= _MAX_TRAFFIC_OVERRIDE_ITEMS:
+            raise ValueError("分类修正批量必须为一到一百条。")
+        if traffic_class not in (
+            "INTERACTIVE", "EVALUATION", "SYSTEM", "LEGACY_UNKNOWN"
+        ):
+            raise ValueError("分类修正目标无效。")
+        if (
+            not reason.strip()
+            or len(reason) > _MAX_TRAFFIC_OVERRIDE_REASON_CHARS
+        ):
+            raise ValueError("分类修正说明必须在一到一千字符之间。")
+        if not actor or len(actor) > _MAX_TRAFFIC_OVERRIDE_ACTOR_CHARS:
+            raise ValueError("分类修正操作者无效。")
+        canonical_ids = tuple(
+            normalize_trace_id(item.trace_id) for item in items
+        )
+        if len(set(canonical_ids)) != len(canonical_ids):
+            raise ValueError("分类修正不接受重复 Trace ID。")
+        if any(
+            _SHA256_PATTERN.fullmatch(item.expected_metadata_revision) is None
+            for item in items
+        ):
+            raise ValueError("分类修正元数据版本无效。")
+        result: list[dict[str, str]] = []
+        try:
+            self._submit_write(
+                canonical_ids[0],
+                lambda connection: result.extend(
+                    self._override_traffic_in_transaction(
+                        connection,
+                        items,
+                        project_id=project_id,
+                        knowledge_base_id=knowledge_base_id,
+                        traffic_class=traffic_class,
+                        reason=reason.strip(),
+                        actor=actor,
+                    )
+                ),
+            )
+        except (sqlite3.Error, ProviderUnavailable) as error:
+            raise self._unavailable(canonical_ids[0]) from error
+        return result
+
+    def _override_traffic_in_transaction(  # noqa: PLR0913
+        self,
+        connection: sqlite3.Connection,
+        items: Sequence[TrafficOverrideItem],
+        *,
+        project_id: str,
+        knowledge_base_id: str,
+        traffic_class: TrafficClass,
+        reason: str,
+        actor: str,
+    ) -> list[dict[str, str]]:
+        """在 History writer 的一个 savepoint 内完成整批预检和更新。"""
+        now = datetime.now(UTC).isoformat()
+        prepared: list[tuple[str, str, str]] = []
+        for item in items:
+            canonical = normalize_trace_id(item.trace_id)
+            rows = connection.execute(
+                "SELECT trace_id, metadata_json FROM query_history "
+                "WHERE project_id=? AND knowledge_base_id=? AND expires_at>? "
+                "AND trace_id IN (?, ?)",
+                (
+                    project_id,
+                    knowledge_base_id,
+                    now,
+                    canonical,
+                    canonical.removeprefix("trace_"),
+                ),
+            ).fetchall()
+            if not rows:
+                raise NotFound(
+                    "待修正的问答记录不存在或已过期。",
+                    stage="wanshitong.usage.override",
+                    details={"trace_id": canonical},
+                )
+            if len(rows) != 1:
+                raise Conflict(
+                    "新旧 Trace ID 对应多条记录，不能自动选择。",
+                    stage="wanshitong.usage.override",
+                    details={"trace_id": canonical},
+                )
+            row = rows[0]
+            raw_metadata = str(row["metadata_json"])
+            if (
+                metadata_revision(raw_metadata)
+                != item.expected_metadata_revision
+            ):
+                raise Conflict(
+                    "问答元数据已变化，请刷新后重试。",
+                    stage="wanshitong.usage.override",
+                    details={"trace_id": canonical},
+                )
+            metadata = cast(dict[str, object], json.loads(raw_metadata))
+            existing = metadata.get("usage_audit")
+            if (
+                isinstance(existing, dict)
+                and existing.get("schema_version") == USAGE_SCHEMA_VERSION
+            ):
+                usage = dict(existing)
+            else:
+                usage = {
+                    "schema_version": USAGE_SCHEMA_VERSION,
+                    "traffic_class": "LEGACY_UNKNOWN",
+                    "classification_source": "LEGACY_UNKNOWN",
+                    "entrypoint": "unknown",
+                    "entrypoint_source": "LEGACY_UNKNOWN",
+                    "has_context": (
+                        metadata.get("conversation_context_present") is True
+                    ),
+                }
+            previous = usage.get("override")
+            history = usage.get("override_history")
+            prior = list(history) if isinstance(history, list) else []
+            if isinstance(previous, dict):
+                prior.append(previous)
+            usage["override_history"] = prior
+            usage["override"] = {
+                "traffic_class": traffic_class,
+                "reason": reason,
+                "actor": actor,
+                "updated_at": now,
+            }
+            usage["override_version"] = len(prior) + 1
+            metadata["usage_audit"] = usage
+            prepared.append(
+                (
+                    str(row["trace_id"]),
+                    canonical,
+                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                )
+            )
+        result: list[dict[str, str]] = []
+        for stored_id, canonical, updated_metadata in prepared:
+            connection.execute(
+                "UPDATE query_history SET metadata_json=? WHERE trace_id=?",
+                (updated_metadata, stored_id),
+            )
+            result.append(
+                {
+                    "trace_id": canonical,
+                    "traffic_class": traffic_class,
+                    "metadata_revision": metadata_revision(updated_metadata),
+                }
+            )
+        return result
 
     def _finish_in_transaction(  # noqa: PLR0913
         self,
@@ -1442,7 +1656,8 @@ class ProductQueryHistory:
         detail: bool,
         include_answer: bool = False,
     ) -> dict[str, object]:
-        metadata = json.loads(row["metadata_json"])
+        raw_metadata = str(row["metadata_json"])
+        metadata = json.loads(raw_metadata)
         readable = _sources_readable(connection, row, metadata)
         payload = self._decode(row) if readable else {}
         item = {
@@ -1459,6 +1674,8 @@ class ProductQueryHistory:
             )
         }
         item.update(metadata)
+        item["metadata_revision"] = metadata_revision(raw_metadata)
+        item["usage_audit"] = usage_audit_view(metadata.get("usage_audit"))
         item.update(
             {
                 "body_saved": bool(row["body_saved"]),

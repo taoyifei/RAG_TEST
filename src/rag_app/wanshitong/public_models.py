@@ -78,11 +78,12 @@ class PublicCapabilities(BaseModel):
     conversation_delete: Literal[True] = True
     feedback: Literal[True] = True
     feedback_details: Literal[True] = True
+    request_usage_context: Literal[True] = True
     shortcuts: tuple[PublicShortcut, ...] = ()
 
 
 class PublicChatRequest(PublicRequest):
-    """公共问答只接受问题与可选会话 ID。"""
+    """公共问答接受问题、会话 ID 和不可信的可选入口提示。"""
 
     query: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = Field(
@@ -91,6 +92,7 @@ class PublicChatRequest(PublicRequest):
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
     )
+    client_context: object | None = None
 
     @field_validator("query")
     @classmethod

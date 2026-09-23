@@ -64,6 +64,7 @@ def test_capabilities_publish_only_fixed_public_policy(
         "conversation_delete": True,
         "feedback": True,
         "feedback_details": True,
+        "request_usage_context": True,
         "shortcuts": [],
     }
 

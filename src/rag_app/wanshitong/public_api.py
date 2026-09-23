@@ -15,6 +15,7 @@ from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import NotFound, PolicyDenied, RagError
 from rag_app.core.identifiers import new_id
 from rag_app.core.models import KnowledgeBaseScope
+from rag_app.core.models.usage_audit import QueryAuditContext
 from rag_app.product.http_security import secure_cookie_for_request
 from rag_app.query_executor import QueryAdmissionError
 from rag_app.tracing import TraceMode
@@ -42,6 +43,7 @@ from rag_app.wanshitong.shortcuts import (
     SHORTCUT_CATALOG,
     current_public_filter,
 )
+from rag_app.wanshitong.usage_hints import parse_client_context
 
 PUBLIC_SESSION_PATH = "/api/public/session"
 PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities"
@@ -199,6 +201,25 @@ def register_public_routes(
             trace_mode="SAFE",
         )
         trace_id = new_id("trace")
+        hint = parse_client_context(body.client_context)
+        audit_context = QueryAuditContext(
+            trace_id=trace_id,
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            owner_id=principal.owner_id,
+            deployment_id=sessions.deployment_id,
+            identity_source=(
+                "RDMS_SSO"
+                if principal.user_id is not None
+                else "ANONYMOUS_SESSION"
+            ),
+            traffic_class="INTERACTIVE",
+            classification_source="PUBLIC_ENDPOINT",
+            entrypoint=hint.entrypoint,
+            entrypoint_source=hint.source,
+            recommendation_id=hint.recommendation_id,
+            hint_diagnostic=hint.diagnostic,
+        )
         if runtime.p09.prepare_trace is not None:
             runtime.p09.prepare_trace(trace_id, TraceMode.SAFE)
         runtime.sdk.require_active_knowledge_base(
@@ -217,6 +238,7 @@ def register_public_routes(
                 history_mode="full",
                 owner_id=principal.owner_id,
                 conversation_id=query.conversation_id,
+                audit_context=audit_context,
             ),
             render_final=render_public_final,
             versioned_protocol=True,

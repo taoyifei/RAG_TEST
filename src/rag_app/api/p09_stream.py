@@ -23,6 +23,7 @@ from rag_app.core.models import (
     AnswerStreamStageEvent,
     SearchAnswerResult,
 )
+from rag_app.core.models.usage_audit import QueryAuditContext
 from rag_app.query_executor import QueryExecutor
 from rag_app.sdk import RagSdk
 
@@ -48,6 +49,7 @@ class P09AnswerStreamRequest:
     history_mode: str
     owner_id: str
     conversation_id: str | None = None
+    audit_context: QueryAuditContext | None = None
 
 
 @dataclass(slots=True)
@@ -205,6 +207,7 @@ class P09AnswerStream:
                 owner_id=self.request.owner_id,
                 trace_id=self.request.trace_id,
                 conversation_id=self.request.conversation_id,
+                audit_context=self.request.audit_context,
             )
         except QueryCancelled:
             if (

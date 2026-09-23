@@ -28,7 +28,13 @@ export interface PublicCapabilities {
   document_visibility: "all_internal";
   feedback: boolean;
   feedback_details?: boolean;
+  request_usage_context?: boolean;
   shortcuts: PublicShortcut[];
+}
+
+export interface PublicUsageContext {
+  entrypoint: "manual" | "suggestion" | "popular" | "retry";
+  recommendation_id?: string;
 }
 
 export type PublicFeedbackReasonDetail =
@@ -154,6 +160,7 @@ export async function openPublicChat(options: {
   csrfToken: string;
   question: string;
   signal: AbortSignal;
+  clientContext?: PublicUsageContext;
 }): Promise<Response> {
   const response = await fetch(withAppBase(PUBLIC_CHAT_PATH), {
     method: "POST",
@@ -166,6 +173,9 @@ export async function openPublicChat(options: {
     body: JSON.stringify({
       conversation_id: options.conversationId,
       query: options.question,
+      ...(options.clientContext
+        ? { client_context: options.clientContext }
+        : {}),
     }),
     signal: options.signal,
   });

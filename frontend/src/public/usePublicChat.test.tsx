@@ -61,7 +61,10 @@ function pathOf(input: RequestInfo | URL): string {
   return new URL(value, "http://localhost").pathname;
 }
 
-function installFetch(chat: (index: number) => Promise<Response>) {
+function installFetch(
+  chat: (index: number) => Promise<Response>,
+  usageContext = false,
+) {
   let chatCount = 0;
   return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
     const path = pathOf(input);
@@ -85,6 +88,7 @@ function installFetch(chat: (index: number) => Promise<Response>) {
           document_visibility: "all_internal",
           feedback: true,
           shortcuts: [],
+          ...(usageContext ? { request_usage_context: true } : {}),
         }),
       );
     }
@@ -101,6 +105,10 @@ function chatBodies(fetchMock: ReturnType<typeof installFetch>) {
         JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
           conversation_id: string;
           query: string;
+          client_context?: {
+            entrypoint: string;
+            recommendation_id?: string;
+          };
         },
     );
 }
@@ -164,14 +172,16 @@ describe("公共问答新话题生命周期", () => {
   });
 
   it("推荐创建新会话且只发送可见题面，失败重试冻结原问与原会话", async () => {
-    const fetchMock = installFetch((index) =>
-      Promise.resolve(
-        streamResponse(
-          index === 2
-            ? event("error", 0, { message: "暂时失败" })
-            : event("final", 0, { answer: "已回答", citations: [] }),
+    const fetchMock = installFetch(
+      (index) =>
+        Promise.resolve(
+          streamResponse(
+            index === 2
+              ? event("error", 0, { message: "暂时失败" })
+              : event("final", 0, { answer: "已回答", citations: [] }),
+          ),
         ),
-      ),
+      true,
     );
     const { result } = renderHook(() => usePublicChat());
     await waitFor(() => expect(result.current.sessionReady).toBe(true));
@@ -181,7 +191,7 @@ describe("公共问答新话题生命周期", () => {
     );
     const oldConversationId = result.current.turns[0].conversationId;
 
-    act(() => result.current.submitNewTopic("推荐题面 B"));
+    act(() => result.current.submitNewTopic("推荐题面 B", "sq-test-01"));
     await waitFor(() => expect(result.current.turns[0]?.status).toBe("failed"));
     const failedTurn = result.current.turns[0];
     expect(failedTurn.conversationId).not.toBe(oldConversationId);
@@ -199,6 +209,11 @@ describe("公共问答新话题生命周期", () => {
       "问题 A",
       "推荐题面 B",
       "推荐题面 B",
+    ]);
+    expect(chatBodies(fetchMock).map((body) => body.client_context)).toEqual([
+      { entrypoint: "manual" },
+      { entrypoint: "suggestion", recommendation_id: "sq-test-01" },
+      { entrypoint: "retry" },
     ]);
     expect(chatBodies(fetchMock).map((body) => body.conversation_id)).toEqual([
       oldConversationId,

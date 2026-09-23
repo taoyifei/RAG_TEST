@@ -9,6 +9,7 @@ from pydantic import Field, StrictInt, StringConstraints, model_validator
 
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.management import DocumentStatus, Job
+from rag_app.core.models.usage_audit import TrafficClass
 from rag_app.tracing.models import TraceMode, TraceStatus
 from rag_app.wanshitong.feedback import (
     FeedbackReviewStatus,
@@ -137,6 +138,23 @@ class WanshitongFeedbackQuery(FrozenModel):
     offset: int = Field(default=0, ge=0)
 
 
+class WanshitongTrafficOverrideItem(FrozenModel):
+    """单条分类修正的乐观锁输入。"""
+
+    trace_id: _TraceId
+    expected_metadata_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class WanshitongTrafficOverrideRequest(FrozenModel):
+    """有界批量分类修正，不接受问题正文或身份字段。"""
+
+    items: tuple[WanshitongTrafficOverrideItem, ...] = Field(
+        min_length=1, max_length=100
+    )
+    traffic_class: TrafficClass
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 __all__ = [
     "WanshitongDocumentPage",
     "WanshitongDocumentView",
@@ -144,5 +162,7 @@ __all__ = [
     "WanshitongFeedbackQuery",
     "WanshitongFeedbackReviewRequest",
     "WanshitongTraceQuery",
+    "WanshitongTrafficOverrideItem",
+    "WanshitongTrafficOverrideRequest",
     "WanshitongUploadReceipt",
 ]

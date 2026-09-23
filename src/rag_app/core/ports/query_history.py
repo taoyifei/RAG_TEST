@@ -8,6 +8,7 @@ from rag_app.core.errors import RagError
 from rag_app.core.models import KnowledgeBaseScope
 from rag_app.core.models.provider import ProviderCall
 from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
+from rag_app.core.models.usage_audit import QueryAuditContext
 
 
 class QueryHistoryPort(Protocol):
@@ -22,6 +23,7 @@ class QueryHistoryPort(Protocol):
         owner_id: str,
         save_body: bool,
         conversation_context_digest: str | None = None,
+        audit_context: QueryAuditContext | None = None,
     ) -> None:
         """在读取索引和调用模型前同步创建 STARTED 记录。
 
@@ -32,6 +34,7 @@ class QueryHistoryPort(Protocol):
             owner_id: 当前会话或 Token 主体。
             save_body: 是否允许保存加密正文。
             conversation_context_digest: 可选上下文规范摘要，不含正文。
+            audit_context: 可选认证后冻结的请求来源审计信息。
 
         Returns:
             写入成功时无返回值。

@@ -816,7 +816,9 @@ describe("湾事通公共应用", () => {
           return Promise.resolve(Response.json(sessionBody));
         }
         if (path === "/api/public/capabilities") {
-          return Promise.resolve(Response.json(capabilitiesBody));
+          return Promise.resolve(
+            Response.json({ ...capabilitiesBody, request_usage_context: true }),
+          );
         }
         if (path === "/api/public/chat") {
           chatCount += 1;
@@ -853,6 +855,10 @@ describe("湾事通公共应用", () => {
           JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
             conversation_id: string;
             query: string;
+            client_context: {
+              entrypoint: string;
+              recommendation_id?: string;
+            };
           },
       );
     expect(bodies).toHaveLength(2);
@@ -861,6 +867,9 @@ describe("湾事通公共应用", () => {
       "不同主题的问题 A",
       suggestedQuestion,
     ]);
+    expect(bodies[0].client_context).toEqual({ entrypoint: "manual" });
+    expect(bodies[1].client_context.entrypoint).toBe("suggestion");
+    expect(bodies[1].client_context.recommendation_id).toMatch(/^sq-/);
   });
 
   it("忙碌时禁用新问题，停止后才允许换话题", async () => {

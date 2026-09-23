@@ -33,7 +33,7 @@ export function WanshitongApp() {
   const suggestions = useSuggestedQuestions(chat.turns, suggestionIdentityKey);
   const submitSuggestedQuestion = (question: SuggestedQuestion) => {
     setRestoredDraft("");
-    chat.submitNewTopic(question.question);
+    chat.submitNewTopic(question.question, question.id);
   };
   const submitCurrentQuestion = (question: string) => {
     setRestoredDraft("");

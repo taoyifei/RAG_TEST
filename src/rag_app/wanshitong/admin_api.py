@@ -32,6 +32,7 @@ from rag_app.product.trace_coordinator import (
     OperationalTracePayloadLimitError,
     OperationalTraceSnapshot,
 )
+from rag_app.product.usage_audit import TrafficOverrideItem
 from rag_app.tracing.models import TraceListFilter
 from rag_app.tracing.store import (
     ArtifactExpiredError,
@@ -46,6 +47,7 @@ from rag_app.wanshitong.admin_models import (
     WanshitongFeedbackQuery,
     WanshitongFeedbackReviewRequest,
     WanshitongTraceQuery,
+    WanshitongTrafficOverrideRequest,
     WanshitongUploadReceipt,
 )
 from rag_app.wanshitong.document_metadata import (
@@ -434,6 +436,35 @@ def _register_history_routes(
             runtime, {"items": [payload]}, binding
         )
         return payload
+
+    @app.patch(ADMIN_BASE_PATH + "/query-traffic", tags=["wanshitong-admin"])
+    def _override_query_traffic(
+        body: WanshitongTrafficOverrideRequest, request: Request
+    ) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        principal = getattr(request.state, "product_principal", "")
+        session_id = getattr(request.state, "product_session_id", "")
+        actor = (
+            "admin_session:"
+            + hashlib.sha256(session_id.encode()).hexdigest()[:16]
+            if principal == "admin_session"
+            else "legacy_admin"
+        )
+        updated = runtime.history.override_traffic(
+            tuple(
+                TrafficOverrideItem(
+                    trace_id=item.trace_id,
+                    expected_metadata_revision=item.expected_metadata_revision,
+                )
+                for item in body.items
+            ),
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            traffic_class=body.traffic_class,
+            reason=body.reason,
+            actor=actor,
+        )
+        return {"updated_count": len(updated), "items": updated}
 
     @app.post(
         ADMIN_BASE_PATH + "/history-traces:export",
