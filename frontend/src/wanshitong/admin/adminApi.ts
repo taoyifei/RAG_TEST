@@ -295,6 +295,81 @@ export interface FeedbackReviewInput {
   verification_references: string[];
 }
 
+export type QuestionAnalyticsBoard = "frequent" | "unresolved";
+export type QuestionAnalyticsRunState =
+  | "BUILDING"
+  | "COMPLETE"
+  | "FAILED"
+  | "LIMITED";
+
+export interface QuestionAnalyticsRun {
+  run_id: string;
+  state: QuestionAnalyticsRunState;
+  deployment_id: string;
+  window_start: string;
+  window_end: string;
+  observed_at: string;
+  source_total: number;
+  eligible_count: number;
+  unknown_count: number;
+  excluded_count: number;
+  unknown_identity_count: number;
+  body_missing_count: number;
+  unreadable_count: number;
+  pending_count: number;
+  created_at: string;
+  finished_at: string | null;
+  expires_at: string | null;
+  failure_code: string | null;
+  coverage_start: string | null;
+}
+
+export interface QuestionAnalyticsItem {
+  group_key: string;
+  group_kind: "EXACT" | "APPROVED_ALIAS" | "CONTEXT";
+  representative_question: string | null;
+  request_count: number;
+  distinct_users: number;
+  user_day_heat: number;
+  manual_request_count: number;
+  manual_distinct_users: number;
+  manual_user_day_heat: number;
+  suggestion_count: number;
+  popular_count: number;
+  retry_count: number;
+  unknown_entry_count: number;
+  answered_count: number;
+  refused_count: number;
+  failed_count: number;
+  feedback_count: number;
+  helpful_count: number;
+  negative_feedback_count: number;
+  false_refusal_count: number;
+  confirmed_open_issue_count: number;
+  last_seen_at: string;
+  sample_trace_ids: string[];
+}
+
+export interface QuestionAnalyticsPage {
+  run: QuestionAnalyticsRun | null;
+  latest_run: QuestionAnalyticsRun | null;
+  items: QuestionAnalyticsItem[];
+  total: number;
+  next_offset: number | null;
+}
+
+export interface QuestionAnalyticsSample {
+  trace_id: string;
+  question: string | null;
+  created_at: string;
+  status: string;
+  has_feedback: boolean;
+}
+
+export interface QuestionAnalyticsSamples {
+  items: QuestionAnalyticsSample[];
+}
+
 function queryPath<T extends object>(
   path: string,
   values: T,
@@ -494,6 +569,41 @@ export const wanshitongAdminApi = {
     );
     return downloadResponse(response, "wanshitong-feedback.json");
   },
+  questionAnalytics: (
+    board: QuestionAnalyticsBoard,
+    offset = 0,
+    signal?: AbortSignal,
+  ) =>
+    consoleRequest<QuestionAnalyticsPage>(
+      queryPath(`${BASE_PATH}/question-analytics`, {
+        board,
+        page_size: 20,
+        offset,
+      }),
+      { signal },
+    ),
+  refreshQuestionAnalytics: () =>
+    consoleRequest<QuestionAnalyticsRun>(
+      `${BASE_PATH}/question-analytics:refresh`,
+      jsonInit("POST"),
+    ),
+  questionAnalyticsRun: (runId: string, signal?: AbortSignal) =>
+    consoleRequest<QuestionAnalyticsRun>(
+      `${BASE_PATH}/question-analytics/runs/${encodeURIComponent(runId)}`,
+      { signal },
+    ),
+  questionAnalyticsSamples: (
+    runId: string,
+    groupKey: string,
+    signal?: AbortSignal,
+  ) =>
+    consoleRequest<QuestionAnalyticsSamples>(
+      queryPath(`${BASE_PATH}/question-analytics/samples`, {
+        run_id: runId,
+        group_key: groupKey,
+      }),
+      { signal },
+    ),
   models: (signal?: AbortSignal) =>
     consoleRequest<WanshitongModels>(`${BASE_PATH}/models`, { signal }),
   system: (signal?: AbortSignal) =>

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, Path, Query, Request, Response
@@ -61,6 +61,7 @@ from rag_app.wanshitong.document_metadata import (
 )
 from rag_app.wanshitong.errors import AdminFacadeError, ScopeBindingError
 from rag_app.wanshitong.models import ScopeBinding
+from rag_app.wanshitong.question_analytics import QuestionAnalyticsService
 from rag_app.wanshitong.scope_service import FixedScopeService
 from rag_app.wanshitong.template_catalog import searchable_upload_content
 from rag_app.wanshitong.upload_validation import (
@@ -78,15 +79,15 @@ def register_admin_routes(
     runtime: ProductRuntime,
     scope_service: FixedScopeService,
     document_metadata: WanshitongDocumentMetadataStore,
+    question_analytics: QuestionAnalyticsService,
 ) -> None:
     """注册复用唯一 Product Runtime 的管理员 Facade。"""
     _register_error_handler(app)
-    _register_document_routes(
-        app, runtime, scope_service, document_metadata
-    )
+    _register_document_routes(app, runtime, scope_service, document_metadata)
     _register_job_routes(app, runtime, scope_service)
     _register_history_routes(app, runtime, scope_service)
     _register_feedback_routes(app, runtime, scope_service)
+    _register_question_analytics_routes(app, scope_service, question_analytics)
     _register_trace_routes(app, runtime, scope_service)
     _register_status_routes(app, runtime, scope_service, document_metadata)
 
@@ -214,9 +215,7 @@ def _register_document_routes(
         tags=["wanshitong-admin"],
         response_model=WanshitongDocumentView,
     )
-    def _document(
-        document_id: str, request: Request
-    ) -> WanshitongDocumentView:
+    def _document(document_id: str, request: Request) -> WanshitongDocumentView:
         binding = _admin_scope(request, scope_service)
         document = runtime.sdk.get_document(
             binding.project_id, binding.knowledge_base_id, document_id
@@ -349,9 +348,7 @@ def _register_job_routes(
         )
         return payload
 
-    @app.get(
-        ADMIN_BASE_PATH + "/jobs/{job_id}", tags=["wanshitong-admin"]
-    )
+    @app.get(ADMIN_BASE_PATH + "/jobs/{job_id}", tags=["wanshitong-admin"])
     def _job(job_id: str, request: Request) -> Job:
         binding = _admin_scope(request, scope_service)
         return _scoped_job(runtime, binding, job_id)
@@ -432,9 +429,7 @@ def _register_history_routes(
             project_id=binding.project_id,
             knowledge_base_id=binding.knowledge_base_id,
         )
-        _add_admin_history_metadata(
-            runtime, {"items": [payload]}, binding
-        )
+        _add_admin_history_metadata(runtime, {"items": [payload]}, binding)
         return payload
 
     @app.patch(ADMIN_BASE_PATH + "/query-traffic", tags=["wanshitong-admin"])
@@ -551,9 +546,7 @@ def _register_trace_routes(
         tags=["wanshitong-admin"],
     )
     def _export_trace(
-        trace_id: Annotated[
-            str, Path(pattern=r"^(?:trace_)?[0-9a-f]{32}$")
-        ],
+        trace_id: Annotated[str, Path(pattern=r"^(?:trace_)?[0-9a-f]{32}$")],
         request: Request,
     ) -> Response:
         binding = _admin_scope(request, scope_service)
@@ -574,9 +567,7 @@ def _register_trace_routes(
         ADMIN_BASE_PATH + "/operational-traces:export",
         tags=["wanshitong-admin"],
     )
-    def _export_traces(
-        body: TraceExportRequest, request: Request
-    ) -> Response:
+    def _export_traces(body: TraceExportRequest, request: Request) -> Response:
         binding = _admin_scope(request, scope_service)
         payloads = _scoped_trace_exports(
             runtime, binding, tuple(sorted(body.trace_ids))
@@ -710,9 +701,7 @@ def _register_feedback_routes(
         tags=["wanshitong-admin"],
     )
     def _feedback_detail(
-        trace_id: Annotated[
-            str, Path(pattern=r"^trace_[0-9a-f]{32}$")
-        ],
+        trace_id: Annotated[str, Path(pattern=r"^trace_[0-9a-f]{32}$")],
         request: Request,
     ) -> dict[str, object]:
         binding = _admin_scope(request, scope_service)
@@ -727,9 +716,7 @@ def _register_feedback_routes(
         tags=["wanshitong-admin"],
     )
     def _feedback_review(
-        trace_id: Annotated[
-            str, Path(pattern=r"^trace_[0-9a-f]{32}$")
-        ],
+        trace_id: Annotated[str, Path(pattern=r"^trace_[0-9a-f]{32}$")],
         body: WanshitongFeedbackReviewRequest,
         request: Request,
     ) -> dict[str, object]:
@@ -749,6 +736,87 @@ def _register_feedback_routes(
             fix_reference=body.fix_reference,
             verification_references=body.verification_references,
             reviewed_by_admin=principal,
+        )
+
+
+def _register_question_analytics_routes(
+    app: FastAPI,
+    scope_service: FixedScopeService,
+    service: QuestionAnalyticsService,
+) -> None:
+    """在现有管理员鉴权与 CSRF 下提供 F05 两榜及刷新状态。"""
+
+    @app.get(
+        ADMIN_BASE_PATH + "/question-analytics",
+        tags=["wanshitong-admin"],
+    )
+    def _question_analytics(
+        request: Request,
+        board: Literal["frequent", "unresolved"] = "frequent",
+        page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        return service.board(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            board=board,
+            page_size=page_size,
+            offset=offset,
+        )
+
+    @app.post(
+        ADMIN_BASE_PATH + "/question-analytics:refresh",
+        tags=["wanshitong-admin"],
+        status_code=202,
+    )
+    def _question_analytics_refresh(request: Request) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        try:
+            return service.refresh(
+                project_id=binding.project_id,
+                knowledge_base_id=binding.knowledge_base_id,
+            )
+        except RuntimeError as error:
+            if str(error) != "QUESTION_ANALYTICS_REFRESH_BUSY":
+                raise
+            raise AdminFacadeError(
+                "QUESTION_ANALYTICS_REFRESH_BUSY",
+                "统计任务已在另一个实例启动，请稍后查看运行状态。",
+                status_code=409,
+                stage="wanshitong.analytics.refresh",
+            ) from error
+
+    @app.get(
+        ADMIN_BASE_PATH + "/question-analytics/runs/{run_id}",
+        tags=["wanshitong-admin"],
+    )
+    def _question_analytics_run(
+        run_id: Annotated[str, Path(pattern=r"^qrun_[0-9a-f]{32}$")],
+        request: Request,
+    ) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        return service.run(
+            run_id,
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+        )
+
+    @app.get(
+        ADMIN_BASE_PATH + "/question-analytics/samples",
+        tags=["wanshitong-admin"],
+    )
+    def _question_analytics_samples(
+        request: Request,
+        run_id: Annotated[str, Query(pattern=r"^qrun_[0-9a-f]{32}$")],
+        group_key: Annotated[str, Query(pattern=r"^[0-9a-f]{64}$")],
+    ) -> dict[str, object]:
+        binding = _admin_scope(request, scope_service)
+        return service.samples(
+            run_id=run_id,
+            group_key=group_key,
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
         )
 
 
@@ -1053,9 +1121,7 @@ def _add_admin_history_metadata(
         rows = connection.execute(
             "SELECT trace_id, owner_id, useful, reason_code "
             "FROM product_feedback WHERE project_id=? "
-            "AND knowledge_base_id=? AND trace_id IN ("
-            + placeholders
-            + ")",
+            "AND knowledge_base_id=? AND trace_id IN (" + placeholders + ")",
             (binding.project_id, binding.knowledge_base_id, *trace_ids),
         ).fetchall()
     feedback = {str(row["trace_id"]): row for row in rows}
@@ -1271,9 +1337,7 @@ def _reauthorize_trace_sources(
         runtime.sdk.get_knowledge_base(project_id, knowledge_base_id)
         document_id = root.get("document_id")
         if isinstance(document_id, str):
-            runtime.sdk.get_document(
-                project_id, knowledge_base_id, document_id
-            )
+            runtime.sdk.get_document(project_id, knowledge_base_id, document_id)
     except NotFound as error:
         raise PolicyDenied(
             "Trace 来源已删除或无权读取。", stage="trace.source"
@@ -1362,12 +1426,8 @@ def _connection_status(
         "path": connection.rerank_path,
         "host": _masked_host(connection),
         "status": connection.status,
-        "validation_status": None
-        if validation is None
-        else validation.status,
-        "validated_at": None
-        if validation is None
-        else validation.finished_at,
+        "validation_status": None if validation is None else validation.status,
+        "validated_at": None if validation is None else validation.finished_at,
     }
 
 
@@ -1436,9 +1496,7 @@ def _overview_status(
         },
         "public_query_ready": bool(
             scope.active_index_revision_id
-            and cast(dict[str, object], model_status["embedding"])[
-                "configured"
-            ]
+            and cast(dict[str, object], model_status["embedding"])["configured"]
             and cast(dict[str, object], model_status["llm"])["configured"]
         ),
         "supported_formats": {

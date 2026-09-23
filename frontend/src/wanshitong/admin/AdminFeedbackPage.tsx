@@ -13,6 +13,7 @@ import {
   type FeedbackReviewStatus,
   type FeedbackStatistics,
 } from "./adminApi";
+import { QuestionAnalyticsSection } from "./QuestionAnalyticsSection";
 
 const reviewStatuses: ReadonlyArray<[FeedbackReviewStatus, string]> = [
   ["NEW", "待处理"],
@@ -542,6 +543,7 @@ export function AdminFeedbackPage() {
           </article>
         </div>
       )}
+      <QuestionAnalyticsSection onInspectFeedback={(traceId) => void inspect(traceId)} />
       <div className="history-filters feedback-filters">
         <label>
           用户原因

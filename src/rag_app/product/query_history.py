@@ -1724,6 +1724,20 @@ class ProductQueryHistory:
             ),
         )
 
+    def decode_snapshot_payload(
+        self, row: dict[str, object]
+    ) -> dict[str, object]:
+        """在读取事务结束后解密已物化的 History 原始行。
+
+        Args:
+            row: 同一只读快照中物化的原始 History 列。
+
+        Returns:
+            可用正文的解密载荷；未保存正文时为空对象。
+
+        """
+        return self._decode(cast(sqlite3.Row, row))
+
     @staticmethod
     def _unavailable(trace_id: str) -> ProviderUnavailable:
         _LOGGER.error("TRACE_PERSISTENCE_UNAVAILABLE request_id=%s", trace_id)

@@ -118,6 +118,13 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("反馈与优化待办页", () => {
   it("展示四段详情并携带版本和受权来源保存复核", async () => {
+    vi.spyOn(wanshitongAdminApi, "questionAnalytics").mockResolvedValue({
+      run: null,
+      latest_run: null,
+      items: [],
+      total: 0,
+      next_offset: null,
+    });
     vi.spyOn(wanshitongAdminApi, "listFeedback").mockResolvedValue({
       items: [item],
       total: 1,

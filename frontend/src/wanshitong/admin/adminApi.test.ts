@@ -114,3 +114,33 @@ it("反馈复核与安全导出复用管理员会话和 CSRF", async () => {
   );
   expect(file.filename).toBe("wanshitong-feedback.json");
 });
+
+it("问题运营榜分页、刷新、任务轮询和样本都走固定范围接口", async () => {
+  setBrowserCsrfToken("synthetic-csrf");
+  const runId = "run_20260923";
+  const groupKey = "group/a+b";
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+    Promise.resolve(new Response(JSON.stringify({ run_id: runId, items: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })),
+  );
+
+  await wanshitongAdminApi.questionAnalytics("unresolved", 20);
+  await wanshitongAdminApi.refreshQuestionAnalytics();
+  await wanshitongAdminApi.questionAnalyticsRun(runId);
+  await wanshitongAdminApi.questionAnalyticsSamples(runId, groupKey);
+
+  expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+    "/api/v1/admin/wanshitong/question-analytics?board=unresolved&page_size=20&offset=20",
+    "/api/v1/admin/wanshitong/question-analytics:refresh",
+    `/api/v1/admin/wanshitong/question-analytics/runs/${runId}`,
+    "/api/v1/admin/wanshitong/question-analytics/samples?run_id=run_20260923&group_key=group%2Fa%2Bb",
+  ]);
+  expect(fetchMock.mock.calls[1][1]?.method).toBe("POST");
+  expect(new Headers(fetchMock.mock.calls[1][1]?.headers).get("X-CSRF-Token"))
+    .toBe("synthetic-csrf");
+  for (const [, init] of fetchMock.mock.calls) {
+    expect(init?.credentials).toBe("same-origin");
+  }
+});

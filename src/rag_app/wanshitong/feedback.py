@@ -274,8 +274,7 @@ class WanshitongFeedbackService:
             "SELECT COUNT(*) FROM product_feedback f LEFT JOIN "  # noqa: S608
             "wanshitong_feedback_details d USING(trace_id) "
             "LEFT JOIN wanshitong_feedback_reviews r "
-            "USING(trace_id) WHERE "
-            + where_clause
+            "USING(trace_id) WHERE " + where_clause
         )
         try:
             with self._connections.transaction() as connection:
@@ -376,9 +375,7 @@ class WanshitongFeedbackService:
                 "selected_source_document_id": row[
                     "selected_source_document_id"
                 ],
-                "selected_source_version_id": row[
-                    "selected_source_version_id"
-                ],
+                "selected_source_version_id": row["selected_source_version_id"],
                 "reviewed_feedback_revision": reviewed_revision,
                 "evaluation_candidate": bool(row["evaluation_candidate"] or 0),
                 "fix_reference": row["fix_reference"],
@@ -672,6 +669,24 @@ class WanshitongFeedbackService:
             and previous_comment == comment
         )
         if unchanged:
+            if previous is not None and previous["feedback_revision"] is None:
+                connection.execute(
+                    "INSERT INTO wanshitong_feedback_details("
+                    "trace_id, reason_detail, feedback_revision, updated_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        canonical.trace_id,
+                        reason_detail,
+                        previous_revision,
+                        canonical.updated_at,
+                    ),
+                )
+            else:
+                connection.execute(
+                    "UPDATE wanshitong_feedback_details SET updated_at=? "
+                    "WHERE trace_id=?",
+                    (canonical.updated_at, canonical.trace_id),
+                )
             return previous_revision
         revision = previous_revision + 1 if previous_revision else 1
         ciphertext, nonce = self._encrypt_secret(

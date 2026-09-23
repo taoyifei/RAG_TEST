@@ -1284,9 +1284,105 @@ label:has(input[type="checkbox"]) {
 .feedback-pagination {
   justify-content: flex-end;
 }
+.question-analytics {
+  display: grid;
+  gap: 14px;
+}
+.question-analytics-heading {
+  align-items: center;
+}
+.question-analytics-heading .row-actions {
+  flex-wrap: wrap;
+}
+.question-analytics-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.question-analytics-tabs button {
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: #24425f;
+  font-weight: 700;
+}
+.question-analytics-tabs button.active {
+  border-color: var(--blue);
+  background: #eaf1ff;
+  color: var(--blue-dark);
+}
+.question-analytics-sort,
+.question-analytics-coverage p,
+.question-analytics-run-state {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.question-analytics-run-state {
+  color: #8a4b00;
+}
+.question-analytics-coverage {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.question-analytics-coverage strong {
+  color: var(--navy);
+}
+.question-analytics-table {
+  margin-top: 2px;
+}
+.question-analytics-table table {
+  min-width: 1120px;
+}
+.question-analytics-table td {
+  min-width: 130px;
+}
+.question-analytics-table td:first-child {
+  min-width: 220px;
+  max-width: 320px;
+}
+.question-analytics-table td strong,
+.question-analytics-table td small {
+  display: block;
+  margin-top: 5px;
+}
+.question-analytics-table td small {
+  color: var(--muted);
+}
+.question-analytics-samples {
+  display: grid;
+  gap: 10px;
+  min-width: 280px;
+  margin-top: 10px;
+}
+.question-analytics-sample {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.question-analytics-sample .row-actions {
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.question-analytics-sample a {
+  color: var(--blue-dark);
+}
+.question-analytics-pagination {
+  flex-wrap: wrap;
+}
 @media (max-width: 720px) {
   .feedback-metrics {
     grid-template-columns: 1fr;
+  }
+  .question-analytics-heading {
+    align-items: start;
+    flex-direction: column;
   }
 }
 .history-list article {

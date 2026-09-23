@@ -24,6 +24,7 @@ from rag_app.wanshitong.public_session import (
     PublicSessionProvider,
     PublicSessionService,
 )
+from rag_app.wanshitong.question_analytics import QuestionAnalyticsService
 from rag_app.wanshitong.scope_service import FixedScopeService
 from rag_app.wanshitong.scope_store import ScopeBindingStore
 from rag_app.wanshitong.settings import WanshitongSettings
@@ -83,9 +84,7 @@ def configure_wanshitong_app(
         sso_client = SsoClient(
             validate_url=resolved.sso.validate_url,
             client_id=resolved.sso.client_id,
-            client_secret=load_client_secret(
-                resolved.sso.client_secret_file
-            ),
+            client_secret=load_client_secret(resolved.sso.client_secret_file),
         )
         register_sso_routes(
             app,
@@ -110,6 +109,13 @@ def configure_wanshitong_app(
     app.state.wanshitong_scope_error = scope_error
     app.state.wanshitong_scope_service = service
     app.state.wanshitong_public_session_service = public_sessions
+    question_analytics = QuestionAnalyticsService(
+        runtime.connections,
+        runtime.history,
+        deployment_id=public_sessions.deployment_id or "LEGACY_UNKNOWN",
+        retention_days=runtime.settings.history_retention_days,
+    )
+    app.state.wanshitong_question_analytics = question_analytics
     document_metadata = WanshitongDocumentMetadataStore(runtime.connections)
     document_metadata.synchronize_legacy_rows()
     app.state.wanshitong_document_metadata = document_metadata
@@ -131,6 +137,7 @@ def configure_wanshitong_app(
         runtime=runtime,
         scope_service=service,
         document_metadata=document_metadata,
+        question_analytics=question_analytics,
     )
     register_public_routes(
         app,
