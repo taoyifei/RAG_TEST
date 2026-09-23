@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""为私网入口提供单一 `/kb` 前缀反向代理。"""
+"""为私网入口提供 `/kb` 前缀及可选的公共根路径代理。"""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ _HOP_BY_HOP_HEADERS = frozenset(
     }
 )
 _MAX_TCP_PORT = 65535
+_PUBLIC_ROOT_EXACT_PATHS = frozenset({b"/", b"/api/public", b"/sso/logout"})
+_PUBLIC_ROOT_PREFIXES = (b"/api/public/", b"/assets/")
 
 AsgiMessage = dict[str, Any]
 Receive = Callable[[], Awaitable[AsgiMessage]]
@@ -92,6 +94,22 @@ def _strip_external_prefix(raw_path: bytes, prefix: bytes) -> bytes | None:
     return None
 
 
+def _public_root_path(raw_path: bytes) -> bytes | None:
+    """只放行公共页面依赖的根路径，阻断管理员及路径变体。"""
+    if (
+        b"%" in raw_path
+        or b"\\" in raw_path
+        or b"//" in raw_path
+        or any(part in {b".", b".."} for part in raw_path.split(b"/"))
+    ):
+        return None
+    if raw_path in _PUBLIC_ROOT_EXACT_PATHS or raw_path.startswith(
+        _PUBLIC_ROOT_PREFIXES
+    ):
+        return raw_path
+    return None
+
+
 def _filter_headers(
     headers: Sequence[tuple[bytes, bytes]],
 ) -> list[tuple[bytes, bytes]]:
@@ -105,18 +123,23 @@ def _filter_headers(
     }
     blocked = _HOP_BY_HOP_HEADERS | connection_tokens
     return [
-        (name, value)
-        for name, value in headers
-        if name.lower() not in blocked
+        (name, value) for name, value in headers if name.lower() not in blocked
     ]
 
 
 class PrefixProxy:
     """把一个精确外部前缀流式代理到回环 HTTP 服务。"""
 
-    def __init__(self, *, upstream_origin: str, external_prefix: str) -> None:
+    def __init__(
+        self,
+        *,
+        upstream_origin: str,
+        external_prefix: str,
+        public_root_alias: bool = False,
+    ) -> None:
         self._upstream_origin = upstream_origin
         self._external_prefix = external_prefix.encode("ascii")
+        self._public_root_alias = public_root_alias
         self._timeout = httpx.Timeout(
             connect=5.0,
             read=None,
@@ -137,14 +160,18 @@ class PrefixProxy:
         raw_path = scope.get("raw_path") or str(scope.get("path", "/")).encode(
             "ascii"
         )
-        if bytes(raw_path) == b"/":
-            await self._send_redirect(
-                send, self._external_prefix + b"/"
-            )
+        if bytes(raw_path) == b"/" and not self._public_root_alias:
+            await self._send_redirect(send, self._external_prefix + b"/")
             return
-        upstream_path = _strip_external_prefix(
-            bytes(raw_path), self._external_prefix
+        upstream_path = (
+            _public_root_path(bytes(raw_path))
+            if self._public_root_alias
+            else None
         )
+        if upstream_path is None:
+            upstream_path = _strip_external_prefix(
+                bytes(raw_path), self._external_prefix
+            )
         if upstream_path is None:
             await self._send_json(send, 404, {"detail": "not found"})
             return
@@ -271,7 +298,7 @@ class PrefixProxy:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="把单一外部路径前缀代理到私网候选。"
+        description="把外部路径前缀及可选公共根路径代理到私网候选。"
     )
     parser.add_argument(
         "--listen-host", type=_private_or_loopback_ip, required=True
@@ -283,6 +310,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--external-prefix", type=_external_prefix, default="/kb"
     )
+    parser.add_argument("--public-root-alias", action="store_true")
     return parser
 
 
@@ -295,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         PrefixProxy(
             upstream_origin=arguments.upstream_origin,
             external_prefix=arguments.external_prefix,
+            public_root_alias=arguments.public_root_alias,
         ),
         host=arguments.listen_host,
         port=arguments.listen_port,

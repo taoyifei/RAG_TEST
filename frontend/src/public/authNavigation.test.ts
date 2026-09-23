@@ -12,6 +12,14 @@ afterEach(() => {
 });
 
 describe("湾事通 SSO 导航", () => {
+  it("公共根入口登录后仍返回已公布的根地址", () => {
+    window.history.replaceState({}, "", "/?source=notice#ignored");
+
+    expect(ssoEntryLocation()).toBe(
+      "/kb/sso/entry?return_to=%2F%3Fsource%3Dnotice",
+    );
+  });
+
   it("生成同源 entry 并把完整 KB 页面作为 return_to", () => {
     window.history.replaceState({}, "", "/kb/admin/history?trace_id=1#x");
 

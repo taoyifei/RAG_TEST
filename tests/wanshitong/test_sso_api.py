@@ -61,9 +61,7 @@ def sso_harness(
     monkeypatch.setenv("RAG_ROOT_PATH", "/kb")
     monkeypatch.setenv("RAG_WANSHITONG_DEMO_ALLOW_HTTP", "true")
     monkeypatch.setenv("RAG_WANSHITONG_AUTH_MODE", "sso")
-    monkeypatch.setenv(
-        "RAG_WANSHITONG_SSO_DEPLOYMENT_ID", "candidate_8289"
-    )
+    monkeypatch.setenv("RAG_WANSHITONG_SSO_DEPLOYMENT_ID", "candidate_8289")
     monkeypatch.setenv(
         "RAG_WANSHITONG_SSO_ENTRIES",
         json.dumps(
@@ -81,9 +79,7 @@ def sso_harness(
         "http://rdms-backend.test:21000/sso/validate",
     )
     monkeypatch.setenv("RAG_WANSHITONG_SSO_CLIENT_ID", "kb")
-    monkeypatch.setenv(
-        "RAG_WANSHITONG_SSO_CLIENT_SECRET_FILE", str(secret)
-    )
+    monkeypatch.setenv("RAG_WANSHITONG_SSO_CLIENT_SECRET_FILE", str(secret))
     product = build_product_harness(
         tmp_path,
         root_path="/kb",
@@ -167,21 +163,82 @@ def test_sso_entry_callback_bootstrap_and_admin_isolation(
     }
     assert session["deployment_id"] == "candidate_8289"
     principal = sso_harness.sessions.authenticate(
-        sso_harness.browser.cookies[
-            "kb_user_session_candidate_8289"
-        ].strip('"'),
+        sso_harness.browser.cookies["kb_user_session_candidate_8289"].strip(
+            '"'
+        ),
         str(session["csrf_token"]),
     )
     assert principal.owner_id == "rdms:1001"
-    capabilities = sso_harness.browser.get(
-        f"/kb{PUBLIC_CAPABILITIES_PATH}"
-    )
+    capabilities = sso_harness.browser.get(f"/kb{PUBLIC_CAPABILITIES_PATH}")
     assert capabilities.status_code == 200
 
-    denied = sso_harness.browser.get(
-        "/kb/api/v1/admin/wanshitong/scope"
-    )
+    denied = sso_harness.browser.get("/kb/api/v1/admin/wanshitong/scope")
     assert denied.status_code == 401
+
+
+def test_public_root_login_returns_to_root_and_keeps_admin_separate(
+    sso_harness: SsoHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = sso_harness.browser.get(
+        "/kb/sso/entry",
+        params={"return_to": "/"},
+        follow_redirects=False,
+    )
+    assert entry.status_code == 302
+    authorize_query = parse_qs(urlsplit(entry.headers["location"]).query)
+    assert authorize_query["service"] == [_CALLBACK]
+    assert "path=/kb/sso" in entry.headers["set-cookie"].lower()
+
+    def _validate(
+        _client: SsoClient,
+        *,
+        ticket: str,
+        service: str,
+        state: str,
+    ) -> SsoIdentity:
+        assert ticket == _TICKET
+        assert service == _CALLBACK
+        assert state == authorize_query["state"][0]
+        return _identity()
+
+    monkeypatch.setattr(SsoClient, "validate", _validate)
+    callback = sso_harness.browser.get(
+        "/kb/sso/callback",
+        params={
+            "ticket": _TICKET,
+            "state": authorize_query["state"][0],
+        },
+        follow_redirects=False,
+    )
+    assert callback.status_code == 303
+    assert callback.headers["location"] == "/"
+    cookies = callback.headers.get_list("set-cookie")
+    assert any(
+        sso_harness.sessions.cookie_name in value and "path=/;" in value.lower()
+        for value in cookies
+    )
+    assert any(
+        sso_harness.sessions.cookie_name in value
+        and "path=/kb" in value.lower()
+        and "max-age=0" in value.lower()
+        for value in cookies
+    )
+
+    root = sso_harness.browser.get("/")
+    assert root.status_code == 200
+    session = sso_harness.browser.post(PUBLIC_SESSION_PATH)
+    assert session.status_code == 200
+    assert session.json()["user"]["display_name"] == "测试用户"
+
+    denied = sso_harness.browser.get("/kb/api/v1/admin/wanshitong/scope")
+    assert denied.status_code == 401
+
+    logout = sso_harness.browser.post(
+        "/sso/logout",
+        headers={"X-CSRF-Token": session.json()["csrf_token"]},
+    )
+    assert logout.status_code == 200
+    assert sso_harness.browser.post(PUBLIC_SESSION_PATH).status_code == 401
 
 
 def test_wrong_state_never_calls_idp_or_clears_current_pending(
@@ -204,9 +261,7 @@ def test_wrong_state_never_calls_idp_or_clears_current_pending(
     assert response.status_code == 403
     assert state not in response.text
     assert (
-        sso_harness.browser.cookies[
-            sso_harness.sessions.pending_cookie_name
-        ]
+        sso_harness.browser.cookies[sso_harness.sessions.pending_cookie_name]
         == pending_before
     )
 
@@ -215,14 +270,10 @@ def test_failed_new_callback_preserves_existing_user_session(
     sso_harness: SsoHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     established = _login(sso_harness, monkeypatch)
-    user_cookie = sso_harness.browser.cookies[
-        sso_harness.sessions.cookie_name
-    ]
+    user_cookie = sso_harness.browser.cookies[sso_harness.sessions.cookie_name]
     state = _entry(sso_harness)
 
-    def _replayed(
-        _client: SsoClient, **_kwargs: str
-    ) -> SsoIdentity:
+    def _replayed(_client: SsoClient, **_kwargs: str) -> SsoIdentity:
         raise SsoValidationError(
             "AUTH_LOGIN_EXPIRED",
             "登录已失效，请重新登录。",
@@ -261,12 +312,11 @@ def test_logout_is_local_csrf_protected_and_does_not_touch_admin(
         "scope": "kb_local",
     }
     assert (
-        sso_harness.browser.post(f"/kb{PUBLIC_SESSION_PATH}").status_code
-        == 401
+        sso_harness.browser.post(f"/kb{PUBLIC_SESSION_PATH}").status_code == 401
     )
     assert (
         sso_harness.product.client.get(
-                "/kb/api/v1/admin/wanshitong/scope"
+            "/kb/api/v1/admin/wanshitong/scope"
         ).status_code
         == 200
     )
@@ -280,6 +330,8 @@ def test_logout_is_local_csrf_protected_and_does_not_touch_admin(
         "/kb/../outside",
         "/kb/%2e%2e/outside",
         "/kb/sso/callback",
+        "/admin",
+        "/sso/callback",
         "/outside",
     ],
 )
@@ -314,9 +366,7 @@ def test_entry_rejects_unknown_host_and_ignores_untrusted_forwarding(
         follow_redirects=False,
     )
     assert direct.status_code == 302
-    service = parse_qs(urlsplit(direct.headers["location"]).query)[
-        "service"
-    ]
+    service = parse_qs(urlsplit(direct.headers["location"]).query)["service"]
     assert service == [_CALLBACK]
 
 
@@ -330,8 +380,7 @@ def test_callback_rejects_duplicate_query_without_calling_idp(
 
     monkeypatch.setattr(SsoClient, "validate", _unexpected)
     response = sso_harness.browser.get(
-        f"/kb/sso/callback?ticket={_TICKET}&ticket={'b' * 32}"
-        f"&state={state}",
+        f"/kb/sso/callback?ticket={_TICKET}&ticket={'b' * 32}&state={state}",
         follow_redirects=False,
     )
 
