@@ -84,6 +84,9 @@ from rag_app.application.retrieval.generation_evidence import (
 )
 from rag_app.application.retrieval.hydration import CandidateHydrator
 from rag_app.application.retrieval.lexical import LexicalChannel
+from rag_app.application.retrieval.minimal_plan import (
+    independent_question_atoms,
+)
 from rag_app.application.retrieval.neighbors import (
     ExpansionOutcome,
     NeighborExpander,
@@ -1539,6 +1542,11 @@ class RetrievalService:
                     planner_called=adaptive.attempted,
                 )
         else:
+            direct_atoms = (
+                independent_question_atoms(input_spans, effective_analysis)
+                if not adaptive.attempted and resolved_root.mode != "CLARIFY"
+                else ()
+            )
             query_plan = (
                 degraded_query_plan(
                     request,
@@ -1550,6 +1558,19 @@ class RetrievalService:
                     planner_called=adaptive.attempted,
                 )
                 if adaptive.attempted or resolved_root.mode == "CLARIFY"
+                else make_query_plan(
+                    standalone_query=resolved_root.resolved_query,
+                    original_query=request.text,
+                    context_resolution_mode=resolved_root.mode,
+                    context_digest=resolved_root.context_digest,
+                    referenced_span_ids=resolved_root.referenced_span_ids,
+                    intent="FACT",
+                    effort=effort.value,
+                    atoms=direct_atoms,
+                    reason_code="TRUSTED_NATURAL_CLAUSE_SPLIT",
+                    planner_called=False,
+                )
+                if direct_atoms
                 else fallback_query_plan(
                     effective_analysis,
                     effort=effort.value,

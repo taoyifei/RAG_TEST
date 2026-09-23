@@ -141,15 +141,8 @@ def build_query_atoms(
         tuple(span for span in current_clauses if span not in modifier_clauses)
         or current_clauses
     )
-    independent_clauses = (
-        1 < len(required_clauses) <= _MAX_INDEPENDENT_ATOMS
-        and len(payload.atoms) != len(required_clauses)
-        and all(
-            _INDEPENDENT_QUESTION.search(span.text)
-            for span in required_clauses
-        )
-    )
-    if independent_clauses:
+    independent_atoms = independent_question_atoms(spans, analysis)
+    if independent_atoms and len(payload.atoms) != len(independent_atoms):
         referenced_clause_ids = {
             span_id
             for item in payload.atoms
@@ -159,12 +152,7 @@ def build_query_atoms(
             span.span_id for span in required_clauses
         } - referenced_clause_ids:
             raise MinimalPlanValidationError("PLANNER_CLAUSE_UNCOVERED")
-        return _independent_question_atoms(
-            required_clauses,
-            modifier_clauses,
-            spans,
-            analysis,
-        )
+        return independent_atoms
     referenced_clauses: set[str] = set()
     atoms: list[QueryAtom] = []
     for index, item in enumerate(payload.atoms, 1):
@@ -268,6 +256,29 @@ def _validate_payload_references(
             or relation.turn != "CURRENT"
         ):
             raise MinimalPlanValidationError("PLANNER_INVALID_SPAN_KIND")
+
+
+def independent_question_atoms(
+    spans: tuple[QueryInputSpan, ...],
+    analysis: QueryAnalysis,
+) -> tuple[QueryAtom, ...]:
+    """仅把受信原文中明确并列的自然问句拆为独立义务。"""
+    current_clauses = tuple(
+        span
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
+    )
+    modifiers = current_context_modifier_clauses(current_clauses)
+    required = (
+        tuple(span for span in current_clauses if span not in modifiers)
+        or current_clauses
+    )
+    if not (
+        1 < len(required) <= _MAX_INDEPENDENT_ATOMS
+        and all(_INDEPENDENT_QUESTION.search(span.text) for span in required)
+    ):
+        return ()
+    return _independent_question_atoms(required, modifiers, spans, analysis)
 
 
 def _independent_question_atoms(

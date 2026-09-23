@@ -11,6 +11,7 @@ from rag_app.application.retrieval.minimal_plan import (
     MinimalPlanValidationError,
     _trusted_answer_shape,
     build_query_atoms,
+    independent_question_atoms,
     planner_json_schema,
 )
 from rag_app.core.identifiers import deterministic_id
@@ -331,6 +332,27 @@ def test_planner_single_atom_cannot_collapse_two_natural_questions() -> None:
         AtomAnswerShape.DURATION,
         AtomAnswerShape.RESPONSIBLE_PARTY,
     ]
+    assert all(atom.target == "设计文档" for atom in atoms)
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "设计文档由谁确认、几天内反馈？",
+        "设计文档几天内反馈、由谁确认？",
+    ),
+)
+def test_direct_path_preserves_natural_question_atoms(question: str) -> None:
+    request = _request(question)
+    atoms = independent_question_atoms(
+        build_input_spans(request), QueryAnalyzer().analyze(request)
+    )
+
+    assert len(atoms) == 2
+    assert {atom.answer_shape for atom in atoms} == {
+        AtomAnswerShape.RESPONSIBLE_PARTY,
+        AtomAnswerShape.DURATION,
+    }
     assert all(atom.target == "设计文档" for atom in atoms)
 
 
