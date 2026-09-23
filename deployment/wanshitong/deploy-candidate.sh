@@ -92,6 +92,12 @@ if grep -Eq \
   "${env_file}"; then
   sso_guard_args+=(--allow-sso-enable)
 fi
+popular_guard_args=()
+if grep -Eq \
+  "^RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED=(true|false|'true'|'false'|\"true\"|\"false\")$" \
+  "${env_file}"; then
+  popular_guard_args+=(--allow-popular-questions-toggle)
+fi
 
 report_ready() {
   python3 - "$1" <<'PY'
@@ -128,6 +134,7 @@ PY
       --forbidden-root /data/tyf/wanshitong \
       "${shadow_guard_args[@]}" \
       "${sso_guard_args[@]}" \
+      "${popular_guard_args[@]}" \
       --output "${rendered_guard}"
     ;;
   create)
@@ -148,6 +155,7 @@ PY
       --forbidden-root /data/tyf/wanshitong \
       "${shadow_guard_args[@]}" \
       "${sso_guard_args[@]}" \
+      "${popular_guard_args[@]}" \
       --output "${created_guard}"
     ;;
   start)

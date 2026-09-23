@@ -27,6 +27,7 @@ _BASE_IMAGE_LABELS = (
     "org.opencontainers.image.base.name",
 )
 _DEPARTMENT_SHADOW_KEY = "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
+_POPULAR_QUESTIONS_KEY = "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED"
 _ROOT_PATH_KEY = "RAG_ROOT_PATH"
 _TRUSTED_ORIGINS_KEY = "RAG_TRUSTED_ORIGINS"
 _SSO_AUTH_MODE_KEY = "RAG_WANSHITONG_AUTH_MODE"
@@ -299,15 +300,52 @@ class _Report:
         }
 
 
-def _compare_environment(
+def _compare_popular_questions_toggle(
+    report: _Report,
+    baseline: dict[str, str],
+    candidate: dict[str, str],
+    ignored_keys: set[str],
+) -> None:
+    """只声明 F06 公共榜单布尔开关的安全差异。"""
+    baseline_value = baseline.get(_POPULAR_QUESTIONS_KEY)
+    candidate_value = candidate.get(_POPULAR_QUESTIONS_KEY)
+    if baseline_value not in (
+        None,
+        "true",
+        "false",
+    ) or candidate_value not in ("true", "false"):
+        ignored_keys.add(_POPULAR_QUESTIONS_KEY)
+        report.add_problem(
+            "semantic_mismatches",
+            f"services.app.environment.{_POPULAR_QUESTIONS_KEY}",
+            "公共问题开关只允许显式 true 或 false。",
+            baseline=baseline_value,
+            candidate=candidate_value,
+        )
+    elif baseline_value != candidate_value:
+        ignored_keys.add(_POPULAR_QUESTIONS_KEY)
+        report.allow(
+            f"services.app.environment.{_POPULAR_QUESTIONS_KEY}",
+            "F06 公共问题开关允许在候选中启用或回退。",
+            baseline=baseline_value,
+            candidate=candidate_value,
+        )
+
+
+def _compare_environment(  # noqa: PLR0913
     report: _Report,
     baseline: dict[str, str],
     candidate: dict[str, str],
     *,
     allow_department_shadow_enable: bool = False,
     allow_sso_enable: bool = False,
+    allow_popular_questions_toggle: bool = False,
 ) -> None:
     ignored_keys: set[str] = set()
+    if allow_popular_questions_toggle:
+        _compare_popular_questions_toggle(
+            report, baseline, candidate, ignored_keys
+        )
     if allow_department_shadow_enable:
         baseline_value = baseline.get(_DEPARTMENT_SHADOW_KEY)
         candidate_value = candidate.get(_DEPARTMENT_SHADOW_KEY)
@@ -963,6 +1001,7 @@ def compare_runtime(  # noqa: PLR0913
     forbidden_root: PurePosixPath,
     allow_department_shadow_enable: bool = False,
     allow_sso_enable: bool = False,
+    allow_popular_questions_toggle: bool = False,
 ) -> dict[str, object]:
     """比较候选描述或创建后容器，返回无秘密的字段级报告。
 
@@ -975,6 +1014,7 @@ def compare_runtime(  # noqa: PLR0913
         forbidden_root: 不得写入的生产宿主根目录。
         allow_department_shadow_enable: 是否允许唯一的 Shadow 开关启用差异。
         allow_sso_enable: 是否允许并严格校验阶段 03 的 SSO 切换差异。
+        allow_popular_questions_toggle: 是否允许 F06 公共问题开关的声明差异。
 
     Returns:
         含逐类差异、各层摘要和 `ready` 判定的安全报告。
@@ -1017,6 +1057,7 @@ def compare_runtime(  # noqa: PLR0913
         candidate_environment,
         allow_department_shadow_enable=allow_department_shadow_enable,
         allow_sso_enable=allow_sso_enable,
+        allow_popular_questions_toggle=allow_popular_questions_toggle,
     )
     _compare_mounts(
         report,
@@ -1155,6 +1196,9 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
     )
     compare.add_argument("--allow-sso-enable", action="store_true")
+    compare.add_argument(
+        "--allow-popular-questions-toggle", action="store_true"
+    )
     return parser
 
 
@@ -1184,6 +1228,9 @@ def main(argv: list[str] | None = None) -> int:
             arguments.allow_department_shadow_enable
         ),
         allow_sso_enable=arguments.allow_sso_enable,
+        allow_popular_questions_toggle=(
+            arguments.allow_popular_questions_toggle
+        ),
     )
     _write_report(arguments.output, report)
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))

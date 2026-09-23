@@ -332,6 +332,45 @@ def test_later_candidate_preserves_enabled_department_shadow(
     assert report["semantic_mismatches"] == []
 
 
+def test_f06_popular_questions_toggle_requires_declared_boolean(
+    tmp_path: Path,
+) -> None:
+    rendered = _rendered()
+    rendered["services"]["app"]["environment"][
+        "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED"
+    ] = "true"
+    baseline, candidate, image = _inputs(tmp_path, rendered)
+    arguments = {
+        "stage": "rendered_spec",
+        "baseline_inspect": baseline,
+        "candidate_input": candidate,
+        "target_image_inspect": image,
+        "candidate_root": PurePosixPath("/candidate"),
+        "forbidden_root": PurePosixPath("/production"),
+    }
+
+    rejected = guard.compare_runtime(**arguments)
+    accepted = guard.compare_runtime(
+        **arguments, allow_popular_questions_toggle=True
+    )
+    assert rejected["ready"] is False
+    assert accepted["ready"] is True, accepted
+    assert any(
+        item["field_path"].endswith("RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED")
+        for item in accepted["allowed_changes"]
+    )
+
+    rendered["services"]["app"]["environment"][
+        "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED"
+    ] = "invalid"
+    _write_json(candidate, rendered)
+    invalid = guard.compare_runtime(
+        **arguments, allow_popular_questions_toggle=True
+    )
+    assert invalid["ready"] is False
+    assert invalid["semantic_mismatches"]
+
+
 def test_sso_changes_require_explicit_guard_flag(tmp_path: Path) -> None:
     rendered = _rendered()
     _enable_sso(rendered)
