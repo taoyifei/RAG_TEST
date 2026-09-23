@@ -59,7 +59,7 @@ from rag_app.core.source_compatibility import (
     table_cell_coordinate,
 )
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v17"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v18"
 _MIN_TABLE_FACT_COLUMNS = 2
 _TABLE_ROW_LABEL_COLUMN = 0
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
@@ -75,6 +75,7 @@ _MIN_READING_LABEL_CHARS = 2
 _MAX_READING_LABEL_CHARS = 64
 _MIN_READING_LABEL_COVERAGE = 0.5
 _MIN_READING_RELATION_CELLS = 2
+_MAX_INFERRED_HEADER_CELL_CHARS = 16
 _TEMPLATE_BODY = re.compile(
     r"正文|具体内容|具体字段|怎么填|如何填写|填写方法|占位|示例|正式要求"
 )
@@ -817,17 +818,71 @@ def _reading_table_identity(
     )
 
 
-def _reading_header(item: EvidenceItem, candidate: RankedChunk) -> bool:
+def _inferred_header_tables(
+    candidate_by_id: dict[str, RankedChunk],
+) -> frozenset[tuple[object, ...]]:
+    """仅从同表完整首行的短列标签推断未标记表头。"""
+    first_rows: dict[
+        tuple[object, ...], dict[int, list[str]]
+    ] = defaultdict(lambda: defaultdict(list))
+    data_tables: set[tuple[object, ...]] = set()
+    marked_tables: set[tuple[object, ...]] = set()
+    for candidate in candidate_by_id.values():
+        chunk = candidate.hydrated.chunk
+        if chunk.role is not ChunkRole.TABLE:
+            continue
+        for span in chunk.source_spans:
+            if not span.is_citable or span.is_repeated:
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ].strip()
+            if not quote:
+                continue
+            item = _evidence_item(candidate, span, quote, "S0")
+            cell = _reading_table_identity(item)
+            if cell is None:
+                continue
+            table, row, column = cell
+            if _reading_header(item, candidate):
+                marked_tables.add(table)
+            elif row == 0:
+                first_rows[table][column].append(quote)
+            else:
+                data_tables.add(table)
+    return frozenset(
+        table
+        for table, columns in first_rows.items()
+        if table in data_tables
+        and table not in marked_tables
+        and _TABLE_ROW_LABEL_COLUMN in columns
+        and len(columns) >= _MIN_TABLE_FACT_COLUMNS
+        and all(
+            len(" ".join(values)) <= _MAX_INFERRED_HEADER_CELL_CHARS
+            for values in columns.values()
+        )
+    )
+
+
+def _reading_header(
+    item: EvidenceItem,
+    candidate: RankedChunk,
+    inferred_tables: frozenset[tuple[object, ...]] = frozenset(),
+) -> bool:
     """只使用解析器明确认证且实际映射到该节点的表头。
 
     Args:
         item: 表头候选原文。
         candidate: 保留 canonical atom 映射的合法候选。
+        inferred_tables: 已按同一表首行短标签确认的未标记表头。
 
     Returns:
         是否具备源表头标记，不把任意第一行当作表头。
 
     """
+    cell = _reading_table_identity(item)
+    if cell is not None and cell[0] in inferred_tables and cell[1] == 0:
+        return True
     atoms = dict(candidate.hydrated.chunk.metadata).get("atoms")
     if not isinstance(atoms, (list, tuple)):
         return False
@@ -879,11 +934,15 @@ def _reading_seed_rank(
 
 
 def _reading_header_columns(
-    item: EvidenceItem, candidate: RankedChunk
+    item: EvidenceItem,
+    candidate: RankedChunk,
+    inferred_tables: frozenset[tuple[object, ...]] = frozenset(),
 ) -> frozenset[int]:
     """按规范单元格 grid span 展开祖先列头，不靠相邻列猜合并关系。"""
     cell = _reading_table_identity(item)
-    if cell is None or not _reading_header(item, candidate):
+    if cell is None or not _reading_header(
+        item, candidate, inferred_tables
+    ):
         return frozenset()
     _table, row, column = cell
     columns = {column}
@@ -948,14 +1007,21 @@ def _physical_table_facts(
         tuple[object, ...],
         dict[tuple[int, int, tuple[int, ...]], list[EvidenceItem]],
     ] = defaultdict(lambda: defaultdict(list))
+    inferred_tables = _inferred_header_tables(candidate_by_id)
     for item in items:
         cell = _reading_table_identity(item)
         candidate = candidate_by_id.get(item.chunk_id)
         if cell is None or candidate is None:
             continue
         table, row, column = cell
-        if _reading_header(item, candidate):
-            covered = tuple(sorted(_reading_header_columns(item, candidate)))
+        if _reading_header(item, candidate, inferred_tables):
+            covered = tuple(
+                sorted(
+                    _reading_header_columns(
+                        item, candidate, inferred_tables
+                    )
+                )
+            )
             if covered:
                 headers[table][row, column, covered].append(item)
             continue
@@ -1174,6 +1240,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
         owner 与必须一起阅读的稳定来源身份；表头保持独立引用。
 
     """
+    inferred_tables = _inferred_header_tables(candidate_by_id)
     rows: dict[tuple[tuple[object, ...], int], list[EvidenceItem]] = (
         defaultdict(list)
     )
@@ -1184,7 +1251,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
             continue
         table, row, _column = cell
         candidate = candidate_by_id[item.chunk_id]
-        if _reading_header(item, candidate):
+        if _reading_header(item, candidate, inferred_tables):
             headers[table].append(item)
         else:
             rows[(table, row)].append(item)
@@ -1217,7 +1284,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
                     for item in column_headers
                     if _normalized(item.citation_text) in _normalized(query)
                     for column in _reading_header_columns(
-                        item, candidate_by_id[item.chunk_id]
+                        item, candidate_by_id[item.chunk_id], inferred_tables
                     )
                     if column != _TABLE_ROW_LABEL_COLUMN
                 }
@@ -1235,7 +1302,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
                     column
                     for item in column_headers
                     for column in _reading_header_columns(
-                        item, candidate_by_id[item.chunk_id]
+                        item, candidate_by_id[item.chunk_id], inferred_tables
                     )
                 }
                 if not value_columns or not value_columns <= header_columns:
@@ -1250,9 +1317,9 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
                     in columns
                     or bool(
                         columns
-                        & _reading_header_columns(
-                            item, candidate_by_id[item.chunk_id]
-                        )
+                    & _reading_header_columns(
+                        item, candidate_by_id[item.chunk_id], inferred_tables
+                    )
                     )
                 )
                 if (
@@ -1544,6 +1611,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     # 已获准文档中的目标行一旦由规范行名确认，直接从同一有界 canonical
     # 表结构补齐该行全部竞争字段和真实表头。字段选择稍后由 schema-aware
     # resolver 完成；这里不读取旧 relation_status，也不按最高分预选一列。
+    inferred_tables = _inferred_header_tables(candidate_by_id)
     schema_rows: dict[
         tuple[tuple[object, ...], int],
         list[tuple[RankedChunk, EvidenceItem, int]],
@@ -1568,7 +1636,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             if cell is None:
                 continue
             table, row, column = cell
-            if _reading_header(item, candidate):
+            if _reading_header(item, candidate, inferred_tables):
                 schema_headers[table].append((candidate, item))
             else:
                 schema_rows[table, row].append((candidate, item, column))
@@ -1601,7 +1669,9 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         selected_schema_items.extend(
             (candidate, item)
             for candidate, item in schema_headers.get(table, ())
-            if _reading_header_columns(item, candidate) & value_columns
+            if _reading_header_columns(
+                item, candidate, inferred_tables
+            ) & value_columns
         )
         for _candidate, item in selected_schema_items:
             key = _identity(item)

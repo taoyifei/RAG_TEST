@@ -10,7 +10,7 @@ from pydantic import Field, StrictBool, StrictInt, model_validator
 from rag_app.core.models.common import FrozenModel
 
 ANSWER_PLAN_SCHEMA_REVISION = "wb08r-answer-plan-v3"
-ANSWER_PLAN_POLICY_REVISION = "wb08r-answer-plan-policy-v3"
+ANSWER_PLAN_POLICY_REVISION = "wb08r-answer-plan-policy-v4"
 _MIN_AMBIGUOUS_CANDIDATES = 2
 
 
@@ -344,6 +344,7 @@ class AnswerObligation(FrozenModel):
     qualifiers: tuple[AnswerQualifier, ...] = Field(default=(), max_length=8)
     source_resolved: StrictBool
     source_closed: StrictBool
+    collection_requires_member_proof: StrictBool = False
 
     @model_validator(mode="after")
     def _validate_identity(self) -> Self:

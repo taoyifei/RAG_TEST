@@ -434,6 +434,7 @@ class GroundedOutcome:
     relation_review_elapsed_ms: float = 0.0
     relation_review_skip_reason: str | None = None
     relation_review_results: tuple[tuple[str, str, str], ...] = ()
+    semantic_review_facets: tuple[JsonObject, ...] = ()
     target_member_coverage: tuple[JsonObject, ...] = ()
     claim_rejection_codes: tuple[tuple[str, int], ...] = ()
     generated_claim_count: int = 0
@@ -2727,6 +2728,7 @@ class GroundedAnsweringService:
         relation_review_elapsed_ms = 0.0
         relation_review_skip_reason: str | None = "NO_BOUND_CLAIM"
         relation_review_results: list[tuple[str, str, str]] = []
+        semantic_review_facets: list[JsonObject] = []
         pending_relations: list[BoundClaim] = []
         pending_legacy_relations: list[NaturalClaim] = []
         pending_legacy_diagnostics: dict[
@@ -3741,6 +3743,22 @@ class GroundedAnsweringService:
                 for result in results:
                     candidate = by_claim[result.claim_id]
                     bound = candidate.claim.with_semantic_status(result.status)
+                    semantic_review_facets.append(
+                        freeze_json_object(
+                            {
+                                "claim_sha256": canonical_sha256(bound.text),
+                                "atom_id": bound.atom_id,
+                                "source_support": result.source_support,
+                                "question_relevance": (
+                                    result.question_relevance
+                                ),
+                                "qualifier_fidelity": (
+                                    result.qualifier_fidelity
+                                ),
+                                "overall_status": result.status,
+                            }
+                        )
+                    )
                     if result.status != "supported":
                         rejected_atoms[bound.atom_id] += 1
                         claim_rejections[
@@ -4322,6 +4340,7 @@ class GroundedAnsweringService:
                 relation_review_elapsed_ms=relation_review_elapsed_ms,
                 relation_review_skip_reason=relation_review_skip_reason,
                 relation_review_results=tuple(relation_review_results),
+                semantic_review_facets=tuple(semantic_review_facets),
                 claim_rejection_codes=tuple(sorted(claim_rejections.items())),
                 generated_claim_count=generated_claim_count,
                 accepted_claim_count=len(accepted),
@@ -4418,6 +4437,7 @@ class GroundedAnsweringService:
             relation_review_elapsed_ms=relation_review_elapsed_ms,
             relation_review_skip_reason=relation_review_skip_reason,
             relation_review_results=tuple(relation_review_results),
+            semantic_review_facets=tuple(semantic_review_facets),
             claim_rejection_codes=tuple(sorted(claim_rejections.items())),
             generated_claim_count=generated_claim_count,
             accepted_claim_count=len(accepted),

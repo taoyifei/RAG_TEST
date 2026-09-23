@@ -22,7 +22,8 @@ from rag_app.core.ports.evidence_source import CatalogDocument
 
 _TITLE = re.compile(r"《([^》]{2,200})》")
 _NAVIGATION = re.compile(
-    r"哪份(?:材料|资料|文档|文件|模板)|(?:什么|哪些)(?:资料|文档|文件|模板)"
+    r"哪份(?:材料|资料|文档|文件|模板)"
+    r"|(?:什么|哪些)(?:资料|文档|文件|模板)(?:可|可以|能|能够)?(?:参考|查阅|下载)"
     r"|(?:哪个|哪份)(?:纪要|记录|报告|方案|计划|规范|办法|制度|表格)"
     r"|(?:用|选|采用|参考)哪份"
     r"|有没有.{0,50}模板|是否有.{0,50}模板|找.{0,50}(?:文档|材料|模板)"
@@ -32,6 +33,10 @@ _NAVIGATION = re.compile(
 )
 _CONTENT_REQUEST = re.compile(
     r"(?:怎么|如何)(?:填写|编写|操作)|填写项|字段|正文内容|具体要求"
+)
+_CONTENT_ENUMERATION = re.compile(
+    r"(?:什么|哪些)(?:材料|资料|文档|文件|模板)"
+    r"(?!(?:可|可以|能|能够)?(?:参考|查阅|下载))"
 )
 _COMPOUND = re.compile(
     r"(?:同时|分别|并且|以及|此外)|(?:输入|前提|条件).{0,35}(?:流程|时限|步骤)"
@@ -197,7 +202,7 @@ def reasoning_effort(
 
 def is_navigation_query(query: str) -> bool:
     """仅识别询问文档身份/存在性的通用语言形状。"""
-    if _CONTENT_REQUEST.search(query):
+    if _CONTENT_REQUEST.search(query) or _CONTENT_ENUMERATION.search(query):
         return False
     return bool(
         _NAVIGATION.search(query)

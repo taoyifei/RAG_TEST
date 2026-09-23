@@ -74,7 +74,7 @@ _REGISTERED_SCHEMA_FAMILIES = (
     "wb08r-field-resolution-v2",
     "wb08r-query-plan-v11",
     "wb08r-grounded-wire-v10",
-    "wb08r-semantic-validation-v3",
+    "wb08r-semantic-validation-v4",
     "wb08r-relation-review-v4",
 )
 

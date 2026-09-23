@@ -14,6 +14,27 @@ from rag_app.adapters.providers.openai_compatible import (
 from rag_app.core.models import AnswerDraft
 
 
+def _review_result(claim_id: str, status: str) -> dict[str, str]:
+    """将测试状态转换为当前三维复核协议。"""
+    result = {
+        "claim_id": claim_id,
+        "source_support": "supported",
+        "question_relevance": "answered",
+        "qualifier_fidelity": "faithful",
+    }
+    if status in {"unknown", "undetermined"}:
+        result.update(
+            source_support="unknown",
+            question_relevance="unknown",
+            qualifier_fidelity="unknown",
+        )
+    elif status == "irrelevant":
+        result["question_relevance"] = "irrelevant"
+    elif status == "contradicted":
+        result["source_support"] = "contradicted"
+    return result
+
+
 def fixed_review_generator(
     draft: AnswerDraft,
     *,
@@ -64,22 +85,14 @@ def fixed_review_generator(
             }
         else:
             assert "candidates" in data
+            review_statuses = (
+                statuses or ("supported",) * len(data["candidates"])
+            )
             payload = {
                 "results": [
-                    {
-                        "claim_id": candidate["claim_id"],
-                        "status": (
-                            "unknown"
-                            if statuses is not None
-                            and statuses[index] == "undetermined"
-                            else "contradicted"
-                            if statuses is not None
-                            and statuses[index] == "irrelevant"
-                            else statuses[index]
-                            if statuses is not None
-                            else "supported"
-                        ),
-                    }
+                    _review_result(
+                        candidate["claim_id"], review_statuses[index]
+                    )
                     for index, candidate in enumerate(data["candidates"])
                 ]
             }

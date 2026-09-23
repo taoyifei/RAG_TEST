@@ -156,6 +156,43 @@ def test_exact_sql_closes_remote_header_even_when_prose_ranks_first(
     assert source.section_calls == len(prose)
 
 
+def test_unmarked_short_first_row_is_hydrated_and_forms_physical_fact() -> (
+    None
+):
+    row = _sources()
+    header = row[-1]
+    chunk = header.hydrated.chunk
+    metadata = dict(chunk.metadata)
+    _atom_metadata(metadata)["header_strategy"] = "none"
+    unmarked = header.model_copy(
+        update={
+            "hydrated": header.hydrated.model_copy(
+                update={
+                    "chunk": chunk.model_copy(
+                        update={"metadata": freeze_json_object(metadata)}
+                    )
+                }
+            )
+        }
+    )
+    source = _CanonicalSource((*row[:-1], unmarked))
+    outcome = _expand(source, (row[0],))
+    assert unmarked.hydrated.chunk.chunk_id in {
+        item.hydrated.chunk.chunk_id for item in outcome.candidates
+    }
+
+    atom = QueryAtom(
+        atom_id="A1",
+        target="工装试制",
+        relation="输入",
+        answer_shape=AtomAnswerShape.ENUMERATION,
+    )
+    pack = _pack(_plan(atom), outcome.candidates)
+    assert any(
+        fact.value_column_index == 2 for fact in pack.physical_table_facts
+    )
+
+
 def test_same_section_other_table_and_same_named_column_are_not_borrowed() -> (
     None
 ):

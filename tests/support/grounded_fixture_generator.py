@@ -109,7 +109,9 @@ class GroundedFixtureGenerator:
             results=tuple(
                 SemanticValidationResult(
                     claim_id=item.claim.claim_id,
-                    status="supported",
+                    source_support="supported",
+                    question_relevance="answered",
+                    qualifier_fidelity="faithful",
                 )
                 for item in request.candidates
             ),

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.context_resolution import (
     SpanKind,
@@ -46,6 +48,38 @@ def test_same_short_question_in_two_contexts_has_distinct_plan_identity() -> (
         plans.append(plan)
     assert plans[0].plan_id != plans[1].plan_id
     assert plans[0].context_digest != plans[1].context_digest
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "研发规划需要做哪些事？",
+        "研发外协费用需要先有预算吗？",
+        "知识产权管理机构要备案哪些文件资料？",
+        "项目验收需要哪些文件？",
+    ),
+)
+def test_complete_new_topic_does_not_inherit_previous_question(
+    question: str,
+) -> None:
+    request = _request(question, "上一问：委托研发是什么？")
+    root = resolve_root_query(request, build_input_spans(request))
+
+    assert root.mode == "ORIGINAL"
+    assert root.referenced_span_ids == ()
+    assert root.reason_codes == ("CURRENT_TOPIC_STANDALONE",)
+    assert "委托研发" not in root.resolved_query
+
+
+@pytest.mark.parametrize("question", ("那由谁负责？", "提前多久提出？"))
+def test_omitted_topic_can_still_inherit_unique_previous_question(
+    question: str,
+) -> None:
+    request = _request(question, "上一问：合作申请怎么处理？")
+    root = resolve_root_query(request, build_input_spans(request))
+
+    assert root.mode == "RULE_CONTEXT"
+    assert root.referenced_span_ids
 
 
 def test_context_target_and_current_relation_are_separate_trusted_spans() -> (

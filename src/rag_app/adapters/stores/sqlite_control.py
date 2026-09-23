@@ -2019,7 +2019,7 @@ class SqliteControlStore:
         row_indices: tuple[int, ...],
         limit: int,
     ) -> tuple[str, ...] | None:
-        """按 canonical atom 映射读取同表表头与目标行，不扫描章节正文。"""
+        """按 canonical atom 映射读取目标行及同表首行候选。"""
         if not 0 < limit <= _MAX_HYDRATION_CHUNKS:
             raise ValueError("table context limit 必须在 1..200。")
         revision = snapshot.revision
@@ -2041,7 +2041,9 @@ class SqliteControlStore:
                 "WHERE json_extract(m.value, '$[0]')='atoms' "
                 "AND json_extract(a.value, '$.metadata.table_node_id')=? "
                 "AND (json_extract(a.value, '$.metadata.header_strategy')"
-                "='tblHeader' OR json_extract(a.value, '$.metadata.row_index') "
+                "='tblHeader' OR "
+                "json_extract(a.value, '$.metadata.row_index')=0 "
+                "OR json_extract(a.value, '$.metadata.row_index') "
                 "IN (SELECT value FROM json_each(?)))) "
                 "ORDER BY c.row_id LIMIT ?",
                 (

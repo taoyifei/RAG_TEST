@@ -233,6 +233,10 @@ def reduce_plan_coverage(  # noqa: PLR0912
             and validated
             and not missing_members
             and not missing_qualifiers
+            and (
+                not obligation.collection_requires_member_proof
+                or bool(required)
+            )
         ):
             status = "FULL"
         elif validated:

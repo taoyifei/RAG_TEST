@@ -82,7 +82,12 @@ def test_missing_model_result_is_explicit_unknown() -> None:
     results = normalized_semantic_results(
         SemanticValidationPayload(
             results=(
-                SemanticValidationResult(claim_id="C1", status="supported"),
+                SemanticValidationResult(
+                    claim_id="C1",
+                    source_support="supported",
+                    question_relevance="answered",
+                    qualifier_fidelity="faithful",
+                ),
             )
         ),
         _request(),
@@ -94,13 +99,29 @@ def test_missing_model_result_is_explicit_unknown() -> None:
     )
 
 
+def test_source_support_alone_cannot_approve_wrong_question_relation() -> None:
+    result = SemanticValidationResult(
+        claim_id="C1",
+        source_support="supported",
+        question_relevance="irrelevant",
+        qualifier_fidelity="faithful",
+    )
+
+    assert result.status == "contradicted"
+
+
 def test_unknown_or_duplicate_result_id_rejects_the_batch() -> None:
     request = _request()
     with pytest.raises(ValueError, match="UNKNOWN_CLAIM"):
         normalized_semantic_results(
             SemanticValidationPayload(
                 results=(
-                    SemanticValidationResult(claim_id="C3", status="supported"),
+                    SemanticValidationResult(
+                        claim_id="C3",
+                        source_support="supported",
+                        question_relevance="answered",
+                        qualifier_fidelity="faithful",
+                    ),
                 )
             ),
             request,
@@ -109,8 +130,18 @@ def test_unknown_or_duplicate_result_id_rejects_the_batch() -> None:
         normalized_semantic_results(
             SemanticValidationPayload(
                 results=(
-                    SemanticValidationResult(claim_id="C1", status="supported"),
-                    SemanticValidationResult(claim_id="C1", status="unknown"),
+                    SemanticValidationResult(
+                        claim_id="C1",
+                        source_support="supported",
+                        question_relevance="answered",
+                        qualifier_fidelity="faithful",
+                    ),
+                    SemanticValidationResult(
+                        claim_id="C1",
+                        source_support="unknown",
+                        question_relevance="unknown",
+                        qualifier_fidelity="unknown",
+                    ),
                 )
             ),
             request,

@@ -1595,6 +1595,43 @@ def test_open_generation_artifact_can_close_only_its_own_obligation() -> None:
     assert coverage.complete
 
 
+def test_collection_cannot_be_full_without_frozen_member_set() -> None:
+    query_plan, pack, evidence = _list_fixture()
+    pack = replace(
+        pack,
+        trusted_source_groups=(),
+        complete_group_ids=(),
+    )
+    plan = compile_answer_plan(query_plan, pack, snapshot_id="irev-test")
+    obligation = plan.obligations[0]
+    assert obligation.collection_requires_member_proof
+    assert not obligation.required_member_keys
+    artifact = ValidatedPlanArtifact(
+        artifact_id="G1",
+        plan_id=plan.plan_id,
+        obligation_ids=(obligation.obligation_id,),
+        selection_digests=(),
+        covered_member_keys=(),
+        satisfied_qualifier_ids=(),
+        source_closed=True,
+        origin="GROUNDED_GENERATION",
+        claim=AnswerClaim(
+            text=evidence[1].citation_text,
+            supports=(
+                ClaimSupport(
+                    support_id=evidence[1].support_id,
+                    quote=evidence[1].citation_text,
+                ),
+            ),
+        ),
+    )
+
+    coverage = reduce_plan_coverage(plan, (artifact,))
+
+    assert coverage.obligations[0].status == "PARTIAL"
+    assert not coverage.complete
+
+
 def test_service_deterministic_path_calls_no_generation_or_review() -> None:
     query_plan, pack, _ = _fixture_plan(
         "《开发中心三种工作模式》中，需求快验的输入项是什么？"

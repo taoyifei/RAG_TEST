@@ -60,6 +60,11 @@ _MEDIA_TYPE = (
         ("申请阶段有哪些文档可参考？", True),
         ("纪要该用哪份？", True),
         ("纪要要写哪些内容？", False),
+        ("知识产权管理机构要备案哪些文件资料？", False),
+        ("采购申请要提交哪些文件？", False),
+        ("项目验收需要哪些文件？", False),
+        ("请找一下知识产权管理办法文档", True),
+        ("找一下制度文档，里面有哪些文件需要备案？", False),
     ),
 )
 def test_document_navigation_excludes_required_input_materials(

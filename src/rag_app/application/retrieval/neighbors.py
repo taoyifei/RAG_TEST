@@ -371,6 +371,8 @@ class NeighborExpander:
                             item.chunk, table_node
                         ) != identity or (
                             (table_node, row) not in _table_row_keys(item.chunk)
+                            and (table_node, 0)
+                            not in _table_row_keys(item.chunk)
                             and not _has_original_header(item.chunk, table_node)
                         ):
                             raise IndexCorrupt(

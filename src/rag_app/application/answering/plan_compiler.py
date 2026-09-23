@@ -44,6 +44,7 @@ from rag_app.core.models.answer_plan import (
 from rag_app.core.models.evidence_group import EvidenceGroupKind
 from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import (
+    AtomAnswerShape,
     QueryAtom,
     QueryPlan,
     SourceResolution,
@@ -1014,6 +1015,7 @@ def compile_answer_plan(  # noqa: PLR0915
                 qualifiers=structured_qualifiers,
                 source_resolved=_source_resolved(atom),
                 source_closed=member_scope.source_complete,
+                collection_requires_member_proof=True,
             )
         )
 
@@ -1051,6 +1053,11 @@ def compile_answer_plan(  # noqa: PLR0915
                 qualifiers=open_qualifiers,
                 source_resolved=_source_resolved(atom),
                 source_closed=False,
+                collection_requires_member_proof=atom.answer_shape in {
+                    AtomAnswerShape.ENUMERATION,
+                    AtomAnswerShape.PROCEDURE,
+                    AtomAnswerShape.DUTIES,
+                },
             )
         )
 

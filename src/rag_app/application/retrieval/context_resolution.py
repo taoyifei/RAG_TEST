@@ -21,7 +21,7 @@ from rag_app.core.models.query_plan import (
     make_query_plan,
 )
 
-CONTEXT_RESOLUTION_REVISION = "wb08r-context-resolution-v3"
+CONTEXT_RESOLUTION_REVISION = "wb08r-context-resolution-v4"
 _CLAUSES = re.compile(r"[^，,；;。！？?!]+")
 _REFERENCES = re.compile(r"这个|那个|上述|前者|后者|其中|它|其|这些|那些|那")
 _SHORT_RELATION = re.compile(
@@ -66,6 +66,9 @@ _MIN_SEQUENCE_PARTS = 2
 _MAX_ATOMS = 4
 _MAX_SHORT_FOLLOW_UP_CHARS = 24
 _MIN_TARGET_CHARS = 2
+_INDEPENDENT_TOPIC_PREFIX = re.compile(
+    r"^(?P<topic>[^，,；;。！？?!]{2,80}?)(?:需要|应当|必须|要|须)"
+)
 
 
 class SpanKind(StrEnum):
@@ -335,19 +338,34 @@ def resolve_root_query(
         >= _MIN_TARGET_CHARS
         and len({span.text for span in current_antecedents}) == 1
     )
-    if not previous_targets and (
-        local_topic_before_reference
-        or (
-            len(current_clauses) > 1
-            and len({span.text for span in current_antecedents}) == 1
+    independent_topic = bool(current_clauses) and any(
+        span.text != current_clauses[0].text
+        and len(_HAN.findall(span.text)) >= _MIN_TARGET_CHARS
+        and not _REFERENCES.match(span.text)
+        and not _TIME_MODIFIER.fullmatch(span.text)
+        for span in current_antecedents
+    )
+    if not independent_topic:
+        topic_prefix = _INDEPENDENT_TOPIC_PREFIX.match(original)
+        independent_topic = bool(
+            topic_prefix
+            and len(_HAN.findall(topic_prefix["topic"])) >= _MIN_TARGET_CHARS
+            and not _REFERENCES.match(topic_prefix["topic"])
         )
-    ):
+    local_topic = local_topic_before_reference or (
+        len(current_clauses) > 1
+        and len({span.text for span in current_antecedents}) == 1
+    )
+    if independent_topic or (not previous_targets and local_topic):
         return ResolvedRootQuery(
             original_query=request.text,
             resolved_query=original[:512],
             mode="ORIGINAL",
             confidence="HIGH",
             context_digest=digest,
+            reason_codes=(
+                ("CURRENT_TOPIC_STANDALONE",) if independent_topic else ()
+            ),
         )
     latest_targets = tuple(
         span

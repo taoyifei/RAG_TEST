@@ -150,6 +150,11 @@ def test_batch_review_success_clears_final_rejection_counts() -> None:
     assert outcome.claim_rejection_codes == ()
     assert outcome.claim_rejection_diagnostics == ()
     assert outcome.relation_review_calls == 1
+    assert len(outcome.semantic_review_facets) == 2
+    assert all(
+        dict(item)["question_relevance"] == "answered"
+        for item in outcome.semantic_review_facets
+    )
     assert outcome.repair_calls == 0
     assert len(outcome.calls) == 2
     assert outcome.raw_failures == ()
@@ -195,9 +200,17 @@ def test_mixed_review_removes_only_the_accepted_claim_diagnostic() -> None:
         else:
             payload = {
                 "results": [
-                    {
-                        "claim_id": item["claim_id"],
-                        "status": "supported" if index == 1 else "unknown",
+                        {
+                            "claim_id": item["claim_id"],
+                            "source_support": (
+                                "supported" if index == 1 else "unknown"
+                            ),
+                            "question_relevance": (
+                                "answered" if index == 1 else "unknown"
+                            ),
+                            "qualifier_fidelity": (
+                                "faithful" if index == 1 else "unknown"
+                            ),
                     }
                     for index, item in enumerate(data["candidates"])
                 ]

@@ -2879,6 +2879,9 @@ class RetrievalService:
                                 generated.relation_review_results
                             )
                         ),
+                        "semantic_review_facets": (
+                            generated.semantic_review_facets
+                        ),
                         "claim_rejection_codes": (
                             generated.claim_rejection_codes
                         ),

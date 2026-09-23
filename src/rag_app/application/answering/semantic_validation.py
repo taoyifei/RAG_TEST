@@ -17,15 +17,34 @@ from rag_app.core.models.generation_packet import (
 from rag_app.core.models.provider import ProviderCall
 from rag_app.core.models.query_plan import QueryAtom
 
-SEMANTIC_VALIDATION_REVISION = "wb08r-semantic-validation-v3"
+SEMANTIC_VALIDATION_REVISION = "wb08r-semantic-validation-v4"
 _MAX_CANDIDATES = 24
 
 
 class SemanticValidationResult(FrozenModel):
-    """模型只返回服务端签发的事实 ID 与三态语义结果。"""
+    """分别记录来源蕴含、答题关系和限定保持的三态结果。"""
 
     claim_id: str = Field(pattern=r"^C[1-9][0-9]*$")
-    status: Literal["supported", "contradicted", "unknown"]
+    source_support: Literal["supported", "contradicted", "unknown"]
+    question_relevance: Literal["answered", "irrelevant", "unknown"]
+    qualifier_fidelity: Literal["faithful", "contradicted", "unknown"]
+
+    @property
+    def status(self) -> Literal["supported", "contradicted", "unknown"]:
+        """仅三个维度全部通过时允许发布。"""
+        if (
+            self.source_support == "supported"
+            and self.question_relevance == "answered"
+            and self.qualifier_fidelity == "faithful"
+        ):
+            return "supported"
+        if (
+            self.source_support == "contradicted"
+            or self.question_relevance == "irrelevant"
+            or self.qualifier_fidelity == "contradicted"
+        ):
+            return "contradicted"
+        return "unknown"
 
 
 class SemanticValidationPayload(FrozenModel):
@@ -133,7 +152,12 @@ def normalized_semantic_results(
     return tuple(
         returned.get(
             claim_id,
-            SemanticValidationResult(claim_id=claim_id, status="unknown"),
+            SemanticValidationResult(
+                claim_id=claim_id,
+                source_support="unknown",
+                question_relevance="unknown",
+                qualifier_fidelity="unknown",
+            ),
         )
         for claim_id in expected
     )
