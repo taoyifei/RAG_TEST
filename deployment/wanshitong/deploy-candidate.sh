@@ -98,6 +98,12 @@ if grep -Eq \
   "${env_file}"; then
   popular_guard_args+=(--allow-popular-questions-toggle)
 fi
+q1_capture_guard_args=()
+if grep -Eq \
+  "^RAG_PRIVATE_PROVIDER_DIAGNOSTIC_CAPTURE_SUCCESS=(true|'true'|\"true\")$" \
+  "${env_file}"; then
+  q1_capture_guard_args+=(--allow-q1-private-capture)
+fi
 
 report_ready() {
   python3 - "$1" <<'PY'
@@ -135,6 +141,7 @@ PY
       "${shadow_guard_args[@]}" \
       "${sso_guard_args[@]}" \
       "${popular_guard_args[@]}" \
+      "${q1_capture_guard_args[@]}" \
       --output "${rendered_guard}"
     ;;
   create)
@@ -156,6 +163,7 @@ PY
       "${shadow_guard_args[@]}" \
       "${sso_guard_args[@]}" \
       "${popular_guard_args[@]}" \
+      "${q1_capture_guard_args[@]}" \
       --output "${created_guard}"
     ;;
   start)

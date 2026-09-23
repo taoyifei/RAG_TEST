@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import socket
 import ssl
 from pathlib import Path
@@ -571,6 +573,101 @@ def test_private_diagnostic_is_explicit_bounded_and_redacts_headers(
         ]
         == "WRITTEN"
     )
+
+
+def test_private_success_capture_records_sent_chat_and_raw_response(
+    tmp_path: Path,
+) -> None:
+    """仅显式打开时记录聊天成功入出，普通调用审计不含正文。"""
+    private_directory = tmp_path / "private"
+    private_directory.mkdir(mode=0o700)
+    recorder = PrivateProviderDiagnosticRecorder(
+        private_directory, capture_success=True
+    )
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    json={"choices": [{"message": {"content": "合成草稿"}}]},
+                )
+            )
+        ),
+        private_diagnostic_recorder=recorder,
+    )
+
+    result = client.request_json(
+        "POST",
+        "/chat/completions",
+        payload={"messages": [{"role": "user", "content": "合成问题"}]},
+        headers={"Authorization": "Bearer synthetic-secret"},
+        provider_id="test-provider",
+        operation="generation",
+        model="test-model",
+        input_count=1,
+        estimated_tokens=20,
+    )
+    client.close()
+
+    files = tuple(private_directory.glob("provider-http-private-*.json"))
+    assert len(files) == 1
+    assert files[0].stat().st_mode & 0o777 == 0o600
+    saved = json.loads(files[0].read_text(encoding="utf-8"))
+    request = json.loads(base64.b64decode(saved["request_payload_base64"]))
+    response = json.loads(base64.b64decode(saved["response_body_base64"]))
+    assert request["messages"][0]["content"] == "合成问题"
+    assert response["choices"][0]["message"]["content"] == "合成草稿"
+    assert saved["request_headers"]["Authorization"] == "REDACTED"
+    assert saved["request_truncated"] is False
+    assert saved["response_truncated"] is False
+    assert (
+        dict(result.call.transport_diagnostics)["private_diagnostic_status"]
+        == "WRITTEN"
+    )
+    assert "合成问题" not in result.call.model_dump_json()
+    assert "合成草稿" not in result.call.model_dump_json()
+
+
+def test_private_success_capture_records_streamed_chat(tmp_path: Path) -> None:
+    """流式生成也保存实际发送消息与完整原始响应。"""
+    private_directory = tmp_path / "private"
+    private_directory.mkdir(mode=0o700)
+    recorder = PrivateProviderDiagnosticRecorder(
+        private_directory, capture_success=True
+    )
+    response_body = b'data: {"content":"synthetic draft"}\n\ndata: [DONE]\n\n'
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    content=response_body,
+                    headers={"Content-Type": "text/event-stream"},
+                )
+            )
+        ),
+        private_diagnostic_recorder=recorder,
+    )
+
+    result = _stream_request(client)
+    client.close()
+
+    files = tuple(private_directory.glob("provider-http-private-*.json"))
+    assert len(files) == 1
+    saved = json.loads(files[0].read_text(encoding="utf-8"))
+    assert base64.b64decode(saved["response_body_base64"]) == response_body
+    assert json.loads(base64.b64decode(saved["request_payload_base64"])) == {
+        "private": "text"
+    }
+    assert saved["request_headers"]["Authorization"] == "REDACTED"
+    assert saved["response_truncated"] is False
+    assert (
+        dict(result.call.transport_diagnostics)["private_diagnostic_status"]
+        == "WRITTEN"
+    )
+    assert "synthetic draft" not in result.call.model_dump_json()
 
 
 def test_close_is_idempotent_and_rejects_future_calls() -> None:

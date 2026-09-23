@@ -30,7 +30,7 @@ _SECRET_HEADERS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class PrivateHttpDiagnostic:
-    """一次传输失败或响应合同失败的有界私有诊断输入。"""
+    """一次受控 Provider HTTP 入出的有界私有诊断输入。"""
 
     request_id: str
     attempt_id: str
@@ -54,6 +54,7 @@ class PrivateProviderDiagnosticRecorder:
         *,
         max_files: int = _DEFAULT_MAX_FILES,
         retention_seconds: int = _DEFAULT_RETENTION_SECONDS,
+        capture_success: bool = False,
     ) -> None:
         """校验诊断目录和固定保留上限。
 
@@ -61,6 +62,7 @@ class PrivateProviderDiagnosticRecorder:
             directory: 必须已存在、非符号链接且权限为 ``0700`` 的目录。
             max_files: 目录内最多保留的本模块诊断文件数。
             retention_seconds: 本模块文件的最长保留时间。
+            capture_success: 是否额外记录聊天模型成功响应，仅用于受控复查。
 
         Raises:
             ValueError: 路径、权限或上限不符合私有诊断合同。
@@ -88,6 +90,7 @@ class PrivateProviderDiagnosticRecorder:
         self._directory = resolved
         self._max_files = max_files
         self._retention_seconds = retention_seconds
+        self.capture_success = capture_success
 
     @classmethod
     def from_environment(cls) -> PrivateProviderDiagnosticRecorder | None:
@@ -96,7 +99,14 @@ class PrivateProviderDiagnosticRecorder:
         acknowledgement = os.environ.get(
             "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_ACK", ""
         )
+        success_setting = os.environ.get(
+            "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_CAPTURE_SUCCESS", "false"
+        )
+        if success_setting not in {"true", "false"}:
+            raise ValueError("私有 Provider 成功捕获开关无效。")
         if not directory and not acknowledgement:
+            if success_setting == "true":
+                raise ValueError("私有 Provider 成功捕获缺少受控目录。")
             return None
         if acknowledgement != _ACK_VALUE or not directory:
             raise ValueError("私有 Provider 诊断配置不完整或确认口令无效。")
@@ -114,6 +124,7 @@ class PrivateProviderDiagnosticRecorder:
                 minimum=_MIN_RETENTION_SECONDS,
                 maximum=_MAX_RETENTION_SECONDS,
             ),
+            capture_success=success_setting == "true",
         )
 
     def record(self, diagnostic: PrivateHttpDiagnostic) -> Path:

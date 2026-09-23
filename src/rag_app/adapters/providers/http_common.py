@@ -58,6 +58,7 @@ _HTTP_SUCCESS_MAX = 300
 _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_SERVER_ERROR_MAX = 600
 _MAX_ERROR_RESPONSE_BYTES = 64 * 1024
+_MAX_PRIVATE_STREAM_BYTES = 64 * 1024
 _SAFE_ERROR_VALUE = re.compile(r"^[A-Za-z0-9_.:/-]{1,80}$")
 _SAFE_CONTENT_TYPE = re.compile(
     r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
@@ -142,6 +143,17 @@ def _bounded_stream_bytes(
                 stage="provider.http.stream",
                 code="RESPONSE_TOO_LARGE",
             )
+        yield chunk
+
+
+def _capture_private_stream_bytes(
+    chunks: Iterator[bytes], captured: bytearray
+) -> Iterator[bytes]:
+    """向消费方原样透传，同时只留有界私有响应字节。"""
+    for chunk in chunks:
+        remaining = _MAX_PRIVATE_STREAM_BYTES - len(captured)
+        if remaining > 0:
+            captured.extend(chunk[:remaining])
         yield chunk
 
 
@@ -436,7 +448,7 @@ class ProviderHttpClient:
                     **_safe_request_diagnostics(request_diagnostics),
                     **response_diagnostics,
                 }
-                private_status = self._record_private_failure(
+                private_status = self._record_private_response(
                     request_id=request_id,
                     attempt_id=attempt_id,
                     operation=operation,
@@ -514,6 +526,36 @@ class ProviderHttpClient:
                 last_retry_after_ms,
                 encountered_rate_limit,
             )
+            recorder = self._private_diagnostic_recorder
+            if (
+                recorder is not None
+                and recorder.capture_success
+                and operation
+                in {"generation", "query.interpret", "query.rewrite"}
+            ):
+                private_status = self._record_private_response(
+                    request_id=request_id,
+                    attempt_id=f"{request_id}-{attempt}",
+                    operation=operation,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    payload=payload,
+                    response=response,
+                    response_body=content,
+                    response_truncated=False,
+                )
+                if private_status is not None:
+                    call = call.model_copy(
+                        update={
+                            "transport_diagnostics": freeze_json_object(
+                                {
+                                    **dict(call.transport_diagnostics),
+                                    "private_diagnostic_status": private_status,
+                                }
+                            )
+                        }
+                    )
             if not self._defer_success_observation:
                 self._observe(call)
             return ProviderHttpResult(payload=response_payload, call=call)
@@ -649,7 +691,7 @@ class ProviderHttpClient:
                                 ),
                                 **response_diagnostics,
                             }
-                            private_status = self._record_private_failure(
+                            private_status = self._record_private_response(
                                 request_id=request_id,
                                 attempt_id=attempt_id,
                                 operation=operation,
@@ -689,11 +731,27 @@ class ProviderHttpClient:
                                 encountered_rate_limit,
                             )
                         try:
-                            value = consumer(
-                                _bounded_stream_bytes(
-                                    response.iter_bytes(),
-                                    self._max_response_bytes,
+                            recorder = self._private_diagnostic_recorder
+                            capture_success = (
+                                recorder is not None
+                                and recorder.capture_success
+                                and operation in {
+                                    "generation",
+                                    "query.interpret",
+                                    "query.rewrite",
+                                }
+                            )
+                            private_body = bytearray()
+                            chunks = _bounded_stream_bytes(
+                                response.iter_bytes(),
+                                self._max_response_bytes,
+                            )
+                            if capture_success:
+                                chunks = _capture_private_stream_bytes(
+                                    chunks, private_body
                                 )
+                            value = consumer(
+                                chunks
                             )
                         except QueryCancelled as error:
                             call = self._call(
@@ -832,6 +890,34 @@ class ProviderHttpClient:
                             last_retry_after_ms,
                             encountered_rate_limit,
                         )
+                        if capture_success:
+                            private_status = self._record_private_response(
+                                request_id=request_id,
+                                attempt_id=f"{request_id}-{attempt}",
+                                operation=operation,
+                                method=method,
+                                path=path,
+                                headers=headers,
+                                payload=payload,
+                                response=response,
+                                response_body=bytes(private_body),
+                                response_truncated=(
+                                    response.num_bytes_downloaded
+                                    > len(private_body)
+                                ),
+                            )
+                            if private_status is not None:
+                                diagnostics = {
+                                    **dict(call.transport_diagnostics),
+                                    "private_diagnostic_status": private_status,
+                                }
+                                frozen_diagnostics = freeze_json_object(
+                                    diagnostics
+                                )
+                                call_update = {
+                                    "transport_diagnostics": frozen_diagnostics
+                                }
+                                call = call.model_copy(update=call_update)
                         if not self._defer_success_observation:
                             self._observe(call)
                         return ProviderHttpStreamResult(value=value, call=call)
@@ -981,7 +1067,7 @@ class ProviderHttpClient:
         diagnostics.update(_safe_error_fields(content, truncated=truncated))
         return diagnostics, content, truncated
 
-    def _record_private_failure(  # noqa: PLR0913
+    def _record_private_response(  # noqa: PLR0913
         self,
         *,
         request_id: str,
@@ -995,7 +1081,7 @@ class ProviderHttpClient:
         response_body: bytes,
         response_truncated: bool,
     ) -> str | None:
-        """私有记录故障只返回安全状态，绝不覆盖原始 HTTP 异常。"""
+        """私有记录只返回安全状态，绝不覆盖原始 HTTP 结果。"""
         recorder = self._private_diagnostic_recorder
         if recorder is None:
             return None

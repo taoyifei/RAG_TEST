@@ -1,0 +1,16 @@
+{
+  "revision": "wb08r-q1-current-v1",
+  "baseline_code_sha": "aee8755c1aa7a597ce9a84725f1352d3fcab322e",
+  "baseline_image_id": "sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06",
+  "baseline_index_revision_id": "irev_0329a35ca9ea700133f7b309160118f0",
+  "cases_file": "cases.ndjson",
+  "cases_sha256": "b3fd9982d05dac8297494aa815563a1b70c614a681bacbce56c176278f3a5758",
+  "case_count": 10,
+  "source_truth_revision": "wb08r03f-truth-v1",
+  "source_dataset_revision": "wanshitong-v2-20260917",
+  "provisional_case_ids": [
+    "WB08R-Q1-N060-REV",
+    "WB08R-N-003",
+    "WB08R-Q1-SQ-SECURITY"
+  ]
+}

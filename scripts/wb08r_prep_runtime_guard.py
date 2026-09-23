@@ -28,6 +28,19 @@ _BASE_IMAGE_LABELS = (
 )
 _DEPARTMENT_SHADOW_KEY = "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
 _POPULAR_QUESTIONS_KEY = "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED"
+_Q1_CAPTURE_KEYS = {
+    "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_CAPTURE_SUCCESS": "true",
+    "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_MAX_FILES": "128",
+    "RAG_PRIVATE_REPLAY_CAPTURE_DIR": "/private-diagnostics/q1-replay",
+    "RAG_PRIVATE_REPLAY_CAPTURE_ACK": "private-replay-v1",
+    "RAG_PRIVATE_REPLAY_CAPTURE_LIMIT": "16",
+}
+_Q1_INERT_KEYS = {
+    "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_CAPTURE_SUCCESS": "false",
+    "RAG_PRIVATE_REPLAY_CAPTURE_DIR": "",
+    "RAG_PRIVATE_REPLAY_CAPTURE_ACK": "",
+    "RAG_PRIVATE_REPLAY_CAPTURE_LIMIT": "",
+}
 _ROOT_PATH_KEY = "RAG_ROOT_PATH"
 _TRUSTED_ORIGINS_KEY = "RAG_TRUSTED_ORIGINS"
 _SSO_AUTH_MODE_KEY = "RAG_WANSHITONG_AUTH_MODE"
@@ -332,6 +345,49 @@ def _compare_popular_questions_toggle(
         )
 
 
+def _compare_q1_private_capture(
+    report: _Report,
+    baseline: dict[str, str],
+    candidate: dict[str, str],
+    ignored_keys: set[str],
+    *,
+    allow_q1_private_capture: bool,
+) -> None:
+    """只允许隔离候选上的固定、有界 Q1 私有证据捕获。"""
+    for key, inert_value in _Q1_INERT_KEYS.items():
+        if key not in baseline and candidate.get(key) == inert_value:
+            ignored_keys.add(key)
+            report.allow(
+                f"services.app.environment.{key}",
+                "新增的 Q1 捕获配置保持关闭。",
+                candidate=inert_value,
+            )
+    if not allow_q1_private_capture:
+        return
+    for key, expected in _Q1_CAPTURE_KEYS.items():
+        actual = candidate.get(key)
+        previous = baseline.get(key)
+        allowed_baseline = {None, _Q1_INERT_KEYS.get(key, "32")}
+        if key == "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_MAX_FILES":
+            allowed_baseline = {"32", "128"}
+        ignored_keys.add(key)
+        if actual != expected or previous not in allowed_baseline:
+            report.add_problem(
+                "semantic_mismatches",
+                f"services.app.environment.{key}",
+                "Q1 私有捕获必须使用预定的有界值和关闭基准。",
+                baseline=previous,
+                candidate=actual,
+            )
+        elif previous != actual:
+            report.allow(
+                f"services.app.environment.{key}",
+                "Q1 专用 8289 的有界私有证据捕获。",
+                baseline=previous,
+                candidate=actual,
+            )
+
+
 def _compare_environment(  # noqa: PLR0913
     report: _Report,
     baseline: dict[str, str],
@@ -340,8 +396,16 @@ def _compare_environment(  # noqa: PLR0913
     allow_department_shadow_enable: bool = False,
     allow_sso_enable: bool = False,
     allow_popular_questions_toggle: bool = False,
+    allow_q1_private_capture: bool = False,
 ) -> None:
     ignored_keys: set[str] = set()
+    _compare_q1_private_capture(
+        report,
+        baseline,
+        candidate,
+        ignored_keys,
+        allow_q1_private_capture=allow_q1_private_capture,
+    )
     if allow_popular_questions_toggle:
         _compare_popular_questions_toggle(
             report, baseline, candidate, ignored_keys
@@ -1002,6 +1066,7 @@ def compare_runtime(  # noqa: PLR0913
     allow_department_shadow_enable: bool = False,
     allow_sso_enable: bool = False,
     allow_popular_questions_toggle: bool = False,
+    allow_q1_private_capture: bool = False,
 ) -> dict[str, object]:
     """比较候选描述或创建后容器，返回无秘密的字段级报告。
 
@@ -1015,6 +1080,7 @@ def compare_runtime(  # noqa: PLR0913
         allow_department_shadow_enable: 是否允许唯一的 Shadow 开关启用差异。
         allow_sso_enable: 是否允许并严格校验阶段 03 的 SSO 切换差异。
         allow_popular_questions_toggle: 是否允许 F06 公共问题开关的声明差异。
+        allow_q1_private_capture: 是否允许专用 8289 上的固定私有证据捕获。
 
     Returns:
         含逐类差异、各层摘要和 `ready` 判定的安全报告。
@@ -1058,6 +1124,7 @@ def compare_runtime(  # noqa: PLR0913
         allow_department_shadow_enable=allow_department_shadow_enable,
         allow_sso_enable=allow_sso_enable,
         allow_popular_questions_toggle=allow_popular_questions_toggle,
+        allow_q1_private_capture=allow_q1_private_capture,
     )
     _compare_mounts(
         report,
@@ -1199,6 +1266,7 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument(
         "--allow-popular-questions-toggle", action="store_true"
     )
+    compare.add_argument("--allow-q1-private-capture", action="store_true")
     return parser
 
 
@@ -1231,6 +1299,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_popular_questions_toggle=(
             arguments.allow_popular_questions_toggle
         ),
+        allow_q1_private_capture=arguments.allow_q1_private_capture,
     )
     _write_report(arguments.output, report)
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))

@@ -371,6 +371,49 @@ def test_f06_popular_questions_toggle_requires_declared_boolean(
     assert invalid["semantic_mismatches"]
 
 
+def test_q1_private_capture_requires_exact_bounded_profile(
+    tmp_path: Path,
+) -> None:
+    rendered = _rendered()
+    environment = rendered["services"]["app"]["environment"]
+    environment.update(guard._Q1_CAPTURE_KEYS)
+    baseline_value = _container(candidate=False)
+    baseline_value["Config"]["Env"].append(
+        "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_MAX_FILES=32"
+    )
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    image = tmp_path / "image.json"
+    _write_json(baseline, [baseline_value])
+    _write_json(candidate, rendered)
+    _write_json(image, [_target_image()])
+    arguments = {
+        "stage": "rendered_spec",
+        "baseline_inspect": baseline,
+        "candidate_input": candidate,
+        "target_image_inspect": image,
+        "candidate_root": PurePosixPath("/candidate"),
+        "forbidden_root": PurePosixPath("/production"),
+    }
+
+    assert guard.compare_runtime(**arguments)["ready"] is False
+    accepted = guard.compare_runtime(
+        **arguments, allow_q1_private_capture=True
+    )
+    assert accepted["ready"] is True, accepted
+
+    environment["RAG_PRIVATE_REPLAY_CAPTURE_LIMIT"] = "33"
+    _write_json(candidate, rendered)
+    rejected = guard.compare_runtime(
+        **arguments, allow_q1_private_capture=True
+    )
+    assert rejected["ready"] is False
+    assert any(
+        item["field_path"].endswith("RAG_PRIVATE_REPLAY_CAPTURE_LIMIT")
+        for item in rejected["semantic_mismatches"]
+    )
+
+
 def test_sso_changes_require_explicit_guard_flag(tmp_path: Path) -> None:
     rendered = _rendered()
     _enable_sso(rendered)
