@@ -15,6 +15,7 @@ COPY --chown=root:root layer/site-packages/rag_app/ \
 COPY --chown=root:root layer/site-packages/docx_rag-0.1.0.dist-info/ \
     /usr/local/lib/python3.11/site-packages/docx_rag-0.1.0.dist-info/
 COPY --chown=rag:rag layer/app/frontend/ /app/frontend/
+COPY --chown=rag:rag layer/app/migrations/ /app/migrations/
 
 RUN chmod -R u=rwX,go=rX \
     /usr/local/lib/python3.11/site-packages/rag_app \
