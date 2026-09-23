@@ -59,9 +59,7 @@ def register_sso_routes(
         response_model=None,
     )
     def _callback(request: Request) -> StarletteResponse:
-        return _handle_callback(
-            request, runtime, settings, sessions, client
-        )
+        return _handle_callback(request, runtime, settings, sessions, client)
 
     @app.get(SSO_LOGOUT_PATH, include_in_schema=False)
     def _logout_confirmation() -> HTMLResponse:
@@ -190,6 +188,9 @@ def _handle_callback(  # noqa: PLR0911 - 安全回调必须显式失败关闭。
         status_code=303,
         headers=_NO_STORE_HEADERS,
     )
+    redirect.delete_cookie(
+        sessions.cookie_name, path=sessions.legacy_cookie_path
+    )
     redirect.set_cookie(
         sessions.cookie_name,
         issue.cookie_value,
@@ -235,6 +236,9 @@ def _handle_logout(
         headers=_NO_STORE_HEADERS,
     )
     response.delete_cookie(sessions.cookie_name, path=sessions.cookie_path)
+    response.delete_cookie(
+        sessions.cookie_name, path=sessions.legacy_cookie_path
+    )
     return response
 
 
@@ -278,7 +282,7 @@ def _safe_return_to(
     base_path: str,
 ) -> str:
     if value is None or not value:
-        return f"{base_path}/"
+        return "/"
     if any(character in value for character in "\\\r\n"):
         raise ValueError("return_to 含不安全字符。")
     parsed = urlsplit(value)
@@ -298,10 +302,10 @@ def _safe_return_to(
     segments = decoded_path.split("/")
     if any(segment in {".", ".."} for segment in segments):
         raise ValueError("return_to 不能包含路径跳转。")
-    if decoded_path != base_path and not decoded_path.startswith(
+    if decoded_path not in {"/", base_path} and not decoded_path.startswith(
         f"{base_path}/"
     ):
-        raise ValueError("return_to 必须位于 KB 前缀内。")
+        raise ValueError("return_to 必须是公共根入口或 KB 前缀内路径。")
     if decoded_path.startswith(f"{base_path}/sso"):
         raise ValueError("return_to 不能指向 SSO 端点。")
     return relative

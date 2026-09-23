@@ -82,7 +82,7 @@ class SsoSessionService:
         Args:
             master_key: 已通过权限检查的 Product 部署主密钥。
             deployment_id: 候选或正式环境内稳定的非 Secret 标识。
-            base_path: 浏览器访问 KB 使用的固定前缀。
+            base_path: 已登记 SSO 回调使用的固定前缀。
             clock: 测试可替换的 Unix 时间函数。
 
         """
@@ -108,7 +108,12 @@ class SsoSessionService:
 
     @property
     def cookie_path(self) -> str:
-        """用户会话覆盖整个 KB 前缀。"""
+        """用户会话同时覆盖公共根入口与原有 KB 前缀。"""
+        return "/"
+
+    @property
+    def legacy_cookie_path(self) -> str:
+        """旧版用户 Cookie 的路径，用于切换和退出时清除。"""
         return self._base_path
 
     @property
@@ -348,9 +353,7 @@ def _string_tuple(payload: Mapping[str, object], key: str) -> tuple[str, ...]:
 
 
 def _invalid_cookie(kind: str) -> PolicyDenied:
-    return PolicyDenied(
-        "SSO 会话无效。", stage=f"wanshitong.sso.{kind}"
-    )
+    return PolicyDenied("SSO 会话无效。", stage=f"wanshitong.sso.{kind}")
 
 
 def _require_canonical_base64(value: str) -> None:
