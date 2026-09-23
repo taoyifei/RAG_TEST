@@ -231,3 +231,74 @@ def test_action_coverage_selects_unseeded_closed_row() -> None:
     assert correct_row <= selected["A1"]
     assert correct_row <= selected["A2"]
     assert stable_support_key(items[7]) not in selected["A1"]
+
+
+def test_explicit_level_keeps_unseeded_matching_row() -> None:
+    """目标行已进入有界池时，完整行名优先于邻行重排。"""
+    cells = (
+        _cell(1, 0, 0, "设备故障级别"),
+        _cell(2, 0, 1, "通知方式"),
+        _cell(3, 0, 2, "通知时限"),
+        _cell(4, 1, 0, "设备故障事件（Ⅰ级）"),
+        _cell(5, 1, 1, "电话和邮件通知"),
+        _cell(6, 1, 2, "4分钟"),
+        _cell(7, 2, 0, "设备故障事件（Ⅱ级）"),
+        _cell(8, 2, 2, "7分钟"),
+    )
+    candidates = {
+        candidate.hydrated.chunk.chunk_id: (
+            candidate.model_copy(update={"rerank_rank": None})
+            if index >= 6
+            else candidate
+        )
+        for index, (candidate, _item) in enumerate(cells)
+    }
+    items = tuple(
+        item.model_copy(update={"rerank_rank": None})
+        if index >= 6
+        else item
+        for index, (_candidate, item) in enumerate(cells)
+    )
+    question = "设备故障事件（Ⅱ级）如何通知，多久完成？"
+    plan = make_query_plan(
+        standalone_query=question,
+        intent="FACT",
+        effort="DIRECT",
+        atoms=(
+            QueryAtom(
+                atom_id="A1",
+                target="通知方式",
+                relation="通知",
+                answer_shape=AtomAnswerShape.FACT,
+            ),
+            QueryAtom(
+                atom_id="A2",
+                target="通知时限",
+                relation="时限",
+                answer_shape=AtomAnswerShape.DURATION,
+            ),
+        ),
+        reason_code="TEST",
+        planner_called=False,
+    )
+    priority = _priority_reading_units(
+        query_plan=plan,
+        items=items,
+        candidate_by_id=candidates,
+        root_evidence=(items[3], items[4], items[5]),
+        atom_candidates_by_atom=(
+            ("A1", (items[4],)),
+            ("A2", (items[5],)),
+        ),
+        policy=RetrievalPolicy(),
+    )
+
+    selected = {
+        owner: {key[0] for key in keys} for owner, keys in priority
+    }
+    target = stable_support_key(items[7])
+    adjacent = stable_support_key(items[5])
+    assert target in selected["A1"]
+    assert target in selected["A2"]
+    assert adjacent not in selected["A1"]
+    assert adjacent not in selected["A2"]

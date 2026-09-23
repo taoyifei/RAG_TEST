@@ -49,6 +49,7 @@ from rag_app.core.models.query_plan import (
     SourceResolution,
 )
 from rag_app.core.query_text import (
+    explicit_table_row_level_conflicts,
     literal_relation_modifiers_supported,
     named_table_label_in_query,
     query_without_source_qualifier,
@@ -768,6 +769,8 @@ def _reading_label_score(query: str, label: str) -> tuple[float, int]:
         最长连续重合占标签比例和长度；短零散重合返回零。
 
     """
+    if explicit_table_row_level_conflicts(query, (label,)):
+        return (0.0, 0)
     query, label = _normalized(query), _normalized(label)
     if not _MIN_READING_LABEL_CHARS <= len(label) <= _MAX_READING_LABEL_CHARS:
         return (0.0, 0)
@@ -1322,6 +1325,17 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
     units: list[tuple[str, tuple[tuple[object, ...], ...]]] = []
     members_by_atom = dict(atom_candidates_by_atom)
     readable = {_identity(item): item for item in items}
+    named_rows_by_table: dict[tuple[object, ...], set[int]] = defaultdict(set)
+    for (table, row), members in rows.items():
+        if any(
+            named_table_label_in_query(
+                query_plan.original_query, item.citation_text
+            )
+            for item in members
+            if (cell := _reading_table_identity(item)) is not None
+            and cell[2] == _TABLE_ROW_LABEL_COLUMN
+        ):
+            named_rows_by_table[table].add(row)
     for atom in query_plan.atoms:
         focused: list[
             tuple[tuple[int, int, float, int, int], tuple[EvidenceItem, ...]]
@@ -1345,11 +1359,16 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
             if _reading_row_seed_rank(atom, members, candidate_by_id)
             is not None
         }
-        for (table, _row), members in rows.items():
+        for (table, row), members in rows.items():
             row_seed_rank = _reading_row_seed_rank(
                 atom, members, candidate_by_id
             )
-            if row_seed_rank is None and table not in seeded_tables:
+            exact_named_row = named_rows_by_table[table] == {row}
+            if (
+                row_seed_rank is None
+                and table not in seeded_tables
+                and not exact_named_row
+            ):
                 continue
             row_values = _normalized(
                 " ".join(
@@ -1366,7 +1385,11 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
             relation_hits = sum(
                 relation in row_values for relation in relation_terms
             )
-            if row_seed_rank is None and not relation_hits:
+            if (
+                row_seed_rank is None
+                and not relation_hits
+                and not exact_named_row
+            ):
                 continue
             effective_seed_rank = (
                 row_seed_rank if row_seed_rank is not None else 2**31
