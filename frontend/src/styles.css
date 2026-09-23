@@ -1949,7 +1949,7 @@ label:has(input[type="checkbox"]) {
 .wst-new-topic-button {
   display: inline-flex;
   min-height: 44px;
-  margin-left: auto;
+  margin-left: 16px;
   padding: 0 12px;
   border: 1px solid rgb(49 215 179 / 35%);
   border-radius: 10px;
@@ -2624,7 +2624,7 @@ label:has(input[type="checkbox"]) {
     min-height: 92px;
   }
   .wst-chat-header {
-    padding: 10px 14px;
+    padding: 66px 14px 10px;
   }
   .wst-chat {
     padding: 34px 14px 0;
