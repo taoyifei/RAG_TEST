@@ -40,7 +40,7 @@ function styleCounts(items: readonly SuggestedQuestion[]) {
 describe("湾事通推荐问题", () => {
   it("首批题库使用稳定身份和明确的三类配额", () => {
     const enabled = SUGGESTED_QUESTIONS.filter((item) => item.enabled);
-    expect(SUGGESTED_QUESTIONS_REVISION).toBe("2026-09-22-f01-r1");
+    expect(SUGGESTED_QUESTIONS_REVISION).toBe("2026-09-23-f01-r2");
     expect(enabled.length).toBeGreaterThanOrEqual(12);
     expect(enabled.length).toBeLessThanOrEqual(18);
     expect(new Set(enabled.map((item) => item.id)).size).toBe(enabled.length);
@@ -55,8 +55,8 @@ describe("湾事通推荐问题", () => {
     );
     expect(styleCounts(enabled)).toEqual({
       SHORT: 9,
-      STANDARD: 3,
-      COMPOUND: 3,
+      STANDARD: 2,
+      COMPOUND: 1,
     });
     expect(
       enabled.every(
@@ -70,18 +70,35 @@ describe("湾事通推荐问题", () => {
         "上线安全评估要提前多久申请？",
         "固定资产从什么时候开始折旧？",
         "研发工时怎么填、怎么留痕？",
-        "业务团队收到设计文档后怎么确认？",
+        "标前公示时间不少于几日？",
         "公司公章怎么申请？",
         "研发外协费用需要先有预算吗？",
       ]),
     );
+    expect(enabled.some((item) => item.question.includes("不适用"))).toBe(true);
     expect(
-      enabled.some(
+      SUGGESTED_QUESTIONS.filter((item) => !item.enabled).map(
+        (item) => item.id,
+      ),
+    ).toEqual([
+      "sq-design-document-confirmation-01",
+      "sq-ip-records-filing-01",
+      "sq-rd-project-name-rules-01",
+      "sq-prebid-publicity-deadline-01",
+    ]);
+    expect(
+      SUGGESTED_QUESTIONS.some(
         (item) =>
-          item.question.includes("必须") && item.question.includes("不能"),
+          item.question.includes("必须") &&
+          item.question.includes("不能") &&
+          !item.enabled,
       ),
     ).toBe(true);
-    expect(enabled.some((item) => item.question.includes("工作日"))).toBe(true);
+    expect(
+      SUGGESTED_QUESTIONS.some(
+        (item) => item.question.includes("工作日") && !item.enabled,
+      ),
+    ).toBe(true);
   });
 
   it("每组优先未展示题，并按三短一标准一复合选择", () => {
@@ -121,14 +138,16 @@ describe("湾事通推荐问题", () => {
       previous = next;
     }
 
-    expect(
-      new Set(
-        batches
-          .slice(0, 3)
-          .flat()
-          .map((item) => item.id),
-      ).size,
-    ).toBe(15);
+    const firstTwoIds = new Set(
+      batches
+        .slice(0, 2)
+        .flat()
+        .map((item) => item.id),
+    );
+    expect(firstTwoIds.size).toBe(10);
+    expect(batches[2].filter((item) => !firstTwoIds.has(item.id))).toHaveLength(
+      2,
+    );
     expect(batches[3].some((item) => batches[0].includes(item))).toBe(true);
   });
 

@@ -11,7 +11,7 @@ export interface SuggestedQuestion {
   enabled: boolean;
 }
 
-export const SUGGESTED_QUESTIONS_REVISION = "2026-09-22-f01-r1";
+export const SUGGESTED_QUESTIONS_REVISION = "2026-09-23-f01-r2";
 
 export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
   {
@@ -44,7 +44,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
     documentId: "DOCX-046",
     style: "SHORT",
     topicKey: "product-delivery",
-    enabled: true,
+    enabled: false,
   },
   {
     id: "sq-company-seal-application-01",
@@ -92,7 +92,7 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
     documentId: "DOCX-012",
     style: "STANDARD",
     topicKey: "intellectual-property",
-    enabled: true,
+    enabled: false,
   },
   {
     id: "sq-performance-indicator-adjustment-01",
@@ -116,13 +116,21 @@ export const SUGGESTED_QUESTIONS: readonly SuggestedQuestion[] = [
     documentId: "DOCX-007",
     style: "COMPOUND",
     topicKey: "rd-project-naming",
-    enabled: true,
+    enabled: false,
   },
   {
     id: "sq-prebid-publicity-deadline-01",
     question: "标前公示截止日必须是工作日吗，至少要公示几天？",
     documentId: "DOCX-020",
     style: "COMPOUND",
+    topicKey: "procurement-publicity",
+    enabled: false,
+  },
+  {
+    id: "sq-prebid-publicity-min-days-01",
+    question: "标前公示时间不少于几日？",
+    documentId: "DOCX-020",
+    style: "SHORT",
     topicKey: "procurement-publicity",
     enabled: true,
   },

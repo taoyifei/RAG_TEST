@@ -408,14 +408,14 @@ describe("湾事通公共应用", () => {
     await waitFor(() => expect(pending.wasCancelled()).toBe(true));
   });
 
-  it("必须、否定和工作日限定从卡片原样进入气泡与query", async () => {
+  it("否定限定从推荐卡片原样进入气泡与query", async () => {
     const fetchMock = installFetch(
       streamResponse([
         event("final", 0, { answer: "已按限定回答。", citations: [] }),
       ]),
     );
     const user = userEvent.setup();
-    const question = "标前公示截止日必须是工作日吗，至少要公示几天？";
+    const question = "哪些认证不适用外部认证管理办法？";
     await openHome();
 
     let card = screen.queryByRole("button", { name: question });
@@ -426,6 +426,28 @@ describe("湾事通公共应用", () => {
     expect(card).not.toBeNull();
     await user.click(card!);
 
+    expect(await screen.findByText("已按限定回答。")).toBeInTheDocument();
+    expect(screen.getByText(question)).toBeInTheDocument();
+    const chatCall = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === "/api/public/chat",
+    );
+    const body = JSON.parse(
+      typeof chatCall?.[1]?.body === "string" ? chatCall[1].body : "{}",
+    ) as Record<string, unknown>;
+    expect(body.query).toBe(question);
+  });
+
+  it("停用后的必须和工作日限定题仍可手工原样提问", async () => {
+    const fetchMock = installFetch(
+      streamResponse([
+        event("final", 0, { answer: "已按限定回答。", citations: [] }),
+      ]),
+    );
+    const question = "标前公示截止日必须是工作日吗，至少要公示几天？";
+    await openHome();
+
+    expect(screen.queryByRole("button", { name: question })).toBeNull();
+    await ask(question);
     expect(await screen.findByText("已按限定回答。")).toBeInTheDocument();
     expect(screen.getByText(question)).toBeInTheDocument();
     const chatCall = fetchMock.mock.calls.find(
