@@ -6,7 +6,6 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repository_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 compose_file="${script_dir}/compose.candidate.yaml"
 guard="${repository_root}/scripts/wb08r_prep_runtime_guard.py"
-project="wanshitong-sso-candidate"
 candidate_container="wanshitong-sso-candidate-app"
 
 fail() {
@@ -44,7 +43,13 @@ evidence_dir="$5"
 
 command -v docker >/dev/null || fail "docker-missing"
 command -v python3 >/dev/null || fail "python-missing"
+command -v sha256sum >/dev/null || fail "sha256sum-missing"
 docker compose version >/dev/null || fail "docker-compose-missing"
+
+# Compose 按 project/service 标签追踪容器；改名的旧候选不得被下一轮 create 重建。
+project="wanshitong-sso-candidate-$(
+  printf '%s' "${candidate_root}" | sha256sum | cut -c1-12
+)"
 
 mapfile -t interpolation_keys < <(
   grep -oE '\$\{[A-Z_][A-Z0-9_]*' "${compose_file}" |

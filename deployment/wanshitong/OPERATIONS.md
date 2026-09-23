@@ -96,6 +96,10 @@ state 落盘。真实验收顺序为：前缀路由、HTTP、Cookie、RDMS 登�
 `wanshitong-sso-candidate-app`；不会操作 8288，也不会操作 54 上的 18288
 转发。清理仅在新候选验收或明确停止后，针对已核对 ID 的旧 8289 容器和
 旧候选镜像执行；禁止使用通配符或 `docker system prune`。
+每个独立候选根目录派生不同的 Compose project；仅给旧容器改名不会改变其
+Compose 标签，若复用固定 project，下一次 `create` 会重建旧容器并丢失回滚点。
+切换前应核对旧 8289 容器身份、候选渲染及创建门禁，确认新 project 下没有
+已存在容器，再启动新候选。
 
 ## 受控 TCP 转发
 
