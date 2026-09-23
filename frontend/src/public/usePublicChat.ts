@@ -517,22 +517,20 @@ export function usePublicChat() {
     resetConversationState();
   }, [resetConversationState]);
 
-  const submitNewTopic = useCallback(
+  const submitRecommendation = useCallback(
     (
       question: string,
       recommendationId?: string,
       entrypoint: "suggestion" | "popular" = "suggestion",
     ) => {
       const value = question.trim();
-      if (!value) return;
-      const nextConversationId = resetConversationState();
-      if (!nextConversationId) return;
-      void runTurn(randomId("turn"), value, nextConversationId, false, {
+      if (!value || busyRef.current) return;
+      void runTurn(randomId("turn"), value, conversationRef.current, false, {
         entrypoint: recommendationId ? entrypoint : "manual",
         ...(recommendationId ? { recommendation_id: recommendationId } : {}),
       });
     },
-    [resetConversationState, runTurn],
+    [runTurn],
   );
 
   const retry = useCallback(
@@ -648,7 +646,7 @@ export function usePublicChat() {
     startNewTopic,
     stop,
     submit,
-    submitNewTopic,
+    submitRecommendation,
     submitFeedback,
     turns,
     user,

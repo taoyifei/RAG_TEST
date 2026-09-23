@@ -40,7 +40,7 @@ export function WanshitongApp() {
   );
   const submitSuggestedQuestion = (question: SuggestedQuestion) => {
     setRestoredDraft("");
-    chat.submitNewTopic(question.question, question.id);
+    chat.submitRecommendation(question.question, question.id);
   };
   const submitCurrentQuestion = (question: string) => {
     setRestoredDraft("");
@@ -48,7 +48,7 @@ export function WanshitongApp() {
   };
   const submitPopularQuestion = (question: PublicPopularQuestion) => {
     setRestoredDraft("");
-    chat.submitNewTopic(question.question, question.id, "popular");
+    chat.submitRecommendation(question.question, question.id, "popular");
   };
   const startNewTopic = () => {
     setRestoredDraft("");

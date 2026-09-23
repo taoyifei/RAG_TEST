@@ -171,7 +171,7 @@ describe("公共问答新话题生命周期", () => {
     ]);
   });
 
-  it("推荐创建新会话且只发送可见题面，失败重试冻结原问与原会话", async () => {
+  it("推荐沿用会话并保留历史，只发送可见题面且失败重试冻结原问", async () => {
     const fetchMock = installFetch(
       (index) =>
         Promise.resolve(
@@ -191,10 +191,11 @@ describe("公共问答新话题生命周期", () => {
     );
     const oldConversationId = result.current.turns[0].conversationId;
 
-    act(() => result.current.submitNewTopic("推荐题面 B", "sq-test-01"));
-    await waitFor(() => expect(result.current.turns[0]?.status).toBe("failed"));
-    const failedTurn = result.current.turns[0];
-    expect(failedTurn.conversationId).not.toBe(oldConversationId);
+    act(() => result.current.submitRecommendation("推荐题面 B", "sq-test-01"));
+    await waitFor(() => expect(result.current.turns[1]?.status).toBe("failed"));
+    expect(result.current.turns[0].question).toBe("问题 A");
+    const failedTurn = result.current.turns[1];
+    expect(failedTurn.conversationId).toBe(oldConversationId);
     act(() =>
       result.current.retry(
         failedTurn.id,
@@ -203,8 +204,9 @@ describe("公共问答新话题生命周期", () => {
       ),
     );
     await waitFor(() =>
-      expect(result.current.turns[0]?.status).toBe("completed"),
+      expect(result.current.turns[1]?.status).toBe("completed"),
     );
+    expect(result.current.turns).toHaveLength(2);
     expect(chatBodies(fetchMock).map((body) => body.query)).toEqual([
       "问题 A",
       "推荐题面 B",
@@ -217,8 +219,8 @@ describe("公共问答新话题生命周期", () => {
     ]);
     expect(chatBodies(fetchMock).map((body) => body.conversation_id)).toEqual([
       oldConversationId,
-      failedTurn.conversationId,
-      failedTurn.conversationId,
+      oldConversationId,
+      oldConversationId,
     ]);
   });
 

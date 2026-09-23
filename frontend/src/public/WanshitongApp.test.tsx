@@ -77,7 +77,7 @@ function pathOf(input: RequestInfo | URL): string {
 }
 
 function installFetch(
-  chatResponse: Response,
+  chatResponse: Response | (() => Response),
   popular: PublicPopularQuestions = {
     mode: "EMPTY",
     generated_at: null,
@@ -101,7 +101,11 @@ function installFetch(
       if (path === "/api/public/popular-questions") {
         return Promise.resolve(Response.json(popular));
       }
-      if (path === "/api/public/chat") return Promise.resolve(chatResponse);
+      if (path === "/api/public/chat") {
+        return Promise.resolve(
+          typeof chatResponse === "function" ? chatResponse() : chatResponse,
+        );
+      }
       if (path === "/api/public/feedback") {
         return Promise.resolve(Response.json({ useful: true }));
       }
@@ -227,6 +231,52 @@ describe("湾事通公共应用", () => {
         entrypoint: "popular",
         recommendation_id: recommendationId,
       },
+    });
+  });
+
+  it("聊天页大家常问保留已有问答并沿用会话", async () => {
+    const question = "办理材料如何提交？";
+    const recommendationId = `pq_${"a".repeat(32)}`;
+    const fetchMock = installFetch(
+      () =>
+        streamResponse([
+          event("final", 0, { answer: "已回答公开问题。", citations: [] }),
+        ]),
+      {
+        mode: "POPULAR",
+        generated_at: "2026-09-23T00:00:00Z",
+        window_days: 7,
+        items: [{ id: recommendationId, question, topic_key: "办理" }],
+      },
+      { ...capabilitiesBody, request_usage_context: true },
+    );
+    const user = userEvent.setup();
+    await openHome();
+    await ask("此前提问");
+    await screen.findByText("已回答公开问题。");
+    const tab = await screen.findByRole("tab", { name: "大家常问" });
+    await user.click(tab);
+    await user.click(screen.getByRole("button", { name: question }));
+    await waitFor(() =>
+      expect(screen.getAllByText("已回答公开问题。")).toHaveLength(2),
+    );
+
+    expect(screen.getByText("此前提问")).toBeInTheDocument();
+    expect(screen.getByText(question)).toBeInTheDocument();
+    const bodies = fetchMock.mock.calls
+      .filter(([input]) => pathOf(input) === "/api/public/chat")
+      .map(
+        ([, init]) =>
+          JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+            conversation_id: string;
+            client_context: { entrypoint: string; recommendation_id?: string };
+          },
+      );
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1].conversation_id).toBe(bodies[0].conversation_id);
+    expect(bodies[1].client_context).toEqual({
+      entrypoint: "popular",
+      recommendation_id: recommendationId,
     });
   });
 
@@ -866,7 +916,7 @@ describe("湾事通公共应用", () => {
     ).toMatchObject({ query: suggestedQuestion });
   });
 
-  it("聊天页全局推荐新建话题并只发可见题面一次", async () => {
+  it("聊天页全局推荐保留历史和会话并只发可见题面一次", async () => {
     let chatCount = 0;
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -906,7 +956,8 @@ describe("湾事通公共应用", () => {
     await user.click(card!);
     await screen.findByText("第 2 次回答");
 
-    expect(screen.queryByText("不同主题的问题 A")).toBeNull();
+    expect(screen.getByText("不同主题的问题 A")).toBeInTheDocument();
+    expect(screen.getByText("第 1 次回答")).toBeInTheDocument();
     expect(screen.getByText(suggestedQuestion)).toBeInTheDocument();
     const bodies = fetchMock.mock.calls
       .filter(([input]) => pathOf(input) === "/api/public/chat")
@@ -922,7 +973,7 @@ describe("湾事通公共应用", () => {
           },
       );
     expect(bodies).toHaveLength(2);
-    expect(bodies[0].conversation_id).not.toBe(bodies[1].conversation_id);
+    expect(bodies[0].conversation_id).toBe(bodies[1].conversation_id);
     expect(bodies.map((body) => body.query)).toEqual([
       "不同主题的问题 A",
       suggestedQuestion,
