@@ -138,6 +138,9 @@ export function HistoryTrace({
               {historyTime(entry.created_at)}
             </time>
           </div>
+          {restricted && (
+            <p>提问者：{entry.requester?.label || "当时未记录"}</p>
+          )}
           {!restricted && (
           <div className="row-actions" aria-label="历史导出">
             <button

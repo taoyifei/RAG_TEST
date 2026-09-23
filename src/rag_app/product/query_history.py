@@ -692,6 +692,7 @@ class ProductQueryHistory:
         keyword: str | None = None,
         page_size: int = 50,
         offset: int = 0,
+        include_answer: bool = False,
     ) -> dict[str, object]:
         """按范围和时间分页，正文关键词只在重新鉴权后匹配。
 
@@ -705,6 +706,7 @@ class ProductQueryHistory:
             keyword: 仅在获准正文中搜索的关键词。
             page_size: 每页记录数量。
             offset: 已跳过记录数量。
+            include_answer: 管理员视图是否返回当前可读的完整答案。
 
         Returns:
             历史条目、总量和本地保存策略。
@@ -748,7 +750,13 @@ class ProductQueryHistory:
                     (*parameters, page_size, offset),
                 ).fetchall()
                 items = [
-                    self._view(connection, row, detail=False) for row in rows
+                    self._view(
+                        connection,
+                        row,
+                        detail=False,
+                        include_answer=include_answer,
+                    )
+                    for row in rows
                 ]
                 search_complete = True
                 scanned_count = len(rows)
@@ -767,6 +775,7 @@ class ProductQueryHistory:
                     keyword=keyword,
                     page_size=page_size,
                     offset=offset,
+                    include_answer=include_answer,
                 )
         result: dict[str, object] = {
             "items": items,
@@ -793,6 +802,59 @@ class ProductQueryHistory:
             )
         return result
 
+    def owner_ids_for_traces(
+        self,
+        trace_ids: Sequence[str],
+        *,
+        project_id: str,
+        knowledge_base_id: str,
+    ) -> dict[str, frozenset[str]]:
+        """批量读取固定范围内有效 History 的真实 owner。
+
+        同一 canonical Trace 的新旧存储形式都参与判断；调用方必须处理
+        多个不同 owner 的关联冲突，不可选择其中一条冒认身份。
+
+        Args:
+            trace_ids: 单页或单条 Trace ID，最多 200 条。
+            project_id: 管理员已获准的项目。
+            knowledge_base_id: 管理员已获准的知识库。
+
+        Returns:
+            canonical Trace ID 到零个或多个 owner 的映射。
+
+        """
+        canonical_ids = {normalize_trace_id(value) for value in trace_ids}
+        if len(canonical_ids) > _MAX_PAGE_SIZE:
+            raise ValueError("批量读取 History owner 超过单页上限。")
+        if not canonical_ids:
+            return {}
+        aliases = tuple(
+            alias
+            for canonical in sorted(canonical_ids)
+            for alias in (canonical, canonical.removeprefix("trace_"))
+        )
+        placeholders = ",".join("?" for _ in aliases)
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT trace_id, owner_id FROM query_history "  # noqa: S608
+                "WHERE project_id=? AND knowledge_base_id=? "
+                "AND expires_at>? AND trace_id IN ("
+                + placeholders
+                + ")",
+                (
+                    project_id,
+                    knowledge_base_id,
+                    datetime.now(UTC).isoformat(),
+                    *aliases,
+                ),
+            ).fetchall()
+        owners: dict[str, set[str]] = {value: set() for value in canonical_ids}
+        for row in rows:
+            owners[normalize_trace_id(str(row["trace_id"]))].add(
+                str(row["owner_id"])
+            )
+        return {key: frozenset(value) for key, value in owners.items()}
+
     def _keyword_page(  # noqa: PLR0913
         self,
         connection: sqlite3.Connection,
@@ -802,6 +864,7 @@ class ProductQueryHistory:
         keyword: str,
         page_size: int,
         offset: int,
+        include_answer: bool,
     ) -> tuple[list[dict[str, object]], int, bool, int, str | None]:
         """在固定候选数和墙钟预算内搜索获准解密的正文。
 
@@ -812,6 +875,7 @@ class ProductQueryHistory:
             keyword: 调用方提供的正文关键词。
             page_size: 返回页大小。
             offset: 匹配结果偏移量。
+            include_answer: 管理员页是否显示完整答案。
 
         Returns:
             页面、已知匹配数、是否扫完、扫描数和截断原因。
@@ -836,7 +900,9 @@ class ProductQueryHistory:
                 break
             scanned_count += 1
             # _view 会先重验 Revision、Document 和 Version，再决定是否解密。
-            item = self._view(connection, row, detail=False)
+            item = self._view(
+                connection, row, detail=False, include_answer=include_answer
+            )
             question = str(item.get("question") or "")
             if normalized_keyword not in question.casefold():
                 continue
@@ -1369,7 +1435,12 @@ class ProductQueryHistory:
             self._unavailable("shutdown")
 
     def _view(
-        self, connection: sqlite3.Connection, row: sqlite3.Row, *, detail: bool
+        self,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        *,
+        detail: bool,
+        include_answer: bool = False,
     ) -> dict[str, object]:
         metadata = json.loads(row["metadata_json"])
         readable = _sources_readable(connection, row, metadata)
@@ -1402,7 +1473,11 @@ class ProductQueryHistory:
                     )
                 ),
                 "question": payload.get("question"),
-                "answer": payload.get("answer") if detail else None,
+                "answer": (
+                    payload.get("answer")
+                    if detail or include_answer
+                    else None
+                ),
                 "answer_summary": str(payload.get("answer") or "")[:240],
             }
         )

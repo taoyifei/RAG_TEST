@@ -22,6 +22,7 @@ from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import NotFound, PolicyDenied
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import Document, DocumentRef, Job
+from rag_app.product.feedback import normalize_trace_id
 from rag_app.product.history_trace_export import (
     HistoryTraceBodyUnavailableError,
     HistoryTraceExportService,
@@ -384,19 +385,37 @@ def _register_history_routes(
     )
 
     @app.get(ADMIN_BASE_PATH + "/history", tags=["wanshitong-admin"])
-    def _history(
+    def _history(  # noqa: PLR0913, PLR0917
         request: Request,
         page_size: Annotated[int, Query(ge=1, le=200)] = 50,
         offset: Annotated[int, Query(ge=0)] = 0,
+        status: str | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
+        keyword: Annotated[str | None, Query(max_length=200)] = None,
+        requester_user_id: Annotated[
+            str | None,
+            Query(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
+        ] = None,
     ) -> dict[str, object]:
         binding = _admin_scope(request, scope_service)
         payload = runtime.history.list_history(
             project_id=binding.project_id,
             knowledge_base_id=binding.knowledge_base_id,
+            owner_id=(
+                None
+                if requester_user_id is None
+                else f"rdms:{requester_user_id}"
+            ),
+            status=status,
+            created_from=created_from,
+            created_to=created_to,
+            keyword=keyword,
             page_size=page_size,
             offset=offset,
+            include_answer=True,
         )
-        _add_owner_masks(runtime, payload)
+        _add_admin_history_metadata(runtime, payload, binding)
         return payload
 
     @app.get(
@@ -411,7 +430,9 @@ def _register_history_routes(
             project_id=binding.project_id,
             knowledge_base_id=binding.knowledge_base_id,
         )
-        _add_owner_mask(runtime, payload)
+        _add_admin_history_metadata(
+            runtime, {"items": [payload]}, binding
+        )
         return payload
 
     @app.post(
@@ -476,7 +497,11 @@ def _register_trace_routes(
                 knowledge_base_id=binding.knowledge_base_id,
             )
         )
-        return jsonable_encoder(result)
+        payload = cast(dict[str, object], jsonable_encoder(result))
+        items = payload.get("items")
+        if isinstance(items, list):
+            _add_requesters(runtime, items, binding)
+        return payload
 
     @app.get(
         ADMIN_BASE_PATH + "/operational-traces/{trace_id}",
@@ -484,7 +509,11 @@ def _register_trace_routes(
     )
     def _trace_detail(trace_id: str, request: Request) -> dict[str, object]:
         binding = _admin_scope(request, scope_service)
-        return _scoped_trace_detail(runtime, binding, trace_id)
+        payload = _scoped_trace_detail(runtime, binding, trace_id)
+        trace = payload.get("trace")
+        if isinstance(trace, dict):
+            _add_requesters(runtime, [trace], binding)
+        return payload
 
     @app.get(
         ADMIN_BASE_PATH + "/operational-traces/{trace_id}/export",
@@ -971,30 +1000,115 @@ def _admin_scope(
         ) from error
 
 
-def _add_owner_masks(
-    runtime: ProductRuntime, payload: dict[str, object]
+def _add_admin_history_metadata(
+    runtime: ProductRuntime,
+    payload: dict[str, object],
+    binding: ScopeBinding,
 ) -> None:
+    """只在管理员响应中批量补充提问者和实际反馈。"""
     items = payload.get("items")
     if not isinstance(items, list):
         return
-    for item in items:
-        if isinstance(item, dict):
-            _add_owner_mask(runtime, item)
-
-
-def _add_owner_mask(runtime: ProductRuntime, item: dict[str, object]) -> None:
-    trace_id = item.get("trace_id")
-    if not isinstance(trace_id, str):
+    owners_by_trace = _add_requesters(runtime, items, binding)
+    trace_ids = [
+        normalize_trace_id(str(item["trace_id"]))
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("trace_id"), str)
+    ]
+    if not trace_ids:
         return
+    placeholders = ",".join("?" for _ in trace_ids)
     with runtime.connections.transaction() as connection:
-        row = connection.execute(
-            "SELECT owner_id FROM query_history WHERE trace_id=?",
-            (trace_id,),
-        ).fetchone()
-    if row is None:
-        return
-    digest = hashlib.sha256(str(row["owner_id"]).encode("utf-8")).hexdigest()
-    item["owner_masked_id"] = "anonymous-" + digest[:12]
+        rows = connection.execute(
+            "SELECT trace_id, owner_id, useful, reason_code "
+            "FROM product_feedback WHERE project_id=? "
+            "AND knowledge_base_id=? AND trace_id IN ("
+            + placeholders
+            + ")",
+            (binding.project_id, binding.knowledge_base_id, *trace_ids),
+        ).fetchall()
+    feedback = {str(row["trace_id"]): row for row in rows}
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(
+            item.get("trace_id"), str
+        ):
+            continue
+        row = feedback.get(normalize_trace_id(str(item["trace_id"])))
+        owners = owners_by_trace[normalize_trace_id(str(item["trace_id"]))]
+        if row is not None and len(owners) == 1 and row["owner_id"] in owners:
+            item["feedback_useful"] = bool(row["useful"])
+            item["feedback_reason_code"] = row["reason_code"]
+
+
+def _add_requesters(
+    runtime: ProductRuntime,
+    items: Sequence[dict[str, object]],
+    binding: ScopeBinding,
+) -> dict[str, frozenset[str]]:
+    """按本页 canonical Trace 批量关联 History，不回推哈希。"""
+    trace_ids = [
+        str(item["trace_id"])
+        for item in items
+        if isinstance(item.get("trace_id"), str)
+    ]
+    if not trace_ids:
+        return {}
+    owners_by_trace = runtime.history.owner_ids_for_traces(
+        trace_ids,
+        project_id=binding.project_id,
+        knowledge_base_id=binding.knowledge_base_id,
+    )
+    for item in items:
+        trace_id = item.get("trace_id")
+        if not isinstance(trace_id, str):
+            continue
+        owners = owners_by_trace[normalize_trace_id(trace_id)]
+        item["requester"] = _requester_view(owners)
+        if len(owners) == 1:
+            owner = next(iter(owners))
+            digest = hashlib.sha256(owner.encode("utf-8")).hexdigest()
+            item["owner_masked_id"] = "anonymous-" + digest[:12]
+    return owners_by_trace
+
+
+def _requester_view(owners: frozenset[str]) -> dict[str, str | None]:
+    """用实际 History owner 构造管理员专用身份标签。"""
+    source = "UNAVAILABLE"
+    external_user_id = None
+    label = "未记录"
+    name_state = "UNAVAILABLE"
+    if len(owners) > 1:
+        source, label, name_state = (
+            "CONFLICT",
+            "身份关联冲突",
+            "CONFLICT",
+        )
+    elif owners:
+        owner = next(iter(owners))
+        if owner.startswith("rdms:") and owner[5:]:
+            source = "RDMS_SSO"
+            external_user_id = owner[5:]
+            label = f"RDMS用户 #{external_user_id}"
+            name_state = "NOT_CAPTURED"
+        elif owner.startswith("wanshitong-public:"):
+            source, label, name_state = (
+                "ANONYMOUS_SESSION",
+                "历史匿名会话",
+                "NOT_APPLICABLE",
+            )
+        elif owner == "local-admin" or owner.startswith("tok_"):
+            source, label, name_state = (
+                "API_CALL",
+                "API调用",
+                "NOT_APPLICABLE",
+            )
+    return {
+        "identity_source": source,
+        "external_user_id": external_user_id,
+        "display_name_at_request": None,
+        "label": label,
+        "name_state": name_state,
+    }
 
 
 def _scoped_trace_detail(
@@ -1265,7 +1379,7 @@ def _overview_status(
         knowledge_base_id=binding.knowledge_base_id,
         page_size=5,
     )
-    _add_owner_masks(runtime, recent_history)
+    _add_admin_history_metadata(runtime, recent_history, binding)
     return {
         "scope": {
             "mode": "wanshitong",

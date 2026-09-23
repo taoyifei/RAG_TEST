@@ -74,6 +74,7 @@ function page(items = [item], total = items.length, offset = 0) {
 }
 beforeEach(() => {
   vi.restoreAllMocks();
+  window.history.replaceState({}, "", "/history");
   vi.spyOn(api, "listKnowledgeBases").mockResolvedValue({
     items: [],
     offset: 0,
@@ -82,6 +83,48 @@ beforeEach(() => {
   vi.spyOn(api, "listHistory").mockResolvedValue(page());
   vi.spyOn(api, "historyDetail").mockResolvedValue(item);
   vi.spyOn(api, "getFeedback").mockResolvedValue({ feedback: null });
+});
+
+it("湾事通管理员首屏显示提问者、完整答案和反馈，并按用户 ID 精确筛选", async () => {
+  const user = userEvent.setup();
+  const fullAnswer = "完整回答".repeat(80);
+  const identified: HistoryEntry = {
+    ...item,
+    answer: fullAnswer,
+    answer_summary: fullAnswer.slice(0, 240),
+    feedback_useful: false,
+    feedback_reason_code: "INCOMPLETE",
+    requester: {
+      identity_source: "RDMS_SSO",
+      external_user_id: "1001",
+      display_name_at_request: null,
+      label: "RDMS用户 #1001",
+      name_state: "NOT_CAPTURED",
+    },
+  };
+  const listHistory = vi.fn().mockResolvedValue(page([identified], 2));
+  render(
+    <HistoryPage
+      fixedScope
+      services={{
+        listHistory,
+        historyDetail: vi.fn().mockResolvedValue(identified),
+      }}
+    />,
+  );
+  expect(await screen.findByText(fullAnswer)).toBeVisible();
+  expect(screen.getByText("提问者：RDMS用户 #1001")).toBeVisible();
+  expect(screen.getByText("用户反馈：无用 · INCOMPLETE")).toBeVisible();
+  await user.click(
+    screen.getByRole("button", { name: "查看该用户其它问题" }),
+  );
+  await waitFor(() =>
+    expect(listHistory).toHaveBeenLastCalledWith(
+      expect.objectContaining({ requester_user_id: "1001", offset: 0 }),
+      expect.any(AbortSignal),
+    ),
+  );
+  expect(window.location.search).toContain("requester_user_id=1001");
 });
 
 it("历史可筛选并分页，不要求预先输入 trace_id", async () => {

@@ -436,6 +436,7 @@ export function OperationalTracesPage({
                 <tr>
                   <th scope="col">选择</th>
                   <th scope="col">Trace</th>
+                  {fixedScope && <th scope="col">提问者</th>}
                   <th scope="col">类型/终态</th>
                   <th scope="col">耗时</th>
                   <th scope="col">捕获</th>
@@ -463,6 +464,9 @@ export function OperationalTracesPage({
                       <code>{item.trace_id}</code>
                       <small>{item.job_id ?? item.request_id ?? "—"}</small>
                     </td>
+                    {fixedScope && (
+                      <td>{item.requester?.label || "未记录"}</td>
+                    )}
                     <td>
                       <strong>
                         {item.kind === "ingestion" ? "入库" : "查询"}
@@ -604,6 +608,12 @@ export function TraceDetailPanel({
         </div>
       </div>
       <dl className="detail-grid">
+        {detail.trace.requester && (
+          <>
+            <dt>提问者</dt>
+            <dd>{detail.trace.requester.label}</dd>
+          </>
+        )}
         <dt>Project / KB</dt>
         <dd>
           {(detail.trace.project_id ?? "—") +

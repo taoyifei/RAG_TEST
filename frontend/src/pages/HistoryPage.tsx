@@ -44,14 +44,6 @@ const defaultHistoryServices: HistoryPageServices = {
   clearHistory: () => api.clearHistory(),
 };
 
-function maskedOwner(entry: HistoryEntry): string {
-  const value = entry as HistoryEntry & {
-    owner_masked_id?: string | null;
-    owner_sha256?: string | null;
-  };
-  return value.owner_masked_id || value.owner_sha256 || "";
-}
-
 export function HistoryPage({
   go,
   fixedScope = false,
@@ -66,11 +58,17 @@ export function HistoryPage({
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
   const [status, setStatus] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [requesterUserId, setRequesterUserId] = useState(() =>
+    fixedScope
+      ? new URLSearchParams(window.location.search).get("requester_user_id") || ""
+      : "",
+  );
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [filters, setFilters] = useState<HistoryFilters>({
     project_id: fixedScope ? undefined : scope.projectId,
     knowledge_base_id: fixedScope ? undefined : scope.kbId,
+    requester_user_id: fixedScope ? requesterUserId || undefined : undefined,
     page_size: PAGE_SIZE,
     offset: 0,
   });
@@ -135,6 +133,10 @@ export function HistoryPage({
       knowledge_base_id: fixedScope ? undefined : kbId,
       status,
       keyword,
+      requester_user_id:
+        fixedScope && requesterUserId.trim()
+          ? requesterUserId.trim()
+          : undefined,
       created_from: from ? new Date(from).toISOString() : undefined,
       created_to: to ? new Date(to).toISOString() : undefined,
       page_size: PAGE_SIZE,
@@ -146,6 +148,18 @@ export function HistoryPage({
     setError(undefined);
     setPage(undefined);
     setFilters({ ...filters, offset });
+  }
+  function filterRequester(userId: string) {
+    setRequesterUserId(userId);
+    setPage(undefined);
+    setLoading(true);
+    setError(undefined);
+    setTraceId(undefined);
+    setChecked(new Set());
+    setFilters({ ...filters, requester_user_id: userId, offset: 0 });
+    const url = new URL(window.location.href);
+    url.searchParams.set("requester_user_id", userId);
+    window.history.replaceState({}, "", `${url.pathname}${url.search}`);
   }
   async function clear() {
     if (!services.clearHistory) return;
@@ -256,6 +270,17 @@ export function HistoryPage({
             placeholder="仅搜索有权查看的正文"
           />
         </label>
+        {fixedScope && (
+          <label>
+            RDMS用户 ID（精确）
+            <input
+              value={requesterUserId}
+              maxLength={128}
+              onChange={(event) => setRequesterUserId(event.target.value)}
+              placeholder="例如 123"
+            />
+          </label>
+        )}
         <button className="primary">筛选历史</button>
       </form>
       {error !== undefined && <ErrorPanel error={error} />}
@@ -378,12 +403,13 @@ export function HistoryPage({
                 <div className="grow">
                   <h3>
                     {item.body_available
-                      ? item.question || "无问题正文"
+                      ? item.question || (fixedScope ? "当时未记录" : "无问题正文")
                       : item.body_message}
                   </h3>
                   <p className="history-summary">
                     {item.body_available
-                      ? item.answer_summary || "本次没有发布答案。"
+                      ? (fixedScope ? item.answer : item.answer_summary) ||
+                        (fixedScope ? "当时未记录" : "本次没有发布答案。")
                       : "正文不可查看"}
                   </p>
                   <small>
@@ -392,12 +418,39 @@ export function HistoryPage({
                     </time>{" "}
                     · {item.models?.join("、") || "未调用远程模型"} ·{" "}
                     {item.duration_ms == null
-                      ? "尚未结束"
+                      ? fixedScope
+                        ? "当时未记录"
+                        : "尚未结束"
                       : `${item.duration_ms.toFixed(1)} ms`}
                   </small>
-                  {fixedScope && maskedOwner(item) && (
+                  {fixedScope && (
+                    <div className="row-actions">
+                      <small>提问者：{item.requester?.label || "当时未记录"}</small>
+                      {item.requester?.identity_source === "RDMS_SSO" &&
+                        item.requester.external_user_id && (
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() =>
+                              filterRequester(
+                                item.requester?.external_user_id || "",
+                              )
+                            }
+                          >
+                            查看该用户其它问题
+                          </button>
+                        )}
+                    </div>
+                  )}
+                  {fixedScope && (
                     <small>
-                      匿名用户：{maskedOwner(item)}
+                      用户反馈：
+                      {item.feedback_useful == null
+                        ? "当时未记录"
+                        : item.feedback_useful ? "有用" : "无用"}
+                      {item.feedback_reason_code
+                        ? ` · ${item.feedback_reason_code}`
+                        : ""}
                     </small>
                   )}
                   <code>{item.trace_id}</code>
@@ -405,6 +458,12 @@ export function HistoryPage({
                 <div>
                   <StatusBadge value={item.status} />
                   {item.cache_hit && <small>缓存命中</small>}
+                  {fixedScope && item.reason_code && (
+                    <small>结果原因：{item.reason_code}</small>
+                  )}
+                  {fixedScope && item.error_stage && (
+                    <small>错误阶段：{item.error_stage}</small>
+                  )}
                 </div>
                 <button onClick={() => setTraceId(item.trace_id)}>
                   查看详情与过程

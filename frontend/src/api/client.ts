@@ -40,6 +40,9 @@ export interface HistoryEntry {
   question?: string | null;
   answer?: string | null;
   answer_summary: string;
+  requester?: RequesterView;
+  feedback_useful?: boolean | null;
+  feedback_reason_code?: string | null;
   body_saved: boolean;
   body_available: boolean;
   body_message: string;
@@ -94,11 +97,25 @@ export interface HistoryFilters {
   created_from?: string;
   created_to?: string;
   keyword?: string;
+  requester_user_id?: string;
   page_size?: number;
   offset?: number;
 }
 
 export type TraceMode = "SAFE" | "DIAGNOSTIC" | "FULL";
+
+export interface RequesterView {
+  identity_source:
+    | "RDMS_SSO"
+    | "ANONYMOUS_SESSION"
+    | "API_CALL"
+    | "UNAVAILABLE"
+    | "CONFLICT";
+  external_user_id: string | null;
+  display_name_at_request: string | null;
+  label: string;
+  name_state: "NOT_CAPTURED" | "NOT_APPLICABLE" | "UNAVAILABLE" | "CONFLICT";
+}
 
 export interface OperationalTraceRoot {
   trace_id: string;
@@ -125,6 +142,7 @@ export interface OperationalTraceRoot {
   dropped_decision_count: number;
   writer_queue_high_water: number;
   feedback_useful?: boolean | null;
+  requester?: RequesterView;
 }
 
 export interface OperationalTraceSpan {

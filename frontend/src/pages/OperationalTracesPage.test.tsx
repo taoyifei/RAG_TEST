@@ -120,6 +120,39 @@ beforeEach(() => {
   vi.spyOn(api, "operationalTraceDetail").mockResolvedValue(detail);
 });
 
+it("湾事通技术 Trace 列表和详情显示 History 关联的提问者", async () => {
+  const user = userEvent.setup();
+  const identified: OperationalTraceRoot = {
+    ...root,
+    requester: {
+      identity_source: "RDMS_SSO",
+      external_user_id: "1001",
+      display_name_at_request: null,
+      label: "RDMS用户 #1001",
+      name_state: "NOT_CAPTURED",
+    },
+  };
+  render(
+    <OperationalTracesPage
+      fixedScope
+      services={{
+        list: vi.fn().mockResolvedValue({
+          items: [identified],
+          page: 1,
+          page_size: 30,
+          total: 1,
+        }),
+        detail: vi.fn().mockResolvedValue({ ...detail, trace: identified }),
+      }}
+    />,
+  );
+  expect(await screen.findByRole("cell", { name: "RDMS用户 #1001" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "查看技术详情" }));
+  await waitFor(() =>
+    expect(screen.getAllByText("RDMS用户 #1001").length).toBeGreaterThan(1),
+  );
+});
+
 it("列表可筛选，详情提供 waterfall 与候选漏斗", async () => {
   const user = userEvent.setup();
   render(<OperationalTracesPage />);
