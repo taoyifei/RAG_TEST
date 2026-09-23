@@ -163,6 +163,7 @@ export function useSuggestedQuestions(
   );
   const previousRef = useRef(questions);
   const seenQuestionIdsRef = useRef(new Set(questions.map((item) => item.id)));
+  const askedQuestionsRef = useRef(new Set<string>());
   const rotatedTurnRef = useRef("");
   const identityKeyRef = useRef(identityKey);
 
@@ -170,6 +171,7 @@ export function useSuggestedQuestions(
     const next = pickSuggestedQuestions([], [], new Set(), random);
     previousRef.current = next;
     seenQuestionIdsRef.current = new Set(next.map((item) => item.id));
+    askedQuestionsRef.current.clear();
     rotatedTurnRef.current = "";
     setQuestions(next);
   }, [random]);
@@ -190,7 +192,13 @@ export function useSuggestedQuestions(
   );
 
   useEffect(() => {
-    if (!identityKey) return;
+    if (!identityKey) {
+      if (identityKeyRef.current) {
+        identityKeyRef.current = undefined;
+        reset();
+      }
+      return;
+    }
     if (!identityKeyRef.current) {
       identityKeyRef.current = identityKey;
       return;
@@ -201,6 +209,7 @@ export function useSuggestedQuestions(
   }, [identityKey, reset]);
 
   useEffect(() => {
+    for (const turn of turns) askedQuestionsRef.current.add(turn.question);
     const lastTurn = turns.at(-1);
     if (
       !lastTurn ||
@@ -212,12 +221,12 @@ export function useSuggestedQuestions(
     const turnKey = `${lastTurn.id}:${lastTurn.startedAt}`;
     if (rotatedTurnRef.current === turnKey) return;
     rotatedTurnRef.current = turnKey;
-    rotate(turns.map((turn) => turn.question));
+    rotate([...askedQuestionsRef.current]);
   }, [rotate, turns]);
 
   const refresh = useCallback(() => {
-    rotate(turns.map((turn) => turn.question));
-  }, [rotate, turns]);
+    rotate([...askedQuestionsRef.current]);
+  }, [rotate]);
 
   return { questions, refresh };
 }

@@ -4,6 +4,7 @@ import type { SuggestedQuestion } from "./suggestedQuestions";
 
 export function WanshitongHome({
   busy,
+  conversationId,
   initialQuestion,
   onRefresh,
   onSuggestedQuestionSubmit,
@@ -12,6 +13,7 @@ export function WanshitongHome({
   questions,
 }: {
   busy: boolean;
+  conversationId: string;
   initialQuestion?: string;
   onRefresh: () => void;
   onSuggestedQuestionSubmit: (question: SuggestedQuestion) => void;
@@ -35,6 +37,7 @@ export function WanshitongHome({
         <PublicChatComposer
           busy={busy}
           initialQuestion={initialQuestion}
+          key={conversationId}
           onStop={onStop}
           onSubmit={onSubmit}
         />

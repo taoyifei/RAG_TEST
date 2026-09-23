@@ -1,3 +1,5 @@
+import { Plus } from "lucide-react";
+
 import { PublicAnswer } from "./PublicAnswer";
 import { PublicChatComposer } from "./PublicChatComposer";
 import { SuggestedQuestionCarousel } from "./SuggestedQuestionCarousel";
@@ -7,10 +9,12 @@ import type { PublicTurn } from "./usePublicChat";
 
 export function WanshitongChat({
   busy,
+  conversationId,
   feedbackDetailsEnabled,
   initialQuestion,
   onFeedback,
   onFeedbackLogin,
+  onNewTopic,
   onRefresh,
   onRetry,
   onStop,
@@ -20,6 +24,7 @@ export function WanshitongChat({
   turns,
 }: {
   busy: boolean;
+  conversationId: string;
   feedbackDetailsEnabled: boolean;
   initialQuestion?: string;
   onFeedback: (
@@ -28,8 +33,9 @@ export function WanshitongChat({
     feedback: PublicFeedbackSubmission,
   ) => void;
   onFeedbackLogin: () => void;
+  onNewTopic: () => void;
   onRefresh: () => void;
-  onRetry: (turnId: string, question: string) => void;
+  onRetry: (turnId: string, question: string, conversationId: string) => void;
   onStop: () => void;
   onSubmit: (question: string) => void;
   onSuggestedQuestionSubmit: (question: SuggestedQuestion) => void;
@@ -40,6 +46,15 @@ export function WanshitongChat({
     <div className="wst-chat-shell">
       <header className="wst-chat-header">
         <strong>湾事通</strong>
+        <button
+          className="wst-new-topic-button"
+          disabled={busy}
+          onClick={onNewTopic}
+          type="button"
+        >
+          <Plus aria-hidden="true" size={17} />
+          新问题
+        </button>
       </header>
       <main className="wst-chat" id="main-content">
         <div className="wst-turns">
@@ -55,7 +70,9 @@ export function WanshitongChat({
                   if (turn.traceId) onFeedback(turn.id, turn.traceId, feedback);
                 }}
                 onFeedbackLogin={onFeedbackLogin}
-                onRetry={() => onRetry(turn.id, turn.question)}
+                onRetry={() =>
+                  onRetry(turn.id, turn.question, turn.conversationId)
+                }
                 turn={turn}
               />
             </article>
@@ -67,6 +84,7 @@ export function WanshitongChat({
             turns.at(-1)?.status !== "streaming" && (
               <SuggestedQuestionCarousel
                 busy={busy}
+                heading="换个话题"
                 onRefresh={onRefresh}
                 onSubmit={onSuggestedQuestionSubmit}
                 questions={questions}
@@ -76,6 +94,7 @@ export function WanshitongChat({
             busy={busy}
             compact
             initialQuestion={initialQuestion}
+            key={conversationId}
             onStop={onStop}
             onSubmit={onSubmit}
           />

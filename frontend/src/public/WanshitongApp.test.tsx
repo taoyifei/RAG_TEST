@@ -319,7 +319,7 @@ describe("湾事通公共应用", () => {
     expect(body.query).toBe(question);
     expect(body).not.toHaveProperty("shortcut_id");
     await waitFor(() => {
-      const next = screen.getByRole("region", { name: "你可能想问" });
+      const next = screen.getByRole("region", { name: "换个话题" });
       expect(within(next).queryByRole("button", { name: question })).toBeNull();
     });
   });
@@ -508,7 +508,10 @@ describe("湾事通公共应用", () => {
     const user = userEvent.setup();
     await openHome();
     const visibleQuestions = () =>
-      within(screen.getByRole("region", { name: "你可能想问" }))
+      within(
+        screen.queryByRole("region", { name: "换个话题" }) ??
+          screen.getByRole("region", { name: "你可能想问" }),
+      )
         .getAllByRole("button")
         .filter((button) => button.classList.contains("wst-suggestion"))
         .map((button) => button.textContent ?? "");
@@ -536,7 +539,7 @@ describe("湾事通公共应用", () => {
     });
     const afterFirst = visibleQuestions();
     await user.click(
-      within(screen.getByRole("region", { name: "你可能想问" })).getByRole(
+      within(screen.getByRole("region", { name: "换个话题" })).getByRole(
         "button",
         { name: afterFirst[0] },
       ),
@@ -565,9 +568,7 @@ describe("湾事通公共应用", () => {
     await ask();
 
     expect(await screen.findByText("五个工作日内完成。")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "新建会话" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新问题" })).toBeEnabled();
     expect(
       screen.queryByRole("heading", { name: "你的内部知识助手" }),
     ).not.toBeInTheDocument();
@@ -745,7 +746,7 @@ describe("湾事通公共应用", () => {
     await waitFor(() => expect(pending.wasCancelled()).toBe(true));
   });
 
-  it("已显示的对话保留且没有新建会话入口", async () => {
+  it("已显示的对话保留且提供新问题入口", async () => {
     installFetch(
       streamResponse([
         event("final", 0, { answer: "本轮答案", citations: [] }),
@@ -756,8 +757,134 @@ describe("湾事通公共应用", () => {
     await screen.findByText("本轮答案");
 
     expect(screen.getByText("第一轮问题")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "新建会话" })).toBeNull();
+    expect(screen.getByRole("button", { name: "新问题" })).toBeEnabled();
     expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toBeEnabled();
+  });
+
+  it("新问题键盘操作回到空输入，登录恢复草稿不重现且不额外请求 Session", async () => {
+    authNavigation.saveLoginDraft("登录前草稿");
+    const fetchMock = installFetch(
+      streamResponse([
+        event("final", 0, { answer: "推荐题已回答", citations: [] }),
+      ]),
+    );
+    const user = userEvent.setup();
+    await openHome();
+    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toHaveValue(
+      "登录前草稿",
+    );
+    const card = within(screen.getByRole("region", { name: "你可能想问" }))
+      .getAllByRole("button")
+      .find((button) => button.classList.contains("wst-suggestion"));
+    expect(card).toBeDefined();
+    const suggestedQuestion = card?.textContent ?? "";
+    await user.click(card!);
+    await screen.findByText("推荐题已回答");
+    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toHaveValue(
+      "",
+    );
+
+    screen.getByRole("button", { name: "新问题" }).focus();
+    await user.keyboard("{Enter}");
+    expect(
+      await screen.findByRole("heading", { name: "你的内部知识助手" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toHaveValue(
+      "",
+    );
+    const paths = fetchMock.mock.calls.map(([input]) => pathOf(input));
+    expect(paths).toEqual([
+      "/api/public/session",
+      "/api/public/capabilities",
+      "/api/public/chat",
+    ]);
+    const chatBody = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === "/api/public/chat",
+    )?.[1]?.body;
+    expect(
+      JSON.parse(typeof chatBody === "string" ? chatBody : "{}"),
+    ).toMatchObject({ query: suggestedQuestion });
+  });
+
+  it("聊天页全局推荐新建话题并只发可见题面一次", async () => {
+    let chatCount = 0;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(Response.json(sessionBody));
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === "/api/public/chat") {
+          chatCount += 1;
+          return Promise.resolve(
+            streamResponse([
+              event("final", 0, {
+                answer: `第 ${chatCount} 次回答`,
+                citations: [],
+              }),
+            ]),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+    const user = userEvent.setup();
+    await openHome();
+    await ask("不同主题的问题 A");
+    await screen.findByText("第 1 次回答");
+    const suggestions = screen.getByRole("region", { name: "换个话题" });
+    const card = within(suggestions)
+      .getAllByRole("button")
+      .find((button) => button.classList.contains("wst-suggestion"));
+    expect(card).toBeDefined();
+    const suggestedQuestion = card?.textContent ?? "";
+    await user.click(card!);
+    await screen.findByText("第 2 次回答");
+
+    expect(screen.queryByText("不同主题的问题 A")).toBeNull();
+    expect(screen.getByText(suggestedQuestion)).toBeInTheDocument();
+    const bodies = fetchMock.mock.calls
+      .filter(([input]) => pathOf(input) === "/api/public/chat")
+      .map(
+        ([, init]) =>
+          JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+            conversation_id: string;
+            query: string;
+          },
+      );
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].conversation_id).not.toBe(bodies[1].conversation_id);
+    expect(bodies.map((body) => body.query)).toEqual([
+      "不同主题的问题 A",
+      suggestedQuestion,
+    ]);
+  });
+
+  it("忙碌时禁用新问题，停止后才允许换话题", async () => {
+    const pending = pendingStream(event("meta", 0));
+    const fetchMock = installFetch(pending.response);
+    await openHome();
+    const user = await ask("正在回答的问题");
+    const newTopic = screen.getByRole("button", { name: "新问题" });
+    expect(newTopic).toBeDisabled();
+    await user.click(newTopic);
+    expect(screen.getByText("正在回答的问题")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => pathOf(input) === "/api/public/chat",
+      ),
+    ).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "停止" }));
+    expect(newTopic).toBeEnabled();
+    await user.click(newTopic);
+    expect(
+      await screen.findByRole("heading", { name: "你的内部知识助手" }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(pending.wasCancelled()).toBe(true));
   });
 
   it("来源卡片只展示允许的公共字段", async () => {

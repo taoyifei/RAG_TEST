@@ -43,6 +43,7 @@ export interface PublicClaim {
 
 export interface PublicTurn {
   id: string;
+  conversationId: string;
   question: string;
   status: "submitting" | "streaming" | "completed" | "failed" | "cancelled";
   stageMessage?: string;
@@ -147,17 +148,16 @@ export function usePublicChat() {
   const [deploymentId, setDeploymentId] = useState<string>();
   const [feedbackDetailsEnabled, setFeedbackDetailsEnabled] = useState(false);
   const [turns, setTurns] = useState<PublicTurn[]>([]);
+  const [conversationId, setConversationId] = useState(() => randomId("wst"));
   const csrfRef = useRef<string | undefined>(undefined);
-  const conversationRef = useRef(randomId("wst"));
+  const conversationRef = useRef(conversationId);
   const sessionControllerRef = useRef<AbortController | undefined>(undefined);
   const streamControllerRef = useRef<AbortController | undefined>(undefined);
   const activeTurnRef = useRef<string | undefined>(undefined);
   const requestIdRef = useRef(0);
   const busyRef = useRef(false);
   const feedbackAttemptsRef = useRef(new Set<string>());
-  const sessionChannelRef = useRef<PublicSessionChannel | undefined>(
-    undefined,
-  );
+  const sessionChannelRef = useRef<PublicSessionChannel | undefined>(undefined);
   const identityChangedRef = useRef(false);
 
   const clearLocalSession = useCallback((showLoggedOut: boolean) => {
@@ -169,7 +169,9 @@ export function usePublicChat() {
     streamControllerRef.current = undefined;
     activeTurnRef.current = undefined;
     csrfRef.current = undefined;
-    conversationRef.current = randomId("wst");
+    const nextConversationId = randomId("wst");
+    conversationRef.current = nextConversationId;
+    setConversationId(nextConversationId);
     feedbackAttemptsRef.current.clear();
     setTurns([]);
     setSessionReady(false);
@@ -180,6 +182,21 @@ export function usePublicChat() {
     setLoggedOut(showLoggedOut);
     setPhase(showLoggedOut ? "idle" : "creating_session");
   }, []);
+
+  const resetConversationState = useCallback((): string | undefined => {
+    if (busyRef.current || !sessionReady) return undefined;
+    requestIdRef.current += 1;
+    streamControllerRef.current?.abort();
+    streamControllerRef.current = undefined;
+    activeTurnRef.current = undefined;
+    const nextConversationId = randomId("wst");
+    conversationRef.current = nextConversationId;
+    setConversationId(nextConversationId);
+    feedbackAttemptsRef.current.clear();
+    setTurns([]);
+    setPhase("ready");
+    return nextConversationId;
+  }, [sessionReady]);
 
   const updateTurn = useCallback(
     (turnId: string, update: (turn: PublicTurn) => PublicTurn) => {
@@ -269,7 +286,12 @@ export function usePublicChat() {
   }, [clearLocalSession, deploymentId, startSession, user?.userId]);
 
   const runTurn = useCallback(
-    async (turnId: string, question: string, retry: boolean) => {
+    async (
+      turnId: string,
+      question: string,
+      turnConversationId: string,
+      retry: boolean,
+    ) => {
       if (busyRef.current || !sessionReady) return;
       busyRef.current = true;
       activeTurnRef.current = turnId;
@@ -289,6 +311,7 @@ export function usePublicChat() {
           ...current,
           {
             id: turnId,
+            conversationId: turnConversationId,
             question,
             status: "submitting",
             stageMessage: "正在提交问题",
@@ -314,7 +337,7 @@ export function usePublicChat() {
           return;
         }
         const response = await openPublicChat({
-          conversationId: conversationRef.current,
+          conversationId: turnConversationId,
           csrfToken,
           question,
           signal: controller.signal,
@@ -442,12 +465,12 @@ export function usePublicChat() {
           throw new TypeError("public stream disconnected before terminal");
         }
       } catch (error) {
+        if (!isCurrent() || controller.signal.aborted) return;
         if (isSessionExpired(error)) {
           clearLocalSession(false);
           authNavigation.redirectToSso(question);
           return;
         }
-        if (!isCurrent() || controller.signal.aborted) return;
         tracker.terminal = true;
         updateTurn(turnId, (turn) => {
           const partial = turn.claims.length > 0;
@@ -466,6 +489,7 @@ export function usePublicChat() {
         if (isCurrent()) {
           busyRef.current = false;
           streamControllerRef.current = undefined;
+          activeTurnRef.current = undefined;
         }
       }
     },
@@ -476,15 +500,31 @@ export function usePublicChat() {
     (question: string) => {
       const value = question.trim();
       if (!value || busyRef.current) return;
-      void runTurn(randomId("turn"), value, false);
+      void runTurn(randomId("turn"), value, conversationRef.current, false);
     },
     [runTurn],
   );
 
+  const startNewTopic = useCallback(() => {
+    resetConversationState();
+  }, [resetConversationState]);
+
+  const submitNewTopic = useCallback(
+    (question: string) => {
+      const value = question.trim();
+      if (!value) return;
+      const nextConversationId = resetConversationState();
+      if (!nextConversationId) return;
+      void runTurn(randomId("turn"), value, nextConversationId, false);
+    },
+    [resetConversationState, runTurn],
+  );
+
   const retry = useCallback(
-    (turnId: string, question: string) => {
-      if (busyRef.current) return;
-      void runTurn(turnId, question, true);
+    (turnId: string, question: string, turnConversationId: string) => {
+      if (busyRef.current || conversationRef.current !== turnConversationId)
+        return;
+      void runTurn(turnId, question, turnConversationId, true);
     },
     [runTurn],
   );
@@ -492,9 +532,11 @@ export function usePublicChat() {
   const stop = useCallback(() => {
     const turnId = activeTurnRef.current;
     if (!busyRef.current || !turnId) return;
+    requestIdRef.current += 1;
     streamControllerRef.current?.abort();
     busyRef.current = false;
     streamControllerRef.current = undefined;
+    activeTurnRef.current = undefined;
     updateTurn(turnId, (turn) => ({
       ...turn,
       status: "cancelled",
@@ -506,11 +548,7 @@ export function usePublicChat() {
   }, [updateTurn]);
 
   const submitFeedback = useCallback(
-    (
-      turnId: string,
-      traceId: string,
-      feedback: PublicFeedbackSubmission,
-    ) => {
+    (turnId: string, traceId: string, feedback: PublicFeedbackSubmission) => {
       const csrfToken = csrfRef.current;
       if (!csrfToken || feedbackAttemptsRef.current.has(turnId)) return;
       feedbackAttemptsRef.current.add(turnId);
@@ -578,6 +616,7 @@ export function usePublicChat() {
   return {
     announcement,
     busy,
+    conversationId,
     deploymentId,
     feedbackDetailsEnabled,
     loggedOut,
@@ -589,8 +628,10 @@ export function usePublicChat() {
     retrySession: startSession,
     sessionError,
     sessionReady,
+    startNewTopic,
     stop,
     submit,
+    submitNewTopic,
     submitFeedback,
     turns,
     user,

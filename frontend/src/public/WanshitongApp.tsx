@@ -1,5 +1,5 @@
 import { LogIn, LogOut, Moon, RotateCcw, Sun } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { consumeLoginDraft } from "./authNavigation";
 import type { SuggestedQuestion } from "./suggestedQuestions";
@@ -9,7 +9,7 @@ import { usePublicChat } from "./usePublicChat";
 import { useSuggestedQuestions } from "./useSuggestedQuestions";
 
 export function WanshitongApp() {
-  const [restoredDraft] = useState(consumeLoginDraft);
+  const [restoredDraft, setRestoredDraft] = useState(consumeLoginDraft);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try {
       return window.localStorage.getItem("wanshitong-theme") === "light"
@@ -20,13 +20,28 @@ export function WanshitongApp() {
     }
   });
   const chat = usePublicChat();
+  const draftConversationRef = useRef(chat.conversationId);
+  useEffect(() => {
+    if (draftConversationRef.current === chat.conversationId) return;
+    draftConversationRef.current = chat.conversationId;
+    setRestoredDraft("");
+  }, [chat.conversationId]);
   const suggestionIdentityKey =
     chat.deploymentId && chat.user
       ? `${chat.deploymentId}:${chat.user.userId}`
       : undefined;
   const suggestions = useSuggestedQuestions(chat.turns, suggestionIdentityKey);
   const submitSuggestedQuestion = (question: SuggestedQuestion) => {
-    chat.submit(question.question);
+    setRestoredDraft("");
+    chat.submitNewTopic(question.question);
+  };
+  const submitCurrentQuestion = (question: string) => {
+    setRestoredDraft("");
+    chat.submit(question);
+  };
+  const startNewTopic = () => {
+    setRestoredDraft("");
+    chat.startNewTopic();
   };
   const themeToggle = (
     <button
@@ -115,7 +130,10 @@ export function WanshitongApp() {
             <button
               aria-label="退出湾事通"
               className="wst-session-action"
-              onClick={chat.logout}
+              onClick={() => {
+                setRestoredDraft("");
+                chat.logout();
+              }}
               type="button"
             >
               <LogOut aria-hidden="true" size={16} />
@@ -133,24 +151,27 @@ export function WanshitongApp() {
       {chat.turns.length === 0 ? (
         <WanshitongHome
           busy={chat.busy}
+          conversationId={chat.conversationId}
           initialQuestion={restoredDraft}
           onRefresh={suggestions.refresh}
           onSuggestedQuestionSubmit={submitSuggestedQuestion}
           onStop={chat.stop}
-          onSubmit={chat.submit}
+          onSubmit={submitCurrentQuestion}
           questions={suggestions.questions}
         />
       ) : (
         <WanshitongChat
           busy={chat.busy}
+          conversationId={chat.conversationId}
           feedbackDetailsEnabled={chat.feedbackDetailsEnabled}
           initialQuestion={restoredDraft}
           onFeedback={chat.submitFeedback}
           onFeedbackLogin={chat.login}
+          onNewTopic={startNewTopic}
           onRefresh={suggestions.refresh}
           onRetry={chat.retry}
           onStop={chat.stop}
-          onSubmit={chat.submit}
+          onSubmit={submitCurrentQuestion}
           onSuggestedQuestionSubmit={submitSuggestedQuestion}
           questions={suggestions.questions}
           turns={chat.turns}

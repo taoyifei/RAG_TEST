@@ -10,11 +10,13 @@ import type { SuggestedQuestion } from "./suggestedQuestions";
 
 export function SuggestedQuestionCarousel({
   busy,
+  heading = "你可能想问",
   onRefresh,
   onSubmit,
   questions,
 }: {
   busy: boolean;
+  heading?: string;
   onRefresh: () => void;
   onSubmit: (question: SuggestedQuestion) => void;
   questions: readonly SuggestedQuestion[];
@@ -47,9 +49,9 @@ export function SuggestedQuestionCarousel({
   if (questions.length === 0) return null;
 
   return (
-    <section className="wst-suggestions" aria-label="你可能想问">
+    <section className="wst-suggestions" aria-label={heading}>
       <div className="wst-suggestions-heading">
-        <span>你可能想问</span>
+        <span>{heading}</span>
         <div className="wst-suggestions-controls">
           <button
             aria-label="换一换推荐问题"

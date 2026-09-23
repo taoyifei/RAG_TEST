@@ -1574,7 +1574,9 @@ label:has(input[type="checkbox"]) {
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
-  transition: background-color 180ms ease, transform 180ms ease;
+  transition:
+    background-color 180ms ease,
+    transform 180ms ease;
 }
 .wst-theme-toggle:hover,
 .wst-session-action:hover {
@@ -1943,6 +1945,25 @@ label:has(input[type="checkbox"]) {
 .wst-chat-header strong {
   font-size: 18px;
   letter-spacing: -0.02em;
+}
+.wst-new-topic-button {
+  display: inline-flex;
+  min-height: 44px;
+  margin-left: auto;
+  padding: 0 12px;
+  border: 1px solid rgb(49 215 179 / 35%);
+  border-radius: 10px;
+  align-items: center;
+  gap: 6px;
+  color: #cffff4;
+  background: rgb(49 215 179 / 10%);
+}
+.wst-new-topic-button:hover:not(:disabled) {
+  background: rgb(49 215 179 / 18%);
+}
+.wst-new-topic-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .wst-chat {
   width: min(920px, 100%);
@@ -2397,7 +2418,8 @@ label:has(input[type="checkbox"]) {
   border-color: #dce5df;
   background: #fff;
 }
-.wst-root[data-theme="light"] .wst-suggestions-arrow:hover:not(:disabled)::before {
+.wst-root[data-theme="light"]
+  .wst-suggestions-arrow:hover:not(:disabled)::before {
   border-color: #9bcfba;
   background: #eff7f1;
 }
@@ -2420,7 +2442,9 @@ label:has(input[type="checkbox"]) {
 .wst-root[data-theme="light"] .wst-composer:focus-within {
   border-color: #7abca6;
   background: #fff;
-  box-shadow: 0 0 0 3px rgb(13 121 103 / 10%), 0 16px 45px rgb(36 69 52 / 8%);
+  box-shadow:
+    0 0 0 3px rgb(13 121 103 / 10%),
+    0 16px 45px rgb(36 69 52 / 8%);
 }
 .wst-root[data-theme="light"] .wst-composer textarea {
   color: #202b27;
@@ -2449,6 +2473,11 @@ label:has(input[type="checkbox"]) {
 }
 .wst-root[data-theme="light"] .wst-chat-header {
   background: rgb(247 249 247 / 92%);
+}
+.wst-root[data-theme="light"] .wst-new-topic-button {
+  border-color: #acd7c4;
+  color: #0b6856;
+  background: #eef8f1;
 }
 .wst-root[data-theme="light"] .wst-question {
   border-color: #dce5df;
@@ -2571,8 +2600,12 @@ label:has(input[type="checkbox"]) {
   }
 }
 @keyframes wst-progress-sweep {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(300%); }
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
 }
 
 @media (max-width: 680px) {

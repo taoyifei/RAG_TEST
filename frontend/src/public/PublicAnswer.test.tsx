@@ -11,6 +11,7 @@ it("生成等待期间只报告真实的连接活动，不伪造阶段进度", a
   vi.spyOn(Date, "now").mockReturnValue(now);
   const turn: PublicTurn = {
     id: "turn-test",
+    conversationId: "wst-test",
     question: "测试问题",
     status: "streaming",
     stageMessage: "正在组织回答",
@@ -27,7 +28,9 @@ it("生成等待期间只报告真实的连接活动，不伪造阶段进度", a
     <PublicAnswer onFeedback={vi.fn()} onRetry={vi.fn()} turn={turn} />,
   );
   expect(
-    await screen.findByText("连接正常，仍在等待回答服务返回结果；如需可停止后重试。"),
+    await screen.findByText(
+      "连接正常，仍在等待回答服务返回结果；如需可停止后重试。",
+    ),
   ).toBeInTheDocument();
   expect(screen.getByText("25 秒")).toBeInTheDocument();
   expect(screen.queryByText("正在核对回答与来源")).not.toBeInTheDocument();
