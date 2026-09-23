@@ -22,7 +22,10 @@ from rag_app.core.models.retrieval import (
     EvidenceItem,
     PhysicalTableFact,
 )
-from rag_app.core.query_text import literal_relation_modifiers_supported
+from rag_app.core.query_text import (
+    explicit_table_row_level_conflicts,
+    literal_relation_modifiers_supported,
+)
 
 SOURCE_PROJECTION_REVISION = "wb08r-source-projection-v3"
 _MAX_CLAIM_TEXT_CHARS = 6000
@@ -178,6 +181,7 @@ def project_bound_claim(  # noqa: PLR0913
     source_scope: SourceScopeDecision | None = None,
     semantic_relation_supported: bool = False,
     question_fragment: str = "",
+    original_query: str = "",
 ) -> BoundClaim:
     """对表格、表格片段和目录项使用服务端最终表述。
 
@@ -214,6 +218,16 @@ def project_bound_claim(  # noqa: PLR0913
             raise SourceProjectionError(
                 "PROJECTION_TABLE_FACT_MISSING"
             ) from error
+        if any(
+            explicit_table_row_level_conflicts(
+                text,
+                _ordered_texts(fact.row_label_support_ids, registry),
+            )
+            for text in (original_query, claim.text)
+            if text
+            for fact in selected_facts
+        ):
+            raise SourceProjectionError("QUESTION_TABLE_ROW_LEVEL_CONFLICT")
         texts = tuple(
             render_physical_table_fact(fact, registry)
             for fact in selected_facts

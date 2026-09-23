@@ -90,6 +90,21 @@ def named_table_label_in_query(query: str, label: str) -> bool:
     )
 
 
+def explicit_table_row_level_conflicts(
+    query: str, row_labels: Iterable[str]
+) -> bool:
+    """显式等级与所引表格行的等级不同时拒绝跨行借用。"""
+    query_levels = set(_TABLE_LEVEL.findall(normalize_semantic_text(query)))
+    if not query_levels:
+        return False
+    row_levels = {
+        level
+        for label in row_labels
+        for level in _TABLE_LEVEL.findall(normalize_semantic_text(label))
+    }
+    return bool(row_levels and query_levels.isdisjoint(row_levels))
+
+
 def table_axis_label_in_query(query: str, label: str) -> bool:
     """检查问句是否逐字指定短表格轴标签。
 

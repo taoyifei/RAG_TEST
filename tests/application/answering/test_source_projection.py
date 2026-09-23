@@ -181,6 +181,76 @@ def test_semantically_verified_table_fact_keeps_natural_duration() -> None:
     assert not invented.relation_complete
 
 
+def test_table_fact_cannot_borrow_another_explicit_level_row() -> None:
+    evidence, fact, unit, binding = _fixture()
+    evidence = tuple(
+        item.model_copy(
+            update={
+                "citation_text": {
+                    "S1": "甲类事件（Ⅰ级）",
+                    "S2": "10分钟",
+                    "S9": "报送时限",
+                }.get(item.support_id, item.citation_text)
+            }
+        )
+        for item in evidence
+    )
+    fact = fact.model_copy(
+        update={
+            "document_id": evidence[0].document_id,
+            "document_version_id": evidence[0].document_version_id,
+        }
+    )
+    bound = bind_wire_claim(
+        GroundedWireClaim(
+            atom_id="A1", text="乙类事件（Ⅱ级）须在10分钟内报送。", refs=("E1",)
+        ),
+        claim_id="C1",
+        read_units=(unit,),
+        evidence=evidence,
+        allowed_unit_ids=frozenset({"E1"}),
+        physical_table_facts=(fact,),
+        atom_fact_bindings=(binding,),
+    )
+
+    with pytest.raises(
+        SourceProjectionError, match="QUESTION_TABLE_ROW_LEVEL_CONFLICT"
+    ):
+        project_bound_claim(
+            bound,
+            read_units=(unit,),
+            evidence=evidence,
+            physical_table_facts=(fact,),
+            atom_fact_bindings=(binding,),
+            semantic_relation_supported=True,
+            original_query="乙类事件（Ⅱ级）的报送时限是多少？",
+        )
+
+    with pytest.raises(
+        SourceProjectionError, match="QUESTION_TABLE_ROW_LEVEL_CONFLICT"
+    ):
+        project_bound_claim(
+            bound,
+            read_units=(unit,),
+            evidence=evidence,
+            physical_table_facts=(fact,),
+            atom_fact_bindings=(binding,),
+            semantic_relation_supported=True,
+            original_query="甲类事件（Ⅰ级）的报送时限是多少？",
+        )
+
+    same_row = project_bound_claim(
+        replace(bound, text="甲类事件（Ⅰ级）须在10分钟内报送。"),
+        read_units=(unit,),
+        evidence=evidence,
+        physical_table_facts=(fact,),
+        atom_fact_bindings=(binding,),
+        semantic_relation_supported=True,
+        original_query="甲类事件（Ⅰ级）的报送时限是多少？",
+    )
+    assert same_row.relation_complete
+
+
 def test_semantic_review_cannot_supply_an_action_absent_from_source() -> None:
     evidence = _evidence("开发中心需在2个工作日内提交配置库")
     item = evidence[0]

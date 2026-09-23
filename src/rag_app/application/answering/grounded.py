@@ -3806,12 +3806,13 @@ class GroundedAnsweringService:
                             question_fragment=(
                                 candidate.atom.original_fragment or ""
                             ),
+                            original_query=query_plan.original_query,
                         )
                     except SourceProjectionError as error:
-                        if (
-                            error.failure_code
-                            == "QUESTION_ACTION_NOT_IN_SOURCE"
-                        ):
+                        if error.failure_code in {
+                            "QUESTION_ACTION_NOT_IN_SOURCE",
+                            "QUESTION_TABLE_ROW_LEVEL_CONFLICT",
+                        }:
                             rejected_atoms[bound.atom_id] += 1
                             claim_rejections[error.failure_code] += 1
                             observed(bound, result.status, error.failure_code)
