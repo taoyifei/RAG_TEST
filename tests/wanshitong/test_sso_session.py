@@ -59,7 +59,9 @@ def test_user_session_is_encrypted_stable_and_csrf_bound() -> None:
     assert "kb:read" not in issue.cookie_value
     assert len(issue.cookie_value) <= 3500
     assert service.cookie_name == "kb_user_session_candidate_8289"
-    assert service.cookie_path == "/kb"
+    assert service.cookie_path == "/"
+    assert service.legacy_cookie_path == "/kb"
+    assert service.pending_cookie_path == "/kb/sso"
     assert service.bootstrap(issue.cookie_value).principal == issue.principal
     assert (
         service.authenticate(issue.cookie_value, issue.csrf_token)
