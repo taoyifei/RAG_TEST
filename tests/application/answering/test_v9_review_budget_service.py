@@ -222,13 +222,25 @@ class _HttpHarness:
             )
         else:
             assert "candidates" in data
+            statuses = self.statuses or ("supported",) * len(
+                data["candidates"]
+            )
+            facets = {
+                "supported": ("supported", "answered", "faithful"),
+                "contradicted": (
+                    "contradicted",
+                    "irrelevant",
+                    "contradicted",
+                ),
+                "unknown": ("unknown", "unknown", "unknown"),
+            }
             payload = {
                 "results": [
                     {
                         "claim_id": candidate["claim_id"],
-                        "status": self.statuses[index]
-                        if self.statuses is not None
-                        else "supported",
+                        "source_support": facets[statuses[index]][0],
+                        "question_relevance": facets[statuses[index]][1],
+                        "qualifier_fidelity": facets[statuses[index]][2],
                     }
                     for index, candidate in enumerate(data["candidates"])
                 ]

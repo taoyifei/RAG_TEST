@@ -785,6 +785,52 @@ def _reading_label_score(query: str, label: str) -> tuple[float, int]:
     )
 
 
+def _reading_value_score(query: str, value: str) -> tuple[float, int]:
+    """行名未出现在口语问句时，用值中的连续主题原文选阅读行。"""
+    query, value = _normalized(query), _normalized(value)
+    if not query or not value:
+        return (0.0, 0)
+    longest = 0
+    for start in range(len(query) - _MIN_QUESTION_SOURCE_RUN + 1):
+        position = value.find(query[start : start + _MIN_QUESTION_SOURCE_RUN])
+        while position >= 0:
+            length = _MIN_QUESTION_SOURCE_RUN
+            while (
+                start + length < len(query)
+                and position + length < len(value)
+                and query[start + length] == value[position + length]
+            ):
+                length += 1
+            longest = max(longest, length)
+            position = value.find(
+                query[start : start + _MIN_QUESTION_SOURCE_RUN], position + 1
+            )
+    if not longest:
+        return (0.0, 0)
+    query_pairs = {query[index : index + 2] for index in range(len(query) - 1)}
+    value_pairs = {value[index : index + 2] for index in range(len(value) - 1)}
+    overlap = len(query_pairs & value_pairs) / max(1, len(query_pairs))
+    return (0.5 * longest / len(query) + 0.5 * overlap, longest)
+
+
+def _reading_row_score(
+    query: str, label: EvidenceItem, members: list[EvidenceItem]
+) -> tuple[float, int]:
+    """显式行名优先；否则仅凭值中的连续主题字面选阅读行。"""
+    label_score = _reading_label_score(query, label.citation_text)
+    if label_score[0]:
+        return (1.0 + label_score[0], label_score[1])
+    return max(
+        (
+            _reading_value_score(query, item.citation_text)
+            for item in members
+            if (cell := _reading_table_identity(item)) is not None
+            and cell[2] != _TABLE_ROW_LABEL_COLUMN
+        ),
+        default=(0.0, 0),
+    )
+
+
 def _reading_table_identity(
     item: EvidenceItem,
 ) -> tuple[tuple[object, ...], int, int] | None:
@@ -931,6 +977,23 @@ def _reading_seed_rank(
         == item.document_version_id
     ]
     return min(ranks, default=None)
+
+
+def _reading_row_seed_rank(
+    atom: QueryAtom,
+    members: list[EvidenceItem],
+    candidates: dict[str, RankedChunk],
+) -> int | None:
+    """同一物理行至少有一个真实命中，才进入优先阅读候选。"""
+    return min(
+        (
+            rank
+            for item in members
+            if _source_matches(atom, item)
+            if (rank := _reading_seed_rank(item, candidates)) is not None
+        ),
+        default=None,
+    )
 
 
 def _reading_header_columns(
@@ -1215,7 +1278,7 @@ def _atom_fact_bindings(
     return tuple(bindings)
 
 
-def _priority_reading_units(  # noqa: PLR0912, PLR0913
+def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
     *,
     query_plan: QueryPlan,
     items: tuple[EvidenceItem, ...],
@@ -1262,18 +1325,22 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
         focused: list[
             tuple[tuple[float, int, int], tuple[EvidenceItem, ...]]
         ] = []
-        query = f"{query_plan.original_query} {atom.search_text}"
+        query = f"{query_plan.original_query} {atom.original_fragment or ''}"
         for (table, _row), members in rows.items():
+            row_seed_rank = _reading_row_seed_rank(
+                atom, members, candidate_by_id
+            )
+            if row_seed_rank is None:
+                continue
             labels = [
                 item
                 for item in members
                 if (cell := _reading_table_identity(item)) is not None
                 and cell[2] == 0
                 and _source_matches(atom, item)
-                and _reading_seed_rank(item, candidate_by_id) is not None
             ]
             for label in labels:
-                score = _reading_label_score(query, label.citation_text)
+                score = _reading_row_score(query, label, members)
                 if not score[0]:
                     continue
                 # 有精确列名时只保留所问列；口语关系未消歧时保留这一
@@ -1331,10 +1398,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913
                     (
                         (
                             *score,
-                            -(
-                                _reading_seed_rank(label, candidate_by_id)
-                                or 2**31
-                            ),
+                            -row_seed_rank,
                         ),
                         related,
                     )

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from rag_app.application.answering.evidence_binding import bind_wire_claim
 from rag_app.application.answering.source_projection import project_bound_claim
 from rag_app.core.models import EvidenceReadUnit, GroundedWireClaim
@@ -116,6 +118,62 @@ def test_explicit_source_header_relation_is_preserved() -> None:
     assert "开始前必须提交" in projected.text
     assert projected.relation_complete
     assert projected.relation_gap_reason is None
+
+
+def test_semantically_verified_table_fact_keeps_natural_duration() -> None:
+    evidence, fact, unit, binding = _fixture()
+    evidence = tuple(
+        item.model_copy(
+            update={
+                "citation_text": {
+                    "S1": "业务团队",
+                    "S2": "收到设计文档后2个工作日内反馈并确认",
+                    "S9": "反馈时效",
+                }.get(item.support_id, item.citation_text)
+            }
+        )
+        for item in evidence
+    )
+    fact = fact.model_copy(
+        update={
+            "document_id": evidence[0].document_id,
+            "document_version_id": evidence[0].document_version_id,
+        }
+    )
+    claim = "业务团队收到设计文档后2个工作日内反馈并确认。"
+    bound = bind_wire_claim(
+        GroundedWireClaim(atom_id="A1", text=claim, refs=("E1",)),
+        claim_id="C1",
+        read_units=(unit,),
+        evidence=evidence,
+        allowed_unit_ids=frozenset({"E1"}),
+        physical_table_facts=(fact,),
+        atom_fact_bindings=(binding,),
+    )
+
+    projected = project_bound_claim(
+        bound,
+        read_units=(unit,),
+        evidence=evidence,
+        physical_table_facts=(fact,),
+        atom_fact_bindings=(binding,),
+        semantic_relation_supported=True,
+        question_fragment="设计文档几天内反馈？",
+    )
+    invented = project_bound_claim(
+        replace(bound, text="业务团队必须先反馈设计文档。"),
+        read_units=(unit,),
+        evidence=evidence,
+        physical_table_facts=(fact,),
+        atom_fact_bindings=(binding,),
+        semantic_relation_supported=True,
+        question_fragment="设计文档几天内反馈？",
+    )
+
+    assert projected.text == claim
+    assert projected.relation_complete
+    assert "必须先" not in invented.text
+    assert not invented.relation_complete
 
 
 def test_table_fragment_can_only_publish_literal_fragment() -> None:

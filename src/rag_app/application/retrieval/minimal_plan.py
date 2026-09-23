@@ -26,6 +26,13 @@ _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 _NEGATION = re.compile(r"不得|无需|不必|禁止|严禁|没有|未|不(?![呢吗呀啊]?$)")
 _UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年|万元|元|%|％|千克|公斤|米)")
 _DURATION_UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年)")
+_DURATION_QUESTION = re.compile(
+    r"(?:几|多少)(?:个)?(?:工作日|自然日|日|天|小时|分钟|周|月|年)"
+    r"|多长时间|多久"
+)
+_RESPONSIBLE_QUESTION = re.compile(
+    r"(?:由|归|让)?谁(?:来)?(?:负责|牵头|确认|审批|审核|反馈|提交|执行|处理)"
+)
 
 _TRUSTED_ANSWER_SHAPES = {
     RequestedAnswerType.DEFINITION: AtomAnswerShape.DEFINITION,
@@ -216,6 +223,12 @@ def _trusted_answer_shape(
         parse_query_semantics,
     )
 
+    duration_question = _DURATION_QUESTION.search(fragment) is not None
+    responsible_question = _RESPONSIBLE_QUESTION.search(fragment) is not None
+    if duration_question and not responsible_question:
+        return AtomAnswerShape.DURATION
+    if responsible_question and not duration_question:
+        return AtomAnswerShape.RESPONSIBLE_PARTY
     parsed = parse_query_semantics(fragment).answer_type
     trusted = _TRUSTED_ANSWER_SHAPES.get(parsed)
     if trusted is not None:

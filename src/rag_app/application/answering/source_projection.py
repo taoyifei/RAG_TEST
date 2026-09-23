@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from rag_app.application.answering.evidence_binding import (
     BoundClaim,
     RenderOrigin,
@@ -20,9 +22,13 @@ from rag_app.core.models.retrieval import (
     EvidenceItem,
     PhysicalTableFact,
 )
+from rag_app.core.query_text import literal_relation_modifiers_supported
 
 SOURCE_PROJECTION_REVISION = "wb08r-source-projection-v2"
 _MAX_CLAIM_TEXT_CHARS = 6000
+_QUANTITY = re.compile(
+    r"\d+(?:\.\d+)?(?:个)?(?:工作日|自然日|分钟|小时|日|天|周|月|年)"
+)
 
 
 class SourceProjectionError(ValueError):
@@ -150,12 +156,13 @@ def project_bound_claim(  # noqa: PLR0913
     physical_table_facts: tuple[PhysicalTableFact, ...] = (),
     atom_fact_bindings: tuple[AtomFactBinding, ...] = (),
     source_scope: SourceScopeDecision | None = None,
+    semantic_relation_supported: bool = False,
+    question_fragment: str = "",
 ) -> BoundClaim:
     """对表格、表格片段和目录项使用服务端最终表述。
 
-    普通段落仍保留模型文本；结构来源则不允许模型自行增加时序、义务
-    或因果关系。关系是否完整独立记录，不能由语义复核的 ``supported``
-    状态替代。
+    普通段落仍保留模型文本。表格先核对物理闭合，再用当前子问题的
+    语义复核与逐字限定共同决定能否保留自然表达。
     """
     units_by_id = {unit.unit_id: unit for unit in read_units}
     try:
@@ -181,18 +188,36 @@ def project_bound_claim(  # noqa: PLR0913
             render_physical_table_fact(fact, registry)
             for fact in selected_facts
         )
+        source_text = " ".join(
+            registry[support_id].citation_text
+            for fact in selected_facts
+            for support_id in fact.all_support_ids
+        )
         binding_states = {
             binding.fact_id: binding.relation_status
             for binding in atom_fact_bindings
             if binding.atom_id == claim.atom_id
         }
-        complete = all(
+        certified = all(
             binding_states.get(fact.fact_id) == "SUPPORTED"
             for fact in selected_facts
         )
+        natural_supported = semantic_relation_supported and all(
+            (
+                literal_relation_modifiers_supported(
+                    fragment, source_text
+                )
+                and all(
+                    quantity in source_text
+                    for quantity in _QUANTITY.findall(fragment)
+                )
+            )
+            for fragment in (question_fragment, claim.text)
+        )
+        complete = certified or natural_supported
         return _finish_projection(
             claim,
-            text="\n".join(texts),
+            text=claim.text if natural_supported else "\n".join(texts),
             render_origin="physical_table_fact",
             selected_assertion_ids=tuple(
                 fact.fact_id for fact in selected_facts

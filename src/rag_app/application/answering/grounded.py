@@ -3205,7 +3205,7 @@ class GroundedAnsweringService:
                         atom_fact_bindings=active_request.atom_fact_bindings,
                         source_scope=atom.source_scope,
                     )
-                    bound = project_bound_claim(
+                    projected = project_bound_claim(
                         bound,
                         read_units=read_units,
                         evidence=active_request.evidence,
@@ -3239,18 +3239,20 @@ class GroundedAnsweringService:
                 source_projection_records.append(
                     freeze_json_object(
                         {
-                            "claim_id": bound.claim_id,
-                            "atom_id": bound.atom_id,
-                            "draft_text_sha256": bound.draft_text_sha256,
+                            "claim_id": projected.claim_id,
+                            "atom_id": projected.atom_id,
+                            "draft_text_sha256": projected.draft_text_sha256,
                             "published_text_sha256": (
-                                bound.published_text_sha256
+                                projected.published_text_sha256
                             ),
-                            "render_origin": bound.render_origin,
+                            "render_origin": projected.render_origin,
                             "selected_assertion_ids": (
-                                bound.selected_assertion_ids
+                                projected.selected_assertion_ids
                             ),
-                            "relation_gap": not bound.relation_complete,
-                            "relation_gap_reason": (bound.relation_gap_reason),
+                            "relation_gap": not projected.relation_complete,
+                            "relation_gap_reason": (
+                                projected.relation_gap_reason
+                            ),
                             "scope_digest": (
                                 atom.source_scope.scope_digest
                                 if atom.source_scope is not None
@@ -3783,7 +3785,29 @@ class GroundedAnsweringService:
                             ),
                             source_scope=candidate.atom.source_scope,
                         )
-                    except EvidenceBindingError:
+                        rebound = project_bound_claim(
+                            rebound,
+                            read_units=(
+                                generation_request.evidence_read_units
+                            ),
+                            evidence=generation_request.evidence,
+                            physical_table_facts=(
+                                generation_request.physical_table_facts
+                            ),
+                            atom_fact_bindings=(
+                                generation_request.atom_fact_bindings
+                            ),
+                            source_scope=candidate.atom.source_scope,
+                            semantic_relation_supported=(
+                                result.source_support == "supported"
+                                and result.question_relevance == "answered"
+                                and result.qualifier_fidelity == "faithful"
+                            ),
+                            question_fragment=(
+                                candidate.atom.original_fragment or ""
+                            ),
+                        )
+                    except (EvidenceBindingError, SourceProjectionError):
                         observed(
                             bound,
                             result.status,
@@ -3797,6 +3821,36 @@ class GroundedAnsweringService:
                         result.status,
                         "SEMANTIC_REVIEW_VALIDATED",
                     )
+                    for record_index in range(
+                        len(source_projection_records) - 1, -1, -1
+                    ):
+                        record = dict(source_projection_records[record_index])
+                        if (
+                            record.get("claim_id") == rebound.claim_id
+                            and record.get("draft_text_sha256")
+                            == rebound.draft_text_sha256
+                        ):
+                            source_projection_records[record_index] = (
+                                freeze_json_object(
+                                    {
+                                        **record,
+                                        "published_text_sha256": (
+                                            rebound.published_text_sha256
+                                        ),
+                                        "render_origin": rebound.render_origin,
+                                        "selected_assertion_ids": (
+                                            rebound.selected_assertion_ids
+                                        ),
+                                        "relation_gap": (
+                                            not rebound.relation_complete
+                                        ),
+                                        "relation_gap_reason": (
+                                            rebound.relation_gap_reason
+                                        ),
+                                    }
+                                )
+                            )
+                            break
                     supported_count += 1
                     accepted.append(
                         ValidatedNaturalClaim(

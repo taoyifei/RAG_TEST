@@ -9,11 +9,13 @@ from rag_app.application.retrieval.context_resolution import build_input_spans
 from rag_app.application.retrieval.minimal_plan import (
     MinimalPlanPayload,
     MinimalPlanValidationError,
+    _trusted_answer_shape,
     build_query_atoms,
     planner_json_schema,
 )
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import KnowledgeBaseScope, SearchRequest
+from rag_app.core.models.query_plan import AtomAnswerShape
 
 
 def _request(text: str, *, context: tuple[str, ...] = ()) -> SearchRequest:
@@ -233,3 +235,25 @@ def test_declarative_lead_in_is_context_for_colloquial_question() -> None:
     assert fragment_ids == ["Q.C2"]
     assert atom.original_fragment == "我刚考了证 钱能放明年报不"
     assert all(item.kind.value != "NEGATION" for item in atom.constraints)
+
+
+@pytest.mark.parametrize(
+    ("fragment", "expected"),
+    (
+        ("设计文档由谁确认", AtomAnswerShape.RESPONSIBLE_PARTY),
+        ("几天内反馈", AtomAnswerShape.DURATION),
+        ("采购应答要留几天", AtomAnswerShape.DURATION),
+        ("流程有几个步骤", AtomAnswerShape.COUNT),
+    ),
+)
+def test_each_natural_subquestion_overrides_wrong_planner_count(
+    fragment: str, expected: AtomAnswerShape
+) -> None:
+    analysis = QueryAnalyzer().analyze(_request(fragment))
+
+    assert _trusted_answer_shape(
+        fragment,
+        AtomAnswerShape.COUNT,
+        analysis,
+        single_atom=False,
+    ) is expected
