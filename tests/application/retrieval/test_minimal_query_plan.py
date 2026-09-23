@@ -314,6 +314,26 @@ def test_planner_overlapping_fragments_keep_each_question_independent() -> None:
     ]
 
 
+def test_planner_single_atom_cannot_collapse_two_natural_questions() -> None:
+    request = _request("设计文档几天内反馈、由谁确认？")
+    atoms = _build(
+        _payload(
+            _atom(("Q.C1", "Q.C2"), "Q.T1", "Q.R1", "COUNT")
+        ),
+        request,
+    )
+
+    assert [atom.original_fragment for atom in atoms] == [
+        "设计文档几天内反馈",
+        "由谁确认",
+    ]
+    assert [atom.answer_shape for atom in atoms] == [
+        AtomAnswerShape.DURATION,
+        AtomAnswerShape.RESPONSIBLE_PARTY,
+    ]
+    assert all(atom.target == "设计文档" for atom in atoms)
+
+
 def test_who_performs_an_explicit_action_is_a_party_question() -> None:
     analysis = QueryAnalyzer().analyze(_request("设计文档由谁确认？"))
 

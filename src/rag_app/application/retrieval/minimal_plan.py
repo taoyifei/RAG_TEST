@@ -35,6 +35,12 @@ _RESPONSIBLE_QUESTION = re.compile(
     r"|(?:哪些|哪(?:个|些))(?:部门|团队|单位|岗位|人员|机构|角色)"
     r"(?:负责|承担|执行|管理|制定|审核|提交|确认|牵头)"
 )
+_INDEPENDENT_QUESTION = re.compile(
+    r"谁|什么|哪些|哪(?:个|些)|怎么|如何|怎样|多久|多长时间|"
+    r"何时|什么时候|多少|几(?:个|天|日|周|月|年|小时|分钟)|"
+    r"是否|能否|可否|吗"
+)
+_MAX_INDEPENDENT_ATOMS = 4
 
 _TRUSTED_ANSWER_SHAPES = {
     RequestedAnswerType.DEFINITION: AtomAnswerShape.DEFINITION,
@@ -124,6 +130,7 @@ def build_query_atoms(
 ) -> tuple[QueryAtom, ...]:
     """仅解引用服务端受信片段；不存在的 ID 拒绝整份计划。"""
     by_id = {span.span_id: span for span in spans}
+    _validate_payload_references(payload, by_id)
     current_clauses = tuple(
         span
         for span in spans
@@ -134,29 +141,36 @@ def build_query_atoms(
         tuple(span for span in current_clauses if span not in modifier_clauses)
         or current_clauses
     )
+    independent_clauses = (
+        1 < len(required_clauses) <= _MAX_INDEPENDENT_ATOMS
+        and len(payload.atoms) != len(required_clauses)
+        and all(
+            _INDEPENDENT_QUESTION.search(span.text)
+            for span in required_clauses
+        )
+    )
+    if independent_clauses:
+        referenced_clause_ids = {
+            span_id
+            for item in payload.atoms
+            for span_id in item.fragment_span_ids
+        }
+        if {
+            span.span_id for span in required_clauses
+        } - referenced_clause_ids:
+            raise MinimalPlanValidationError("PLANNER_CLAUSE_UNCOVERED")
+        return _independent_question_atoms(
+            required_clauses,
+            modifier_clauses,
+            spans,
+            analysis,
+        )
     referenced_clauses: set[str] = set()
     atoms: list[QueryAtom] = []
     for index, item in enumerate(payload.atoms, 1):
-        ids = (
-            *item.fragment_span_ids,
-            item.target_span_id,
-            item.relation_span_id,
-        )
-        if any(span_id not in by_id for span_id in ids):
-            raise MinimalPlanValidationError("PLANNER_UNKNOWN_SPAN_REFERENCE")
         fragments = tuple(by_id[span_id] for span_id in item.fragment_span_ids)
         target = by_id[item.target_span_id]
         relation = by_id[item.relation_span_id]
-        if any(
-            span.kind is not SpanKind.CLAUSE for span in fragments
-        ) or not any(span.turn == "CURRENT" for span in fragments):
-            raise MinimalPlanValidationError("PLANNER_INVALID_SPAN_KIND")
-        if (
-            target.kind is not SpanKind.TARGET
-            or relation.kind is not SpanKind.RELATION
-            or relation.turn != "CURRENT"
-        ):
-            raise MinimalPlanValidationError("PLANNER_INVALID_SPAN_KIND")
         referenced_questions = tuple(
             span for span in fragments if span in required_clauses
         )
@@ -223,6 +237,95 @@ def build_query_atoms(
     )
     if any(value not in atom_text for value in literal_values):
         raise MinimalPlanValidationError("PLANNER_LITERAL_VIOLATION")
+    return tuple(atoms)
+
+
+def _validate_payload_references(
+    payload: MinimalPlanPayload,
+    by_id: dict[str, QueryInputSpan],
+) -> None:
+    """所有规划器 Span 身份先经服务端校验，再允许分句修复。"""
+    for item in payload.atoms:
+        ids = (
+            *item.fragment_span_ids,
+            item.target_span_id,
+            item.relation_span_id,
+        )
+        if any(span_id not in by_id for span_id in ids):
+            raise MinimalPlanValidationError(
+                "PLANNER_UNKNOWN_SPAN_REFERENCE"
+            )
+        fragments = tuple(
+            by_id[span_id] for span_id in item.fragment_span_ids
+        )
+        target = by_id[item.target_span_id]
+        relation = by_id[item.relation_span_id]
+        if (
+            any(span.kind is not SpanKind.CLAUSE for span in fragments)
+            or not any(span.turn == "CURRENT" for span in fragments)
+            or target.kind is not SpanKind.TARGET
+            or relation.kind is not SpanKind.RELATION
+            or relation.turn != "CURRENT"
+        ):
+            raise MinimalPlanValidationError("PLANNER_INVALID_SPAN_KIND")
+
+
+def _independent_question_atoms(
+    clauses: tuple[QueryInputSpan, ...],
+    modifiers: tuple[QueryInputSpan, ...],
+    spans: tuple[QueryInputSpan, ...],
+    analysis: QueryAnalysis,
+) -> tuple[QueryAtom, ...]:
+    """规划器合并独立问句时，从受信原文恢复逐问义务。"""
+    targets = tuple(span for span in spans if span.kind is SpanKind.TARGET)
+    relations = tuple(
+        span
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.RELATION
+    )
+    inherited_target: str | None = None
+    atoms: list[QueryAtom] = []
+    for index, clause in enumerate(clauses, 1):
+        fragment = " ".join(
+            dict.fromkeys(
+                (*(span.text for span in modifiers), clause.text)
+            )
+        )
+        explicit_targets = tuple(
+            span.text for span in targets if span.text in clause.text
+        )
+        target = (
+            max(explicit_targets, key=len)
+            if explicit_targets
+            else inherited_target or analysis.semantics.target or clause.text
+        )
+        inherited_target = target
+        explicit_relations = tuple(
+            span.text for span in relations if span.text in clause.text
+        )
+        relation = (
+            max(explicit_relations, key=len)
+            if explicit_relations
+            else analysis.semantics.relation or clause.text
+        )
+        atoms.append(
+            QueryAtom(
+                atom_id=f"A{index}",
+                target=target,
+                relation=relation,
+                answer_shape=_trusted_answer_shape(
+                    fragment,
+                    AtomAnswerShape.FACT,
+                    analysis,
+                    single_atom=False,
+                ),
+                source_qualifier=analysis.semantics.source_qualifier,
+                constraints=_constraints_for_fragment(
+                    fragment, analysis.semantics.source_qualifier
+                ),
+                original_fragment=fragment[:320],
+            )
+        )
     return tuple(atoms)
 
 
