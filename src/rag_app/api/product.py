@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import MutableHeaders
@@ -1000,16 +1000,20 @@ def _mount_frontend(app: FastAPI, frontend_dir: Path) -> None:
     if not index.is_file() or not assets.is_dir():
         raise FileNotFoundError("产品前端构建目录缺少 index.html 或 assets。")
     app.mount("/assets", StaticFiles(directory=assets), name="product-assets")
+    # 深层管理页面直接加载时，资源路径仍须指向应用根路径。
+    prefix = str(app.root_path or "").rstrip("/")
+    asset_path = f"{prefix}/assets/"
+    html = index.read_text(encoding="utf-8").replace("./assets/", asset_path)
 
     @app.get("/", include_in_schema=False)
-    def _index() -> FileResponse:
-        return FileResponse(index, headers={"Cache-Control": "no-store"})
+    def _index() -> HTMLResponse:
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     @app.get("/{ui_path:path}", include_in_schema=False)
-    def _spa(ui_path: str) -> FileResponse:
+    def _spa(ui_path: str) -> HTMLResponse:
         if ui_path in {"live", "ready"} or ui_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not Found")
-        return FileResponse(index, headers={"Cache-Control": "no-store"})
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 def _replace_authorization(request: Request, token: str) -> None:
