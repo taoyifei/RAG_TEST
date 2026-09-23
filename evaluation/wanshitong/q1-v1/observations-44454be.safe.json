@@ -1,0 +1,146 @@
+{
+  "run_id": "29a7b2ccaab7",
+  "case_count": 10,
+  "observations": [
+    {
+      "case_id": "WB08R-F-037",
+      "question_sha256": "687eb2b944f9607ac701ea277ef1a18fd1e383e0d8fe6a2a2025fd61e53abfc5",
+      "trace_id": "trace_2ac436679452b2baead8bef776ad053a",
+      "status": "ANSWERABLE",
+      "reason_code": "ANSWERABLE",
+      "answer_sha256": "d251f8a67b397470ea1753ee0d1dd86a10e75803247ba88975cb272350c143fb",
+      "answer_chars": 45,
+      "citation_count": 3,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 6883.53
+    },
+    {
+      "case_id": "WB08R-F-040",
+      "question_sha256": "ac239a7d063933101ef006ce21f7289caa441795747f941da00f4e495b23b5a2",
+      "trace_id": "trace_36b192547c8a4161d62692c853cb68a6",
+      "status": "ANSWERABLE",
+      "reason_code": "ANSWERABLE",
+      "answer_sha256": "e22a31589cf30b63b83d3ce860063e1446f20229c521fb7021259ba7d412d94e",
+      "answer_chars": 89,
+      "citation_count": 1,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 8597.53
+    },
+    {
+      "case_id": "WB08R-N-060",
+      "question_sha256": "abb6b1f1cd8535295fc2ac8de921a734f90c18f6eeb0c04128db0a7f4beb032b",
+      "trace_id": "trace_6ab5873dad4a28636ed3f072e118cce6",
+      "status": "INSUFFICIENT_EVIDENCE",
+      "reason_code": "INSUFFICIENT_EVIDENCE",
+      "answer_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "answer_chars": 0,
+      "citation_count": 0,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 10702.7
+    },
+    {
+      "case_id": "WB08R-Q1-N060-REV",
+      "question_sha256": "7b155223402909f1712a1171a86925d9c8b98059f2b60b77e8793cab509f0d9e",
+      "trace_id": "trace_e53f1441ada3cf9c020ce74189bd83d3",
+      "status": "INSUFFICIENT_EVIDENCE",
+      "reason_code": "INSUFFICIENT_EVIDENCE",
+      "answer_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "answer_chars": 0,
+      "citation_count": 0,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 10082.96
+    },
+    {
+      "case_id": "WB08R-N-003",
+      "question_sha256": "1e9a819a521b9b7a395d4ba50d8430a33f350a85c0046b2776e5c5015fa23f87",
+      "trace_id": "trace_7b5eb9d9f5177f428439f948f41571a2",
+      "status": "ANSWERABLE",
+      "reason_code": "ANSWERABLE",
+      "answer_sha256": "63ce12b28ec1196fb5780b6694f4179f1ac1eadecbf4954535e11282285f9822",
+      "answer_chars": 29,
+      "citation_count": 1,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 3846.97
+    },
+    {
+      "case_id": "WB08R-N-059",
+      "question_sha256": "6925f33be3af0df7a64b89c46789920aa3cd223317207ee87b1502404da87eb2",
+      "trace_id": "trace_b89a3892a232f2691aac294092b5218a",
+      "status": "ANSWERABLE",
+      "reason_code": "ANSWERABLE",
+      "answer_sha256": "ef444050cbde272bdae473340bc8b62990d34e48ed91f9be7baf414353c90cb8",
+      "answer_chars": 254,
+      "citation_count": 5,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 14487.53
+    },
+    {
+      "case_id": "WB08R-Q1-SQ-SECURITY",
+      "question_sha256": "f8bbc110c412be6c0faac574f338b289b5bc48eda8d75c566938ce5e0e67ae30",
+      "trace_id": "trace_26c9d0835884446868b392be46c9f558",
+      "status": "ANSWERABLE",
+      "reason_code": "ANSWERABLE",
+      "answer_sha256": "fbedb7d1a3b1aa40a1a1fdf1ba1af095dff3830c4303d58f55d62ce080702c2c",
+      "answer_chars": 38,
+      "citation_count": 1,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 3381.96
+    },
+    {
+      "case_id": "WB08R-F-039",
+      "question_sha256": "eba5d3687f9ee29cd0e182875e2a5af5661e518e4684a41960c1cee03d1db91e",
+      "trace_id": "trace_7f6923dd75dcddd4950ee5ab746fde8a",
+      "status": "ANSWERABLE",
+      "reason_code": "ANSWERABLE",
+      "answer_sha256": "fbedb7d1a3b1aa40a1a1fdf1ba1af095dff3830c4303d58f55d62ce080702c2c",
+      "answer_chars": 38,
+      "citation_count": 1,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 3943.88
+    },
+    {
+      "case_id": "WB08R-F-034",
+      "question_sha256": "d10f06603d8f6bafbcf74184d1c69cf3484d87426debf5004ce0d2542a0dac20",
+      "trace_id": "trace_cb5bfc9aa2df0eb2bb9c7b3c6c23df54",
+      "status": "INSUFFICIENT_EVIDENCE",
+      "reason_code": "INSUFFICIENT_EVIDENCE",
+      "answer_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "answer_chars": 0,
+      "citation_count": 0,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 5868.77
+    },
+    {
+      "case_id": "WB08R-F-017",
+      "question_sha256": "29cdf8cc9134211e1ad6118aaf7c95bb81d0af11eb8bed1d91bf2ce0b9f9e0c8",
+      "trace_id": "trace_d9e589a536f4da3fe38df806e1259ea5",
+      "status": "INSUFFICIENT_EVIDENCE",
+      "reason_code": "INSUFFICIENT_EVIDENCE",
+      "answer_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "answer_chars": 0,
+      "citation_count": 0,
+      "terminal_types": [
+        "final"
+      ],
+      "request_total_ms": 13109.01
+    }
+  ]
+}
