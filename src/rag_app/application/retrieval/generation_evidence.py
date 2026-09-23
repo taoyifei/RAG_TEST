@@ -821,6 +821,8 @@ def _reading_row_score(
     query: str, label: EvidenceItem, members: list[EvidenceItem]
 ) -> tuple[float, int]:
     """显式行名优先；否则仅凭值中的连续主题字面选阅读行。"""
+    if explicit_table_row_level_conflicts(query, (label.citation_text,)):
+        return (0.0, 0)
     label_score = _reading_label_score(query, label.citation_text)
     if label_score[0]:
         return (1.0 + label_score[0], label_score[1])
@@ -872,9 +874,9 @@ def _inferred_header_tables(
     candidate_by_id: dict[str, RankedChunk],
 ) -> frozenset[tuple[object, ...]]:
     """仅从同表完整首行的短列标签推断未标记表头。"""
-    first_rows: dict[
-        tuple[object, ...], dict[int, list[str]]
-    ] = defaultdict(lambda: defaultdict(list))
+    first_rows: dict[tuple[object, ...], dict[int, list[str]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     data_tables: set[tuple[object, ...]] = set()
     marked_tables: set[tuple[object, ...]] = set()
     for candidate in candidate_by_id.values():
@@ -1007,9 +1009,7 @@ def _reading_header_columns(
 ) -> frozenset[int]:
     """按规范单元格 grid span 展开祖先列头，不靠相邻列猜合并关系。"""
     cell = _reading_table_identity(item)
-    if cell is None or not _reading_header(
-        item, candidate, inferred_tables
-    ):
+    if cell is None or not _reading_header(item, candidate, inferred_tables):
         return frozenset()
     _table, row, column = cell
     columns = {column}
@@ -1084,9 +1084,7 @@ def _physical_table_facts(
         if _reading_header(item, candidate, inferred_tables):
             covered = tuple(
                 sorted(
-                    _reading_header_columns(
-                        item, candidate, inferred_tables
-                    )
+                    _reading_header_columns(item, candidate, inferred_tables)
                 )
             )
             if covered:
@@ -1338,16 +1336,16 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
             named_rows_by_table[table].add(row)
     for atom in query_plan.atoms:
         focused: list[
-            tuple[tuple[int, int, float, int, int], tuple[EvidenceItem, ...]]
+            tuple[
+                tuple[int, int, int, float, int, int], tuple[EvidenceItem, ...]
+            ]
         ] = []
         query = f"{query_plan.original_query} {atom.original_fragment or ''}"
         relation_terms = tuple(
             dict.fromkeys(
                 relation
                 for candidate_atom in query_plan.atoms
-                if (
-                    relation := _normalized(candidate_atom.relation)
-                )
+                if (relation := _normalized(candidate_atom.relation))
                 and len(relation) >= _MIN_RELATION_TERM_CHARS
                 and relation in _normalized(query_plan.original_query)
             )
@@ -1379,8 +1377,11 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
                 )
             )
             own_relation_hit = int(
-                bool(own_relation and own_relation in relation_terms
-                     and own_relation in row_values)
+                bool(
+                    own_relation
+                    and own_relation in relation_terms
+                    and own_relation in row_values
+                )
             )
             relation_hits = sum(
                 relation in row_values for relation in relation_terms
@@ -1446,9 +1447,11 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
                     in columns
                     or bool(
                         columns
-                    & _reading_header_columns(
-                        item, candidate_by_id[item.chunk_id], inferred_tables
-                    )
+                        & _reading_header_columns(
+                            item,
+                            candidate_by_id[item.chunk_id],
+                            inferred_tables,
+                        )
                     )
                 )
                 if (
@@ -1459,6 +1462,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
                 focused.append(
                     (
                         (
+                            int(exact_named_row),
                             own_relation_hit,
                             relation_hits,
                             *score,
@@ -1797,9 +1801,8 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         selected_schema_items.extend(
             (candidate, item)
             for candidate, item in schema_headers.get(table, ())
-            if _reading_header_columns(
-                item, candidate, inferred_tables
-            ) & value_columns
+            if _reading_header_columns(item, candidate, inferred_tables)
+            & value_columns
         )
         for _candidate, item in selected_schema_items:
             key = _identity(item)

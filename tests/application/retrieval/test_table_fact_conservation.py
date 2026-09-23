@@ -93,8 +93,7 @@ def test_value_match_keeps_exact_row_fact_for_both_question_orders() -> None:
         _cell(6, 3, 1, "设计文档完成后2个工作日内提交配置库"),
     )
     candidates = {
-        candidate.hydrated.chunk.chunk_id: candidate
-        for candidate, _ in cells
+        candidate.hydrated.chunk.chunk_id: candidate for candidate, _ in cells
     }
     items = tuple(item for _, item in cells)
     by_id = {item.support_id: item for item in items}
@@ -138,9 +137,7 @@ def test_value_match_keeps_exact_row_fact_for_both_question_orders() -> None:
             ),
             policy=RetrievalPolicy(),
         )
-        selected = {
-            owner: {key[0] for key in keys} for owner, keys in priority
-        }
+        selected = {owner: {key[0] for key in keys} for owner, keys in priority}
         assert selected["A1"] == selected["A2"]
         assert {
             stable_support_key(items[index]) for index in (0, 1, 2, 3)
@@ -180,8 +177,7 @@ def test_action_coverage_selects_unseeded_closed_row() -> None:
         _cell(8, 3, 1, "设计文档完成后2个工作日内提交配置库"),
     )
     candidates = {
-        candidate.hydrated.chunk.chunk_id: candidate
-        for candidate, _ in cells
+        candidate.hydrated.chunk.chunk_id: candidate for candidate, _ in cells
     }
     items = tuple(
         item.model_copy(update={"rerank_rank": None})
@@ -224,9 +220,7 @@ def test_action_coverage_selects_unseeded_closed_row() -> None:
         policy=RetrievalPolicy(),
     )
 
-    selected = {
-        owner: {key[0] for key in keys} for owner, keys in priority
-    }
+    selected = {owner: {key[0] for key in keys} for owner, keys in priority}
     correct_row = {stable_support_key(items[index]) for index in (3, 4, 5)}
     assert correct_row <= selected["A1"]
     assert correct_row <= selected["A2"]
@@ -240,7 +234,7 @@ def test_explicit_level_keeps_unseeded_matching_row() -> None:
         _cell(2, 0, 1, "通知方式"),
         _cell(3, 0, 2, "通知时限"),
         _cell(4, 1, 0, "设备故障事件（Ⅰ级）"),
-        _cell(5, 1, 1, "电话和邮件通知"),
+        _cell(5, 1, 1, "疑似发现后电话和邮件通知"),
         _cell(6, 1, 2, "4分钟"),
         _cell(7, 2, 0, "设备故障事件（Ⅱ级）"),
         _cell(8, 2, 2, "7分钟"),
@@ -254,12 +248,10 @@ def test_explicit_level_keeps_unseeded_matching_row() -> None:
         for index, (candidate, _item) in enumerate(cells)
     }
     items = tuple(
-        item.model_copy(update={"rerank_rank": None})
-        if index >= 6
-        else item
+        item.model_copy(update={"rerank_rank": None}) if index >= 6 else item
         for index, (_candidate, item) in enumerate(cells)
     )
-    question = "设备故障事件（Ⅱ级）如何通知，多久完成？"
+    question = "设备故障事件（Ⅱ级）疑似发现后如何通知，多久完成？"
     plan = make_query_plan(
         standalone_query=question,
         intent="FACT",
@@ -293,9 +285,7 @@ def test_explicit_level_keeps_unseeded_matching_row() -> None:
         policy=RetrievalPolicy(),
     )
 
-    selected = {
-        owner: {key[0] for key in keys} for owner, keys in priority
-    }
+    selected = {owner: {key[0] for key in keys} for owner, keys in priority}
     target = stable_support_key(items[7])
     adjacent = stable_support_key(items[5])
     assert target in selected["A1"]
