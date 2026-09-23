@@ -192,7 +192,7 @@ class PhysicalTableHeader(FrozenModel):
 
 
 class PhysicalTableFact(FrozenModel):
-    """与问句无关的真实表格坐标、值片段及结构依赖。"""
+    """真实表格行列和来源；纵向合并值保留原始行坐标。"""
 
     fact_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     table_key: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -200,6 +200,7 @@ class PhysicalTableFact(FrozenModel):
     document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
     table_node_id: str = Field(pattern=r"^node_[0-9a-f]{32}$")
     row_index: StrictInt = Field(ge=0)
+    value_origin_row_index: StrictInt | None = Field(default=None, ge=0)
     row_label_column_index: StrictInt = Field(ge=0)
     value_column_index: StrictInt = Field(ge=0)
     row_label_support_ids: tuple[str, ...] = Field(min_length=1)
@@ -237,6 +238,11 @@ class PhysicalTableFact(FrozenModel):
         )
         if self.row_label_column_index == self.value_column_index:
             raise ValueError("表格事实的行名列和值列不能相同。")
+        if (
+            self.value_origin_row_index is not None
+            and self.value_origin_row_index >= self.row_index
+        ):
+            raise ValueError("纵向合并值只能继承更早的原始行。")
         if any(len(values) != len(set(values)) for values in groups):
             raise ValueError("表格事实的来源 ID 不允许重复。")
         if set(self.row_label_support_ids) & set(self.value_support_ids):

@@ -12,6 +12,7 @@ from rag_app.core.models import (
     HydratedChunk,
     RankedChunk,
     RetrievalPolicy,
+    SourceSpan,
 )
 from rag_app.core.models.chunk import Chunk
 from rag_app.core.ports import EvidenceSourcePort
@@ -627,6 +628,36 @@ def _table_row_keys(chunk: Chunk) -> frozenset[tuple[str, int]]:
     return frozenset(rows)
 
 
+def _verified_vertical_inheritance(
+    span: SourceSpan, atoms: object, table_node_id: str
+) -> bool:
+    """重复片段仅在规范映射指向上方原始行时可参加表闭合。"""
+    anchor = span.source_anchor
+    if anchor is None or type(anchor.row_index) is not int:
+        return False
+    if not isinstance(atoms, (list, tuple)):
+        return False
+    for atom in atoms:
+        metadata = atom.get("metadata") if isinstance(atom, dict) else None
+        if not isinstance(metadata, dict):
+            continue
+        logical_row = metadata.get("row_index")
+        mapping = metadata.get("cell_source_node_ids")
+        if (
+            metadata.get("table_node_id") != table_node_id
+            or type(logical_row) is not int
+            or logical_row <= anchor.row_index
+            or not isinstance(mapping, dict)
+        ):
+            continue
+        if any(
+            isinstance(values, (list, tuple)) and span.node_id in values
+            for values in mapping.values()
+        ):
+            return True
+    return False
+
+
 def _table_source_identities(
     chunk: Chunk, table_node_id: str, *, header_only: bool = False
 ) -> frozenset[tuple[object, ...]]:
@@ -658,9 +689,13 @@ def _table_source_identities(
         anchor = span.source_anchor
         if (
             not span.is_citable
-            or span.is_repeated
+            or (header_only and span.is_repeated)
             or span.node_id not in nodes
             or anchor is None
+        ):
+            continue
+        if span.is_repeated and not _verified_vertical_inheritance(
+            span, atoms, table_node_id
         ):
             continue
         table_positions = [

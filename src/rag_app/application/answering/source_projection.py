@@ -26,6 +26,7 @@ from rag_app.core.query_text import (
     explicit_table_row_level_conflicts,
     literal_relation_modifiers_supported,
 )
+from rag_app.core.source_compatibility import reconstruct_complete_node_text
 
 SOURCE_PROJECTION_REVISION = "wb08r-source-projection-v4"
 _MAX_CLAIM_TEXT_CHARS = 6000
@@ -85,7 +86,20 @@ def render_physical_table_fact(
     ):
         raise SourceProjectionError("TABLE_FACT_SOURCE_IDENTITY_MISMATCH")
     row_labels = _ordered_texts(fact.row_label_support_ids, registry)
-    values = _ordered_texts(fact.value_support_ids, registry)
+    values: tuple[str, ...]
+    if fact.value_origin_row_index is not None:
+        try:
+            inherited_sources = tuple(
+                registry[support_id] for support_id in fact.value_support_ids
+            )
+        except KeyError as error:
+            raise SourceProjectionError("PROJECTION_SOURCE_MISSING") from error
+        inherited_text = reconstruct_complete_node_text(inherited_sources)
+        if inherited_text is None:
+            raise SourceProjectionError("INHERITED_TABLE_VALUE_INCOMPLETE")
+        values = (inherited_text.strip(),)
+    else:
+        values = _ordered_texts(fact.value_support_ids, registry)
     headers = tuple(
         "".join(_ordered_texts(header.support_ids, registry)).strip()
         for header in fact.headers
@@ -258,9 +272,7 @@ def project_bound_claim(  # noqa: PLR0913
         )
         natural_supported = semantic_relation_supported and all(
             (
-                literal_relation_modifiers_supported(
-                    fragment, source_text
-                )
+                literal_relation_modifiers_supported(fragment, source_text)
                 and all(
                     quantity in source_text
                     for quantity in _QUANTITY.findall(fragment)

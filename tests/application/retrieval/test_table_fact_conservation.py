@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+from rag_app.application.answering.source_projection import (
+    render_physical_table_fact,
+)
 from rag_app.application.retrieval.evidence import _evidence_item
 from rag_app.application.retrieval.generation_evidence import (
     _atom_fact_bindings,
     _physical_table_facts,
     _priority_reading_units,
+    _reading_table_identity,
+    project_evidence_read_units,
 )
 from rag_app.core.models import (
     ChunkRole,
     EvidenceItem,
     RankedChunk,
     RetrievalPolicy,
+    SourceSpanKind,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.generation_packet import stable_support_key
@@ -292,3 +298,122 @@ def test_explicit_level_keeps_unseeded_matching_row() -> None:
     assert target in selected["A2"]
     assert adjacent not in selected["A1"]
     assert adjacent not in selected["A2"]
+
+
+def test_vertical_merge_restores_only_complete_mapped_value() -> None:
+    """跨行继承须有规范节点映射和完整原始单元格，不能借邻行值。"""
+    source_text = "疑似发现后电话通知。\n确认后发送邮件。"
+    _original_candidate, original = _cell(20, 1, 1, source_text)
+    inherited_candidate, _unused = _cell(21, 2, 1, source_text)
+    original_span = original.source_spans[0]
+    repeated_span = original_span.model_copy(
+        update={
+            "span_type": SourceSpanKind.REPEATED_CONTEXT,
+            "is_repeated": True,
+        }
+    )
+    chunk = inherited_candidate.hydrated.chunk
+    atoms = dict(chunk.metadata)["atoms"]
+    assert isinstance(atoms, list)
+    atom = atoms[0]
+    assert isinstance(atom, dict)
+    metadata = atom["metadata"]
+    assert isinstance(metadata, dict)
+    metadata["cell_source_node_ids"] = {"1": [original_span.node_id]}
+    inherited_candidate = inherited_candidate.model_copy(
+        update={
+            "hydrated": inherited_candidate.hydrated.model_copy(
+                update={
+                    "chunk": chunk.model_copy(
+                        update={
+                            "source_spans": (repeated_span,),
+                            "metadata": freeze_json_object({"atoms": atoms}),
+                        }
+                    )
+                }
+            )
+        }
+    )
+    inherited = _evidence_item(
+        inherited_candidate, repeated_span, source_text, "S21"
+    )
+    cells = (
+        _cell(22, 0, 0, "事件级别"),
+        _cell(23, 0, 1, "通知方式"),
+        _cell(24, 2, 0, "二级事件"),
+        (inherited_candidate, inherited),
+    )
+    candidates = {
+        candidate.hydrated.chunk.chunk_id: candidate for candidate, _ in cells
+    }
+    evidence = tuple(item for _, item in cells)
+    assert _reading_table_identity(inherited, inherited_candidate) is not None
+    facts = _physical_table_facts(evidence, candidates)
+    assert len(facts) == 1
+    fact = facts[0]
+    assert fact.row_index == 2
+    assert fact.value_origin_row_index == 1
+    unit = project_evidence_read_units(evidence, facts)[-1]
+    assert source_text in unit.text
+    assert source_text in render_physical_table_fact(
+        fact, {item.support_id: item for item in evidence}
+    )
+
+    cut = len(source_text) // 2
+    left_span = repeated_span.model_copy(
+        update={"chunk_end_char": cut + 2, "source_end_char": cut + 2}
+    )
+    right_span = repeated_span.model_copy(
+        update={"chunk_start_char": cut, "source_start_char": cut}
+    )
+    left = _evidence_item(
+        inherited_candidate, left_span, source_text[: cut + 2], "S31"
+    )
+    right = _evidence_item(
+        inherited_candidate, right_span, source_text[cut:], "S32"
+    )
+    overlapped = (*evidence[:-1], left, right)
+    overlapped_fact = _physical_table_facts(overlapped, candidates)[0]
+    overlapped_unit = project_evidence_read_units(
+        overlapped, (overlapped_fact,)
+    )[-1]
+    assert source_text in overlapped_unit.text
+    assert source_text in render_physical_table_fact(
+        overlapped_fact, {item.support_id: item for item in overlapped}
+    )
+
+    half = len(source_text) // 2
+    partial_span = repeated_span.model_copy(
+        update={"chunk_end_char": half, "source_end_char": half}
+    )
+    partial = _evidence_item(
+        inherited_candidate, partial_span, source_text[:half], "S21"
+    )
+    assert not _physical_table_facts((*evidence[:-1], partial), candidates)
+
+    wrong_metadata = freeze_json_object(
+        {
+            "atoms": [
+                {
+                    "metadata": {
+                        "table_node_id": f"node_{99:032x}",
+                        "row_index": 2,
+                        "cell_source_node_ids": {"1": [f"node_{98:032x}"]},
+                    }
+                }
+            ]
+        }
+    )
+    wrong_candidate = inherited_candidate.model_copy(
+        update={
+            "hydrated": inherited_candidate.hydrated.model_copy(
+                update={
+                    "chunk": inherited_candidate.hydrated.chunk.model_copy(
+                        update={"metadata": wrong_metadata}
+                    )
+                }
+            )
+        }
+    )
+    wrong = _evidence_item(wrong_candidate, repeated_span, source_text, "S21")
+    assert _reading_table_identity(wrong, wrong_candidate) is None

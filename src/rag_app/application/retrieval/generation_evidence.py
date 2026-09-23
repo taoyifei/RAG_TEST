@@ -56,6 +56,7 @@ from rag_app.core.query_text import (
     table_axis_label_in_query,
 )
 from rag_app.core.source_compatibility import (
+    reconstruct_complete_node_text,
     source_compatibility,
     table_cell_coordinate,
 )
@@ -302,6 +303,25 @@ class GenerationEvidencePack:
         }
 
 
+def _fact_value_texts(
+    fact: PhysicalTableFact, registry: dict[str, EvidenceItem]
+) -> tuple[str, ...]:
+    """纵向合并值按原始节点去重叠恢复，其余值保持独立引用。"""
+    if fact.value_origin_row_index is not None:
+        inherited_text = reconstruct_complete_node_text(
+            tuple(registry[key] for key in fact.value_support_ids)
+        )
+        if inherited_text is None:
+            raise ValueError("INHERITED_TABLE_VALUE_INCOMPLETE")
+        return (inherited_text.strip(),)
+    return tuple(
+        dict.fromkeys(
+            registry[key].citation_text.strip()
+            for key in fact.value_support_ids
+        )
+    )
+
+
 def project_evidence_read_units(
     evidence: tuple[EvidenceItem, ...],
     physical_table_facts: tuple[PhysicalTableFact, ...] = (),
@@ -375,6 +395,11 @@ def project_evidence_read_units(
 
     for raw_items in grouped_items:
         items = tuple(raw_items)
+        text = "\n".join(
+            dict.fromkeys(source.citation_text.strip() for source in items)
+        )
+        if not text.strip():
+            continue
         item = items[0]
         table_fragment = is_table_fragment(item)
         metadata = dict(item.metadata)
@@ -401,11 +426,7 @@ def project_evidence_read_units(
             EvidenceReadUnit(
                 unit_id=f"E{len(units) + 1}",
                 kind=kind,
-                text="\n".join(
-                    dict.fromkeys(
-                        source.citation_text.strip() for source in items
-                    )
-                ),
+                text=text,
                 source_context=freeze_json_object(
                     {
                         key: value
@@ -432,12 +453,7 @@ def project_evidence_read_units(
             ).strip()
             for header in fact.headers
         )
-        values = tuple(
-            dict.fromkeys(
-                by_id[support_id].citation_text.strip()
-                for support_id in fact.value_support_ids
-            )
-        )
+        values = _fact_value_texts(fact, by_id)
         anchor = by_id[fact.value_support_ids[0]]
         units.append(
             EvidenceReadUnit(
@@ -818,7 +834,10 @@ def _reading_value_score(query: str, value: str) -> tuple[float, int]:
 
 
 def _reading_row_score(
-    query: str, label: EvidenceItem, members: list[EvidenceItem]
+    query: str,
+    label: EvidenceItem,
+    members: list[EvidenceItem],
+    candidates: dict[str, RankedChunk],
 ) -> tuple[float, int]:
     """显式行名优先；否则仅凭值中的连续主题字面选阅读行。"""
     if explicit_table_row_level_conflicts(query, (label.citation_text,)):
@@ -830,7 +849,12 @@ def _reading_row_score(
         (
             _reading_value_score(query, item.citation_text)
             for item in members
-            if (cell := _reading_table_identity(item)) is not None
+            if (
+                cell := _reading_table_identity(
+                    item, candidates.get(item.chunk_id)
+                )
+            )
+            is not None
             and cell[2] != _TABLE_ROW_LABEL_COLUMN
         ),
         default=(0.0, 0),
@@ -839,11 +863,13 @@ def _reading_row_score(
 
 def _reading_table_identity(
     item: EvidenceItem,
+    candidate: RankedChunk | None = None,
 ) -> tuple[tuple[object, ...], int, int] | None:
     """联合规范节点映射与统一坐标合同认证逻辑表和真实单元格。
 
     Args:
         item: 由 canonical Chunk 的 SourceSpan 物化的证据。
+        candidate: 重复展示片段所属的规范 Chunk，用于核对纵向合并映射。
 
     Returns:
         含授权范围、版本、part/story 和表节点的身份及行列。
@@ -858,9 +884,49 @@ def _reading_table_identity(
         or not isinstance(node, str)
         or not _TABLE_NODE_ID.fullmatch(node)
         or type(row) is not int
-        or row != cell[1]
         or not _physical_source(item)
     ):
+        return None
+    if row != cell[1]:
+        # 纵向合并的来源仍位于起始行；只有规范 Chunk 的目标行、列、
+        # 原始节点映射同时吻合，才能把重复展示片段用作目标行的逻辑值。
+        if (
+            candidate is None
+            or len(item.source_spans) != 1
+            or not item.source_spans[0].is_repeated
+            or cell[1] >= row
+            or candidate.hydrated.chunk.chunk_id != item.chunk_id
+            or candidate.hydrated.chunk.version.document_id != item.document_id
+            or candidate.hydrated.chunk.version.document_version_id
+            != item.document_version_id
+        ):
+            return None
+        atoms = dict(candidate.hydrated.chunk.metadata).get("atoms")
+        if not isinstance(atoms, (list, tuple)):
+            return None
+        matches = 0
+        for atom in atoms:
+            atom_metadata = (
+                atom.get("metadata") if isinstance(atom, dict) else None
+            )
+            if (
+                not isinstance(atom_metadata, dict)
+                or atom_metadata.get("table_node_id") != node
+                or atom_metadata.get("row_index") != row
+            ):
+                continue
+            mapping = atom_metadata.get("cell_source_node_ids")
+            mapped = (
+                mapping.get(str(cell[2])) if isinstance(mapping, dict) else None
+            )
+            if (
+                isinstance(mapped, (list, tuple))
+                and item.source_spans[0].node_id in mapped
+            ):
+                matches += 1
+        if matches != 1:
+            return None
+    elif any(span.is_repeated for span in item.source_spans):
         return None
     table = cell[0]
     return (
@@ -1062,6 +1128,43 @@ def _ordered_cell_members(
     )
 
 
+def _complete_inherited_cell(items: tuple[EvidenceItem, ...]) -> bool:
+    """纵向合并值须逐字覆盖同一原始节点，不能截取半个单元格。"""
+    if not items or any(
+        len(item.source_spans) != 1 or not item.source_spans[0].is_repeated
+        for item in items
+    ):
+        return False
+    recovered = reconstruct_complete_node_text(items)
+    return recovered is not None and bool(recovered.strip())
+
+
+def _certified_value_origin(
+    items: tuple[EvidenceItem, ...], logical_row: int
+) -> int | None:
+    """返回真实值行；纵向继承须有完整可核验的原始节点。"""
+    cells = tuple(table_cell_coordinate(item) for item in items)
+    if not cells or any(cell is None for cell in cells):
+        return None
+    rows = {cell[1] for cell in cells if cell is not None}
+    if len(rows) != 1:
+        return None
+    origin = next(iter(rows))
+    if origin == logical_row:
+        return (
+            origin
+            if all(
+                not span.is_repeated
+                for item in items
+                for span in item.source_spans
+            )
+            else None
+        )
+    if origin < logical_row and _complete_inherited_cell(items):
+        return origin
+    return None
+
+
 def _physical_table_facts(
     items: tuple[EvidenceItem, ...],
     candidate_by_id: dict[str, RankedChunk],
@@ -1076,8 +1179,8 @@ def _physical_table_facts(
     ] = defaultdict(lambda: defaultdict(list))
     inferred_tables = _inferred_header_tables(candidate_by_id)
     for item in items:
-        cell = _reading_table_identity(item)
         candidate = candidate_by_id.get(item.chunk_id)
+        cell = _reading_table_identity(item, candidate)
         if cell is None or candidate is None:
             continue
         table, row, column = cell
@@ -1115,6 +1218,9 @@ def _physical_table_facts(
         for value_column, raw_values in sorted(columns.items()):
             if value_column == label_column:
                 continue
+            origin_row = _certified_value_origin(tuple(raw_values), row)
+            if origin_row is None:
+                continue
             header_groups = tuple(
                 PhysicalTableHeader(
                     row_index=header_row,
@@ -1137,10 +1243,19 @@ def _physical_table_facts(
                 PhysicalTableFact(
                     fact_id=canonical_sha256(
                         {
-                            "revision": "wb08r-physical-table-fact-v1",
+                            "revision": (
+                                "wb08r-physical-table-fact-v2-inherited"
+                                if origin_row != row
+                                else "wb08r-physical-table-fact-v1"
+                            ),
                             "table_key": table_key,
                             "row": row,
                             "value_column": value_column,
+                            **(
+                                {"value_origin_row": origin_row}
+                                if origin_row != row
+                                else {}
+                            ),
                         }
                     ),
                     table_key=table_key,
@@ -1148,6 +1263,9 @@ def _physical_table_facts(
                     document_version_id=first.document_version_id,
                     table_node_id=node,
                     row_index=row,
+                    value_origin_row_index=(
+                        origin_row if origin_row != row else None
+                    ),
                     row_label_column_index=label_column,
                     value_column_index=value_column,
                     row_label_support_ids=tuple(
@@ -1311,7 +1429,7 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
     )
     headers: dict[tuple[object, ...], list[EvidenceItem]] = defaultdict(list)
     for item in items:
-        cell = _reading_table_identity(item)
+        cell = _reading_table_identity(item, candidate_by_id.get(item.chunk_id))
         if cell is None:
             continue
         table, row, _column = cell
@@ -1330,7 +1448,12 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
                 query_plan.original_query, item.citation_text
             )
             for item in members
-            if (cell := _reading_table_identity(item)) is not None
+            if (
+                cell := _reading_table_identity(
+                    item, candidate_by_id.get(item.chunk_id)
+                )
+            )
+            is not None
             and cell[2] == _TABLE_ROW_LABEL_COLUMN
         ):
             named_rows_by_table[table].add(row)
@@ -1372,7 +1495,12 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
                 " ".join(
                     member.citation_text
                     for member in members
-                    if (cell := _reading_table_identity(member)) is not None
+                    if (
+                        cell := _reading_table_identity(
+                            member, candidate_by_id.get(member.chunk_id)
+                        )
+                    )
+                    is not None
                     and cell[2] != _TABLE_ROW_LABEL_COLUMN
                 )
             )
@@ -1398,12 +1526,19 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
             labels = [
                 item
                 for item in members
-                if (cell := _reading_table_identity(item)) is not None
+                if (
+                    cell := _reading_table_identity(
+                        item, candidate_by_id.get(item.chunk_id)
+                    )
+                )
+                is not None
                 and cell[2] == 0
                 and _source_matches(atom, item)
             ]
             for label in labels:
-                score = _reading_row_score(query, label, members)
+                score = _reading_row_score(
+                    query, label, members, candidate_by_id
+                )
                 if not score[0]:
                     continue
                 # 有精确列名时只保留所问列；口语关系未消歧时保留这一
@@ -1424,7 +1559,12 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
                 value_columns = {
                     cell[2]
                     for item in members
-                    if (cell := _reading_table_identity(item)) is not None
+                    if (
+                        cell := _reading_table_identity(
+                            item, candidate_by_id.get(item.chunk_id)
+                        )
+                    )
+                    is not None
                     and cell[2] > 0
                     and (not columns or cell[2] in columns)
                 }
@@ -1443,7 +1583,12 @@ def _priority_reading_units(  # noqa: PLR0912, PLR0913, PLR0915
                     item
                     for item in (*members, *column_headers)
                     if not columns
-                    or (_reading_table_identity(item) or ((), -1, -1))[2]
+                    or (
+                        _reading_table_identity(
+                            item, candidate_by_id.get(item.chunk_id)
+                        )
+                        or ((), -1, -1)
+                    )[2]
                     in columns
                     or bool(
                         columns
@@ -1756,15 +1901,16 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         if chunk.role is not ChunkRole.TABLE:
             continue
         for span in chunk.source_spans:
-            if not span.is_citable or span.is_repeated:
+            if not span.is_citable:
                 continue
-            quote = chunk.citation_text[
+            raw_quote = chunk.citation_text[
                 span.chunk_start_char : span.chunk_end_char
-            ].strip()
+            ]
+            quote = raw_quote if span.is_repeated else raw_quote.strip()
             if not quote:
                 continue
             item = _evidence_item(candidate, span, quote, "S0")
-            cell = _reading_table_identity(item)
+            cell = _reading_table_identity(item, candidate)
             if cell is None:
                 continue
             table, row, column = cell
@@ -2063,7 +2209,13 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         cells = {
             cell
             for key in unit
-            if (cell := _reading_table_identity(candidates[key])) is not None
+            if (
+                cell := _reading_table_identity(
+                    candidates[key],
+                    candidate_by_id.get(candidates[key].chunk_id),
+                )
+            )
+            is not None
         }
         if len(cells) < _MIN_READING_RELATION_CELLS or not any(
             cell[2] == 0 for cell in cells

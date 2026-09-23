@@ -156,9 +156,7 @@ def test_exact_sql_closes_remote_header_even_when_prose_ranks_first(
     assert source.section_calls == len(prose)
 
 
-def test_unmarked_short_first_row_is_hydrated_and_forms_physical_fact() -> (
-    None
-):
+def test_unmarked_short_first_row_is_hydrated_and_forms_physical_fact() -> None:
     row = _sources()
     header = row[-1]
     chunk = header.hydrated.chunk
@@ -376,6 +374,48 @@ def test_repeated_header_resolves_only_to_available_original() -> None:
     ids = {item.hydrated.chunk.chunk_id for item in outcome.candidates}
     assert row[-1].hydrated.chunk.chunk_id in ids
     assert repeated.hydrated.chunk.chunk_id not in ids
+
+
+def test_verified_vertical_merge_enters_target_row_closure() -> None:
+    """同表上方原始单元格的继承值进入目标行，普通重复表头不进入。"""
+    original = _table_cell(80, "发现后电话通知", 1, 1)
+    target = _table_cell(81, "二级故障", 2, 0)
+    inherited = _table_cell(82, "发现后电话通知", 2, 1)
+    header = _table_cell(83, "通知方式", 0, 1)
+    chunk = inherited.hydrated.chunk
+    source = original.hydrated.chunk.source_spans[0]
+    assert source.source_anchor is not None
+    repeated = source.model_copy(
+        update={
+            "span_type": SourceSpanKind.REPEATED_CONTEXT,
+            "is_repeated": True,
+            "source_anchor": source.source_anchor.model_copy(
+                update={"row_index": 1}
+            ),
+        }
+    )
+    metadata = dict(chunk.metadata)
+    _atom_metadata(metadata)["cell_source_node_ids"] = {"1": [source.node_id]}
+    inherited = inherited.model_copy(
+        update={
+            "hydrated": inherited.hydrated.model_copy(
+                update={
+                    "chunk": chunk.model_copy(
+                        update={
+                            "source_spans": (repeated,),
+                            "metadata": freeze_json_object(metadata),
+                        }
+                    )
+                }
+            )
+        }
+    )
+    fixture = _CanonicalSource((target, inherited, header, original))
+    outcome = _expand(fixture, (target,))
+    ids = {item.hydrated.chunk.chunk_id for item in outcome.candidates}
+    assert inherited.hydrated.chunk.chunk_id in ids
+    assert header.hydrated.chunk.chunk_id in ids
+    assert outcome.degraded_reason_codes == ()
 
 
 def test_derived_numbering_without_offsets_is_not_a_reading_header() -> None:

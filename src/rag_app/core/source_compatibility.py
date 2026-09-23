@@ -190,6 +190,63 @@ def _continuous_node(  # noqa: PLR0911
     )
 
 
+def reconstruct_complete_node_text(  # noqa: PLR0911
+    units: tuple[EvidenceItem, ...],
+) -> str | None:
+    """仅从完整且逐字一致的同一原始节点恢复文本。"""
+    if not units or not source_compatibility(units).compatible:
+        return None
+    records: list[tuple[int, int, str]] = []
+    origins: set[tuple[object, ...]] = set()
+    for item in units:
+        if len(item.source_spans) != 1:
+            return None
+        span = item.source_spans[0]
+        anchor = span.source_anchor
+        position = _source_range(span)
+        identity = _identity(item, span)
+        if (
+            anchor is None
+            or position is None
+            or identity is None
+            or not span.node_id
+            or type(anchor.source_start_char) is not int
+            or type(anchor.source_end_char) is not int
+            or position[1] - position[0] != len(item.citation_text)
+        ):
+            return None
+        origins.add(
+            (
+                *identity,
+                span.node_id,
+                anchor.structural_path,
+                anchor.source_start_char,
+                anchor.source_end_char,
+            )
+        )
+        records.append((*position, item.citation_text))
+    if len(origins) != 1:
+        return None
+    origin = next(iter(origins))
+    start, end = origin[-2:]
+    if type(start) is not int or type(end) is not int or end <= start:
+        return None
+    records.sort(key=lambda row: (row[0], row[1], row[2]))
+    cursor = start
+    recovered = ""
+    for low, high, text in records:
+        if low > cursor or low < start or high > end:
+            return None
+        overlap = min(cursor, high) - low
+        offset = low - start
+        if overlap and recovered[offset : offset + overlap] != text[:overlap]:
+            return None
+        if high > cursor:
+            recovered += text[overlap:]
+            cursor = high
+    return recovered if cursor == end else None
+
+
 def _certificate_nodes(item: EvidenceItem) -> tuple[str, ...]:
     """只读取认证所指的节点，仍须用真实表格关系进行核对。"""
     certificate = dict(item.metadata).get("answer_support")
