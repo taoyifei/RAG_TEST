@@ -20,28 +20,29 @@
 
 | ID | 题面 | style | topicKey | 资料存在性 | 最近试问 | 启用 | 停用理由/备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `sq-security-assessment-lead-time-01` | 上线安全评估要提前多久申请？ | SHORT | security-assessment | 是，DOCX-014 已登记 | 8289 首问可用 | 是 | 保留“上线前”和提前量含义 |
+| `sq-security-assessment-lead-time-01` | 上线安全评估要提前多久申请？ | SHORT | security-assessment | 是，DOCX-014 已登记 | 8289 长会话试问可用 | 是 | 保留“上线前”和提前量含义 |
 | `sq-asset-depreciation-start-01` | 固定资产从什么时候开始折旧？ | SHORT | fixed-assets | 是，DOCX-026 已登记 | 8289 首问可用 | 是 | 只问起算，不混入折旧年限 |
 | `sq-rd-hours-record-01` | 研发工时怎么填、怎么留痕？ | SHORT | rd-hours | 是，DOCX-003 已登记 | 长会话超时；新会话首问可用 | 是 | 同时保留填写和留痕两个要求 |
 | `sq-design-document-confirmation-01` | 业务团队收到设计文档后怎么确认？ | SHORT | product-delivery | 是，DOCX-046 已登记 | 新会话首问仍仅回答时限 | 否 | 缺少所问确认步骤；窄化试问仍带无依据提示 |
 | `sq-company-seal-application-01` | 公司公章怎么申请？ | SHORT | seal-application | 是，DOCX-023 已登记 | 长会话拒答；新会话首问可用 | 是 | 新的宽问，不视为旧复合题的同义编辑 |
-| `sq-rd-outsourcing-budget-01` | 研发外协费用需要先有预算吗？ | SHORT | rd-outsourcing | 是，DOCX-009 已登记 | 8289 首问可用 | 是 | 保留预算先后限定 |
-| `sq-procurement-response-deadline-01` | 采购文件发布到应答截止至少要几天？ | SHORT | procurement | 是，DOCX-018 已登记 | 8289 首问可用 | 是 | 保留“至少”限定 |
-| `sq-certification-scope-01` | 哪些认证不适用外部认证管理办法？ | SHORT | employee-certification | 是，DOCX-010 已登记 | 8289 首问可用 | 是 | 保留否定边界 |
+| `sq-rd-outsourcing-budget-01` | 研发外协费用需要先有预算吗？ | SHORT | rd-outsourcing | 是，DOCX-009 已登记 | 8289 长会话试问可用 | 是 | 保留预算先后限定 |
+| `sq-procurement-response-deadline-01` | 采购文件发布到应答截止至少要几天？ | SHORT | procurement | 是，DOCX-018 已登记 | 8289 长会话试问可用 | 是 | 保留“至少”限定 |
+| `sq-certification-scope-01` | 哪些认证不适用外部认证管理办法？ | SHORT | employee-certification | 是，DOCX-010 已登记 | 8289 长会话试问可用 | 是 | 保留否定边界 |
 | `sq-rd-project-kickoff-01` | 研发项目立项要准备什么？ | SHORT | rd-project | 是，DOCX-004 已登记 | 长会话偏题；新会话首问可用 | 是 | 只问立项准备，不扩成全流程 |
 | `sq-ip-records-filing-01` | 知识产权管理机构要备案哪些文件资料？ | STANDARD | intellectual-property | 是，DOCX-012 已登记 | 长会话与新会话均拒答 | 否 | 当前索引未确认对应资料，停用而不删除题面 |
 | `sq-performance-indicator-adjustment-01` | 组织绩效考核指标调整要走哪些程序？ | STANDARD | performance-management | 是，DOCX-016 已登记 | 长会话漏步骤；新会话首问可用 | 是 | 不预设是否可以绕过审批 |
-| `sq-office-supplies-off-catalog-01` | 什么情况下可以采购电商平台或集采目录外的办公用品？ | STANDARD | office-procurement | 是，DOCX-024 已登记 | 8289 首问可用 | 是 | 保留两个目录边界 |
+| `sq-office-supplies-off-catalog-01` | 什么情况下可以采购电商平台或集采目录外的办公用品？ | STANDARD | office-procurement | 是，DOCX-024 已登记 | 8289 长会话试问可用 | 是 | 保留两个目录边界 |
 | `sq-rd-project-name-rules-01` | 研发项目名称必须包含哪些内容，哪些非研发动词不能使用？ | COMPOUND | rd-project-naming | 是，DOCX-007 已登记 | 新会话首问仍漏必须项 | 否 | 保留原限定供人工提问，不主动推荐残缺回答 |
 | `sq-prebid-publicity-deadline-01` | 标前公示截止日必须是工作日吗，至少要公示几天？ | COMPOUND | procurement-publicity | 是，DOCX-020 已登记 | 新会话首问答对但附带无依据提示 | 否 | 两种改写仍拒答或自相矛盾，停用复合题 |
 | `sq-prebid-publicity-min-days-01` | 标前公示时间不少于几日？ | SHORT | procurement-publicity | 是，DOCX-020 已登记 | 新会话首问可用且引用原文 | 是 | 新题意、新 ID；不含工作日部分 |
-| `sq-rd-direct-cost-scope-01` | 研发直接消耗的材料、燃料和动力费用能计入研发支出吗？ | COMPOUND | rd-costs | 是，DOCX-027 已登记 | 8289 首问可用 | 是 | 保留三类费用对象 |
+| `sq-rd-direct-cost-scope-01` | 研发直接消耗的材料、燃料和动力费用能计入研发支出吗？ | COMPOUND | rd-costs | 是，DOCX-027 已登记 | 8289 长会话试问可用 | 是 | 保留三类费用对象 |
 
 ## 本轮验收记录
 
 本地选择、组件和请求合同验证完成后，仅在 8289 候选环境试问本批题。
 回答不佳的题停用，不修改全局检索、重排或生成算法。停用只影响主动推荐，
-不阻止用户手工提问。首批 15 条中的 11 条在独立新会话可用；4 条停用，
+不阻止用户手工提问。首批 15 条中的 11 条在有限试问中取得可用回答，
+其中 4 条长会话异常题经独立新会话复测后可用；另有 4 条停用，
 新增 1 条已在旧候选上独立试问并取得直接引用，因此 r2 保持 12 条启用。
 
 ### 2026-09-23 候选环境试问
