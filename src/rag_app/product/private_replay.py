@@ -94,7 +94,7 @@ class PrivateReplayDraftRecorder:
                 return None
             sequence = self._captured + 1
             payload = {
-                "schema_version": "private-grounded-draft-v2",
+                "schema_version": "private-grounded-draft-v3",
                 "evidence_level": "ADAPTER_INPUT",
                 "sequence": sequence,
                 "request_id": request.request_id,
@@ -103,7 +103,17 @@ class PrivateReplayDraftRecorder:
                     request.query.encode("utf-8")
                 ).hexdigest(),
                 "request": _private_request_payload(request),
-                "draft": draft.model_dump(mode="json"),
+                "draft": {
+                    **draft.model_dump(mode="json"),
+                    "wire_claims": [
+                        claim.model_dump(mode="json")
+                        for claim in draft.wire_claims
+                    ],
+                    "wire_diagnostics": [
+                        diagnostic.model_dump(mode="json")
+                        for diagnostic in draft.wire_diagnostics
+                    ],
+                },
                 "prepared_packet": (
                     draft.prepared_packet.model_dump(mode="json")
                     if draft.prepared_packet is not None
@@ -150,6 +160,18 @@ def _private_request_payload(request: GenerationRequest) -> dict[str, object]:
             "per_atom_source_certificates": [
                 [atom_id, key, dict(certificate)]
                 for atom_id, key, certificate in certificates
+            ],
+            "physical_table_facts": [
+                fact.model_dump(mode="json")
+                for fact in request.physical_table_facts
+            ],
+            "atom_fact_bindings": [
+                binding.model_dump(mode="json")
+                for binding in request.atom_fact_bindings
+            ],
+            "evidence_read_units": [
+                unit.model_dump(mode="json")
+                for unit in request.evidence_read_units
             ],
         }
     )

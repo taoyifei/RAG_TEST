@@ -11,12 +11,21 @@ from evaluation.wanshitong.q1_control_compare import (
     _answering_pack,
     _selected_evidence,
     _selected_units,
+    _sent_units,
     _simple_read,
 )
 from rag_app.adapters.providers.openai_compatible import (
     OpenAICompatibleChatAdapter,
 )
+from rag_app.application.retrieval.generation_evidence import (
+    project_evidence_read_units,
+)
 from rag_app.core.models import EvidenceReadUnit
+from rag_app.core.models.generation_packet import (
+    PreparedGenerationPacket,
+    stable_read_unit_digest,
+    stable_support_key,
+)
 from rag_app.core.models.query_plan import AtomStatus
 from rag_app.core.ports import GenerationRequest
 from tests.application.answering.test_natural_grounded_answer import (
@@ -82,9 +91,9 @@ def test_comparison_pack_keeps_only_selected_source_dependencies() -> None:
     assert not pack.physical_table_facts
 
 
-def test_simple_read_rejects_model_reference_outside_same_packet() -> None:
+def test_simple_read_does_not_publish_reference_outside_same_packet() -> None:
     evidence = _evidence("收到申请后2个工作日内审核完成。")
-    unit = _units()[0]
+    unit = project_evidence_read_units(evidence)[0]
     fake_adapter = Mock()
     fake_adapter.complete.return_value = Mock(
         content='{"answer":"2个工作日","refs":["E2"]}',
@@ -92,10 +101,50 @@ def test_simple_read_rejects_model_reference_outside_same_packet() -> None:
         usage=Mock(model_dump=Mock(return_value={})),
     )
 
-    with pytest.raises(ValueError, match="COMPARE_SIMPLE_REF_OUTSIDE_SENT"):
-        _simple_read(
-            cast(OpenAICompatibleChatAdapter, fake_adapter),
-            "收到申请后多久审核完成？",
-            (unit,),
-            evidence,
-        )
+    result = _simple_read(
+        cast(OpenAICompatibleChatAdapter, fake_adapter),
+        "收到申请后多久审核完成？",
+        (unit,),
+        evidence,
+    )
+
+    assert result["answer"] is None
+    assert result["unpublished_model_text"] == "2个工作日"
+    assert result["citation_valid"] is False
+
+
+def test_legacy_capture_restoration_requires_exact_sent_digest() -> None:
+    evidence = _evidence("收到申请后2个工作日内审核完成。")
+    request = GenerationRequest(
+        query="收到申请后多久审核完成？",
+        evidence=evidence,
+        citation_protocol="support-id-v3-quoted-natural-claims",
+    )
+    unit = project_evidence_read_units(evidence)[0]
+    source_key = stable_support_key(evidence[0])
+    packet = PreparedGenerationPacket(
+        request_id=request.request_id,
+        attempt_id=request.attempt_id,
+        packet_id="packet",
+        schema_revision="test",
+        evidence_level="TRANSPORT_SENT",
+        alias_to_support_key=(("S1", source_key),),
+        read_unit_bindings=(("E1", (source_key,)),),
+        read_unit_sha256s=(("E1", stable_read_unit_digest(unit)),),
+        original_support_keys=(source_key,),
+        messages_sha256="hash",
+        estimated_input_tokens=1,
+        max_input_tokens=100,
+        reserved_output_tokens=0,
+        safety_margin_tokens=0,
+    )
+
+    with pytest.raises(ValueError, match="COMPARE_CAPTURE_READ_UNITS_MISSING"):
+        _sent_units(request, packet)
+    assert _sent_units(request, packet, legacy_capture=True) == (unit,)
+
+    changed = packet.model_copy(
+        update={"read_unit_sha256s": (("E1", "sha256:" + "0" * 64),)}
+    )
+    with pytest.raises(ValueError, match="COMPARE_SENT_UNIT_DIGEST_MISMATCH"):
+        _sent_units(request, changed, legacy_capture=True)

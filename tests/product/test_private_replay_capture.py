@@ -13,6 +13,8 @@ from rag_app.core.models import (
     AnswerDraft,
     ClaimSupport,
     EvidenceItem,
+    EvidenceReadUnit,
+    GroundedWireClaim,
 )
 from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import (
@@ -79,6 +81,15 @@ def _request_and_draft() -> tuple[GenerationRequest, AnswerDraft]:
         atom_support_matrix=matrix,
         per_atom_candidate_support_ids=(("A1", ("S1",)),),
         priority_source_units=(("A1", (stable_support_key(evidence),)),),
+        evidence_read_units=(
+            EvidenceReadUnit(
+                unit_id="E1",
+                kind="paragraph",
+                text=evidence.citation_text,
+                support_ids=("S1",),
+                source_complete=True,
+            ),
+        ),
     )
     draft = AnswerDraft(
         text="合成模型草稿",
@@ -93,6 +104,13 @@ def _request_and_draft() -> tuple[GenerationRequest, AnswerDraft]:
                         quote="合成来源原句。",
                     ),
                 ),
+            ),
+        ),
+        wire_claims=(
+            GroundedWireClaim(
+                atom_id="A1",
+                text="合成来源原句。",
+                refs=("E1",),
             ),
         ),
         generation_mode="natural",
@@ -119,6 +137,7 @@ def test_private_replay_capture_preserves_raw_draft_and_source_spans(
 
     output = private_dir / "raw-generation-drafts.ndjson"
     row = json.loads(output.read_text(encoding="utf-8"))
+    assert row["schema_version"] == "private-grounded-draft-v3"
     assert row["request"]["query"] == "合成问题"
     assert row["request"]["per_atom_candidate_support_ids"] == [["A1", ["S1"]]]
     assert row["request"]["evidence"][0]["source_spans"]
@@ -126,11 +145,17 @@ def test_private_replay_capture_preserves_raw_draft_and_source_spans(
         ["A1", [stable_support_key(request.evidence[0])]]
     ]
     assert "priority_source_units" not in request.model_dump(mode="json")
+    assert row["request"]["evidence_read_units"][0]["text"] == (
+        "合成来源原句。"
+    )
+    assert "evidence_read_units" not in request.model_dump(mode="json")
     claim = row["draft"]["natural_claims"][0]
     assert claim["text"] == "合成模型事实。"
     assert claim["supports"] == [
         {"support_id": "S1", "quote": "合成来源原句。"}
     ]
+    assert row["draft"]["wire_claims"][0]["refs"] == ["E1"]
+    assert "wire_claims" not in draft.model_dump(mode="json")
     assert output.stat().st_mode & 0o077 == 0
 
 
