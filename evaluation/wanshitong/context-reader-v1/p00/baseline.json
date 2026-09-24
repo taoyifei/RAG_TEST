@@ -1,0 +1,50 @@
+{
+  "captured_on": "2026-09-24",
+  "source": {
+    "repository": "taoyifei/RAG_TEST",
+    "base_branch": "codex/wb08r-q1-algorithm-debt",
+    "base_head": "ac6547c6b2c0da895a181b0b731736837b9af1c8",
+    "remote_head_verified_equal": true,
+    "work_branch": "codex/wb08r-context-reader-v1"
+  },
+  "upstream": {
+    "repository": "Tencent/WeKnora",
+    "tag": "v0.8.0",
+    "commit": "1edcd54b43606d9079bb36650efe3f68707a79ea"
+  },
+  "candidate_8289": {
+    "external_route": "54:8289 -> 60:18289 prefix proxy -> 60:8289",
+    "container": "wanshitong-sso-candidate-app",
+    "image_tag": "rag-test-wanshitong:wb08r-f06-aee8755",
+    "image_id": "sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06",
+    "oci_revision": "aee8755c1aa7a597ce9a84725ff1352d3fcab322e",
+    "active_index_revision": "irev_0329a35ca9ea700133f7b309160118f0",
+    "document_count": 46,
+    "chunk_count": 2880,
+    "qdrant_instance_isolated_from_18288": true,
+    "health_verified": true
+  },
+  "protected_18288": {
+    "external_route": "54:18288 -> 60:8288 prefix proxy -> 60:18290",
+    "container": "wanshitong-wb08r-root-production-app",
+    "image_tag": "rag-test-wanshitong:wb08r-root-243a07d",
+    "image_id": "sha256:a018157ce946f531982d07e73c1b74656b87b855981e3886e8009ba56aca65b3",
+    "oci_revision": "243a07d736d17866ca3dd635af644e48a4d326e4",
+    "active_index_revision": "irev_abb7674413b8d095789d6191246310eb",
+    "document_count": 47,
+    "chunk_count": 2881,
+    "qdrant_instance_isolated_from_8289": true,
+    "modification_authorized": false
+  },
+  "side_container_not_external_18288": "wanshitong-wb08r06-production-app",
+  "model_endpoints": {
+    "embedding": "existing_internal_profile; exact runtime identity pending",
+    "reranker": "existing_internal_profile; exact runtime identity pending",
+    "llm": "existing_internal_profile; exact runtime identity pending"
+  },
+  "limits": {
+    "private_trace": "read-only local restricted state; content excluded",
+    "production_source_head": "not inferred from image tag",
+    "live_model_calls": "not run during P00"
+  }
+}
