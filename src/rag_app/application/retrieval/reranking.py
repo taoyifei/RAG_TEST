@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, replace
 from itertools import zip_longest
 
@@ -39,6 +40,7 @@ class RerankingOutcome:
     input_candidates: tuple[RankedChunk, ...] = ()
     preselection_chunk_ids: tuple[str, ...] = ()
     retention_decisions: tuple[tuple[str, str], ...] = ()
+    rerank_windows: tuple[tuple[str, int, int], ...] = ()
 
 
 class CircuitAwareReranker:
@@ -63,6 +65,7 @@ class CircuitAwareReranker:
         enabled: bool,
         result_limit: int,
         required_candidate_ids: frozenset[str] = frozenset(),
+        natural_view: bool = False,
     ) -> RerankingOutcome:
         """重排 bounded fusion prefix 或稳定保留 RRF 顺序。
 
@@ -74,6 +77,7 @@ class CircuitAwareReranker:
             enabled: Planner 是否要求 rerank。
             result_limit: 用户请求的最终候选数。
             required_candidate_ids: 必须保留到结构证据闭合的候选 ID。
+            natural_view: 是否使用候选自然链的独立排序阅读视图。
 
         Returns:
             实际 Provider 或明确 bypass 后的候选与模式。
@@ -156,19 +160,27 @@ class CircuitAwareReranker:
                 )
             )
         limited = rrf_limited
-        request = RerankRequest(
-            query=query,
-            candidates=tuple(
-                (
-                    item.hydrated.chunk.chunk_id,
+        views = tuple(
+            (
+                item.hydrated.chunk.chunk_id,
+                _natural_bounded_text(
+                    item, query, policy.rerank_text_char_limit
+                )
+                if natural_view
+                else (
                     _bounded_text(
                         item,
                         policy.rerank_text_char_limit,
                         contextual=policy.contextual_rerank_mode == "active",
                     ),
-                )
-                for item in limited
-            ),
+                    (0, 0),
+                ),
+            )
+            for item in limited
+        )
+        request = RerankRequest(
+            query=query,
+            candidates=tuple((chunk_id, view[0]) for chunk_id, view in views),
             # 取回实际发送集合的全部分数，输出保护只使用真实回包的分数。
             limit=len(limited),
         )
@@ -213,6 +225,11 @@ class CircuitAwareReranker:
                 mode=result.mode.value,
                 reason_code="RERANK_EXECUTED",
                 provider_calls=result.calls,
+                rerank_windows=tuple(
+                    (chunk_id, *view[1]) for chunk_id, view in views
+                )
+                if natural_view
+                else (),
             ),
             sent=True,
         )
@@ -233,6 +250,34 @@ def _bounded_text(
         return value
     head = int(limit * 0.7)
     return f"{value[:head]}\n[…]\n{value[-(limit - head - 5) :]}"
+
+
+def _natural_bounded_text(
+    candidate: RankedChunk, query: str, limit: int
+) -> tuple[str, tuple[int, int]]:
+    """保留可信标题，并在长文本中选择包含问句词项的连续正文。"""
+    value = contextual_rerank_text(candidate).rerank_text
+    if len(value) <= limit:
+        return value, (0, len(value))
+    prefix = value[: min(160, limit // 4)]
+    room = max(1, limit - len(prefix) - 6)
+    terms = re.findall(r"[\u3400-\u9fff]{2,}|[A-Za-z0-9_./:-]{2,}", query)
+    probes = tuple(
+        term[index : index + 4]
+        for term in terms
+        for index in range(max(1, len(term) - 3))
+    )
+    positions = (
+        (len(probe), value.find(probe))
+        for probe in (*terms, *probes)
+        if probe and value.find(probe) >= 0
+    )
+    best = max(positions, default=(0, len(value) // 2))
+    start = min(max(0, best[1] - room // 3), len(value) - room)
+    end = min(len(value), start + room)
+    if start <= len(prefix):
+        return value[:limit], (0, limit)
+    return f"{prefix}\n[…]\n{value[start:end]}", (start, end)
 
 
 def _diversified_candidates(

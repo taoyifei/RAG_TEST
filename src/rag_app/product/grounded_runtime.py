@@ -73,6 +73,7 @@ from rag_app.application.retrieval.minimal_plan import (
     build_query_atoms,
     planner_json_schema,
 )
+from rag_app.application.retrieval.natural_context import NaturalBudget
 from rag_app.application.retrieval.rewrite_constraints import (
     interpretation_constraint_reason,
     rewrite_constraint_reason,
@@ -221,7 +222,7 @@ _AdaptivePlanPayload = MinimalPlanPayload
 class ProductGroundedModel:
     """一个知识库的模型引用，每次发送都重新核对来源与持久授权。"""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         settings: KnowledgeBaseModelSettings,
         knowledge_base_id: str,
@@ -229,6 +230,7 @@ class ProductGroundedModel:
         providers: ProviderRuntimeRegistry,
         *,
         private_replay_recorder: PrivateReplayDraftRecorder | None = None,
+        natural_budget: NaturalBudget | None = None,
     ) -> None:
         """绑定模型、知识库授权与可选的受控私有草稿记录器。
 
@@ -238,6 +240,7 @@ class ProductGroundedModel:
             connections: 产品 SQLite 连接工厂。
             providers: 已配置 Provider 运行时注册表。
             private_replay_recorder: 默认关闭的受控私有草稿记录器。
+            natural_budget: 只供候选自然问答使用的输入与输出预算。
 
         Returns:
             无返回值。
@@ -248,6 +251,7 @@ class ProductGroundedModel:
         self.connections = connections
         self.providers = providers
         self._private_replay_recorder = private_replay_recorder
+        self.natural_budget = natural_budget or NaturalBudget()
         with connections.transaction() as connection:
             row = connection.execute(
                 "SELECT project_id FROM knowledge_bases "
@@ -274,6 +278,12 @@ class ProductGroundedModel:
             for model in settings.generation_models
         )
         self.adapter = self.adapters[0]
+        self._natural_adapters: (
+            tuple[AliyunChatAdapter | OpenAICompatibleChatAdapter, ...] | None
+        ) = None
+        self._query_adapters: (
+            tuple[AliyunChatAdapter | OpenAICompatibleChatAdapter, ...] | None
+        ) = None
         self._quota_exhausted_models: set[str] = set()
         self._rotation_lock = RLock()
 
@@ -403,15 +413,21 @@ class ProductGroundedModel:
             yield
 
     def _chat_config(
-        self, model: str
+        self,
+        model: str,
+        *,
+        input_limit: int = _MAX_GROUNDED_INPUT_TOKENS,
+        output_limit: int = _MAX_GROUNDED_OUTPUT_TOKENS,
+        prompt_version: str = "grounded-chat-v9",
     ) -> AliyunChatConfig | OpenAICompatibleChatConfig:
         """按连接协议创建模型配置，不用内置模型形状限制自定义 ID。"""
         if not self._campaign_required:
             return OpenAICompatibleChatConfig(
                 model=model,
                 egress_allowed=True,
-                max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
-                max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+                max_input_tokens=input_limit,
+                max_output_tokens=output_limit,
+                prompt_version=prompt_version,
                 disable_thinking_supported=(
                     self.settings.disable_thinking_supported
                 ),
@@ -424,23 +440,67 @@ class ProductGroundedModel:
         return AliyunChatConfig(
             model=model,
             egress_allowed=True,
-            max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
-            max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+            max_input_tokens=input_limit,
+            max_output_tokens=output_limit,
+            prompt_version=prompt_version,
             json_mode="json_object",
         )
 
     def _rotation_candidates(
         self,
+        adapters: tuple[AliyunChatAdapter | OpenAICompatibleChatAdapter, ...]
+        | None = None,
     ) -> tuple[AliyunChatAdapter | OpenAICompatibleChatAdapter, ...]:
         """优先跳过本进程已经确认额度耗尽的模型。"""
         with self._rotation_lock:
+            candidates = self.adapters if adapters is None else adapters
             available = tuple(
                 adapter
-                for adapter in self.adapters
+                for adapter in candidates
                 if adapter.config.model not in self._quota_exhausted_models
             )
         # 全部曾失败时重新探测完整链，允许额度变化后自行恢复。
-        return available or self.adapters
+        return available or candidates
+
+    def _candidate_adapters(
+        self, *, rewrite: bool
+    ) -> tuple[AliyunChatAdapter | OpenAICompatibleChatAdapter, ...]:
+        """仅在候选入口调用时构造独立预算的模型适配器。"""
+        with self._rotation_lock:
+            current = (
+                self._query_adapters if rewrite else self._natural_adapters
+            )
+            if current is not None:
+                return current
+            connection_id = self.settings.generation_connection_id
+            if connection_id is None:
+                raise ValueError("回答模型尚未配置。")
+            adapters = tuple(
+                self.providers.chat_adapter(
+                    connection_id,
+                    model=model,
+                    config=self._chat_config(
+                        model,
+                        input_limit=self.natural_budget.input_limit,
+                        output_limit=(
+                            self.natural_budget.rewrite_output_tokens
+                            if rewrite
+                            else self.natural_budget.output_tokens
+                        ),
+                        prompt_version=(
+                            "weknora-query-v3-02"
+                            if rewrite
+                            else "weknora-natural-v3-02"
+                        ),
+                    ),
+                )
+                for model in self.settings.generation_models
+            )
+            if rewrite:
+                self._query_adapters = adapters
+            else:
+                self._natural_adapters = adapters
+            return adapters
 
     def _call_with_rotation(
         self,
@@ -449,10 +509,12 @@ class ProductGroundedModel:
         ],
         *,
         can_rotate: Callable[[], bool] | None = None,
+        adapters: tuple[AliyunChatAdapter | OpenAICompatibleChatAdapter, ...]
+        | None = None,
     ) -> tuple[_RotationResult, tuple[ProviderCall, ...]]:
         """只在单模型免费额度耗尽且尚可安全切换时尝试下一模型。"""
         failed_calls: list[ProviderCall] = []
-        candidates = self._rotation_candidates()
+        candidates = self._rotation_candidates(adapters)
         for index, adapter in enumerate(candidates):
             try:
                 return action(adapter), tuple(failed_calls)
@@ -578,12 +640,45 @@ class ProductGroundedModel:
                     wire_messages,
                     on_delta=lambda _delta: None,
                     cancellation=cancellation,
-                )
+                ),
+                adapters=self._candidate_adapters(rewrite=False),
             )
         return NaturalCompletion(
             text=completion.content,
             model=completion.model,
             provider_calls=(*failed_calls, completion.call),
+            prompt_tokens=completion.usage.prompt_tokens,
+            completion_tokens=completion.usage.completion_tokens,
+            finish_reason=completion.finish_reason,
+        )
+
+    def complete_query_understanding(
+        self,
+        messages: tuple[NaturalMessage, ...],
+        *,
+        cancellation: CancellationPort,
+    ) -> NaturalCompletion:
+        """用同一连接和请求取消令牌完成一次小输出改写。"""
+        wire_messages = tuple(
+            ChatMessage(role=item.role, content=item.content)
+            for item in messages
+        )
+        with self._scope("query.rewrite", ()):
+            completion, failed_calls = self._call_with_rotation(
+                lambda adapter: adapter.complete_stream(
+                    wire_messages,
+                    on_delta=lambda _delta: None,
+                    cancellation=cancellation,
+                ),
+                adapters=self._candidate_adapters(rewrite=True),
+            )
+        return NaturalCompletion(
+            text=completion.content,
+            model=completion.model,
+            provider_calls=(*failed_calls, completion.call),
+            prompt_tokens=completion.usage.prompt_tokens,
+            completion_tokens=completion.usage.completion_tokens,
+            finish_reason=completion.finish_reason,
         )
 
     def validate_natural_sources(
@@ -1400,7 +1495,11 @@ class ProductGroundedModel:
             关闭成功时无返回值。
 
         """
-        for adapter in self.adapters:
+        for adapter in (
+            *self.adapters,
+            *(self._natural_adapters or ()),
+            *(self._query_adapters or ()),
+        ):
             adapter.close()
 
 

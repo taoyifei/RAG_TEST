@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Callable, Iterator
 from queue import Empty, Queue
@@ -27,6 +28,7 @@ from rag_app.wanshitong.scope_service import FixedScopeService
 _BASE = "/api/v1/admin/wanshitong"
 _FINAL_CHUNK_CHARS = 256
 _CANDIDATE_WAIT_SECONDS = 240
+_SAFE_DIAGNOSTIC_CODE = re.compile(r"[A-Z][A-Z0-9_]{2,63}")
 
 
 class CandidateChatRequest(FrozenModel):
@@ -35,12 +37,27 @@ class CandidateChatRequest(FrozenModel):
     query: str = Field(min_length=1, max_length=8000)
     engine_id: Literal["wk-standard-v1", "wk-standard-pc-v1"] = "wk-standard-v1"
     conversation_context: tuple[str, ...] = Field(default=(), max_length=8)
+    rewrite_enabled: bool = True
     limit: int = Field(default=10, ge=1, le=50)
 
 
 def _event(name: str, payload: dict[str, object]) -> str:
     """编码独立候选 SSE 事件。"""
     return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _safe_error_diagnostics(error: RagError) -> dict[str, str]:
+    """只把无正文的稳定 Provider 原因码送回管理员隔离入口。"""
+    values: dict[str, str] = {}
+    reason = dict(error.details).get("reason_code")
+    if isinstance(reason, str) and _SAFE_DIAGNOSTIC_CODE.fullmatch(reason):
+        values["provider_reason_code"] = reason
+    call = error.provider_call
+    if call is not None:
+        detail = dict(call.transport_diagnostics).get("contract_detail")
+        if isinstance(detail, str) and _SAFE_DIAGNOSTIC_CODE.fullmatch(detail):
+            values["contract_detail"] = detail
+    return values
 
 
 def register_candidate_routes(  # noqa: PLR0915
@@ -135,6 +152,7 @@ def register_candidate_routes(  # noqa: PLR0915
                             frozen,
                             engine_id=body.engine_id,
                             cancellation=cancellation,
+                            rewrite_enabled=body.rewrite_enabled,
                         )
             except QueryCancelled:
                 cancelled = True
@@ -208,6 +226,7 @@ def register_candidate_routes(  # noqa: PLR0915
                             "code": failure.code,
                             "stage": failure.stage,
                             "message": failure.safe_message,
+                            **_safe_error_diagnostics(failure),
                         },
                     )
                     return

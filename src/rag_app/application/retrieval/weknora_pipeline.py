@@ -4,21 +4,27 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, cast
 
 from rag_app.application.answering.natural_answer import (
     NaturalAnswerResult,
     NaturalMessage,
     NaturalReference,
-    cited_aliases,
+    check_citations,
 )
 from rag_app.application.retrieval.filters import apply_candidate_filters
 from rag_app.application.retrieval.fusion import reciprocal_rank_fusion
+from rag_app.application.retrieval.natural_context import (
+    NATURAL_PIPELINE_REVISION,
+    NaturalBudget,
+    estimate_natural_messages,
+)
 from rag_app.application.retrieval.source_scope import (
     query_requires_source_resolution,
     resolve_query_source_context,
 )
+from rag_app.application.retrieval.weknora_query import understand_query
 from rag_app.core.errors import (
     ChannelRateLimited,
     ChannelUnavailable,
@@ -26,7 +32,6 @@ from rag_app.core.errors import (
     IndexCompatibilityError,
     IndexCorrupt,
     PolicyDenied,
-    ProviderInvalidResponse,
     QueryCancelled,
 )
 from rag_app.core.identifiers import canonical_sha256
@@ -41,15 +46,14 @@ from rag_app.core.models import (
 from rag_app.core.models.chunk import ParentPassage
 from rag_app.core.models.query_plan import SourceResolution
 from rag_app.core.ports import CancellationPort
-from rag_app.core.tokenization import estimate_provider_input_tokens
 
 if TYPE_CHECKING:
     from rag_app.application.retrieval.service import RetrievalService
 
-_MAX_INPUT_TOKENS = 5000
-_MAX_PASSAGES = 8
 _MAX_CONTEXT_HISTORY = 2
 _MAX_HISTORY_CHARS = 500
+_MAX_QUERY_VARIANTS = 2
+_MIN_PARTIAL_CHARS = 32
 _PARENT_CHUNKER_ID = "weknora-adaptive-parent-child-v1"
 _SYSTEM = (
     "你是湾事通知识库助手。只根据本次提供的材料回答。"
@@ -64,6 +68,7 @@ class _Passage:
 
     text: str
     reference: NaturalReference
+    hit_sources: tuple[tuple[str, SourceSpan], ...] = ()
 
 
 class WeKnoraStandardPipeline:
@@ -78,6 +83,7 @@ class WeKnoraStandardPipeline:
         *,
         engine_id: Literal["wk-standard-v1", "wk-standard-pc-v1"],
         cancellation: CancellationPort,
+        rewrite_enabled: bool = True,
     ) -> NaturalAnswerResult:
         """执行一次原问 Hybrid 检索、重排、回读和普通聊天。
 
@@ -85,6 +91,7 @@ class WeKnoraStandardPipeline:
             request: 已鉴权的知识库查询。
             engine_id: 候选链与目标索引档位。
             cancellation: 覆盖所有 Provider 调用的取消令牌。
+            rewrite_enabled: 是否对受控会话执行一次候选改写。
 
         Returns:
             独立候选结果，引用仅通过别名与版本绑定核对。
@@ -98,6 +105,12 @@ class WeKnoraStandardPipeline:
                 stage="generation.natural",
                 code="NATURAL_MODEL_NOT_CONFIGURED",
             )
+        configured_budget = getattr(model, "natural_budget", None)
+        budget = (
+            configured_budget
+            if isinstance(configured_budget, NaturalBudget)
+            else NaturalBudget()
+        )
         trace_id = request.trace_id or f"trace_{uuid.uuid4().hex}"
         self._check_cancelled(cancellation)
         snapshot = service._query_snapshot(request)
@@ -117,6 +130,9 @@ class WeKnoraStandardPipeline:
                 "revision_id": snapshot.revision.index_revision_id,
                 "index_fingerprint": snapshot.revision.index_fingerprint,
                 "serving_fingerprint": snapshot.serving_fingerprint,
+                "pipeline_revision": NATURAL_PIPELINE_REVISION,
+                "policy_fingerprint": budget.identity,
+                "budget_profile": "estimated",
             },
         )
         need_scope = query_requires_source_resolution(request.text)
@@ -141,12 +157,50 @@ class WeKnoraStandardPipeline:
             else None
         )
         query = source_context.query_view.business_query.strip() or request.text
-        analysis = service._analyzer.analyze(
-            request.model_copy(update={"text": query})
+        understanding = (
+            understand_query(request, model, cancellation)
+            if rewrite_enabled
+            else None
         )
         channel_hits: dict[str, tuple[ChannelHit, ...]] = {}
         degraded: list[str] = []
-        provider_calls: list[ProviderCall] = []
+        provider_calls: list[ProviderCall] = list(
+            understanding.provider_calls if understanding is not None else ()
+        )
+        rewrite = understanding.rewrite if understanding is not None else None
+        if rewrite is not None and query_requires_source_resolution(rewrite):
+            rewritten_scope = resolve_query_source_context(
+                rewrite, catalog, registry_revision=registry
+            )
+            if (
+                rewritten_scope.resolution
+                not in {
+                    SourceResolution.OPEN,
+                    SourceResolution.RESOLVED,
+                }
+                or rewritten_scope.allowed_documents != allowed
+            ):
+                rewrite = None
+                degraded.append("REWRITE_SOURCE_SCOPE_CHANGED")
+        queries = tuple(
+            dict.fromkeys(item for item in (query, rewrite) if item)
+        )
+        service._record(
+            trace_id,
+            "weknora_query_understand",
+            {
+                "reason_code": (
+                    understanding.reason_code
+                    if understanding is not None
+                    else "REWRITE_DISABLED"
+                ),
+                "query_count": len(queries),
+                "rewrite_accepted": len(queries) == _MAX_QUERY_VARIANTS,
+                "model": understanding.model
+                if understanding is not None
+                else None,
+            },
+        )
         top_k = service._policy.channel_top_k
 
         def add(name: str, hits: tuple[ChannelHit, ...]) -> None:
@@ -164,58 +218,62 @@ class WeKnoraStandardPipeline:
                 )
             )
 
-        if "exact" in service._policy.enabled_channels:
-            try:
-                add(
-                    "exact",
-                    service._exact.search(
-                        snapshot,
-                        analysis,
-                        limit=top_k,
-                        allowed_documents=allowed,
-                    ),
-                )
-            except (ChannelRateLimited, ChannelUnavailable) as error:
-                degraded.append(error.code)
-        if "lexical" in service._policy.enabled_channels:
-            variant = service._expander.expand(analysis)[0]
-            try:
-                add(
-                    "lexical",
-                    service._lexical.search(
-                        snapshot,
-                        variant,
-                        limit=top_k,
-                        analysis=analysis,
-                        allowed_documents=allowed,
-                    ),
-                )
-            except (ChannelRateLimited, ChannelUnavailable) as error:
-                degraded.append(error.code)
         selected_slot = None
-        if "dense" in service._policy.enabled_channels:
+        for query_index, search_query in enumerate(queries):
             self._check_cancelled(cancellation)
-            try:
-                dense = service._dense.search(
-                    snapshot,
-                    query,
-                    service._egress,
-                    limit=top_k,
-                    allowed_documents=allowed,
-                )
-            except (DenseUnavailable, PolicyDenied) as error:
-                if request.dense_required:
-                    raise
-                degraded.append(error.code)
-            except IndexCompatibilityError as error:
-                raise IndexCorrupt(
-                    "候选 Dense 路由与活动索引不兼容。",
-                    stage="retrieval.dense",
-                ) from error
-            else:
-                selected_slot = dense.routed.selected_slot_id
-                provider_calls.extend(dense.routed.provider_calls)
-                add(f"dense:{selected_slot}", dense.hits)
+            analysis = service._analyzer.analyze(
+                request.model_copy(update={"text": search_query})
+            )
+            if "exact" in service._policy.enabled_channels:
+                try:
+                    add(
+                        f"exact:q{query_index}",
+                        service._exact.search(
+                            snapshot,
+                            analysis,
+                            limit=top_k,
+                            allowed_documents=allowed,
+                        ),
+                    )
+                except (ChannelRateLimited, ChannelUnavailable) as error:
+                    degraded.append(error.code)
+            if "lexical" in service._policy.enabled_channels:
+                variant = service._expander.expand(analysis)[0]
+                try:
+                    add(
+                        f"lexical:q{query_index}",
+                        service._lexical.search(
+                            snapshot,
+                            variant,
+                            limit=top_k,
+                            analysis=analysis,
+                            allowed_documents=allowed,
+                        ),
+                    )
+                except (ChannelRateLimited, ChannelUnavailable) as error:
+                    degraded.append(error.code)
+            if "dense" in service._policy.enabled_channels:
+                try:
+                    dense = service._dense.search(
+                        snapshot,
+                        search_query,
+                        service._egress,
+                        limit=top_k,
+                        allowed_documents=allowed,
+                    )
+                except (DenseUnavailable, PolicyDenied) as error:
+                    if request.dense_required and query_index == 0:
+                        raise
+                    degraded.append(error.code)
+                except IndexCompatibilityError as error:
+                    raise IndexCorrupt(
+                        "候选 Dense 路由与活动索引不兼容。",
+                        stage="retrieval.dense",
+                    ) from error
+                else:
+                    selected_slot = dense.routed.selected_slot_id
+                    provider_calls.extend(dense.routed.provider_calls)
+                    add(f"dense:{selected_slot}:q{query_index}", dense.hits)
         service._record(
             trace_id,
             "weknora_retrieve",
@@ -237,12 +295,13 @@ class WeKnoraStandardPipeline:
         hydrated = service._hydrator.hydrate(snapshot, fused)
         self._check_cancelled(cancellation)
         reranked = service._reranker.rerank(
-            query,
+            rewrite or query,
             hydrated,
             service._egress,
             service._policy,
             enabled=service._policy.rerank_enabled,
-            result_limit=max(request.limit, _MAX_PASSAGES),
+            result_limit=max(request.limit, budget.rerank_pool),
+            natural_view=True,
         )
         provider_calls.extend(reranked.provider_calls)
         if reranked.reason_code != "RERANK_EXECUTED":
@@ -255,11 +314,37 @@ class WeKnoraStandardPipeline:
                 "reason_code": reranked.reason_code,
                 "input_count": len(reranked.input_candidates),
                 "output_count": len(reranked.candidates),
+                "view_revision": "natural-structure-v1",
+                "visible_windows": reranked.rerank_windows,
             },
         )
         passages = self._passages(snapshot, reranked.candidates, engine_id)
-        selected = self._fit_messages(request, passages)
-        if selected is None:
+        messages, sent, decisions = self._fit_messages(
+            request, passages, budget
+        )
+        service._record(
+            trace_id,
+            "weknora_material_selection",
+            {
+                "decisions": decisions,
+                "sent_aliases": tuple(item.reference.alias for item in sent),
+                "sent_ranges": tuple(
+                    (item.reference.alias, item.reference.parent_ranges)
+                    for item in sent
+                ),
+                "estimated_input_tokens": self._message_tokens(messages),
+                "input_limit": budget.input_limit,
+                "fixed_input_tokens": self._message_tokens(
+                    self._messages(request.text, self._history(request), ())
+                ),
+                "material_count": len(sent),
+                "context_window": budget.context_window,
+                "configured_output_tokens": budget.output_tokens,
+                "safety_margin": budget.safety_margin,
+                "counter": "chat-message-char-plus-16-estimated",
+            },
+        )
+        if not sent:
             return self._result(
                 request,
                 trace_id,
@@ -270,9 +355,13 @@ class WeKnoraStandardPipeline:
                 tuple(degraded),
                 tuple(provider_calls),
                 answer=None,
-                reason_code="NO_BOUNDED_SOURCE_PASSAGE",
+                reason_code=(
+                    "NO_RETRIEVAL_MATERIAL"
+                    if not passages
+                    else "NO_BOUNDED_SOURCE_PASSAGE"
+                ),
+                policy_fingerprint=budget.identity,
             )
-        messages, sent = selected
         source_identities = tuple(
             dict.fromkeys(
                 (item.reference.document_version_id, item.reference.document_id)
@@ -287,12 +376,7 @@ class WeKnoraStandardPipeline:
         )
         provider_calls.extend(completion.provider_calls)
         all_aliases = frozenset(item.reference.alias for item in sent)
-        try:
-            cited = cited_aliases(completion.text, all_aliases)
-        except ValueError as error:
-            raise ProviderInvalidResponse(
-                str(error), stage="generation.citation"
-            ) from error
+        binding = check_citations(completion.text, all_aliases)
         self._check_cancelled(cancellation)
         model.validate_natural_sources(source_identities)
         frozen_request = request.model_copy(
@@ -314,9 +398,15 @@ class WeKnoraStandardPipeline:
                 "engine_id": engine_id,
                 "model": completion.model,
                 "source_aliases": tuple(item.reference.alias for item in sent),
-                "cited_aliases": cited,
+                "cited_aliases": binding.cited_aliases,
+                "citation_status": binding.status,
+                "invalid_citations": binding.invalid_markers,
                 "input_packet_sha256": packet_hash,
                 "estimated_input_tokens": self._message_tokens(messages),
+                "actual_prompt_tokens": completion.prompt_tokens,
+                "finish_reason": completion.finish_reason,
+                "configured_output_tokens": budget.output_tokens,
+                "policy_fingerprint": budget.identity,
                 "validation_level": "citation_binding_only",
                 "provider_call_count": sum(
                     item.call_count for item in provider_calls
@@ -332,15 +422,29 @@ class WeKnoraStandardPipeline:
             reranked.mode,
             tuple(degraded),
             tuple(provider_calls),
-            answer=completion.text,
-            reason_code=("ANSWERED" if cited else "GENERATION_ABSTAINED"),
-            references=tuple(
-                item.reference for item in sent if item.reference.alias in cited
+            answer=completion.text if binding.status == "valid" else None,
+            draft=completion.text if binding.status != "valid" else None,
+            reason_code=(
+                "ANSWERED"
+                if binding.status == "valid"
+                else "CITATION_INVALID"
+                if binding.status == "invalid"
+                else "CITATION_MISSING"
             ),
-            cited=cited,
+            references=tuple(
+                item.reference
+                for item in sent
+                if item.reference.alias in binding.cited_aliases
+            ),
+            cited=binding.cited_aliases,
+            citation_status=binding.status,
+            invalid_citations=binding.invalid_markers,
             model=completion.model,
             packet_hash=packet_hash,
             input_tokens=self._message_tokens(messages),
+            actual_prompt_tokens=completion.prompt_tokens,
+            finish_reason=completion.finish_reason,
+            policy_fingerprint=budget.identity,
         )
 
     @staticmethod
@@ -379,7 +483,7 @@ class WeKnoraStandardPipeline:
         passages: list[_Passage] = []
         used_chunks: set[str] = set()
         for group in read.groups:
-            if not group.pieces or len(passages) >= _MAX_PASSAGES:
+            if not group.pieces:
                 continue
             pieces = tuple(
                 dict.fromkeys(
@@ -412,8 +516,6 @@ class WeKnoraStandardPipeline:
                 )
             )
         for candidate in ranked:
-            if len(passages) >= _MAX_PASSAGES:
-                break
             chunk = candidate.hydrated.chunk
             if chunk.chunk_id in used_chunks:
                 continue
@@ -460,9 +562,18 @@ class WeKnoraStandardPipeline:
             )
         passages: list[_Passage] = []
         seen: set[str] = set()
+        hit_sources_by_parent: dict[str, list[tuple[str, SourceSpan]]] = {}
         for candidate in ranked:
-            if len(passages) >= _MAX_PASSAGES:
-                break
+            chunk = candidate.hydrated.chunk
+            if chunk.parent_passage_id is not None:
+                hit_sources_by_parent.setdefault(
+                    chunk.parent_passage_id, []
+                ).extend(
+                    (chunk.chunk_id, span)
+                    for span in chunk.source_spans
+                    if span.is_citable
+                )
+        for candidate in ranked:
             chunk = candidate.hydrated.chunk
             parent_id = chunk.parent_passage_id
             if parent_id is None:
@@ -481,8 +592,6 @@ class WeKnoraStandardPipeline:
                         )
                     )
                 continue
-            if parent_id in seen:
-                continue
             parent = by_id[parent_id]
             if (
                 parent.project_id != chunk.project_id
@@ -495,6 +604,8 @@ class WeKnoraStandardPipeline:
                     "父级来源与命中子块的版本或关系不一致。",
                     stage="retrieval.parent_read",
                 )
+            if parent_id in seen:
+                continue
             spans = tuple(
                 span for span in parent.source_spans if span.is_citable
             )
@@ -511,6 +622,7 @@ class WeKnoraStandardPipeline:
                     spans,
                     True,
                     len(passages) + 1,
+                    hit_sources=tuple(hit_sources_by_parent[parent_id]),
                 )
             )
             seen.add(parent_id)
@@ -524,6 +636,8 @@ class WeKnoraStandardPipeline:
         spans: tuple[SourceSpan, ...],
         source_complete: bool,
         index: int,
+        *,
+        hit_sources: tuple[tuple[str, SourceSpan], ...] | None = None,
     ) -> _Passage:
         chunk = candidate.hydrated.chunk
         parsed = tuple(
@@ -547,29 +661,164 @@ class WeKnoraStandardPipeline:
                 document_title=candidate.hydrated.display_name,
                 chunk_ids=chunk_ids,
                 source_spans=spans,
+                parent_ranges=(
+                    ((0, len(text)),)
+                    if chunk.parent_passage_id is not None
+                    else ()
+                ),
                 citation_basis=basis,
                 source_complete=source_complete,
+            ),
+            hit_sources=(
+                tuple((chunk_ids[0], span) for span in spans)
+                if hit_sources is None
+                else hit_sources
             ),
         )
 
     def _fit_messages(
-        self, request: SearchRequest, passages: tuple[_Passage, ...]
-    ) -> tuple[tuple[NaturalMessage, ...], tuple[_Passage, ...]] | None:
-        history = "\n".join(
-            item[:_MAX_HISTORY_CHARS]
-            for item in request.conversation_context[-_MAX_CONTEXT_HISTORY:]
-        )
+        self,
+        request: SearchRequest,
+        passages: tuple[_Passage, ...],
+        budget: NaturalBudget,
+    ) -> tuple[
+        tuple[NaturalMessage, ...],
+        tuple[_Passage, ...],
+        tuple[tuple[str, str], ...],
+    ]:
+        history = self._history(request)
         chosen: list[_Passage] = []
+        decisions: list[tuple[str, str]] = []
         for passage in passages:
-            trial = (*chosen, passage)
-            messages = self._messages(request.text, history, trial)
-            if self._message_tokens(messages) <= _MAX_INPUT_TOKENS:
-                chosen.append(passage)
-        if not chosen:
-            return None
+            identity = passage.reference.chunk_ids[0]
+            if len(chosen) >= budget.max_passages:
+                decisions.append((identity, "PASSAGE_LIMIT"))
+                continue
+            alias = f"S{len(chosen) + 1}"
+            current = replace(
+                passage,
+                reference=passage.reference.model_copy(update={"alias": alias}),
+            )
+            messages = self._messages(request.text, history, (*chosen, current))
+            if self._message_tokens(messages) <= budget.input_limit:
+                chosen.append(current)
+                decisions.append((identity, "INCLUDED_FULL"))
+                continue
+            empty = replace(current, text="")
+            fixed = self._message_tokens(
+                self._messages(request.text, history, (*chosen, empty))
+            )
+            partial = self._partial_passage(
+                current, max_chars=budget.input_limit - fixed
+            )
+            if (
+                partial is not None
+                and self._message_tokens(
+                    self._messages(request.text, history, (*chosen, partial))
+                )
+                <= budget.input_limit
+            ):
+                chosen.append(partial)
+                decisions.append((identity, "STRUCTURALLY_PARTIAL"))
+            else:
+                decisions.append((identity, "OVER_BUDGET"))
         return (
             self._messages(request.text, history, tuple(chosen)),
             tuple(chosen),
+            tuple(decisions),
+        )
+
+    @staticmethod
+    def _partial_passage(
+        passage: _Passage, *, max_chars: int
+    ) -> _Passage | None:
+        """沿真实来源跨度回读命中处，引用只覆盖实际发送的局部文本。"""
+        if (
+            max_chars < _MIN_PARTIAL_CHARS
+            or not passage.reference.parent_ranges
+        ):
+            return None
+        spans = passage.reference.source_spans
+        matched = tuple(
+            index
+            for index, span in enumerate(spans)
+            if any(
+                _same_source_region(span, hit) for _, hit in passage.hit_sources
+            )
+        )
+        if not matched:
+            raise IndexCorrupt(
+                "父级正文无法定位命中子块的来源跨度。",
+                stage="retrieval.parent_read",
+            )
+        selected: set[int] = set()
+        used = 0
+        for index in matched:
+            cost = spans[index].chunk_end_char - spans[index].chunk_start_char
+            if used + cost + len(selected) <= max_chars:
+                selected.add(index)
+                used += cost
+        if not selected:
+            return _clip_hit_span(passage, spans[matched[0]], max_chars)
+        neighbors = tuple(
+            index
+            for offset in range(1, len(spans))
+            for index in (min(selected) - offset, max(selected) + offset)
+            if 0 <= index < len(spans)
+        )
+        for index in neighbors:
+            if index in selected:
+                continue
+            cost = spans[index].chunk_end_char - spans[index].chunk_start_char
+            if used + cost + len(selected) <= max_chars:
+                selected.add(index)
+                used += cost
+        parts: list[str] = []
+        local_spans: list[SourceSpan] = []
+        ranges: list[tuple[int, int]] = []
+        cursor = 0
+        for index in sorted(selected):
+            span = spans[index]
+            if parts:
+                parts.append("\n")
+                cursor += 1
+            text = passage.text[span.chunk_start_char : span.chunk_end_char]
+            parts.append(text)
+            local_spans.append(
+                span.model_copy(
+                    update={
+                        "chunk_start_char": cursor,
+                        "chunk_end_char": cursor + len(text),
+                    }
+                )
+            )
+            ranges.append((span.chunk_start_char, span.chunk_end_char))
+            cursor += len(text)
+        reference = passage.reference.model_copy(
+            update={
+                "source_spans": tuple(local_spans),
+                "source_complete": False,
+                "parent_ranges": tuple(ranges),
+                "chunk_ids": tuple(
+                    dict.fromkeys(
+                        chunk_id
+                        for chunk_id, hit in passage.hit_sources
+                        if any(
+                            _same_source_region(spans[index], hit)
+                            for index in selected
+                        )
+                    )
+                ),
+            }
+        )
+        return replace(passage, text="".join(parts), reference=reference)
+
+    @staticmethod
+    def _history(request: SearchRequest) -> str:
+        """只取当前受控候选请求中有限的会话上下文。"""
+        return "\n".join(
+            item[:_MAX_HISTORY_CHARS]
+            for item in request.conversation_context[-_MAX_CONTEXT_HISTORY:]
         )
 
     @staticmethod
@@ -591,9 +840,7 @@ class WeKnoraStandardPipeline:
 
     @staticmethod
     def _message_tokens(messages: tuple[NaturalMessage, ...]) -> int:
-        return estimate_provider_input_tokens(
-            "\n".join(item.content for item in messages)
-        )
+        return estimate_natural_messages(messages)
 
     @staticmethod
     def _result(  # noqa: PLR0913, PLR0917
@@ -608,31 +855,123 @@ class WeKnoraStandardPipeline:
         *,
         answer: str | None,
         reason_code: str,
+        draft: str | None = None,
         references: tuple[NaturalReference, ...] = (),
         cited: tuple[str, ...] = (),
+        citation_status: Literal["valid", "missing", "invalid"] = "missing",
+        invalid_citations: tuple[str, ...] = (),
         model: str | None = None,
         packet_hash: str | None = None,
         input_tokens: int = 0,
+        actual_prompt_tokens: int | None = None,
+        finish_reason: str | None = None,
+        policy_fingerprint: str | None = None,
     ) -> NaturalAnswerResult:
         del request
         return NaturalAnswerResult(
             trace_id=trace_id,
             engine_id=engine_id,
             answer=answer,
+            draft=draft,
             reason_code=reason_code,
             references=references,
             cited_aliases=cited,
+            citation_status=citation_status,
+            invalid_citations=invalid_citations,
             active_index_revision_id=snapshot.revision.index_revision_id,
             index_fingerprint=snapshot.revision.index_fingerprint,
             serving_fingerprint=snapshot.serving_fingerprint,
+            policy_fingerprint=policy_fingerprint,
             selected_embedding_slot=selected_slot,
             rerank_execution_mode=rerank_mode,
             degraded_reason_codes=degraded,
             generation_model=model,
             input_packet_sha256=packet_hash,
             estimated_input_tokens=input_tokens,
+            actual_prompt_tokens=actual_prompt_tokens,
+            finish_reason=finish_reason,
             provider_calls=provider_calls,
         )
+
+
+def _same_source_region(parent: SourceSpan, hit: SourceSpan) -> bool:
+    """按同一节点和原文区间定位父级中的命中来源。"""
+    if (
+        parent.node_id is None
+        or parent.node_id != hit.node_id
+        or parent.source_anchor is None
+        or hit.source_anchor is None
+        or parent.source_anchor.part_uri != hit.source_anchor.part_uri
+    ):
+        return False
+    if (
+        parent.source_start_char is None
+        or parent.source_end_char is None
+        or hit.source_start_char is None
+        or hit.source_end_char is None
+    ):
+        return True
+    return (
+        parent.source_start_char < hit.source_end_char
+        and hit.source_start_char < parent.source_end_char
+    )
+
+
+def _clip_hit_span(
+    passage: _Passage, span: SourceSpan, max_chars: int
+) -> _Passage | None:
+    """只对一比一映射的长来源跨度取命中邻域，不推断归一化偏移。"""
+    source_start = span.source_start_char
+    source_end = span.source_end_char
+    if (
+        source_start is None
+        or source_end is None
+        or source_end - source_start
+        != span.chunk_end_char - span.chunk_start_char
+    ):
+        return None
+    hit = next(
+        (
+            item
+            for _, item in passage.hit_sources
+            if _same_source_region(span, item)
+            and item.source_start_char is not None
+        ),
+        None,
+    )
+    if hit is None or hit.source_start_char is None:
+        return None
+    length = span.chunk_end_char - span.chunk_start_char
+    offset = min(
+        max(0, hit.source_start_char - source_start - max_chars // 4),
+        length - max_chars,
+    )
+    start = span.chunk_start_char + offset
+    end = start + max_chars
+    local = SourceSpan.model_validate(
+        {
+            **span.model_dump(mode="python"),
+            "chunk_start_char": 0,
+            "chunk_end_char": max_chars,
+            "source_start_char": source_start + offset,
+            "source_end_char": source_start + offset + max_chars,
+        }
+    )
+    reference = passage.reference.model_copy(
+        update={
+            "source_spans": (local,),
+            "source_complete": False,
+            "parent_ranges": ((start, end),),
+            "chunk_ids": tuple(
+                dict.fromkeys(
+                    chunk_id
+                    for chunk_id, item in passage.hit_sources
+                    if _same_source_region(span, item)
+                )
+            ),
+        }
+    )
+    return replace(passage, text=passage.text[start:end], reference=reference)
 
 
 __all__ = ["WeKnoraStandardPipeline"]

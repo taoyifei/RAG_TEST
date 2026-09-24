@@ -524,7 +524,10 @@ class ProductQueryHistory:
         if not 1 <= len(items) <= _MAX_TRAFFIC_OVERRIDE_ITEMS:
             raise ValueError("分类修正批量必须为一到一百条。")
         if traffic_class not in (
-            "INTERACTIVE", "EVALUATION", "SYSTEM", "LEGACY_UNKNOWN"
+            "INTERACTIVE",
+            "EVALUATION",
+            "SYSTEM",
+            "LEGACY_UNKNOWN",
         ):
             raise ValueError("分类修正目标无效。")
         if (
@@ -1053,9 +1056,7 @@ class ProductQueryHistory:
             rows = connection.execute(
                 "SELECT trace_id, owner_id FROM query_history "  # noqa: S608
                 "WHERE project_id=? AND knowledge_base_id=? "
-                "AND expires_at>? AND trace_id IN ("
-                + placeholders
-                + ")",
+                "AND expires_at>? AND trace_id IN (" + placeholders + ")",
                 (
                     project_id,
                     knowledge_base_id,
@@ -1692,9 +1693,7 @@ class ProductQueryHistory:
                 ),
                 "question": payload.get("question"),
                 "answer": (
-                    payload.get("answer")
-                    if detail or include_answer
-                    else None
+                    payload.get("answer") if detail or include_answer else None
                 ),
                 "answer_summary": str(payload.get("answer") or "")[:240],
             }
@@ -1958,11 +1957,19 @@ def _completion(
         metadata.update(
             {
                 "engine_id": result.engine_id,
+                "pipeline_revision": result.pipeline_revision,
+                "policy_fingerprint": result.policy_fingerprint,
                 "validation_level": result.validation_level,
                 "reason_code": result.reason_code,
+                "citation_status": result.citation_status,
+                "invalid_citations": list(result.invalid_citations),
                 "active_index_revision_id": result.active_index_revision_id,
                 "index_fingerprint": result.index_fingerprint,
                 "serving_fingerprint": result.serving_fingerprint,
+                "estimated_input_tokens": result.estimated_input_tokens,
+                "actual_prompt_tokens": result.actual_prompt_tokens,
+                "finish_reason": result.finish_reason,
+                "generation_model": result.generation_model,
                 "degraded_reason_codes": list(result.degraded_reason_codes),
                 "document_ids": sorted(
                     {item.document_id for item in result.references}

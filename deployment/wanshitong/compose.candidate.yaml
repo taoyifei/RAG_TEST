@@ -72,6 +72,7 @@ services:
       RAG_WANSHITONG_RERANKER_MODEL: ${RAG_WANSHITONG_RERANKER_MODEL:?required}
       RAG_WANSHITONG_RERANKER_PATH: ${RAG_WANSHITONG_RERANKER_PATH:?required}
       RAG_WANSHITONG_RERANKER_PROTOCOL: ${RAG_WANSHITONG_RERANKER_PROTOCOL:?required}
+      RAG_WK_CHUNKER_MODE: ${RAG_WK_CHUNKER_MODE:-legacy}
     extra_hosts:
       - host.docker.internal:host-gateway
     volumes:

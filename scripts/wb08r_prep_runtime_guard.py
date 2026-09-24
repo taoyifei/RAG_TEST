@@ -28,6 +28,7 @@ _BASE_IMAGE_LABELS = (
 )
 _DEPARTMENT_SHADOW_KEY = "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
 _POPULAR_QUESTIONS_KEY = "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED"
+_WEKNORA_CHUNKER_KEY = "RAG_WK_CHUNKER_MODE"
 _Q1_CAPTURE_KEYS = {
     "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_CAPTURE_SUCCESS": "true",
     "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_MAX_FILES": "128",
@@ -183,8 +184,7 @@ def _sso_entry_origins(value: str) -> frozenset[str]:
         origin = raw_entry["origin"]
         authorize_url = raw_entry["authorize_url"]
         if not all(
-            isinstance(item, str)
-            for item in (entry_id, origin, authorize_url)
+            isinstance(item, str) for item in (entry_id, origin, authorize_url)
         ):
             raise ValueError("入口字段必须是字符串")
         if not _SSO_ENTRY_ID_PATTERN.fullmatch(entry_id):
@@ -388,6 +388,48 @@ def _compare_q1_private_capture(
             )
 
 
+def _compare_weknora_chunker(
+    report: _Report,
+    baseline: dict[str, str],
+    candidate: dict[str, str],
+    ignored_keys: set[str],
+    *,
+    allow_parent_child: bool,
+) -> None:
+    """只承认声明过的独立候选父子分块差异。"""
+    previous = baseline.get(_WEKNORA_CHUNKER_KEY)
+    selected = candidate.get(_WEKNORA_CHUNKER_KEY)
+    if previous == selected:
+        return
+    if previous is None and selected == "legacy":
+        ignored_keys.add(_WEKNORA_CHUNKER_KEY)
+        report.allow(
+            f"services.app.environment.{_WEKNORA_CHUNKER_KEY}",
+            "显式保留应用默认的 legacy 分块模式。",
+            baseline=previous,
+            candidate=selected,
+        )
+        return
+    if not allow_parent_child:
+        return
+    ignored_keys.add(_WEKNORA_CHUNKER_KEY)
+    if previous not in {None, "legacy"} or selected != "parent-child":
+        report.add_problem(
+            "semantic_mismatches",
+            f"services.app.environment.{_WEKNORA_CHUNKER_KEY}",
+            "WeKnora 候选分块只允许从旧模式显式切到 parent-child。",
+            baseline=previous,
+            candidate=selected,
+        )
+        return
+    report.allow(
+        f"services.app.environment.{_WEKNORA_CHUNKER_KEY}",
+        "独立数据副本使用已固定版本的 WeKnora 父子分块。",
+        baseline=previous,
+        candidate=selected,
+    )
+
+
 def _compare_environment(  # noqa: PLR0913
     report: _Report,
     baseline: dict[str, str],
@@ -397,8 +439,16 @@ def _compare_environment(  # noqa: PLR0913
     allow_sso_enable: bool = False,
     allow_popular_questions_toggle: bool = False,
     allow_q1_private_capture: bool = False,
+    allow_weknora_parent_child: bool = False,
 ) -> None:
     ignored_keys: set[str] = set()
+    _compare_weknora_chunker(
+        report,
+        baseline,
+        candidate,
+        ignored_keys,
+        allow_parent_child=allow_weknora_parent_child,
+    )
     _compare_q1_private_capture(
         report,
         baseline,
@@ -572,9 +622,7 @@ def _compare_sso_environment(
     entry_origins: frozenset[str] = frozenset()
     entries_valid = False
     try:
-        entry_origins = _sso_entry_origins(
-            candidate.get(_SSO_ENTRIES_KEY, "")
-        )
+        entry_origins = _sso_entry_origins(candidate.get(_SSO_ENTRIES_KEY, ""))
         entries_valid = True
     except ValueError as error:
         report.add_problem(
@@ -1067,6 +1115,7 @@ def compare_runtime(  # noqa: PLR0913
     allow_sso_enable: bool = False,
     allow_popular_questions_toggle: bool = False,
     allow_q1_private_capture: bool = False,
+    allow_weknora_parent_child: bool = False,
 ) -> dict[str, object]:
     """比较候选描述或创建后容器，返回无秘密的字段级报告。
 
@@ -1081,6 +1130,7 @@ def compare_runtime(  # noqa: PLR0913
         allow_sso_enable: 是否允许并严格校验阶段 03 的 SSO 切换差异。
         allow_popular_questions_toggle: 是否允许 F06 公共问题开关的声明差异。
         allow_q1_private_capture: 是否允许专用 8289 上的固定私有证据捕获。
+        allow_weknora_parent_child: 是否允许独立候选数据使用父子分块。
 
     Returns:
         含逐类差异、各层摘要和 `ready` 判定的安全报告。
@@ -1125,6 +1175,7 @@ def compare_runtime(  # noqa: PLR0913
         allow_sso_enable=allow_sso_enable,
         allow_popular_questions_toggle=allow_popular_questions_toggle,
         allow_q1_private_capture=allow_q1_private_capture,
+        allow_weknora_parent_child=allow_weknora_parent_child,
     )
     _compare_mounts(
         report,
@@ -1267,6 +1318,7 @@ def _parser() -> argparse.ArgumentParser:
         "--allow-popular-questions-toggle", action="store_true"
     )
     compare.add_argument("--allow-q1-private-capture", action="store_true")
+    compare.add_argument("--allow-weknora-parent-child", action="store_true")
     return parser
 
 
@@ -1300,6 +1352,7 @@ def main(argv: list[str] | None = None) -> int:
             arguments.allow_popular_questions_toggle
         ),
         allow_q1_private_capture=arguments.allow_q1_private_capture,
+        allow_weknora_parent_child=arguments.allow_weknora_parent_child,
     )
     _write_report(arguments.output, report)
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
