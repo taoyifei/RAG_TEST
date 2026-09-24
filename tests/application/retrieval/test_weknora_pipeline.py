@@ -276,6 +276,34 @@ def test_rewrite_cannot_drop_explicit_number_or_negation() -> None:
     )
 
 
+def test_rewrite_cannot_drop_explicit_document_title() -> None:
+    service, model = _scenario()
+    model.complete_query_understanding.return_value = NaturalCompletion(
+        text='{"query":"由谁负责审批？"}',
+        model="fixture-qwen",
+        provider_calls=(),
+    )
+    request = _request().model_copy(
+        update={
+            "text": "只根据《电子资源管理办法》说明由谁审批？",
+            "conversation_context": ("之前讨论了另一个办法。",),
+        }
+    )
+
+    WeKnoraStandardPipeline(service).run(
+        request,
+        engine_id="wk-standard-v1",
+        cancellation=StreamCancellation(),
+    )
+
+    assert service._lexical.search.call_count == 1
+    assert any(
+        call.args[1] == "weknora_query_understand"
+        and call.args[2]["reason_code"] == "REWRITE_CONSTRAINT_CHANGED"
+        for call in service._record.call_args_list
+    )
+
+
 def test_oversized_parent_uses_hit_source_range() -> None:
     service, _model = _scenario()
     pipeline = WeKnoraStandardPipeline(service)

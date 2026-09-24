@@ -18,6 +18,7 @@ from rag_app.core.ports import CancellationPort
 
 _NUMBER = re.compile(r"[+-]?\d+(?:[.:/-]\d+)*")
 _QUOTED = re.compile(r"[“\"'‘]([^”\"'’]{1,160})[”\"'’]")
+_BOOK_TITLE = re.compile(r"《([^》]{1,160})》")
 _NEGATION = re.compile(r"不得|禁止|不能|不可|不允许|尚未|没有|不是|\bnot\b")
 _MAX_REWRITE_CHARS = 512
 _MAX_RESPONSE_CHARS = 2048
@@ -125,7 +126,7 @@ def _preserves_explicit_constraints(original: str, rewrite: str) -> bool:
     """仅核对可直接观察的硬约束，不引入业务同义词表。"""
     return all(
         value in rewrite
-        for pattern in (_NUMBER, _QUOTED, _NEGATION)
+        for pattern in (_NUMBER, _QUOTED, _BOOK_TITLE, _NEGATION)
         for value in pattern.findall(original)
     )
 
