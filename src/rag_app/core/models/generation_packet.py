@@ -99,6 +99,7 @@ def stable_support_key(item: EvidenceItem) -> str:
 
     """
     metadata = dict(item.metadata)
+    reader_group = metadata.get("context_reader_group_id")
     return canonical_sha256(
         {
             "revision": EVIDENCE_IDENTITY_REVISION,
@@ -127,6 +128,11 @@ def stable_support_key(item: EvidenceItem) -> str:
                 for span in item.source_spans
             ],
             "quote_sha256": canonical_sha256(item.citation_text),
+            **(
+                {"context_reader_group_id": reader_group}
+                if isinstance(reader_group, str) and reader_group
+                else {}
+            ),
         }
     )
 

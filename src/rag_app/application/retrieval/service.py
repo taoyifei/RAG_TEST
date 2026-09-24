@@ -49,6 +49,17 @@ from rag_app.application.retrieval.atom_group_alignment import (
     qualify_atom_evidence,
 )
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
+from rag_app.application.retrieval.context_packing import pack_context_groups
+from rag_app.application.retrieval.context_reader import (
+    CONTEXT_READER_REVISION,
+    SOURCE_STRUCTURE_REVISION,
+    ContextReader,
+    ContextReadResult,
+)
+from rag_app.application.retrieval.context_reader_pack import (
+    CONTEXT_READER_PACK_REVISION,
+    build_context_reader_evidence_pack,
+)
 from rag_app.application.retrieval.context_resolution import (
     CONTEXT_RESOLUTION_REVISION,
     ResolvedRootQuery,
@@ -245,6 +256,7 @@ class _SelectionOutcome:
     ambiguous_support: bool
     confidence: ConfidenceDecision
     groups: tuple[GroupCandidate, ...] = ()
+    context_reader: ContextReadResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -775,6 +787,7 @@ class RetrievalService:
         self._cache = cache
         self._department_shadow = department_shadow
         self._policy = policy or RetrievalPolicy()
+        self._context_reader = ContextReader(source)
         # 检索实现演进仅改变 serving/query cache；文档索引与向量语义不变。
         self._serving_fingerprint = canonical_sha256(
             {
@@ -799,6 +812,26 @@ class RetrievalService:
                 ),
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
+                ),
+                **(
+                    {
+                        "context_reader_mode": (
+                            self._policy.context_reader_mode
+                        ),
+                        "context_reader_revision": CONTEXT_READER_REVISION,
+                        "source_structure_revision": SOURCE_STRUCTURE_REVISION,
+                        "context_reader_pack_revision": (
+                            CONTEXT_READER_PACK_REVISION
+                        ),
+                        "context_reader_source_token_budget": (
+                            self._policy.generation_evidence_token_budget
+                        ),
+                        "context_reader_group_item_limit": (
+                            self._policy.generation_max_group_items
+                        ),
+                    }
+                    if self._policy.context_reader_mode != "legacy"
+                    else {}
                 ),
                 "source_scope_revision": SOURCE_SCOPE_SCHEMA_REVISION,
                 "source_projection_revision": SOURCE_PROJECTION_REVISION,
@@ -2331,19 +2364,132 @@ class RetrievalService:
                     "elapsed_ms": round(correction_elapsed_ms, 3),
                 },
             )
-        generation_evidence_pack = build_generation_evidence_pack(
-            query_plan=query_plan,
-            root_evidence=selection.model_evidence_candidates,
-            atom_evidence=atom_evidence,
-            atom_candidates_by_atom=atom_candidate_membership,
-            ranked_candidates=generation_ranked_candidates,
-            groups=generation_groups,
-            links=atom_links,
-            request=request,
-            active_revision_id=snapshot.revision.index_revision_id,
-            excluded_document_ids=snapshot.excluded_document_ids,
-            policy=self._policy,
-        )
+        if self._policy.context_reader_mode == "candidate":
+            if selection.context_reader is None:
+                raise IndexCorrupt(
+                    "候选来源回读未执行。", stage="retrieval.context_reader"
+                )
+            context_packing = pack_context_groups(
+                selection.context_reader,
+                token_budget=self._policy.generation_evidence_token_budget,
+                max_groups=self._policy.rerank_candidate_limit,
+                max_items=self._policy.generation_max_group_items,
+            )
+            generation_evidence_pack = build_context_reader_evidence_pack(
+                query_plan=query_plan,
+                groups=context_packing.selected,
+                request=request,
+                active_revision_id=snapshot.revision.index_revision_id,
+                excluded_document_ids=snapshot.excluded_document_ids,
+            )
+            self._record(
+                trace_id,
+                "context_reader_pack",
+                {
+                    "mode": "candidate",
+                    "selected_group_ids": tuple(
+                        group.group_id for group in context_packing.selected
+                    ),
+                    "rejected_groups": context_packing.rejected,
+                    "estimated_source_tokens": context_packing.estimated_tokens,
+                    "materialized_source_count": len(
+                        generation_evidence_pack.entries
+                    ),
+                    "hard_rejected_source_count": len(
+                        generation_evidence_pack.rejected_entries
+                    ),
+                },
+            )
+        else:
+            generation_evidence_pack = build_generation_evidence_pack(
+                query_plan=query_plan,
+                root_evidence=selection.model_evidence_candidates,
+                atom_evidence=atom_evidence,
+                atom_candidates_by_atom=atom_candidate_membership,
+                ranked_candidates=generation_ranked_candidates,
+                groups=generation_groups,
+                links=atom_links,
+                request=request,
+                active_revision_id=snapshot.revision.index_revision_id,
+                excluded_document_ids=snapshot.excluded_document_ids,
+                policy=self._policy,
+            )
+            if (
+                self._policy.context_reader_mode == "shadow"
+                and selection.context_reader is not None
+            ):
+                try:
+                    shadow_packing = pack_context_groups(
+                        selection.context_reader,
+                        token_budget=(
+                            self._policy.generation_evidence_token_budget
+                        ),
+                        max_groups=self._policy.rerank_candidate_limit,
+                        max_items=self._policy.generation_max_group_items,
+                    )
+                    shadow_pack = build_context_reader_evidence_pack(
+                        query_plan=query_plan,
+                        groups=shadow_packing.selected,
+                        request=request,
+                        active_revision_id=(
+                            snapshot.revision.index_revision_id
+                        ),
+                        excluded_document_ids=(snapshot.excluded_document_ids),
+                    )
+                except (IndexCorrupt, ValueError) as error:
+                    self._record(
+                        trace_id,
+                        "context_reader_compare",
+                        {
+                            "mode": "shadow",
+                            "status": "COMPARE_FAILED",
+                            "error_type": type(error).__name__,
+                        },
+                    )
+                else:
+
+                    def source_only_key(item: EvidenceItem) -> str:
+                        """比较真实来源坐标时去掉新组身份。"""
+                        metadata = dict(item.metadata)
+                        metadata.pop("context_reader_group_id", None)
+                        return stable_support_key(
+                            item.model_copy(
+                                update={
+                                    "metadata": freeze_json_object(metadata)
+                                }
+                            )
+                        )
+
+                    legacy_keys = {
+                        source_only_key(item)
+                        for item in generation_evidence_pack.evidence
+                    }
+                    shadow_keys = {
+                        source_only_key(item) for item in shadow_pack.evidence
+                    }
+                    self._record(
+                        trace_id,
+                        "context_reader_compare",
+                        {
+                            "mode": "shadow",
+                            "status": "COMPARED",
+                            "legacy_source_count": len(legacy_keys),
+                            "reader_source_count": len(shadow_keys),
+                            "reader_only_source_keys": tuple(
+                                sorted(shadow_keys - legacy_keys)
+                            ),
+                            "legacy_only_source_keys": tuple(
+                                sorted(legacy_keys - shadow_keys)
+                            ),
+                            "reader_complete_group_count": len(
+                                shadow_pack.complete_group_ids
+                            ),
+                            "reader_partial_group_count": len(
+                                shadow_pack.partial_group_ids
+                            ),
+                            "reader_rejected_groups": (shadow_packing.rejected),
+                        },
+                    )
         all_field_candidates = build_field_candidates(
             query_plan, generation_evidence_pack
         )
@@ -5014,7 +5160,7 @@ class RetrievalService:
             policy=self._policy,
         )
 
-    def _rank_and_select(  # noqa: PLR0913, PLR0915
+    def _rank_and_select(  # noqa: PLR0912, PLR0913, PLR0915
         self,
         *,
         request: SearchRequest,
@@ -5211,6 +5357,73 @@ class RetrievalService:
                 **candidate_observation(reranked.input_candidates),
             },
         )
+        context_read: ContextReadResult | None = None
+        if self._policy.context_reader_mode != "legacy":
+            reader_started = perf_counter()
+            reader_seeds = reranked.candidates
+            try:
+                context_read = self._context_reader.read(
+                    snapshot, reader_seeds, self._policy
+                )
+            except (IndexCorrupt, ValueError) as error:
+                if self._policy.context_reader_mode == "candidate":
+                    raise
+                self._record(
+                    trace_id,
+                    "context_reader",
+                    {
+                        "pass": retrieval_phase,
+                        "mode": "shadow",
+                        "status": "SOURCE_READ_FAILED",
+                        "error_type": type(error).__name__,
+                    },
+                )
+            else:
+                self._record(
+                    trace_id,
+                    "context_reader",
+                    {
+                        "pass": retrieval_phase,
+                        "mode": self._policy.context_reader_mode,
+                        "status": "READ",
+                        "seed_count": len(reader_seeds),
+                        "group_count": len(context_read.groups),
+                        "complete_group_count": sum(
+                            group.source_complete
+                            for group in context_read.groups
+                        ),
+                        "partial_group_count": sum(
+                            not group.source_complete
+                            for group in context_read.groups
+                        ),
+                        "group_diagnostics": tuple(
+                            {
+                                "group_id": group.group_id,
+                                "kind": group.kind,
+                                "seed_chunk_ids": group.seed_chunk_ids,
+                                "member_chunk_ids": tuple(
+                                    item.hydrated.chunk.chunk_id
+                                    for item in group.candidates
+                                ),
+                                "required_node_count": len(
+                                    group.required_node_ids
+                                ),
+                                "missing_node_count": len(
+                                    group.missing_node_ids
+                                ),
+                                "source_complete": group.source_complete,
+                                "reason_codes": group.reason_codes,
+                            }
+                            for group in context_read.groups
+                        ),
+                        "skipped_seed_ids": context_read.skipped_seed_ids,
+                    },
+                )
+            _finish_timing(
+                stage_timings,
+                f"{retrieval_phase}_context_reader",
+                reader_started,
+            )
         expansion = self._neighbors.expand(
             snapshot,
             reranked.candidates,
@@ -5488,6 +5701,7 @@ class RetrievalService:
             ambiguous_support=evidence_selection.ambiguous,
             confidence=confidence,
             groups=correction_groups,
+            context_reader=context_read,
         )
 
     def _validate_cached_sources(

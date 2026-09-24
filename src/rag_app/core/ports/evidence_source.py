@@ -7,6 +7,7 @@ from typing import Protocol
 
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
+    DocumentIR,
     DocumentVersionRef,
     HydratedChunk,
     KnowledgeBaseScope,
@@ -86,6 +87,27 @@ class EvidenceSourcePort(Protocol):
             canonical chunks 和显示身份。
 
         """
+        ...
+
+    def load_document_ir(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        document_version: DocumentVersionRef,
+        *,
+        max_bytes: int,
+    ) -> DocumentIR | None:
+        """读取当前快照中指定文档版本的权威 IR；超预算返回 None。"""
+        ...
+
+    def source_node_chunk_ids(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        document_version: DocumentVersionRef,
+        *,
+        node_ids: tuple[str, ...],
+        limit: int,
+    ) -> tuple[str, ...] | None:
+        """按原始节点精确读取同版本 Chunk ID；超数量上限返回 None。"""
         ...
 
     def catalog_documents(
