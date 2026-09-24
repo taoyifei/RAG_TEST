@@ -24,11 +24,13 @@ from rag_app.tracing import TraceMode
 from rag_app.wanshitong.natural_stream import (
     NATURAL_PUBLIC_PROTOCOL,
     NaturalPublicStream,
+    NaturalStreamRegistry,
     public_natural_references,
 )
 from rag_app.wanshitong.public_models import (
     PublicCapabilities,
     PublicChatRequest,
+    PublicChatStopRequest,
     PublicConversationClearResponse,
     PublicFeedbackRequest,
     PublicFeedbackResponse,
@@ -59,6 +61,7 @@ from rag_app.wanshitong.usage_hints import parse_client_context
 PUBLIC_SESSION_PATH = "/api/public/session"
 PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities"
 PUBLIC_CHAT_PATH = "/api/public/chat"
+PUBLIC_CHAT_STOP_PATH = "/api/public/chat/{trace_id}/stop"
 PUBLIC_FEEDBACK_PATH = "/api/public/feedback"
 PUBLIC_POPULAR_QUESTIONS_PATH = "/api/public/popular-questions"
 PUBLIC_CONVERSATIONS_PATH = "/api/public/conversations"
@@ -120,6 +123,7 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
         natural_public_engine: 服务器固定的自然问答引擎。
 
     """
+    natural_streams = NaturalStreamRegistry()
 
     @app.post(
         PUBLIC_SESSION_PATH,
@@ -307,9 +311,17 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
                     retryable=True,
                     trace_id=trace_id,
                 ) from error
+            natural_streams.register(natural)
+
+            def cleanup_natural_stream() -> None:
+                try:
+                    natural.cancel()
+                finally:
+                    natural_streams.discard(natural)
+
             return _PublicStreamingResponse(
                 natural_iterator,
-                cancel=natural.cancel,
+                cancel=cleanup_natural_stream,
                 headers={
                     "Cache-Control": "no-store, no-transform",
                     "X-Accel-Buffering": "no",
@@ -368,6 +380,26 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
                 "X-Trace-Id": trace_id,
             },
         )
+
+    @app.post(PUBLIC_CHAT_STOP_PATH, tags=["wanshitong-public"])
+    def _stop_natural_chat(
+        body: PublicChatStopRequest,
+        request: Request,
+        trace_id: Annotated[str, Path(pattern=r"^trace_[0-9a-f]{32}$")],
+    ) -> dict[str, bool]:
+        _reject_query_parameters(request)
+        if not natural_public_enabled:
+            raise HTTPException(
+                status_code=404, detail="natural stream disabled"
+            )
+        principal, _ = _authenticate_public_request(request, sessions)
+        return {
+            "cancelled": natural_streams.cancel_owned(
+                trace_id,
+                owner_id=principal.owner_id,
+                conversation_id=body.conversation_id,
+            )
+        }
 
     @app.get(PUBLIC_CONVERSATIONS_PATH, tags=["wanshitong-public"])
     def _natural_sessions(request: Request) -> dict[str, object]:

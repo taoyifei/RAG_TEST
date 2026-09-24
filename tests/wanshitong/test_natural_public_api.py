@@ -21,11 +21,13 @@ from rag_app.query_executor import QueryExecutor
 from rag_app.wanshitong.natural_stream import (
     NATURAL_PUBLIC_PROTOCOL,
     NaturalPublicStream,
+    NaturalStreamRegistry,
     public_natural_final,
 )
 from rag_app.wanshitong.public_api import (
     PUBLIC_CAPABILITIES_PATH,
     PUBLIC_CHAT_PATH,
+    PUBLIC_CHAT_STOP_PATH,
 )
 from tests.wanshitong.support import build_public_harness
 
@@ -194,3 +196,61 @@ def test_slow_reader_backpressure_releases_on_cancel() -> None:
     worker.join(timeout=2)
     assert not worker.is_alive()
     assert len(failures) == 1
+
+
+def test_natural_stop_registry_checks_owner_and_conversation() -> None:
+    stream = NaturalPublicStream(
+        runtime=cast(ProductRuntime, object()),
+        executor=cast(QueryExecutor, object()),
+        scope=KnowledgeBaseScope(
+            project_id="prj_" + "1" * 32,
+            knowledge_base_id="kb_" + "2" * 32,
+        ),
+        question="如何停止？",
+        conversation_id="conversation-a",
+        owner_id="owner-a",
+        trace_id="trace_" + "3" * 32,
+        engine_id="wk-standard-pc-v1",
+        audit_context=cast(QueryAuditContext, object()),
+        authorization_guard=lambda: None,
+    )
+    registry = NaturalStreamRegistry()
+    registry.register(stream)
+    assert not registry.cancel_owned(
+        stream.trace_id, owner_id="owner-b", conversation_id="conversation-a"
+    )
+    assert not registry.cancel_owned(
+        stream.trace_id, owner_id="owner-a", conversation_id="conversation-b"
+    )
+    assert not stream.cancellation.is_cancelled()
+    assert registry.cancel_owned(
+        stream.trace_id, owner_id="owner-a", conversation_id="conversation-a"
+    )
+    assert stream.cancellation.is_cancelled()
+    assert not registry.cancel_owned(
+        stream.trace_id, owner_id="owner-a", conversation_id="conversation-a"
+    )
+    registry.discard(stream)
+
+
+def test_public_stop_route_requires_session_and_csrf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_WANSHITONG_NATURAL_PUBLIC_ENABLED", "true")
+    harness = build_public_harness(tmp_path, monkeypatch)
+    try:
+        path = PUBLIC_CHAT_STOP_PATH.format(trace_id="trace_" + "a" * 32)
+        body = {"conversation_id": "conversation-a"}
+        assert harness.client.post(path, json=body).status_code == 403
+        assert harness.client.post(
+            path,
+            headers={"X-CSRF-Token": "invalid"},
+            json=body,
+        ).status_code == 403
+        stopped = harness.client.post(
+            path, headers=harness.headers, json=body
+        )
+        assert stopped.status_code == 200
+        assert stopped.json() == {"cancelled": False}
+    finally:
+        harness.close()

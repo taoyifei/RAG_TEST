@@ -375,3 +375,38 @@ class NaturalPublicStream:
         }
         self._sequence += 1
         return _frame(name, event)
+
+
+class NaturalStreamRegistry:
+    """按 Trace 保存运行中的公共流，供同一会话显式停止。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._streams: dict[str, NaturalPublicStream] = {}
+
+    def register(self, stream: NaturalPublicStream) -> None:
+        """登记已取得查询容量的自然流。"""
+        with self._lock:
+            self._streams[stream.trace_id] = stream
+
+    def discard(self, stream: NaturalPublicStream) -> None:
+        """仅移除同一对象，避免响应收尾误删其他流。"""
+        with self._lock:
+            if self._streams.get(stream.trace_id) is stream:
+                del self._streams[stream.trace_id]
+
+    def cancel_owned(
+        self, trace_id: str, *, owner_id: str, conversation_id: str
+    ) -> bool:
+        """只允许原 owner 与原会话停止该轮；重复停止返回 false。"""
+        with self._lock:
+            stream = self._streams.get(trace_id)
+            if (
+                stream is None
+                or stream.owner_id != owner_id
+                or stream.conversation_id != conversation_id
+            ):
+                return False
+            del self._streams[trace_id]
+        stream.cancel()
+        return True

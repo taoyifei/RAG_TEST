@@ -233,6 +233,25 @@ export async function openPublicChat(options: {
   return response;
 }
 
+export async function stopPublicNaturalChat(options: {
+  conversationId: string;
+  csrfToken: string;
+  traceId: string;
+}): Promise<boolean> {
+  const path = `/api/public/chat/${encodeURIComponent(options.traceId)}/stop`;
+  const response = await fetch(withAppBase(path), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": options.csrfToken,
+    },
+    body: JSON.stringify({ conversation_id: options.conversationId }),
+  });
+  const result = await requireJson<{ cancelled: boolean }>(response);
+  return result.cancelled;
+}
+
 export async function getPublicNaturalHistory(options: {
   conversationId: string;
   csrfToken: string;

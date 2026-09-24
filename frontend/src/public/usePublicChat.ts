@@ -11,6 +11,7 @@ import {
   PublicApiError,
   publicErrorMessage,
   sendPublicFeedback,
+  stopPublicNaturalChat,
   type PublicFeedbackSubmission,
   type PublicSessionUser,
   type PublicUsageContext,
@@ -195,6 +196,7 @@ export function usePublicChat() {
   const sessionControllerRef = useRef<AbortController | undefined>(undefined);
   const streamControllerRef = useRef<AbortController | undefined>(undefined);
   const activeTurnRef = useRef<string | undefined>(undefined);
+  const activeTraceIdRef = useRef<string | undefined>(undefined);
   const requestIdRef = useRef(0);
   const busyRef = useRef(false);
   const feedbackAttemptsRef = useRef(new Set<string>());
@@ -210,6 +212,7 @@ export function usePublicChat() {
     sessionControllerRef.current = undefined;
     streamControllerRef.current = undefined;
     activeTurnRef.current = undefined;
+    activeTraceIdRef.current = undefined;
     csrfRef.current = undefined;
     if (historyKeyRef.current) {
       try {
@@ -242,6 +245,7 @@ export function usePublicChat() {
     streamControllerRef.current?.abort();
     streamControllerRef.current = undefined;
     activeTurnRef.current = undefined;
+    activeTraceIdRef.current = undefined;
     const nextConversationId = randomId("wst");
     conversationRef.current = nextConversationId;
     if (historyKeyRef.current) {
@@ -387,6 +391,7 @@ export function usePublicChat() {
       if (busyRef.current || !sessionReady) return;
       busyRef.current = true;
       activeTurnRef.current = turnId;
+      activeTraceIdRef.current = undefined;
       const requestId = ++requestIdRef.current;
       const controller = new AbortController();
       streamControllerRef.current = controller;
@@ -441,6 +446,10 @@ export function usePublicChat() {
           throw new TypeError("public stream body missing");
         }
         if (!isCurrent()) return;
+        const responseTraceId = response.headers.get("X-Trace-Id");
+        if (responseTraceId && /^trace_[0-9a-f]{32}$/.test(responseTraceId)) {
+          activeTraceIdRef.current = responseTraceId;
+        }
         setPhase("streaming");
         updateTurn(turnId, (turn) => ({
           ...turn,
@@ -462,6 +471,7 @@ export function usePublicChat() {
             typeof event.trace_id === "string" ? event.trace_id : undefined;
           if (event.type === "meta") {
             if (traceId) {
+              activeTraceIdRef.current = traceId;
               updateTurn(turnId, (turn) => ({ ...turn, traceId }));
             }
             return true;
@@ -605,6 +615,7 @@ export function usePublicChat() {
           busyRef.current = false;
           streamControllerRef.current = undefined;
           activeTurnRef.current = undefined;
+          activeTraceIdRef.current = undefined;
         }
       }
     },
@@ -686,11 +697,27 @@ export function usePublicChat() {
   const stop = useCallback(() => {
     const turnId = activeTurnRef.current;
     if (!busyRef.current || !turnId) return;
+    const traceId = activeTraceIdRef.current;
+    const csrfToken = csrfRef.current;
+    const turnConversationId = conversationRef.current;
+    if (naturalProtocol && traceId && csrfToken) {
+      void stopPublicNaturalChat({
+        conversationId: turnConversationId,
+        csrfToken,
+        traceId,
+      }).catch(() => {
+        updateTurn(turnId, (turn) => ({
+          ...turn,
+          errorMessage: "已停止显示；服务端取消未确认。",
+        }));
+      });
+    }
     requestIdRef.current += 1;
     streamControllerRef.current?.abort();
     busyRef.current = false;
     streamControllerRef.current = undefined;
     activeTurnRef.current = undefined;
+    activeTraceIdRef.current = undefined;
     updateTurn(turnId, (turn) => ({
       ...turn,
       status: "cancelled",
@@ -699,7 +726,7 @@ export function usePublicChat() {
       partial: turn.claims.length > 0 || Boolean(turn.provisionalAnswer),
     }));
     setPhase("cancelled");
-  }, [updateTurn]);
+  }, [naturalProtocol, updateTurn]);
 
   const submitFeedback = useCallback(
     (turnId: string, traceId: string, feedback: PublicFeedbackSubmission) => {
