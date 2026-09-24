@@ -5,13 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict
 from typing import Annotated, Literal, cast
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, Path, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
+from rag_app.adapters.chunkers.weknora.chunker import WeKnoraChunkerAdapter
 from rag_app.api.operational_trace import (
     MAX_TRACE_EXPORT_BYTES,
     TraceExportRequest,
@@ -19,9 +22,18 @@ from rag_app.api.operational_trace import (
 )
 from rag_app.api.query_history import _archive_response
 from rag_app.composition.product_runtime import ProductRuntime
+from rag_app.core.document_formats import extension_of
 from rag_app.core.errors import NotFound, PolicyDenied
 from rag_app.core.identifiers import deterministic_id
-from rag_app.core.models import Document, DocumentRef, Job
+from rag_app.core.models import (
+    ChunkingContext,
+    Document,
+    DocumentRef,
+    Job,
+    ParseContext,
+    ParseSource,
+)
+from rag_app.core.models.common import freeze_json_object
 from rag_app.product.feedback import normalize_trace_id
 from rag_app.product.history_trace_export import (
     HistoryTraceBodyUnavailableError,
@@ -69,7 +81,7 @@ from rag_app.wanshitong.question_recommendations import (
     QuestionRecommendationService,
 )
 from rag_app.wanshitong.scope_service import FixedScopeService
-from rag_app.wanshitong.template_catalog import searchable_upload_content
+from rag_app.wanshitong.template_catalog import validate_template_source
 from rag_app.wanshitong.upload_validation import (
     ValidatedDocxUpload,
     read_and_validate_upload,
@@ -197,15 +209,12 @@ def _register_document_routes(
             document_id=proposed_id,
             relative_path=metadata.source_relative_path,
         )
+        validate_template_source(metadata.source_relative_path)
         job = runtime.sdk.create_document(
             binding.project_id,
             binding.knowledge_base_id,
             display_name=upload.display_name,
-            content=searchable_upload_content(
-                upload.content,
-                source_relative_path=metadata.source_relative_path,
-                document_title=metadata.document_title,
-            ),
+            content=upload.content,
             media_type=upload.media_type,
             idempotency_key=idempotency_key,
             metadata=metadata.index_metadata(),
@@ -219,6 +228,117 @@ def _register_document_routes(
         return WanshitongUploadReceipt(
             document=_document_view(runtime, document, stored_metadata, job),
             job=job,
+        )
+
+    @app.post(
+        ADMIN_BASE_PATH + "/candidate/chunk-preview",
+        tags=["wanshitong-admin"],
+    )
+    async def _chunk_preview(
+        request: Request,
+        relative_path: Annotated[str, Query(min_length=1, max_length=4096)],
+        include_content: bool = False,
+    ) -> JSONResponse:
+        """使用当前候选 Parser/Chunker 预览，不创建 Job 或索引。"""
+        binding = _admin_scope(request, scope_service)
+        components = runtime.p09.retrieval_runtime.persistence.components
+        chunker = components.chunker
+        if not isinstance(chunker, WeKnoraChunkerAdapter):
+            raise AdminFacadeError(
+                "CANDIDATE_CHUNKER_DISABLED",
+                "当前实例未启用 WeKnora 候选分块器。",
+                status_code=409,
+                stage="wanshitong.chunk_preview",
+            )
+        document_id = deterministic_id(
+            "doc",
+            binding.project_id,
+            binding.knowledge_base_id,
+            "chunk-preview",
+            relative_path,
+        )
+        upload = await _validated_upload(
+            request,
+            runtime,
+            binding,
+            document_id=document_id,
+            relative_path=relative_path,
+        )
+        validate_template_source(upload.relative_path)
+        document = DocumentRef(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            document_id=document_id,
+            display_name=upload.display_name,
+            metadata=freeze_json_object(
+                {
+                    "source_relative_path": upload.relative_path,
+                    "document_title": upload.display_name,
+                }
+            ),
+        )
+        parsed = await run_in_threadpool(
+            components.parser.parse,
+            ParseSource(
+                media_type=upload.media_type,
+                display_name=upload.display_name,
+                extension=extension_of(upload.display_name),
+                content=upload.content,
+            ),
+            components.parsing_policy,
+            ParseContext(document=document),
+        )
+        preview = await run_in_threadpool(
+            chunker.preview,
+            parsed.document_ir,
+            ChunkingContext(
+                chunker_fingerprint=chunker.fingerprint,
+                index_revision_id=deterministic_id(
+                    "irev",
+                    "chunk-preview",
+                    document_id,
+                    parsed.document_ir.version.document_version_id,
+                ),
+            ),
+        )
+        limit = 200
+        chunks = preview.result.chunks[:limit]
+        return JSONResponse(
+            {
+                "source_sha256": parsed.document_ir.version.content_sha256,
+                "parser": components.parser.descriptor.model_dump(mode="json"),
+                "chunker_fingerprint": chunker.fingerprint,
+                "reading_view_revision": chunker.policy.reading_view_revision,
+                "report": preview.result.report.model_dump(mode="json"),
+                "domains": [asdict(item) for item in preview.domains],
+                "chunk_count": len(preview.result.chunks),
+                "parent_count": len(preview.result.parent_passages),
+                "truncated": len(preview.result.chunks) > limit,
+                "chunks": [
+                    {
+                        "chunk_id": item.chunk_id,
+                        "parent_passage_id": item.parent_passage_id,
+                        "role": item.role.value,
+                        "domain_id": dict(item.metadata).get("domain_id"),
+                        "start_char": dict(item.metadata).get(
+                            "domain_piece_start_char"
+                        ),
+                        "end_char": dict(item.metadata).get(
+                            "domain_piece_end_char"
+                        ),
+                        "source_spans": [
+                            span.model_dump(mode="json")
+                            for span in item.source_spans
+                        ],
+                        **(
+                            {"citation_text": item.citation_text}
+                            if include_content
+                            else {}
+                        ),
+                    }
+                    for item in chunks
+                ],
+            }
         )
 
     @app.get(
@@ -289,15 +409,12 @@ def _register_document_routes(
             document_id=document_id,
             relative_path=metadata.source_relative_path,
         )
+        validate_template_source(metadata.source_relative_path)
         job = runtime.sdk.create_document_version(
             binding.project_id,
             binding.knowledge_base_id,
             document_id,
-            content=searchable_upload_content(
-                upload.content,
-                source_relative_path=metadata.source_relative_path,
-                document_title=metadata.document_title,
-            ),
+            content=upload.content,
             media_type=upload.media_type,
             idempotency_key=idempotency_key,
             metadata=metadata.index_metadata(),

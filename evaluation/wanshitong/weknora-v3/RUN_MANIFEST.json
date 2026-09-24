@@ -1,0 +1,91 @@
+{
+  "schema_version": "v3-00-run-manifest-v1",
+  "observed_at_utc": "2026-09-24T05:41:50Z",
+  "supplemental_read_only_probe_at_utc": "2026-09-24T06:14Z",
+  "checkout": {
+    "branch": "codex/wb08r-weknora-v3-00-01",
+    "base_commit": "715509306d14c6fac387717c8483eb00425a7e68",
+    "upstream_reference": "Tencent/WeKnora@1edcd54b43606d9079bb36650efe3f68707a79ea"
+  },
+  "environment": "60-server",
+  "services": {
+    "candidate_8289": {
+      "container_name": "wanshitong-sso-candidate-app",
+      "container_id": "14c0f9a42c1479ef9c272ef4ff9f0c352c3855d292e9a5c9821f3021c0fdb591",
+      "image_tag": "rag-test-wanshitong:wb08r-f06-aee8755",
+      "image_id": "sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06",
+      "data_mount_container_path": "/data",
+      "data_mount_host_label": "wanshitong-wb08r-f06-fdb596e/data",
+      "health": "healthy",
+      "active_index_revision_id": "irev_0329a35ca9ea700133f7b309160118f0",
+      "active_index_fingerprint": "sha256:37ef53011feccfaf0bb01624c0127f026e028e64af0f89517eaa5e36dabc88714",
+      "active_chunker_name": "docx-structural-v3",
+      "active_revision_expected_documents": 46,
+      "active_revision_expected_chunks": 2880,
+      "http_kb_status_from_60_loopback": 200,
+      "http_kb_status_from_local_via_54_no_proxy": 200
+    },
+    "protected_18288": {
+      "container_name": "wanshitong-wb08r06-production-app",
+      "container_id": "fb65fdaeaec49c161bc6a7e73c9af7eca01cb9c5858341c073c75a64d64abf47",
+      "image_tag": "rag-test-wanshitong:wb08r06-d814f8d",
+      "image_id": "sha256:96f1aa48eed69de4a98f48af6f4fa89ebf5b35a6392c30697ee855b105f5ecd9",
+      "data_mount_container_path": "/data",
+      "data_mount_host_label": "wanshitong-wb08r06-prod-20260922-2114/data",
+      "health": "healthy",
+      "active_index_revision_id": "irev_abb7674413b8d095789d6191246310eb",
+      "http_kb_status_from_60_loopback": 200,
+      "http_kb_status_from_local_via_54_no_proxy": 200,
+      "changed_by_this_audit": false,
+      "source_artifacts_audited": false
+    }
+  },
+  "candidate_runtime_profile": {
+    "observed_container": "wanshitong-sso-candidate-app",
+    "product_mode": "wanshitong",
+    "context_reader_mode": "legacy (environment default)",
+    "weknora_chunker_mode": "legacy (environment default)",
+    "weknora_document_formats": "docx only (environment default)",
+    "candidate_code_running": false,
+    "candidate_index_revision": "irev_0329a35ca9ea700133f7b309160118f0"
+  },
+  "model_service_observation": {
+    "scope": "candidate_8289 configuration and read-only 54 LLM model catalog",
+    "embedding": {
+      "model": "Qwen3-Embedding-0.6B",
+      "endpoint": "http://host.docker.internal:8091/v1",
+      "configured_dimension": 1024,
+      "protocol": "OpenAI-compatible",
+      "service_input_limit": "not measured"
+    },
+    "reranker": {
+      "model": "Qwen3-Reranker-0.6B",
+      "endpoint": "http://host.docker.internal:8092/rerank",
+      "protocol": "tei",
+      "service_input_limit": "not measured"
+    },
+    "generation": {
+      "model": "Qwen/Qwen3-8B-AWQ",
+      "endpoint": "http://10.242.180.54:18000/v1",
+      "protocol": "OpenAI-compatible",
+      "service_reported_max_model_len": 8192,
+      "service_max_output_tokens": "not reported by model catalog",
+      "application_adapter_default_max_output_tokens": 1536,
+      "service_concurrency": "not measured"
+    },
+    "credential_values_recorded": false
+  },
+  "source_inventory": {
+    "environment": "candidate_8289",
+    "active_document_versions": 46,
+    "candidate_source_blob_files": 0,
+    "comparison_source_label": "LEGACY_CORPUS",
+    "comparison_docx_files": 46,
+    "matched_original_by_sha256": 33,
+    "derived_template_versions_without_original_digest_match": 13,
+    "source_blob_restored": false,
+    "candidate_rebuild_ready": false,
+    "source_inventory_file": "SOURCE_INVENTORY.json"
+  },
+  "audit_boundary": "Only read-only Docker, SQLite, filesystem hash, and HTTP status checks were performed. No server resource or production service was modified. Matching external corpus bytes does not mean the candidate Blob store has been repaired."
+}

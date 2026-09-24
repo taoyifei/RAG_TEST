@@ -184,6 +184,59 @@ def test_local_markdown_preserves_exact_parsed_artifact_offsets() -> None:
         assert node.anchor.source_end_char == len(node.text_payload.exact_text)
 
 
+def test_repeated_images_keep_raw_markdown_and_positions() -> None:
+    original = (
+        "# 图片说明\n\n"
+        "![图示](sidecar://image-1)\n"
+        "![图示](sidecar://image-1)\n\n"
+        "```md\n![代码字面量](sidecar://literal)\n```\n"
+    )
+    router = WeKnoraDocumentRouter(
+        DocxOoxmlV4Parser(),
+        extensions=frozenset({".md"}),
+        endpoint="",
+    )
+    parsed = router.parse(
+        ParseSource(
+            media_type="text/markdown",
+            display_name="图片.md",
+            extension=".md",
+            content=original.encode(),
+        ),
+        ParsingPolicy(),
+        _context("图片.md"),
+    )
+    metadata = dict(parsed.document_ir.metadata)
+    raw = next(
+        item
+        for item in parsed.artifacts
+        if item.artifact_id == metadata["raw_markdown_artifact_id"]
+    )
+    reading = next(
+        item
+        for item in parsed.artifacts
+        if item.artifact_id == metadata["parsed_artifact_id"]
+    )
+    assert raw.content.decode() == original
+    assert b"sidecar://" not in reading.content
+    occurrences = metadata["image_occurrences"]
+    assert len(occurrences) == 2
+    for occurrence in occurrences:
+        assert (
+            original[occurrence["raw_start_char"] : occurrence["raw_end_char"]]
+            == "![图示](sidecar://image-1)"
+        )
+        assert (
+            reading.content.decode()[
+                occurrence["reading_start_char"] : occurrence[
+                    "reading_end_char"
+                ]
+            ]
+            == "[图片：图示]"
+        )
+    validate_document_ir(parsed.document_ir)
+
+
 def test_unsafe_ooxml_package_is_blocked_before_remote_call() -> None:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:

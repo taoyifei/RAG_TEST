@@ -147,6 +147,7 @@ from rag_app.product.verification import profile_specs
 from rag_app.sdk import RagSdk
 from rag_app.tracing import TraceRecorder, TraceStore
 from rag_app.wanshitong.feedback import WanshitongFeedbackService
+from rag_app.wanshitong.template_parser import WanshitongTemplateParser
 
 _MIN_LOCAL_OCR_TOKEN_LENGTH = 32
 _MAX_LOCAL_OCR_TOKEN_LENGTH = 4096
@@ -246,9 +247,7 @@ class ProductRuntimeSettings:
         contextual_rerank_mode = os.environ.get(
             "RAG_CONTEXTUAL_RERANK_MODE", "off"
         )
-        weknora_chunker_mode = os.environ.get(
-            "RAG_WK_CHUNKER_MODE", "legacy"
-        )
+        weknora_chunker_mode = os.environ.get("RAG_WK_CHUNKER_MODE", "legacy")
         if evidence_group_mode not in {"off", "shadow", "active"}:
             raise ValueError(
                 "RAG_EVIDENCE_GROUP_MODE 必须为 off/shadow/active。"
@@ -2187,7 +2186,11 @@ def build_product_runtime(  # noqa: PLR0915
     pdf = ProductPdfParsing(connections, models, control, credentials)
 
     def _wrap_parser(parser: ParserPort) -> ParserPort:
-        return wrap_weknora_document_parser(pdf.wrap(parser))
+        wrapped = wrap_weknora_document_parser(pdf.wrap(parser))
+        product_mode = os.environ.get("RAG_PRODUCT_MODE", "universal")
+        if product_mode.strip().casefold() == "wanshitong":
+            return WanshitongTemplateParser(wrapped)
+        return wrapped
 
     auth_cipher = SecretCipher(_authentication_key(bootstrap_token))
     auth = AuthStore(connections, auth_cipher)

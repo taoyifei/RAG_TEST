@@ -8,20 +8,23 @@ import shutil
 import subprocess
 import time
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from rag_app.adapters.chunkers.docx_structural.lexical import lexical_view
 from rag_app.adapters.chunkers.docx_structural.reports import (
     build_chunking_report,
 )
-from rag_app.adapters.chunkers.docx_structural.sections import plan_sections
 from rag_app.adapters.chunkers.docx_structural.validation import validate_chunks
+from rag_app.adapters.chunkers.weknora.reading_domain import (
+    ReadingDomain,
+    plan_reading_domains,
+    stable_domain_label,
+)
 from rag_app.adapters.chunkers.weknora.reading_view import (
     ReadingView,
-    build_reading_view,
     slice_source_spans,
 )
 from rag_app.adapters.tokenizers import DeterministicUtf8TokenCounter
@@ -46,9 +49,6 @@ from rag_app.core.models import (
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.ports import TokenCounterPort
 
-if TYPE_CHECKING:
-    from rag_app.adapters.chunkers.docx_structural.atoms import RunPlan
-
 _UPSTREAM_COMMIT = "1edcd54b43606d9079bb36650efe3f68707a79ea"
 _PINNED_BINARY_SHA256 = (
     "491a0bd01577ecff835b0e2c93112e141f550e7bd07fabc523b98f8433e75f6f"
@@ -56,6 +56,7 @@ _PINNED_BINARY_SHA256 = (
 _MAX_REQUEST_BYTES = 8 << 20
 _MAX_RESPONSE_BYTES = 32 << 20
 _GO_TIMEOUT_SECONDS = 30
+_MAX_DOMAIN_CHARS = 750_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +67,30 @@ class _GoPiece:
     start: int
     end: int
     parent_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class DomainDiagnostics:
+    """一个阅读域的固定上游切分画像，不含正文。"""
+
+    domain_id: str
+    boundary: str
+    start_char: int
+    end_char: int
+    parent_count: int
+    child_count: int
+    selected_tier: str
+    tier_chain: tuple[str, ...]
+    rejected: tuple[tuple[str, str], ...]
+    profile: dict[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkingPreview:
+    """与真实入库同一适配器产出的只读分块预览。"""
+
+    result: ChunkingResult
+    domains: tuple[DomainDiagnostics, ...]
 
 
 class WeKnoraChunkerAdapter:
@@ -107,25 +132,48 @@ class WeKnoraChunkerAdapter:
         document_ir: DocumentIR,
         context: ChunkingContext,
     ) -> ChunkingResult:
-        """分块每个同来源结构 run，并保留父子关系和精确来源。"""
+        """按阅读域调用 Go，保留父子关系和逐字来源。"""
+        return self.preview(document_ir, context).result
+
+    def preview(
+        self,
+        document_ir: DocumentIR,
+        context: ChunkingContext,
+    ) -> ChunkingPreview:
+        """运行与入库相同的分块和校验，但不写索引。"""
         if context.chunker_fingerprint != self.fingerprint:
             raise ValueError("WeKnora chunker fingerprint 不匹配。")
         started = time.monotonic()
-        nodes = {node.node_id: node for node in document_ir.nodes}
         chunks: list[Chunk] = []
         parents: list[ParentPassage] = []
-        for section in plan_sections(document_ir, self.policy):
-            for run in section.runs:
-                view = build_reading_view(run, nodes)
+        diagnostics: list[DomainDiagnostics] = []
+        for domain in plan_reading_domains(document_ir, self.policy):
+            for segment_index, (offset, view) in enumerate(
+                _bounded_views(domain.view)
+            ):
                 if not view.text.strip():
                     continue
-                parent_pieces, child_pieces, selected_tier = self._split(view)
+                segment_id = stable_domain_label(
+                    "run", domain.domain_id, segment_index
+                )
+                parent_pieces, child_pieces, upstream = self._split(view)
+                selected_tier = cast(str, upstream["selected_tier"])
+                diagnostics.append(
+                    _domain_diagnostics(
+                        domain,
+                        offset,
+                        view,
+                        parent_pieces,
+                        child_pieces,
+                        upstream,
+                    )
+                )
                 parent_ids = tuple(
                     deterministic_id(
                         "ppsg",
                         document_ir.version.document_version_id,
                         self.fingerprint,
-                        run.run_id,
+                        segment_id,
                         piece.seq,
                         piece.start,
                         piece.end,
@@ -147,11 +195,13 @@ class WeKnoraChunkerAdapter:
                     chunk = self._make_chunk(
                         document_ir,
                         context,
-                        run,
+                        domain,
+                        segment_id,
+                        offset,
                         piece,
                         spans,
                         parent_id,
-                        selected_tier,
+                        upstream,
                     )
                     chunks.append(chunk)
                     if piece.parent_index >= 0:
@@ -181,10 +231,14 @@ class WeKnoraChunkerAdapter:
                                 {
                                     "upstream_commit": _UPSTREAM_COMMIT,
                                     "selected_tier": selected_tier,
+                                    "tier_chain": upstream["tier_chain"],
+                                    "rejected": upstream["rejected"],
                                     "reading_view_revision": (
                                         self.policy.reading_view_revision
                                     ),
-                                    "run_id": run.run_id,
+                                    "run_id": segment_id,
+                                    "domain_id": domain.domain_id,
+                                    "domain_start_char": offset,
                                     "reading_view_start_char": piece.start,
                                     "reading_view_end_char": piece.end,
                                 }
@@ -199,10 +253,13 @@ class WeKnoraChunkerAdapter:
             self.policy,
             elapsed_seconds=time.monotonic() - started,
         )
-        return ChunkingResult(
-            chunks=tuple(linked),
-            report=report,
-            parent_passages=tuple(parents),
+        return ChunkingPreview(
+            result=ChunkingResult(
+                chunks=tuple(linked),
+                report=report,
+                parent_passages=tuple(parents),
+            ),
+            domains=tuple(diagnostics),
         )
 
     def validate_persisted(
@@ -313,7 +370,7 @@ class WeKnoraChunkerAdapter:
 
     def _split(
         self, view: ReadingView
-    ) -> tuple[tuple[_GoPiece, ...], tuple[_GoPiece, ...], str]:
+    ) -> tuple[tuple[_GoPiece, ...], tuple[_GoPiece, ...], dict[str, object]]:
         request = {
             "normalized_text": view.text,
             "mode": "parent_child",
@@ -322,8 +379,8 @@ class WeKnoraChunkerAdapter:
             "overlap": self.policy.overlap_chars,
             "parent_size": self.policy.parent_size_chars,
             "child_size": self.policy.child_size_chars,
-            "token_limit": 0,
-            "language_hints": [],
+            "token_limit": self.policy.upstream_token_limit,
+            "language_hints": list(self.policy.language_hints),
         }
         payload = json.dumps(request, ensure_ascii=False).encode("utf-8")
         if len(payload) > _MAX_REQUEST_BYTES:
@@ -354,28 +411,23 @@ class WeKnoraChunkerAdapter:
             raise ValueError("Go 分块版本或偏移单位不匹配。")
         parents = _parse_pieces(response.get("parents"), view.text)
         children = _parse_pieces(response.get("children"), view.text)
-        diagnostics = response.get("diagnostics")
-        selected_tier = (
-            diagnostics.get("selected_tier")
-            if isinstance(diagnostics, dict)
-            else None
-        )
-        if not isinstance(selected_tier, str) or not selected_tier:
-            raise ValueError("Go 分块未返回实际选择的策略层。")
-        return parents, children, selected_tier
+        diagnostics = _parse_diagnostics(response.get("diagnostics"))
+        return parents, children, diagnostics
 
     def _make_chunk(  # noqa: PLR0913, PLR0917
         self,
         document_ir: DocumentIR,
         context: ChunkingContext,
-        run: RunPlan,
+        domain: ReadingDomain,
+        segment_id: str,
+        domain_offset: int,
         piece: _GoPiece,
         spans: tuple[SourceSpan, ...],
         parent_id: str | None,
-        selected_tier: str,
+        upstream: dict[str, object],
     ) -> Chunk:
         citation = piece.content
-        heading_path = run.heading_path
+        heading_path = domain.heading_path
         embedded = (
             piece.context_header + "\n\n" + citation.strip()
             if piece.context_header
@@ -389,9 +441,21 @@ class WeKnoraChunkerAdapter:
             self.token_counter.count(embedded).count,
         )
         content_hash = hashlib.sha256(citation.encode("utf-8")).hexdigest()
+        source_nodes = {
+            span.node_id for span in spans if span.node_id is not None
+        }
+        relevant_atoms = tuple(
+            atom
+            for atom in domain.atoms
+            if any(
+                fragment.node_id in source_nodes
+                for fragment in atom.fragments
+                if fragment.node_id is not None
+            )
+        )
         parent_nodes = {
             atom.parent_node_id
-            for atom in run.atoms
+            for atom in relevant_atoms
             if atom.parent_node_id is not None
         }
         parent_node_id = (
@@ -400,21 +464,23 @@ class WeKnoraChunkerAdapter:
         child_groups = tuple(
             dict.fromkeys(
                 group_id
-                for atom in run.atoms
+                for atom in relevant_atoms
                 for group_id in atom.child_group_ids
             )
         )
         note_refs = tuple(
             dict.fromkeys(
-                note_id for atom in run.atoms for note_id in atom.note_refs
+                note_id for atom in relevant_atoms for note_id in atom.note_refs
             )
         )
+        roles = {atom.role for atom in relevant_atoms}
+        role = next(iter(roles)) if len(roles) == 1 else domain.role
         return Chunk(
             chunk_id=deterministic_id(
                 "chunk",
                 document_ir.version.document_version_id,
                 self.fingerprint,
-                run.run_id,
+                segment_id,
                 piece.seq,
                 piece.start,
                 piece.end,
@@ -425,14 +491,14 @@ class WeKnoraChunkerAdapter:
             index_revision_id=context.index_revision_id,
             version=document_ir.version,
             chunker_fingerprint=self.fingerprint,
-            role=run.role,
+            role=role,
             parent_node_id=parent_node_id,
             parent_passage_id=parent_id,
-            section_id=run.section_id,
-            neighbor_group_id=run.neighbor_group_id,
+            section_id=domain.section_id,
+            neighbor_group_id=domain.neighbor_group_id,
             child_group_ids=child_groups,
             note_refs=note_refs,
-            context_dependencies=run.context_dependencies,
+            context_dependencies=domain.context_dependencies,
             source_spans=spans,
             citation_text=citation,
             embedding_text=embedded,
@@ -446,14 +512,91 @@ class WeKnoraChunkerAdapter:
             metadata=freeze_json_object(
                 {
                     "upstream_commit": _UPSTREAM_COMMIT,
-                    "selected_tier": selected_tier,
+                    "selected_tier": upstream["selected_tier"],
+                    "tier_chain": upstream["tier_chain"],
+                    "rejected": upstream["rejected"],
                     "reading_view_revision": self.policy.reading_view_revision,
-                    "run_id": run.run_id,
+                    "run_id": segment_id,
+                    "domain_id": domain.domain_id,
+                    "domain_start_char": domain_offset,
+                    "domain_piece_start_char": domain_offset + piece.start,
+                    "domain_piece_end_char": domain_offset + piece.end,
                     "reading_view_start_char": piece.start,
                     "reading_view_end_char": piece.end,
                 }
             ),
         )
+
+
+def _bounded_views(view: ReadingView) -> Iterator[tuple[int, ReadingView]]:
+    """只在 Go 请求容量边界截断，优先保留完整行。"""
+    start = 0
+    while start < len(view.text):
+        end = min(start + _MAX_DOMAIN_CHARS, len(view.text))
+        if end < len(view.text):
+            newline = view.text.rfind("\n", start + _MAX_DOMAIN_CHARS // 2, end)
+            if newline > start:
+                end = newline + 1
+        yield (
+            start,
+            ReadingView(
+                view.text[start:end], slice_source_spans(view, start, end)
+            ),
+        )
+        start = end
+
+
+def _parse_diagnostics(raw: object) -> dict[str, object]:
+    if not isinstance(raw, dict):
+        raise ValueError("Go 分块诊断缺失。")
+    selected = raw.get("selected_tier")
+    chain = raw.get("tier_chain")
+    rejected = raw.get("rejected") or []
+    profile = raw.get("profile")
+    if (
+        not isinstance(selected, str)
+        or not selected
+        or not isinstance(chain, list)
+        or any(not isinstance(item, str) for item in chain)
+        or not isinstance(rejected, list)
+        or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("tier"), str)
+            or not isinstance(item.get("reason"), str)
+            for item in rejected
+        )
+        or (profile is not None and not isinstance(profile, dict))
+    ):
+        raise ValueError("Go 分块诊断结构无效。")
+    return {
+        "selected_tier": selected,
+        "tier_chain": chain,
+        "rejected": rejected,
+        "profile": profile,
+    }
+
+
+def _domain_diagnostics(  # noqa: PLR0913, PLR0917
+    domain: ReadingDomain,
+    offset: int,
+    view: ReadingView,
+    parents: tuple[_GoPiece, ...],
+    children: tuple[_GoPiece, ...],
+    upstream: dict[str, object],
+) -> DomainDiagnostics:
+    rejected = cast(list[dict[str, str]], upstream["rejected"])
+    return DomainDiagnostics(
+        domain_id=domain.domain_id,
+        boundary=domain.boundary,
+        start_char=offset,
+        end_char=offset + len(view.text),
+        parent_count=len(parents),
+        child_count=len(children),
+        selected_tier=cast(str, upstream["selected_tier"]),
+        tier_chain=tuple(cast(list[str], upstream["tier_chain"])),
+        rejected=tuple((item["tier"], item["reason"]) for item in rejected),
+        profile=cast(dict[str, object] | None, upstream["profile"]),
+    )
 
 
 def _resolve_binary(configured: str | Path | None) -> Path:

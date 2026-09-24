@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from fastapi.testclient import TestClient
 
@@ -52,6 +53,7 @@ def build_product_harness(  # noqa: PLR0913
     qdrant_api_key_file: Path | None = None,
     local_ocr_endpoints: tuple[str, ...] = (),
     local_ocr_token_file: Path | None = None,
+    weknora_chunker_mode: Literal["legacy", "parent-child"] = "legacy",
     root_path: str = "",
     trusted_origins: tuple[str, ...] = (
         "http://127.0.0.1:8088",
@@ -69,6 +71,7 @@ def build_product_harness(  # noqa: PLR0913
         qdrant_api_key_file: Qdrant URL 模式的 0600 Key 文件。
         local_ocr_endpoints: 可选内部 OCR 服务端点。
         local_ocr_token_file: 可选内部 OCR Bearer 的 0600 文件。
+        weknora_chunker_mode: 测试使用的固定分块器模式。
         root_path: 可选外部路径前缀。
         trusted_origins: 浏览器允许使用的精确 Origin。
 
@@ -99,6 +102,7 @@ def build_product_harness(  # noqa: PLR0913
         qdrant_api_key_file=qdrant_api_key_file,
         local_ocr_endpoints=local_ocr_endpoints,
         local_ocr_token_file=local_ocr_token_file,
+        weknora_chunker_mode=weknora_chunker_mode,
         trusted_origins=trusted_origins,
     )
     runtime = build_product_runtime(
