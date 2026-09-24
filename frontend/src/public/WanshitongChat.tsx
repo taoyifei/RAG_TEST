@@ -18,6 +18,7 @@ export function WanshitongChat({
   initialQuestion,
   onFeedback,
   onFeedbackLogin,
+  onDownloadReference,
   onNewTopic,
   onPopularQuestionSubmit,
   onRefresh,
@@ -39,6 +40,12 @@ export function WanshitongChat({
     feedback: PublicFeedbackSubmission,
   ) => void;
   onFeedbackLogin: () => void;
+  onDownloadReference?: (
+    conversationId: string,
+    traceId: string,
+    referenceId: string,
+    documentName: string,
+  ) => Promise<void>;
   onNewTopic: () => void;
   onPopularQuestionSubmit: (question: PublicPopularQuestion) => void;
   onRefresh: () => void;
@@ -78,6 +85,17 @@ export function WanshitongChat({
                   if (turn.traceId) onFeedback(turn.id, turn.traceId, feedback);
                 }}
                 onFeedbackLogin={onFeedbackLogin}
+                onDownloadReference={
+                  turn.traceId && onDownloadReference
+                    ? (referenceId, documentName) =>
+                        onDownloadReference(
+                          turn.conversationId,
+                          turn.traceId!,
+                          referenceId,
+                          documentName,
+                        )
+                    : undefined
+                }
                 onRetry={() =>
                   onRetry(turn.id, turn.question, turn.conversationId)
                 }

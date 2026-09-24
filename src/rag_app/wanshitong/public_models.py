@@ -72,6 +72,7 @@ class PublicCapabilities(BaseModel):
     stream_protocol: Literal["wanshitong-public-sse-v1"] = (
         "wanshitong-public-sse-v1"
     )
+    natural_stream_protocol: Literal["wanshitong-natural-sse-v1"] | None = None
     trace_mode: Literal["SAFE"] = "SAFE"
     history_mode: Literal["full"] = "full"
     document_visibility: Literal["all_internal"] = "all_internal"
@@ -132,6 +133,16 @@ class PublicChatRequest(PublicRequest):
         return self
 
 
+class PublicChatStopRequest(PublicRequest):
+    """停止同一服务端会话内正在执行的自然问答轮次。"""
+
+    conversation_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    )
+
+
 class PublicConversationClearResponse(BaseModel):
     """不暴露内部 owner 或固定 Scope 的会话清理回执。"""
 
@@ -179,6 +190,7 @@ class PublicFeedbackResponse(BaseModel):
 __all__ = [
     "PublicCapabilities",
     "PublicChatRequest",
+    "PublicChatStopRequest",
     "PublicConversationClearResponse",
     "PublicFeedbackRequest",
     "PublicFeedbackResponse",

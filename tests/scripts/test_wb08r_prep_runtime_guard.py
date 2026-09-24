@@ -277,6 +277,35 @@ def test_parent_child_chunker_requires_exact_isolated_candidate_transition(
     assert invalid["semantic_mismatches"]
 
 
+def test_natural_public_requires_explicit_isolated_candidate_enable(
+    tmp_path: Path,
+) -> None:
+    rendered = _rendered()
+    environment = rendered["services"]["app"]["environment"]  # type: ignore[index]
+    environment["RAG_WANSHITONG_NATURAL_PUBLIC_ENABLED"] = "true"
+    environment["RAG_WANSHITONG_NATURAL_PUBLIC_ENGINE"] = "wk-standard-pc-v1"
+    baseline, candidate, image = _inputs(tmp_path, rendered)
+    arguments = {
+        "stage": "rendered_spec",
+        "baseline_inspect": baseline,
+        "candidate_input": candidate,
+        "target_image_inspect": image,
+        "candidate_root": PurePosixPath("/candidate"),
+        "forbidden_root": PurePosixPath("/production"),
+    }
+    assert guard.compare_runtime(**arguments)["ready"] is False
+    assert (
+        guard.compare_runtime(**arguments, allow_natural_public=True)["ready"]
+        is True
+    )
+    environment["RAG_WANSHITONG_NATURAL_PUBLIC_ENGINE"] = "unknown"
+    _write_json(candidate, rendered)
+    assert (
+        guard.compare_runtime(**arguments, allow_natural_public=True)["ready"]
+        is False
+    )
+
+
 def test_phase04_allows_only_explicit_department_shadow_enable(
     tmp_path: Path,
 ) -> None:

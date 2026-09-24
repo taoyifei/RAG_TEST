@@ -45,12 +45,14 @@ export function PublicAnswer({
   feedbackDetailsEnabled = true,
   onFeedback,
   onFeedbackLogin,
+  onDownloadReference,
   onRetry,
   turn,
 }: {
   feedbackDetailsEnabled?: boolean;
   onFeedback: (feedback: PublicFeedbackSubmission) => void;
   onFeedbackLogin?: () => void;
+  onDownloadReference?: (referenceId: string, documentName: string) => Promise<void>;
   onRetry: () => void;
   turn: PublicTurn;
 }) {
@@ -67,7 +69,7 @@ export function PublicAnswer({
   const waitingForGeneration = turn.stageMessage === PUBLIC_STAGE_LABELS.generation;
   const hint = progressHint(
     turn.stageMessage,
-    turn.claims.length,
+    turn.claims.length + (turn.provisionalAnswer ? 1 : 0),
     stageSeconds,
     signalAgeSeconds,
   );
@@ -134,7 +136,16 @@ export function PublicAnswer({
         {turn.answer !== undefined ? (
           <div className="wst-final-answer">{turn.answer}</div>
         ) : (
-          turn.claims.length > 0 && (
+          turn.provisionalAnswer ? (
+            <div className="wst-claims">
+              <p>
+                {active
+                  ? "生成中，引用待核对 · 以下是临时正文"
+                  : "回答已中断 · 以下内容未经最终核对"}
+              </p>
+              <div className="wst-final-answer">{turn.provisionalAnswer}</div>
+            </div>
+          ) : turn.claims.length > 0 && (
             <div className="wst-claims">
               <p>已核验 {turn.claims.length} 条内容 · 暂非最终答案</p>
               {turn.claims.map((claim) => (
@@ -160,7 +171,10 @@ export function PublicAnswer({
         )}
         {turn.status === "completed" && (
           <>
-            <PublicCitations citations={turn.citations} />
+            <PublicCitations
+              citations={turn.citations}
+              onDownloadReference={onDownloadReference}
+            />
           </>
         )}
         {(turn.status === "completed" ||

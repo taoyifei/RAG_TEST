@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Path, Request, Response
 from fastapi.responses import StreamingResponse
@@ -11,17 +11,26 @@ from starlette.types import Receive, Scope, Send
 
 from rag_app.api.p09_schemas import QueryRequest
 from rag_app.api.p09_stream import P09AnswerStream, P09AnswerStreamRequest
+from rag_app.application.answering.natural_answer import NaturalReference
 from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import NotFound, PolicyDenied, RagError
 from rag_app.core.identifiers import new_id
 from rag_app.core.models import KnowledgeBaseScope
 from rag_app.core.models.usage_audit import QueryAuditContext
+from rag_app.product.conversations import natural_reference_id
 from rag_app.product.http_security import secure_cookie_for_request
 from rag_app.query_executor import QueryAdmissionError
 from rag_app.tracing import TraceMode
+from rag_app.wanshitong.natural_stream import (
+    NATURAL_PUBLIC_PROTOCOL,
+    NaturalPublicStream,
+    NaturalStreamRegistry,
+    public_natural_references,
+)
 from rag_app.wanshitong.public_models import (
     PublicCapabilities,
     PublicChatRequest,
+    PublicChatStopRequest,
     PublicConversationClearResponse,
     PublicFeedbackRequest,
     PublicFeedbackResponse,
@@ -52,8 +61,10 @@ from rag_app.wanshitong.usage_hints import parse_client_context
 PUBLIC_SESSION_PATH = "/api/public/session"
 PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities"
 PUBLIC_CHAT_PATH = "/api/public/chat"
+PUBLIC_CHAT_STOP_PATH = "/api/public/chat/{trace_id}/stop"
 PUBLIC_FEEDBACK_PATH = "/api/public/feedback"
 PUBLIC_POPULAR_QUESTIONS_PATH = "/api/public/popular-questions"
+PUBLIC_CONVERSATIONS_PATH = "/api/public/conversations"
 PUBLIC_CONVERSATION_PATH = "/api/public/conversations/{conversation_id}"
 _PUBLIC_STREAM_FIRST_CONTENT_SECONDS = 120.0
 _PUBLIC_STREAM_IDLE_SECONDS = 120.0
@@ -88,13 +99,17 @@ class _PublicStreamingResponse(StreamingResponse):
             self._cancel_stream()
 
 
-def register_public_routes(  # noqa: PLR0915
+def register_public_routes(  # noqa: PLR0913, PLR0915
     app: FastAPI,
     *,
     runtime: ProductRuntime,
     scope_service: FixedScopeService,
     sessions: PublicSessionProvider,
     recommendations: QuestionRecommendationService,
+    natural_public_enabled: bool = False,
+    natural_public_engine: Literal["wk-standard-v1", "wk-standard-pc-v1"] = (
+        "wk-standard-pc-v1"
+    ),
 ) -> None:
     """注册固定 Scope 的匿名 Facade，不新增查询或存储服务。
 
@@ -104,8 +119,11 @@ def register_public_routes(  # noqa: PLR0915
         scope_service: WB-01 已校验的固定 Scope 服务。
         sessions: 由部署主密钥派生的匿名会话服务。
         recommendations: 已审核公共题目录。
+        natural_public_enabled: 仅候选部署启用的自然流开关。
+        natural_public_engine: 服务器固定的自然问答引擎。
 
     """
+    natural_streams = NaturalStreamRegistry()
 
     @app.post(
         PUBLIC_SESSION_PATH,
@@ -163,12 +181,16 @@ def register_public_routes(  # noqa: PLR0915
         PUBLIC_CAPABILITIES_PATH,
         tags=["wanshitong-public"],
         response_model=PublicCapabilities,
+        response_model_exclude_none=True,
     )
     def _capabilities(request: Request) -> PublicCapabilities:
         _reject_query_parameters(request)
         _authenticate_public_cookie(request, sessions)
         scope_service.binding()
         return PublicCapabilities(
+            natural_stream_protocol=(
+                NATURAL_PUBLIC_PROTOCOL if natural_public_enabled else None
+            ),
             shortcuts=tuple(
                 PublicShortcut(
                     shortcut_id=item.shortcut_id,
@@ -177,7 +199,7 @@ def register_public_routes(  # noqa: PLR0915
                     revision=item.revision,
                 )
                 for item in SHORTCUT_CATALOG.public_definitions()
-            )
+            ),
         )
 
     @app.get(
@@ -248,6 +270,64 @@ def register_public_routes(  # noqa: PLR0915
         runtime.sdk.require_active_knowledge_base(
             binding.project_id, binding.knowledge_base_id
         )
+        requested_protocol = request.headers.get("X-Wanshitong-Stream-Protocol")
+        if requested_protocol is not None:
+            if requested_protocol != NATURAL_PUBLIC_PROTOCOL:
+                raise HTTPException(
+                    status_code=406, detail="unsupported stream protocol"
+                )
+            if not natural_public_enabled:
+                raise HTTPException(
+                    status_code=409, detail="natural stream disabled"
+                )
+            if body.conversation_id is None:
+                raise HTTPException(
+                    status_code=422, detail="conversation_id required"
+                )
+            natural = NaturalPublicStream(
+                runtime=runtime,
+                executor=runtime.p09.query_executor,
+                scope=KnowledgeBaseScope(
+                    project_id=binding.project_id,
+                    knowledge_base_id=binding.knowledge_base_id,
+                ),
+                question=body.query,
+                conversation_id=body.conversation_id,
+                owner_id=principal.owner_id,
+                trace_id=trace_id,
+                engine_id=natural_public_engine,
+                audit_context=audit_context,
+                authorization_guard=lambda: _validate_stream_session(
+                    sessions, cookie_value, principal
+                ),
+            )
+            try:
+                natural_iterator = natural.start()
+            except QueryAdmissionError as error:
+                raise RagError(
+                    "查询容量已满，请稍后重试。",
+                    stage="query.admission",
+                    code="QUEUE_LIMIT_EXCEEDED",
+                    retryable=True,
+                    trace_id=trace_id,
+                ) from error
+            natural_streams.register(natural)
+
+            def cleanup_natural_stream() -> None:
+                try:
+                    natural.cancel()
+                finally:
+                    natural_streams.discard(natural)
+
+            return _PublicStreamingResponse(
+                natural_iterator,
+                cancel=cleanup_natural_stream,
+                headers={
+                    "Cache-Control": "no-store, no-transform",
+                    "X-Accel-Buffering": "no",
+                    "X-Trace-Id": trace_id,
+                },
+            )
         stream = P09AnswerStream(
             executor=runtime.p09.query_executor,
             sdk=runtime.sdk,
@@ -300,6 +380,192 @@ def register_public_routes(  # noqa: PLR0915
                 "X-Trace-Id": trace_id,
             },
         )
+
+    @app.post(PUBLIC_CHAT_STOP_PATH, tags=["wanshitong-public"])
+    def _stop_natural_chat(
+        body: PublicChatStopRequest,
+        request: Request,
+        trace_id: Annotated[str, Path(pattern=r"^trace_[0-9a-f]{32}$")],
+    ) -> dict[str, bool]:
+        _reject_query_parameters(request)
+        if not natural_public_enabled:
+            raise HTTPException(
+                status_code=404, detail="natural stream disabled"
+            )
+        principal, _ = _authenticate_public_request(request, sessions)
+        return {
+            "cancelled": natural_streams.cancel_owned(
+                trace_id,
+                owner_id=principal.owner_id,
+                conversation_id=body.conversation_id,
+            )
+        }
+
+    @app.get(PUBLIC_CONVERSATIONS_PATH, tags=["wanshitong-public"])
+    def _natural_sessions(request: Request) -> dict[str, object]:
+        _reject_query_parameters(request)
+        if not natural_public_enabled:
+            raise HTTPException(
+                status_code=404, detail="natural history disabled"
+            )
+        principal, _ = _authenticate_public_request(request, sessions)
+        binding = scope_service.binding()
+        scope = KnowledgeBaseScope(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+        )
+        items = runtime.conversations.natural_sessions(
+            scope, owner_id=principal.owner_id
+        )
+        return {
+            "items": [
+                {
+                    "conversation_id": item.conversation_id,
+                    "title": item.title,
+                    "updated_at": item.updated_at,
+                }
+                for item in items
+            ]
+        }
+
+    @app.get(
+        PUBLIC_CONVERSATION_PATH,
+        tags=["wanshitong-public"],
+    )
+    def _natural_history(
+        conversation_id: Annotated[
+            str,
+            Path(
+                min_length=1,
+                max_length=128,
+                pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            ),
+        ],
+        request: Request,
+    ) -> dict[str, object]:
+        _reject_query_parameters(request)
+        if not natural_public_enabled:
+            raise HTTPException(
+                status_code=404, detail="natural history disabled"
+            )
+        principal, _ = _authenticate_public_request(request, sessions)
+        binding = scope_service.binding()
+        scope = KnowledgeBaseScope(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+        )
+        records = runtime.conversations.natural_turns(
+            scope, conversation_id, owner_id=principal.owner_id
+        )
+        return {
+            "conversation_id": conversation_id,
+            "turns": [
+                {
+                    "turn_id": item.trace_id,
+                    "trace_id": item.trace_id,
+                    "question": item.question,
+                    "status": item.status,
+                    "answer": item.answer,
+                    "citation_status": item.citation_status,
+                    "validation_level": item.validation_level,
+                    "citations": public_natural_references(
+                        item.trace_id, item.references
+                    ),
+                    "created_at": item.created_at,
+                }
+                for item in records
+            ],
+        }
+
+    @app.get(
+        PUBLIC_CONVERSATION_PATH
+        + "/turns/{trace_id}/references/{reference_id}",
+        tags=["wanshitong-public"],
+    )
+    def _natural_reference(
+        conversation_id: str,
+        trace_id: Annotated[str, Path(pattern=r"^trace_[0-9a-f]{32}$")],
+        reference_id: Annotated[str, Path(pattern=r"^ref_[0-9a-f]{32}$")],
+        request: Request,
+    ) -> dict[str, object]:
+        _reject_query_parameters(request)
+        _reference, citation = _resolve_natural_reference(
+            request, conversation_id, trace_id, reference_id
+        )
+        return citation
+
+    @app.get(
+        PUBLIC_CONVERSATION_PATH
+        + "/turns/{trace_id}/references/{reference_id}/source",
+        tags=["wanshitong-public"],
+    )
+    def _natural_source(
+        conversation_id: str,
+        trace_id: Annotated[str, Path(pattern=r"^trace_[0-9a-f]{32}$")],
+        reference_id: Annotated[str, Path(pattern=r"^ref_[0-9a-f]{32}$")],
+        request: Request,
+    ) -> Response:
+        _reject_query_parameters(request)
+        reference, _citation = _resolve_natural_reference(
+            request, conversation_id, trace_id, reference_id
+        )
+        binding = scope_service.binding()
+        version = runtime.sdk.get_document_version(
+            binding.project_id,
+            binding.knowledge_base_id,
+            reference.document_id,
+            reference.document_version_id,
+        )
+        if version.source_artifact_id is None:
+            raise NotFound(
+                "该版本原件不可用。", stage="wanshitong.public.reference"
+            )
+        blob = runtime.sdk.read_artifact(
+            binding.project_id,
+            binding.knowledge_base_id,
+            reference.document_id,
+            reference.document_version_id,
+            version.source_artifact_id,
+        )
+        return Response(
+            content=blob.content,
+            media_type=blob.media_type,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    def _resolve_natural_reference(
+        request: Request,
+        conversation_id: str,
+        trace_id: str,
+        reference_id: str,
+    ) -> tuple[NaturalReference, dict[str, object]]:
+        if not natural_public_enabled:
+            raise HTTPException(
+                status_code=404, detail="natural reference disabled"
+            )
+        principal, _ = _authenticate_public_request(request, sessions)
+        binding = scope_service.binding()
+        scope = KnowledgeBaseScope(
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+        )
+        record = runtime.conversations.natural_turn(
+            scope, conversation_id, trace_id, owner_id=principal.owner_id
+        )
+        if record is None or record.status != "ANSWERED":
+            raise NotFound("来源不可用。", stage="wanshitong.public.reference")
+        reference = next(
+            (
+                item
+                for item in record.references
+                if natural_reference_id(trace_id, item.alias) == reference_id
+            ),
+            None,
+        )
+        if reference is None:
+            raise NotFound("来源不可用。", stage="wanshitong.public.reference")
+        citation = public_natural_references(trace_id, (reference,))[0]
+        return reference, citation
 
     @app.delete(
         PUBLIC_CONVERSATION_PATH,
@@ -431,6 +697,7 @@ def _validate_stream_session(
 __all__ = [
     "PUBLIC_CAPABILITIES_PATH",
     "PUBLIC_CHAT_PATH",
+    "PUBLIC_CONVERSATIONS_PATH",
     "PUBLIC_CONVERSATION_PATH",
     "PUBLIC_FEEDBACK_PATH",
     "PUBLIC_POPULAR_QUESTIONS_PATH",

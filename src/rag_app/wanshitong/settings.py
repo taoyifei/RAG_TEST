@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Literal
 
 from rag_app.wanshitong.mode import ProductMode
 from rag_app.wanshitong.sso_settings import SsoSettings
@@ -13,6 +14,8 @@ _PRODUCT_MODE_ENVIRONMENT_KEY = "RAG_PRODUCT_MODE"
 _DEMO_ALLOW_HTTP_ENVIRONMENT_KEY = "RAG_WANSHITONG_DEMO_ALLOW_HTTP"
 _DEPARTMENT_SHADOW_ENVIRONMENT_KEY = "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
 _POPULAR_QUESTIONS_ENVIRONMENT_KEY = "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED"
+_NATURAL_PUBLIC_ENVIRONMENT_KEY = "RAG_WANSHITONG_NATURAL_PUBLIC_ENABLED"
+_NATURAL_ENGINE_ENVIRONMENT_KEY = "RAG_WANSHITONG_NATURAL_PUBLIC_ENGINE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +26,10 @@ class WanshitongSettings:
     demo_allow_http: bool = False
     department_shadow_enabled: bool = False
     popular_questions_enabled: bool = True
+    natural_public_enabled: bool = False
+    natural_public_engine: Literal["wk-standard-v1", "wk-standard-pc-v1"] = (
+        "wk-standard-pc-v1"
+    )
     sso: SsoSettings = field(default_factory=SsoSettings)
 
     @property
@@ -85,6 +92,22 @@ class WanshitongSettings:
                 "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED "
                 "仅支持 true 或 false。"
             )
+        raw_natural = (
+            source.get(_NATURAL_PUBLIC_ENVIRONMENT_KEY, "false")
+            .strip()
+            .casefold()
+        )
+        if raw_natural not in {"true", "false"}:
+            raise ValueError(
+                "RAG_WANSHITONG_NATURAL_PUBLIC_ENABLED 仅支持 true 或 false。"
+            )
+        natural_engine = source.get(
+            _NATURAL_ENGINE_ENVIRONMENT_KEY, "wk-standard-pc-v1"
+        ).strip()
+        if natural_engine not in {"wk-standard-v1", "wk-standard-pc-v1"}:
+            raise ValueError(
+                "RAG_WANSHITONG_NATURAL_PUBLIC_ENGINE 不是受支持的引擎。"
+            )
         return cls(
             product_mode=product_mode,
             demo_allow_http=(
@@ -98,6 +121,10 @@ class WanshitongSettings:
             popular_questions_enabled=(
                 product_mode is ProductMode.WANSHITONG and raw_popular == "true"
             ),
+            natural_public_enabled=(
+                product_mode is ProductMode.WANSHITONG and raw_natural == "true"
+            ),
+            natural_public_engine=natural_engine,
             sso=(
                 SsoSettings.from_environment(
                     source,

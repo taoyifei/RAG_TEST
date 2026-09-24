@@ -1,4 +1,5 @@
 import type { PublicCitation } from "./publicSse";
+import { useState } from "react";
 
 interface CitationGroup {
   key: string;
@@ -51,9 +52,12 @@ function groupCitations(citations: PublicCitation[]): CitationGroup[] {
 
 export function PublicCitations({
   citations,
+  onDownloadReference,
 }: {
   citations: PublicCitation[];
+  onDownloadReference?: (referenceId: string, documentName: string) => Promise<void>;
 }) {
+  const [downloadError, setDownloadError] = useState<string>();
   const visible = citations.filter(
     (citation) =>
       typeof citation.document_name === "string" &&
@@ -110,9 +114,26 @@ export function PublicCitations({
                       {citation.quote && (
                         <blockquote>{citation.quote}</blockquote>
                       )}
+                      {citation.reference_id && onDownloadReference && (
+                        <button
+                          onClick={() => {
+                            setDownloadError(undefined);
+                            void onDownloadReference(
+                              citation.reference_id!,
+                              citation.document_name,
+                            ).catch(() => {
+                              setDownloadError("原件暂不可用，请稍后重试。");
+                            });
+                          }}
+                          type="button"
+                        >
+                          下载本次引用的原件
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ol>
+                {downloadError && <p role="alert">{downloadError}</p>}
               </div>
             </details>
           </article>

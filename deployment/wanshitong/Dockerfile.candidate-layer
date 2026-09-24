@@ -16,12 +16,15 @@ COPY --chown=root:root layer/site-packages/docx_rag-0.1.0.dist-info/ \
     /usr/local/lib/python3.11/site-packages/docx_rag-0.1.0.dist-info/
 COPY --chown=rag:rag layer/app/frontend/ /app/frontend/
 COPY --chown=rag:rag layer/app/migrations/ /app/migrations/
+COPY vendor/weknora-chunker/bin/linux-amd64/wb-chunker /usr/local/bin/wb-chunker
+COPY --chown=rag:rag vendor/weknora-chunker/LICENSE /app/licenses/WeKnora-LICENSE
 COPY --chown=rag:rag layer/app/scripts/wanshitong_question_analytics.py \
     /app/scripts/wanshitong_question_analytics.py
 
 RUN chmod -R u=rwX,go=rX \
     /usr/local/lib/python3.11/site-packages/rag_app \
     /usr/local/lib/python3.11/site-packages/docx_rag-0.1.0.dist-info \
+    && chmod 755 /usr/local/bin/wb-chunker \
     && python -c \
     'import sys; from rag_app._build_revision import SOURCE_REVISION; sys.exit(0 if SOURCE_REVISION == sys.argv[1] else 1)' \
     "${VCS_REF}" \

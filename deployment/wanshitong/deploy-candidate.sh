@@ -110,6 +110,12 @@ if grep -Eq \
   "${env_file}"; then
   chunker_guard_args+=(--allow-weknora-parent-child)
 fi
+natural_guard_args=()
+if grep -Eq \
+  "^RAG_WANSHITONG_NATURAL_PUBLIC_ENABLED=(true|'true'|\"true\")$" \
+  "${env_file}"; then
+  natural_guard_args+=(--allow-natural-public)
+fi
 
 report_ready() {
   python3 - "$1" <<'PY'
@@ -149,6 +155,7 @@ PY
       "${popular_guard_args[@]}" \
       "${q1_capture_guard_args[@]}" \
       "${chunker_guard_args[@]}" \
+      "${natural_guard_args[@]}" \
       --output "${rendered_guard}"
     ;;
   create)
@@ -172,6 +179,7 @@ PY
       "${popular_guard_args[@]}" \
       "${q1_capture_guard_args[@]}" \
       "${chunker_guard_args[@]}" \
+      "${natural_guard_args[@]}" \
       --output "${created_guard}"
     ;;
   start)

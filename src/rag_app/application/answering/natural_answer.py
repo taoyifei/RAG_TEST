@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -13,7 +14,7 @@ from rag_app.core.models.common import FrozenModel
 from rag_app.core.ports import CancellationPort
 
 _CITATION = re.compile(r"\[S([0-9]+)\]")
-_CITATION_LIKE = re.compile(r"\[S[^\]]*\]")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +55,7 @@ class NaturalAnswerPort(Protocol):
         *,
         source_identities: tuple[tuple[str, str], ...],
         cancellation: CancellationPort,
+        on_delta: Callable[[str], None] | None = None,
     ) -> NaturalCompletion:
         """使用实际聊天流完成一次生成。"""
 
@@ -75,6 +77,7 @@ class NaturalReference(FrozenModel):
     parent_ranges: tuple[tuple[int, int], ...] = ()
     citation_basis: Literal["original", "parsed_artifact", "mixed"]
     source_complete: bool
+    excerpt: str | None = Field(default=None, max_length=1000, repr=False)
 
 
 class NaturalAnswerResult(FrozenModel):
@@ -108,12 +111,16 @@ class NaturalAnswerResult(FrozenModel):
 
 def check_citations(answer: str, available: frozenset[str]) -> CitationBinding:
     """区分缺失与非法引用；只有本次实际送模的别名可绑定。"""
-    markers = _CITATION_LIKE.findall(answer)
+    markers = _visible_citation_markers(answer)
     invalid = tuple(
         marker for marker in markers if _CITATION.fullmatch(marker) is None
     )
     cited = tuple(
-        dict.fromkeys(f"S{match}" for match in _CITATION.findall(answer))
+        dict.fromkeys(
+            f"S{match.group(1)}"
+            for marker in markers
+            if (match := _CITATION.fullmatch(marker)) is not None
+        )
     )
     invalid += tuple(f"[{alias}]" for alias in cited if alias not in available)
     if invalid:
@@ -121,6 +128,58 @@ def check_citations(answer: str, available: frozenset[str]) -> CitationBinding:
     if not cited:
         return CitationBinding("missing")
     return CitationBinding("valid", cited_aliases=cited)
+
+
+def _visible_citation_markers(  # noqa: PLR0912
+    answer: str,
+) -> tuple[str, ...]:
+    """忽略代码及转义文本，并将 EOF 半截标签保留为无效引用。"""
+    markers: list[str] = []
+    fence_char = ""
+    fence_length = 0
+    for line in answer.splitlines():
+        fence = _FENCE.match(line)
+        if fence is not None:
+            run = fence.group(1)
+            if not fence_char:
+                fence_char, fence_length = run[0], len(run)
+            elif run[0] == fence_char and len(run) >= fence_length:
+                fence_char, fence_length = "", 0
+            continue
+        if fence_char:
+            continue
+        index = 0
+        inline_length = 0
+        while index < len(line):
+            if line[index] == "`":
+                end = index
+                while end < len(line) and line[end] == "`":
+                    end += 1
+                run_length = end - index
+                if not inline_length:
+                    inline_length = run_length
+                elif inline_length == run_length:
+                    inline_length = 0
+                index = end
+                continue
+            if inline_length or line[index : index + 2] != "[S":
+                index += 1
+                continue
+            backslashes = 0
+            cursor = index - 1
+            while cursor >= 0 and line[cursor] == "\\":
+                backslashes += 1
+                cursor -= 1
+            if backslashes % 2:
+                index += 1
+                continue
+            end = line.find("]", index + 2)
+            if end < 0:
+                markers.append(line[index : index + 130])
+                break
+            markers.append(line[index : end + 1])
+            index = end + 1
+    return tuple(markers)
 
 
 def cited_aliases(answer: str, available: frozenset[str]) -> tuple[str, ...]:

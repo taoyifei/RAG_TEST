@@ -97,4 +97,32 @@ describe("湾事通 SSE parser", () => {
     expect(publicStageLabel("validation")).toBe("正在核对回答与来源");
     expect(publicStageLabel("internal.future.stage")).toBe("正在处理问题");
   });
+
+  it("自然协议在最终答案前逐段交付，未知协议与旧协议增量均拒绝", async () => {
+    const controller = new AbortController();
+    const seen: string[] = [];
+    await consumePublicSse(
+      body(
+        'event: answer_delta\ndata: {"protocol":"wanshitong-natural-sse-v1","type":"answer_delta","sequence":1,"text":"第","provisional":true}\n\n' +
+          'event: answer_delta\ndata: {"protocol":"wanshitong-natural-sse-v1","type":"answer_delta","sequence":2,"text":"一段","provisional":true}\n\n' +
+          'event: final\ndata: {"protocol":"wanshitong-natural-sse-v1","type":"final","sequence":3,"status":"ANSWERED","published":true,"answer":"第一段","citation_status":"valid","citations":[{"document_name":"依据.docx"}]}\n\n',
+      ),
+      (event) => {
+        seen.push(event.type === "answer_delta" ? event.text : event.type);
+      },
+      controller.signal,
+    );
+    expect(seen).toEqual(["第", "一段", "final"]);
+    for (const protocol of ["wanshitong-public-sse-v1", "future-v2"]) {
+      await expect(
+        consumePublicSse(
+          body(
+            `event: answer_delta\ndata: {"protocol":"${protocol}","type":"answer_delta","sequence":1,"text":"假增量","provisional":true}\n\n`,
+          ),
+          vi.fn(),
+          controller.signal,
+        ),
+      ).rejects.toBeInstanceOf(PublicSseParseError);
+    }
+  });
 });

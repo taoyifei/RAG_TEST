@@ -1011,6 +1011,7 @@ class RetrievalService:
         engine_id: Literal["wk-standard-v1", "wk-standard-pc-v1"],
         cancellation: CancellationPort,
         rewrite_enabled: bool = True,
+        on_delta: Callable[[str], None] | None = None,
     ) -> NaturalAnswerResult:
         """从独立候选路径执行通用检索和自然回答。"""
         return WeKnoraStandardPipeline(self).run(
@@ -1018,6 +1019,7 @@ class RetrievalService:
             engine_id=engine_id,
             cancellation=cancellation,
             rewrite_enabled=rewrite_enabled,
+            on_delta=on_delta,
         )
 
     def execution_identity(

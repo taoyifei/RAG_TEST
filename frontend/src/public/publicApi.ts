@@ -1,5 +1,6 @@
 import { withAppBase } from "../app/basePath";
 import { PublicSseParseError } from "./publicSse";
+import type { PublicCitation } from "./publicSse";
 
 export interface PublicSessionUser {
   userId: string;
@@ -25,6 +26,7 @@ export interface PublicCapabilities {
   mode: "wanshitong";
   stream: true;
   stream_protocol: "wanshitong-public-sse-v1";
+  natural_stream_protocol?: "wanshitong-natural-sse-v1";
   document_visibility: "all_internal";
   feedback: boolean;
   feedback_details?: boolean;
@@ -99,6 +101,22 @@ const PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities";
 const PUBLIC_CHAT_PATH = "/api/public/chat";
 const PUBLIC_FEEDBACK_PATH = "/api/public/feedback";
 const PUBLIC_POPULAR_QUESTIONS_PATH = "/api/public/popular-questions";
+
+export interface PublicNaturalHistoryTurn {
+  turn_id: string;
+  trace_id: string;
+  question: string;
+  status: string;
+  answer: string | null;
+  citations: PublicCitation[];
+  created_at: string;
+}
+
+export interface PublicNaturalSession {
+  conversation_id: string;
+  title: string;
+  updated_at: string;
+}
 
 async function readError(response: Response): Promise<PublicApiError> {
   let body: PublicErrorBody = {};
@@ -186,6 +204,7 @@ export async function openPublicChat(options: {
   question: string;
   signal: AbortSignal;
   clientContext?: PublicUsageContext;
+  naturalProtocol?: "wanshitong-natural-sse-v1";
 }): Promise<Response> {
   const response = await fetch(withAppBase(PUBLIC_CHAT_PATH), {
     method: "POST",
@@ -194,6 +213,9 @@ export async function openPublicChat(options: {
       Accept: "text/event-stream",
       "Content-Type": "application/json",
       "X-CSRF-Token": options.csrfToken,
+      ...(options.naturalProtocol
+        ? { "X-Wanshitong-Stream-Protocol": options.naturalProtocol }
+        : {}),
     },
     body: JSON.stringify({
       conversation_id: options.conversationId,
@@ -209,6 +231,77 @@ export async function openPublicChat(options: {
     throw new PublicApiError("回答流不可用。", { status: response.status });
   }
   return response;
+}
+
+export async function stopPublicNaturalChat(options: {
+  conversationId: string;
+  csrfToken: string;
+  traceId: string;
+}): Promise<boolean> {
+  const path = `/api/public/chat/${encodeURIComponent(options.traceId)}/stop`;
+  const response = await fetch(withAppBase(path), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": options.csrfToken,
+    },
+    body: JSON.stringify({ conversation_id: options.conversationId }),
+  });
+  const result = await requireJson<{ cancelled: boolean }>(response);
+  return result.cancelled;
+}
+
+export async function getPublicNaturalHistory(options: {
+  conversationId: string;
+  csrfToken: string;
+  signal?: AbortSignal;
+}): Promise<PublicNaturalHistoryTurn[]> {
+  const path = `/api/public/conversations/${encodeURIComponent(options.conversationId)}`;
+  const response = await fetch(withAppBase(path), {
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "X-CSRF-Token": options.csrfToken,
+    },
+    signal: options.signal,
+  });
+  const body = await requireJson<{ turns: PublicNaturalHistoryTurn[] }>(response);
+  return body.turns;
+}
+
+export async function getPublicNaturalSessions(options: {
+  csrfToken: string;
+  signal?: AbortSignal;
+}): Promise<PublicNaturalSession[]> {
+  const response = await fetch(withAppBase("/api/public/conversations"), {
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "X-CSRF-Token": options.csrfToken,
+    },
+    signal: options.signal,
+  });
+  const body = await requireJson<{ items: PublicNaturalSession[] }>(response);
+  return body.items;
+}
+
+export async function getPublicNaturalSource(options: {
+  conversationId: string;
+  traceId: string;
+  referenceId: string;
+  csrfToken: string;
+}): Promise<Blob> {
+  const path =
+    `/api/public/conversations/${encodeURIComponent(options.conversationId)}` +
+    `/turns/${encodeURIComponent(options.traceId)}` +
+    `/references/${encodeURIComponent(options.referenceId)}/source`;
+  const response = await fetch(withAppBase(path), {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": options.csrfToken },
+  });
+  if (!response.ok) throw await readError(response);
+  return response.blob();
 }
 
 export async function sendPublicFeedback(options: {
