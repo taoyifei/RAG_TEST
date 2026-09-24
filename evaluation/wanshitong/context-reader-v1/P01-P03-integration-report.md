@@ -1,6 +1,6 @@
 # WeKnora 核心阅读能力吸收：接入与 8289 验证记录
 
-状态：`INTEGRATED_ON_Q1_CANDIDATE`。本轮完成来源回读、组级材料打包和最终生成请求接入，并在隔离的 8289 服务上实际跑通 F017。F017 的回答质量仍有 P0，见 [P0-F017-after-reader.md](P0-F017-after-reader.md)。本记录不宣称整套阻塞题或公开试用验收通过。
+状态：`INTEGRATED_ON_Q1`。本轮完成来源回读、组级材料打包和最终生成请求接入，并在隔离的 8289 服务上实际跑通 F017；随后按用户授权以无快进合并提交纳入 `codex/wb08r-q1-algorithm-debt`。F017 的回答质量仍有 P0，见 [P0-F017-after-reader.md](P0-F017-after-reader.md)。本记录不宣称整套阻塞题或公开试用验收通过。
 
 ## 实现边界
 
