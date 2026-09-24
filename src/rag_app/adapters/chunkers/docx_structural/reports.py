@@ -78,12 +78,12 @@ def build_chunking_report(
         for span in chunk.source_spans
         if span.span_type is SourceSpanKind.REPEATED_CONTEXT
     )
-    represented_labels = sum(
-        1
+    represented_label_ids = {
+        span.node_id
         for chunk in chunks
         for span in chunk.source_spans
         if span.span_type is SourceSpanKind.DERIVED_NUMBERING
-    )
+    }
     slot_limits = dict(policy.max_embedding_tokens_by_slot)
     over_by_slot = tuple(
         (
@@ -159,7 +159,7 @@ def build_chunking_report(
             and bool(node.list_attributes.marker)
             for node in list_nodes
         ),
-        represented_list_label_count=represented_labels,
+        represented_list_label_count=len(represented_label_ids),
         whitespace_only_citable_node_count=len(whitespace_only_citable_nodes),
         whitespace_only_citable_char_count=sum(
             len(node.text_payload.exact_text)

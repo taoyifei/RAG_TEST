@@ -27,6 +27,7 @@ from rag_app.core.models import (
 from rag_app.core.policies import ParsingPolicy
 from tests.adapters.parsers.docx.fixtures import build_package, parse_package
 from tests.adapters.parsers.docx_fixtures import build_docx
+from tests.fixtures.docx_v4.generate_fixtures import _list_item, _numbering
 
 
 def _paragraph(text: str) -> str:
@@ -77,6 +78,42 @@ def test_go_parent_child_chunks_keep_exact_source_and_parent_links() -> None:
                     span.source_start_char : span.source_end_char
                 ]
             )
+
+
+def test_parent_child_report_counts_list_label_once_across_children() -> None:
+    """同一列表项跨多个子块时，报告按原始节点计数。"""
+    document_ir = parse_package(
+        build_package(
+            "".join(
+                _list_item(f"第{index}项核验设备记录。" * 4, 7, 0)
+                for index in range(15)
+            ),
+            numbering=_numbering(),
+        ),
+        name="长列表.docx",
+    ).document_ir
+    adapter = WeKnoraChunkerAdapter(
+        WeKnoraChunkingPolicy(parent_size_chars=120, child_size_chars=40)
+    )
+    result = adapter.chunk(
+        document_ir,
+        ChunkingContext(
+            chunker_fingerprint=adapter.fingerprint,
+            index_revision_id=deterministic_id("irev", "weknora-long-list"),
+        ),
+    )
+
+    label_spans = [
+        span
+        for chunk in result.chunks
+        for span in chunk.source_spans
+        if span.span_type is SourceSpanKind.DERIVED_NUMBERING
+    ]
+    assert len(result.chunks) > 1
+    assert len(label_spans) > 1
+    assert len(label_spans) > len({span.node_id for span in label_spans})
+    assert result.report.list_label_count == 15
+    assert result.report.represented_list_label_count == 15
 
 
 def test_parsed_markdown_spans_point_to_derived_artifact() -> None:
