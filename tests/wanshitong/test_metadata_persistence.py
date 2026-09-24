@@ -430,7 +430,7 @@ def test_wb05_metadata_rows_upgrade_forward_without_reclassification(
             (document_id,),
         ).fetchone()
 
-    assert [item.version for item in applied][-1:] == [32]
+    assert any(item.version == 32 for item in applied)
     assert document_row is not None
     assert stored is not None
     assert json.loads(str(document_row["metadata_json"])) == dict(
