@@ -14,7 +14,10 @@ from rag_app.application.retrieval.generation_evidence import (
     _source_matches,
 )
 from rag_app.core.models import (
+    EvidenceGroup,
+    EvidenceGroupKind,
     EvidenceItem,
+    GroupSourceMap,
     RankedChunk,
     SearchRequest,
 )
@@ -22,7 +25,67 @@ from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import QueryPlan
 
-CONTEXT_READER_PACK_REVISION = "wb08r-context-reader-pack-v1"
+CONTEXT_READER_PACK_REVISION = "wb08r-context-reader-pack-v2"
+_SHA256_HEX_LENGTH = 64
+
+
+def _evidence_group_id(group: ContextReadGroup) -> str:
+    """把回读器的完整摘要映射成既有 EvidenceGroup 身份格式。"""
+    digest = group.group_id.removeprefix("sha256:")
+    if len(digest) != _SHA256_HEX_LENGTH or any(
+        char not in "0123456789abcdef" for char in digest
+    ):
+        raise ValueError("来源阅读组身份格式无效。")
+    return f"egrp_{digest[:32]}"
+
+
+def _trusted_group(group: ContextReadGroup) -> EvidenceGroup:
+    """用已核验的 canonical span 构造终端可复核的组成员映射。"""
+    members = group.candidates
+    if not members:
+        raise ValueError("空来源组不能成为可信结构组。")
+    candidate_by_id = {
+        member.hydrated.chunk.chunk_id: member for member in members
+    }
+    source_maps = tuple(
+        GroupSourceMap(
+            chunk_id=chunk_id,
+            citation_text=candidate.hydrated.chunk.citation_text,
+            source_spans=tuple(
+                piece.span
+                for piece in group.pieces
+                if piece.candidate.hydrated.chunk.chunk_id == chunk_id
+            ),
+        )
+        for chunk_id, candidate in candidate_by_id.items()
+    )
+    first = members[0].hydrated
+    chunk = first.chunk
+    kind = (
+        EvidenceGroupKind.TABLE_ROW_GROUP
+        if group.kind == "table_row"
+        else EvidenceGroupKind.LIST_GROUP
+        if group.kind == "list"
+        else EvidenceGroupKind.PARAGRAPH_GROUP
+    )
+    return EvidenceGroup(
+        group_id=_evidence_group_id(group),
+        kind=kind,
+        document_id=chunk.version.document_id,
+        document_version_id=chunk.version.document_version_id,
+        index_revision_id=chunk.index_revision_id,
+        section_id=chunk.section_id,
+        display_name=first.display_name,
+        heading_path=chunk.heading_path,
+        member_chunk_ids=tuple(candidate_by_id),
+        member_source_maps=source_maps,
+        member_ranks=tuple(
+            member.rerank_rank or member.fusion_rank for member in members
+        ),
+        complete=group.source_complete,
+        incomplete_reasons=group.reason_codes,
+        token_cost=0,
+    )
 
 
 def _group_item(
@@ -39,7 +102,7 @@ def _group_item(
             "context_reader_group_id": group.group_id,
             "context_reader_source_complete": group.source_complete,
             "context_reader_reason_codes": list(group.reason_codes),
-            "evidence_group_id": group.group_id,
+            "evidence_group_id": _evidence_group_id(group),
             "evidence_group_type": (
                 "TABLE_ROW_GROUP"
                 if group.kind == "table_row"
@@ -88,6 +151,7 @@ def build_context_reader_evidence_pack(
     candidates: dict[str, RankedChunk] = {}
     complete_ids: list[str] = []
     partial_ids: list[str] = []
+    trusted: list[EvidenceGroup] = []
     reasons: list[str] = []
     for group in groups:
         prepared: list[tuple[EvidenceItem, RankedChunk]] = []
@@ -112,7 +176,7 @@ def build_context_reader_evidence_pack(
                     GenerationEvidenceEntry(
                         support_id=f"R{len(rejected) + 1}",
                         evidence_item=item,
-                        source_group_id=group.group_id,
+                        source_group_id=_evidence_group_id(group),
                         linked_atom_ids=(),
                         admission_status=EvidenceAdmissionStatus.REJECTED_HARD,
                         hard_reject_reasons=hard,
@@ -132,6 +196,7 @@ def build_context_reader_evidence_pack(
         if not prepared or group_hard:
             reasons.append("CONTEXT_GROUP_REJECTED_HARD")
             continue
+        group_identity = _evidence_group_id(group)
         for raw_item, candidate in prepared:
             support_id = f"S{len(entries) + 1}"
             item = raw_item.model_copy(update={"evidence_id": support_id})
@@ -144,7 +209,7 @@ def build_context_reader_evidence_pack(
                 GenerationEvidenceEntry(
                     support_id=support_id,
                     evidence_item=item,
-                    source_group_id=group.group_id,
+                    source_group_id=group_identity,
                     linked_atom_ids=linked,
                     admission_status=(
                         EvidenceAdmissionStatus.ADMITTED
@@ -166,9 +231,10 @@ def build_context_reader_evidence_pack(
             )
             candidates.setdefault(item.chunk_id, candidate)
         if group.source_complete:
-            complete_ids.append(group.group_id)
+            complete_ids.append(group_identity)
+            trusted.append(_trusted_group(group))
         else:
-            partial_ids.append(group.group_id)
+            partial_ids.append(group_identity)
             reasons.extend(group.reason_codes)
     per_atom = tuple(
         (
@@ -215,6 +281,7 @@ def build_context_reader_evidence_pack(
             atom_id for atom_id, support_ids in per_atom if not support_ids
         ),
         pack_revision=CONTEXT_READER_PACK_REVISION,
+        trusted_source_groups=tuple(trusted),
         priority_source_units=priority,
         reading_unit_reason_codes=tuple(dict.fromkeys(reasons)),
         physical_table_facts=facts,

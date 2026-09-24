@@ -15,6 +15,7 @@ from rag_app.application.retrieval.generation_evidence import (
     GenerationEvidencePack,
     project_evidence_read_units,
 )
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import KnowledgeBaseScope, RankedChunk, SearchRequest
 from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import (
@@ -22,6 +23,7 @@ from rag_app.core.models.query_plan import (
     QueryAtom,
     QueryPlan,
 )
+from rag_app.core.source_compatibility import source_group_covered
 from tests.application.retrieval.helpers import make_ranked_chunk
 
 _REVISION_ID = f"irev_{'c' * 32}"
@@ -75,7 +77,7 @@ def _group(
         piece.span.node_id for piece in pieces if piece.span.node_id is not None
     )
     return ContextReadGroup(
-        group_id=group_id,
+        group_id=canonical_sha256(group_id),
         kind="list",
         seed_chunk_ids=(candidates[0].hydrated.chunk.chunk_id,),
         pieces=pieces,
@@ -84,6 +86,10 @@ def _group(
         source_complete=complete,
         reason_codes=() if complete else ("SOURCE_NODE_INCOMPLETE",),
     )
+
+
+def _evidence_group_id(group: ContextReadGroup) -> str:
+    return f"egrp_{group.group_id.removeprefix('sha256:')[:32]}"
 
 
 def _pack(
@@ -121,11 +127,13 @@ def test_complete_group_keeps_all_pieces_in_pack_and_read_units() -> None:
         "S3",
     )
     assert all(
-        entry.source_group_id == group.group_id
+        entry.source_group_id == _evidence_group_id(group)
         and entry.admission_status is EvidenceAdmissionStatus.ADMITTED
         for entry in pack.entries
     )
-    assert pack.complete_group_ids == (group.group_id,)
+    assert pack.complete_group_ids == (_evidence_group_id(group),)
+    assert len(pack.trusted_source_groups) == 1
+    assert source_group_covered(pack.evidence, pack.trusted_source_groups[0])
     assert pack.partial_group_ids == ()
     assert tuple(unit.text for unit in units) == tuple(
         item.citation_text for item in pack.evidence
@@ -154,7 +162,7 @@ def test_partial_group_keeps_incomplete_state_through_read_unit() -> None:
     units = project_evidence_read_units(pack.evidence)
 
     assert pack.complete_group_ids == ()
-    assert pack.partial_group_ids == (group.group_id,)
+    assert pack.partial_group_ids == (_evidence_group_id(group),)
     assert pack.reading_unit_reason_codes == ("SOURCE_NODE_INCOMPLETE",)
     assert len(pack.entries) == len(group.pieces)
     assert all(
