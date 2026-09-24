@@ -114,21 +114,24 @@ def _replay_one(  # noqa: PLR0913
     *,
     engine: str,
     rewrite_enabled: bool,
+    legacy_request: bool,
 ) -> dict[str, object]:
     started = time.monotonic()
     answer: list[str] = []
     final: dict[str, object] | None = None
     errors: list[dict[str, object]] = []
     references: list[dict[str, object]] = []
+    payload: dict[str, object] = {
+        "query": case["query"],
+        "conversation_context": case["conversation_context"],
+        "engine_id": engine,
+    }
+    if not legacy_request:
+        payload["rewrite_enabled"] = rewrite_enabled
     with _post(
         opener,
         origin + "/api/v1/admin/wanshitong/candidate/chat",
-        {
-            "query": case["query"],
-            "conversation_context": case["conversation_context"],
-            "engine_id": engine,
-            "rewrite_enabled": rewrite_enabled,
-        },
+        payload,
         csrf=csrf,
     ) as response:
         event = ""
@@ -157,6 +160,7 @@ def _replay_one(  # noqa: PLR0913
         "id": case["id"],
         "engine_id": engine,
         "rewrite_enabled": rewrite_enabled,
+        "legacy_request": legacy_request,
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "answer_stream": "".join(answer),
         "references": references,
@@ -178,6 +182,7 @@ def main() -> None:
         default="wk-standard-pc-v1",
     )
     parser.add_argument("--rewrite-enabled", action="store_true")
+    parser.add_argument("--legacy-request", action="store_true")
     args = parser.parse_args()
     origin = _origin(args.origin)
     cases = _cases(args.cases)
@@ -215,6 +220,7 @@ def main() -> None:
                     case,
                     engine=args.engine,
                     rewrite_enabled=args.rewrite_enabled,
+                    legacy_request=args.legacy_request,
                 )
             except (
                 ValueError,
