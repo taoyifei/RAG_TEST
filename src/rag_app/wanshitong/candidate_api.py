@@ -55,9 +55,7 @@ def _safe_error_diagnostics(error: RagError) -> dict[str, str]:
     call = error.provider_call
     if call is not None:
         detail = dict(call.transport_diagnostics).get("contract_detail")
-        if isinstance(detail, str) and _SAFE_DIAGNOSTIC_CODE.fullmatch(
-            detail
-        ):
+        if isinstance(detail, str) and _SAFE_DIAGNOSTIC_CODE.fullmatch(detail):
             values["contract_detail"] = detail
     return values
 
