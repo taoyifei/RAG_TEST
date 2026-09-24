@@ -21,6 +21,10 @@ from urllib.parse import urlparse
 import httpx
 
 from rag_app._build_revision import SOURCE_REVISION
+from rag_app.adapters.parsers.document_router import (
+    WeKnoraDocumentRouter,
+    wrap_weknora_document_parser,
+)
 from rag_app.adapters.stores import (
     InMemoryRetrievalCache,
     MigrationRunner,
@@ -76,6 +80,7 @@ from rag_app.core.models import (
     SearchAnswerResult,
     SearchRequest,
     SystemStatus,
+    WeKnoraChunkingPolicy,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.policies import EgressPolicy
@@ -84,6 +89,7 @@ from rag_app.core.ports import (
     ChunkValidationPort,
     DepartmentShadowObserverPort,
     ExactStorePort,
+    ParserPort,
 )
 from rag_app.ocr import OcrClient
 from rag_app.product.auth import (
@@ -203,6 +209,7 @@ class ProductRuntimeSettings:
     evidence_group_mode: Literal["off", "shadow", "active"] = "off"
     context_reader_mode: Literal["legacy", "shadow", "candidate"] = "legacy"
     contextual_rerank_mode: Literal["off", "active"] = "off"
+    weknora_chunker_mode: Literal["legacy", "parent-child"] = "legacy"
 
     @classmethod
     def from_environment(cls) -> ProductRuntimeSettings:
@@ -239,6 +246,9 @@ class ProductRuntimeSettings:
         contextual_rerank_mode = os.environ.get(
             "RAG_CONTEXTUAL_RERANK_MODE", "off"
         )
+        weknora_chunker_mode = os.environ.get(
+            "RAG_WK_CHUNKER_MODE", "legacy"
+        )
         if evidence_group_mode not in {"off", "shadow", "active"}:
             raise ValueError(
                 "RAG_EVIDENCE_GROUP_MODE 必须为 off/shadow/active。"
@@ -249,6 +259,8 @@ class ProductRuntimeSettings:
             )
         if contextual_rerank_mode not in {"off", "active"}:
             raise ValueError("RAG_CONTEXTUAL_RERANK_MODE 必须为 off/active。")
+        if weknora_chunker_mode not in {"legacy", "parent-child"}:
+            raise ValueError("RAG_WK_CHUNKER_MODE 必须为 legacy/parent-child。")
         return cls(
             data_dir=Path(os.environ.get("RAG_DATA_DIR", ".data/product")),
             frontend_dir=frontend,
@@ -316,6 +328,9 @@ class ProductRuntimeSettings:
             ),
             contextual_rerank_mode=cast(
                 Literal["off", "active"], contextual_rerank_mode
+            ),
+            weknora_chunker_mode=cast(
+                Literal["legacy", "parent-child"], weknora_chunker_mode
             ),
         )
 
@@ -757,8 +772,10 @@ class ProductProfileResolver:
             runtime.retrieval_runtime.persistence.components
         )
         if self._pdf is not None:
-            contracts["parser_identity"] = self._pdf.wrap(
-                runtime.retrieval_runtime.persistence.components.parser
+            contracts["parser_identity"] = wrap_weknora_document_parser(
+                self._pdf.wrap(
+                    runtime.retrieval_runtime.persistence.components.parser
+                )
             ).descriptor.model_dump(mode="json")
         self._control.index_contract = {
             key: contracts[key]
@@ -1885,6 +1902,7 @@ class ProductProfileResolver:
             if self._pdf is None
             else self._pdf.wrap(components.parser)
         )
+        parser = wrap_weknora_document_parser(parser)
         contracts["parser_identity"] = parser.descriptor.model_dump(mode="json")
         contracts["embedding_topology"] = topology.model_dump(mode="json")
         vector_schema = dict(
@@ -2036,6 +2054,19 @@ class ProductRuntime:
         """
         return self.p09.sdk
 
+    def ingestion_parser(self, knowledge_base_id: str) -> ParserPort:
+        """返回与建索引 Job 相同的候选格式路由供上传预检。"""
+        del knowledge_base_id
+        components = self.p09.retrieval_runtime.persistence.components
+        return wrap_weknora_document_parser(self.pdf.wrap(components.parser))
+
+    def probe_upload_extensions(self, knowledge_base_id: str) -> frozenset[str]:
+        """为管理面板探测当前配置的解析服务能力。"""
+        parser = self.ingestion_parser(knowledge_base_id)
+        if isinstance(parser, WeKnoraDocumentRouter):
+            return parser.probe_upload_extensions()
+        return frozenset({".docx"})
+
     @property
     def jobs(self) -> DurableJobRunner:
         """返回 Durable Job Runner。
@@ -2154,6 +2185,10 @@ def build_product_runtime(  # noqa: PLR0915
     control = ProductControlStore(connections, credentials)
     models = ProductModelSettings(connections, control)
     pdf = ProductPdfParsing(connections, models, control, credentials)
+
+    def _wrap_parser(parser: ParserPort) -> ParserPort:
+        return wrap_weknora_document_parser(pdf.wrap(parser))
+
     auth_cipher = SecretCipher(_authentication_key(bootstrap_token))
     auth = AuthStore(connections, auth_cipher)
     sessions = ConsoleSessionService(auth, bootstrap_token)
@@ -2289,7 +2324,7 @@ def build_product_runtime(  # noqa: PLR0915
                 query_history=traces,
                 conversation=conversations,
                 document_enricher=_enrich_media,
-                parser_resolver=pdf.wrap,
+                parser_resolver=_wrap_parser,
                 content_identity=_content_identity,
                 retrieval_policy=RetrievalPolicy.model_validate(
                     resolve_retrieval_policy({}, {}),
@@ -2553,12 +2588,17 @@ def _bounded_budget(value: object, *, fallback: int) -> int:
 
 def _product_profile(settings: ProductRuntimeSettings) -> RagProfile:
     base = default_offline_profile()
+    use_parent_child = settings.weknora_chunker_mode == "parent-child"
     vector_store = (
         "memory-vector" if settings.qdrant_mode == "memory" else "qdrant-local"
     )
     components = ComponentsProfile(
         parser="word-document-v1",
-        chunker="docx-structural-v3",
+        chunker=(
+            "weknora-adaptive-parent-child-v1"
+            if use_parent_child
+            else "docx-structural-v3"
+        ),
         embedding_topology="deterministic-single",
         embedding_primary="deterministic",
         embedding_router="embedding-router-single",
@@ -2574,6 +2614,9 @@ def _product_profile(settings: ProductRuntimeSettings) -> RagProfile:
         update={
             "profile_id": "product-runtime",
             "components": components,
+            "chunking": (
+                WeKnoraChunkingPolicy() if use_parent_child else base.chunking
+            ),
             "local_data": LocalDataProfile(
                 data_root=str(settings.data_dir),
                 qdrant_mode=settings.qdrant_mode,

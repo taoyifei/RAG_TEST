@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import zipfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 
@@ -54,10 +56,23 @@ _DOCUMENT_MEDIA_TYPES_BY_EXTENSION = {
         }
     ),
     ".pdf": frozenset({"application/pdf", "application/octet-stream"}),
+    ".md": frozenset({"text/markdown"}),
+    ".txt": frozenset({"text/plain"}),
+    ".csv": frozenset({"text/csv"}),
+    ".pptx": frozenset(
+        {
+            "application/vnd.openxmlformats-officedocument."
+            "presentationml.presentation"
+        }
+    ),
+    ".xlsx": frozenset(
+        {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+    ),
 }
 _OLE_COMPOUND_FILE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _DOCX_ZIP_MAGIC = b"PK\x03\x04"
 _PDF_MAGIC = b"%PDF-"
+_MAX_OOXML_ENTRIES = 10_000
 
 
 class LifecycleService:
@@ -495,7 +510,7 @@ class LifecycleService:
             )
             if requested_extension != current_extension:
                 raise InvalidDocument(
-                    "同一逻辑文档的新版本必须保持 DOC、DOCX 或 PDF 格式。",
+                    "同一逻辑文档的新版本必须保持原文件格式。",
                     stage="document_version.create",
                     code="DOCUMENT_VERSION_FORMAT_MISMATCH",
                 )
@@ -1060,7 +1075,7 @@ def _validate_document_input(
         extension
     ):
         raise InvalidDocument(
-            "显示名扩展名必须与 DOC、DOCX 或 PDF 文件签名一致。",
+            "显示名扩展名必须与文件格式和 Content-Type 一致。",
             stage="document.upload",
         )
 
@@ -1071,12 +1086,32 @@ def _detect_document_extension(content: bytes, media_type: str) -> str:
     if content.startswith(_OLE_COMPOUND_FILE_MAGIC):
         extension = ".doc"
     elif content.startswith(_DOCX_ZIP_MAGIC):
-        extension = ".docx"
+        extension = _detect_ooxml_extension(content)
     elif content.startswith(_PDF_MAGIC):
         extension = ".pdf"
+    elif media_type.casefold() in {
+        "text/markdown",
+        "text/plain",
+        "text/csv",
+    }:
+        try:
+            decoded = content.decode("utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise InvalidDocument(
+                "文本文件必须为有效 UTF-8。", stage="document.upload"
+            ) from error
+        if "\x00" in decoded or not decoded.strip():
+            raise InvalidDocument(
+                "文本文件为空或包含二进制内容。", stage="document.upload"
+            )
+        extension = {
+            "text/markdown": ".md",
+            "text/plain": ".txt",
+            "text/csv": ".csv",
+        }[media_type.casefold()]
     else:
         raise InvalidDocument(
-            "上传内容不是有效的 DOC、DOCX 或 PDF 文件签名。",
+            "上传内容不是有效的受支持文件格式。",
             stage="document.upload",
         )
     if (
@@ -1088,6 +1123,33 @@ def _detect_document_extension(content: bytes, media_type: str) -> str:
             stage="document.upload",
         )
     return extension
+
+
+def _detect_ooxml_extension(content: bytes) -> str:
+    """按 OOXML 主部件识别类型；保留旧损坏 DOCX 的分类行为。"""
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            if len(archive.infolist()) > _MAX_OOXML_ENTRIES:
+                raise InvalidDocument(
+                    "OOXML 包条目过多。", stage="document.upload"
+                )
+            names = {item.filename for item in archive.infolist()}
+    except zipfile.BadZipFile:
+        return ".docx"
+    matches = [
+        extension
+        for extension, part in (
+            (".docx", "word/document.xml"),
+            (".pptx", "ppt/presentation.xml"),
+            (".xlsx", "xl/workbook.xml"),
+        )
+        if part in names
+    ]
+    if len(matches) != 1 or "[Content_Types].xml" not in names:
+        raise InvalidDocument(
+            "OOXML 主部件缺失或类型不唯一。", stage="document.upload"
+        )
+    return matches[0]
 
 
 def _queued_active_document(

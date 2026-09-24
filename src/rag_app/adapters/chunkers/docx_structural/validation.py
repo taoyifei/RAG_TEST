@@ -111,6 +111,7 @@ def _validate_sources(
         node = nodes[span.node_id]
         if span.source_anchor != node.anchor:
             raise ValueError("source span 的 SourceAnchor 与目标节点不一致。")
+        _validate_parsed_artifact_span(span, node)
         if span.span_type is SourceSpanKind.DERIVED_NUMBERING:
             marker = (
                 node.list_attributes.marker
@@ -131,11 +132,36 @@ def _validate_sources(
         if source_end > len(source_text):
             raise ValueError("source span 范围超出目标节点 exact_text。")
         expected = source_text[source_start:source_end]
+        if span.span_type is SourceSpanKind.NORMALIZED_TEXT:
+            expected = expected.replace("\r\n", "\n").replace("\r", "\n")
         observed = chunk.citation_text[
             span.chunk_start_char : span.chunk_end_char
         ]
         if observed != expected:
             raise ValueError("citation 字符无法从 SourceSpan 逐字重建。")
+
+
+def _validate_parsed_artifact_span(
+    span: SourceSpan,
+    node: DocumentNode,
+) -> None:
+    """确认解析产物 ID 和全文偏移未在 Chunk 层漂移。"""
+    node_metadata = dict(node.metadata)
+    if node_metadata.get("citation_basis") != "parsed_artifact":
+        return
+    if span.span_type not in {
+        SourceSpanKind.PARSED_ARTIFACT_TEXT,
+        SourceSpanKind.NORMALIZED_TEXT,
+    }:
+        raise ValueError("解析产物来源类型不一致。")
+    span_metadata = dict(span.metadata)
+    for key in (
+        "parsed_artifact_id",
+        "parsed_artifact_start_char",
+        "parsed_artifact_end_char",
+    ):
+        if span_metadata.get(key) != node_metadata.get(key):
+            raise ValueError("解析产物来源元数据不一致。")
 
 
 def _node_source_text(node: DocumentNode) -> str:

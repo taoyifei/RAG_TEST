@@ -14,7 +14,12 @@ from urllib.parse import unquote
 
 from pydantic import Field, ValidationError
 
+from rag_app.adapters.parsers.format_config import enabled_upload_extensions
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
+from rag_app.core.document_formats import (
+    FORMAT_MEDIA_TYPES,
+    extension_of,
+)
 from rag_app.core.identifiers import canonical_json
 from rag_app.core.models.common import (
     FrozenModel,
@@ -115,11 +120,16 @@ class WanshitongDocumentMetadata(DocumentMetadataValues):
         )
 
 
-def normalize_source_relative_path(value: str) -> tuple[str, str]:
-    """规范化并验证浏览器目录上传的相对 DOCX 路径。
+def normalize_source_relative_path(
+    value: str,
+    *,
+    allowed_extensions: frozenset[str] | None = None,
+) -> tuple[str, str]:
+    """规范化并验证浏览器目录上传的相对路径及启用格式。
 
     Args:
         value: 浏览器提供的相对路径或单文件 basename。
+        allowed_extensions: 显式允许的后缀；默认读取产品候选配置。
 
     Returns:
         NFKC 规范化的相对路径与 basename。
@@ -151,10 +161,16 @@ def normalize_source_relative_path(value: str) -> tuple[str, str]:
     if path.is_absolute() or path.as_posix() != normalized:
         raise _relative_path_error()
     display_name = segments[-1]
-    if not display_name.casefold().endswith(".docx"):
+    allowed = (
+        enabled_upload_extensions()
+        if allowed_extensions is None
+        else allowed_extensions
+    )
+    if extension_of(display_name) not in allowed:
+        docx_only = allowed == frozenset({".docx"})
         raise AdminFacadeError(
-            "DOCX_ONLY",
-            DOCX_ONLY_MESSAGE,
+            "DOCX_ONLY" if docx_only else "UNSUPPORTED_FORMAT",
+            DOCX_ONLY_MESSAGE if docx_only else "当前配置未启用该文件格式。",
             status_code=415,
             stage="wanshitong.document.type",
         )
@@ -169,7 +185,10 @@ def resolve_document_metadata(
         upload.source_relative_path
     )
     directories = source_relative_path.split("/")[:-1]
-    stem = basename[:-5]
+    suffix = extension_of(basename)
+    if suffix not in FORMAT_MEDIA_TYPES:
+        raise ValueError("文档格式未纳入分类元数据合同。")
+    stem = basename[: -len(suffix)]
     inferred_department, inferred_categories, inferred_title = (
         _infer_path_metadata(directories, stem)
     )

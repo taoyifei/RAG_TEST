@@ -7,6 +7,9 @@ import unicodedata
 
 from docx import Document
 
+from rag_app.core.document_formats import extension_of
+from rag_app.wanshitong.errors import AdminFacadeError
+
 
 def is_template_source(source_relative_path: str) -> bool:
     """目录或文件名标记为模板时，将其视为只可提示存在的资料。"""
@@ -23,6 +26,13 @@ def searchable_upload_content(
     """普通文档保持原样，模板仅保留可引用的目录项。"""
     if not is_template_source(source_relative_path):
         return content
+    if extension_of(source_relative_path) != ".docx":
+        raise AdminFacadeError(
+            "TEMPLATE_FORMAT_UNSUPPORTED",
+            "当前模板目录仅接受 DOCX；其他格式暂不入库。",
+            status_code=415,
+            stage="wanshitong.document.template",
+        )
     document = Document()
     document.add_paragraph(
         f"模板目录项：{document_title}（模板）。"

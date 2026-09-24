@@ -57,6 +57,7 @@ from rag_app.core.models import (
     IndexRevisionRef,
     IndexRevisionState,
     KnowledgeBaseScope,
+    ParentPassage,
     ParseReport,
     RetrievalPolicy,
     RevisionActivation,
@@ -1248,6 +1249,75 @@ class SqliteControlStore:
                         ),
                     )
 
+    def write_parent_passages(
+        self,
+        revision_id: str,
+        parents: Sequence[ParentPassage],
+    ) -> None:
+        """幂等保存同 revision 的父级阅读材料并核对已写子块。"""
+        if not parents:
+            return
+        if any(parent.index_revision_id != revision_id for parent in parents):
+            raise ValidationFailed(
+                "父级 revision 与写入目标不一致。", stage="revision.parents"
+            )
+        with self._connections.transaction(write=True) as connection:
+            self._assert_writer_lease(connection, revision_id)
+            for parent in parents:
+                children = connection.execute(
+                    "SELECT chunk_id, chunk_json FROM chunks "
+                    "WHERE revision_id=? AND chunk_id IN "
+                    "(SELECT value FROM json_each(?))",
+                    (revision_id, canonical_json(parent.child_chunk_ids)),
+                ).fetchall()
+                if len(children) != len(parent.child_chunk_ids):
+                    raise ValidationFailed(
+                        "父级子块缺失。", stage="revision.parents"
+                    )
+                child_ids = set(parent.child_chunk_ids)
+                for row in children:
+                    child = Chunk.model_validate_json(str(row["chunk_json"]))
+                    if (
+                        child.chunk_id not in child_ids
+                        or child.parent_passage_id != parent.parent_passage_id
+                        or child.version != parent.version
+                        or child.project_id != parent.project_id
+                        or child.knowledge_base_id != parent.knowledge_base_id
+                    ):
+                        raise ValidationFailed(
+                            "父子来源身份不一致。", stage="revision.parents"
+                        )
+                encoded = parent.model_dump_json()
+                existing = connection.execute(
+                    "SELECT passage_json FROM parent_passages "
+                    "WHERE revision_id=? AND parent_passage_id=?",
+                    (revision_id, parent.parent_passage_id),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing["passage_json"]) != encoded:
+                        raise Conflict(
+                            "同一父级 ID 已存在不同材料。",
+                            stage="revision.parents",
+                        )
+                    continue
+                connection.execute(
+                    "INSERT INTO parent_passages("
+                    "revision_id, parent_passage_id, project_id, "
+                    "knowledge_base_id, document_id, document_version_id, "
+                    "content_sha256, passage_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        revision_id,
+                        parent.parent_passage_id,
+                        parent.project_id,
+                        parent.knowledge_base_id,
+                        parent.version.document_id,
+                        parent.version.document_version_id,
+                        parent.content_sha256,
+                        encoded,
+                    ),
+                )
+
     def set_embedding_state(  # noqa: PLR0913
         self,
         revision_id: str,
@@ -1619,6 +1689,7 @@ class SqliteControlStore:
                 "kb.active_revision_id, r.state, r.index_fingerprint, "
                 "r.physical_vector_namespace, r.embedding_topology_json, "
                 "r.chunk_payload_schema_json, r.lexical_schema_json, "
+                "r.chunker_identity_json, "
                 "r.expected_chunk_count "
                 "FROM knowledge_bases kb LEFT JOIN index_revisions r "
                 "ON r.index_revision_id=kb.active_revision_id "
@@ -1681,6 +1752,7 @@ class SqliteControlStore:
             )
             payload_schema = json.loads(str(row["chunk_payload_schema_json"]))
             lexical_schema = json.loads(str(row["lexical_schema_json"]))
+            chunker_identity = json.loads(str(row["chunker_identity_json"]))
         except (TypeError, ValueError) as error:
             raise IndexCorrupt(
                 "Active Revision resolved contract 无法读取。",
@@ -1696,7 +1768,12 @@ class SqliteControlStore:
                 "Active Revision 需要显式重建为 FTS V2。",
                 stage="retrieval.snapshot",
             )
-        if topology.slots != slots or not isinstance(payload_schema, str):
+        if (
+            topology.slots != slots
+            or not isinstance(payload_schema, str)
+            or not isinstance(chunker_identity, dict)
+            or not isinstance(chunker_identity.get("name"), str)
+        ):
             raise IndexCorrupt(
                 "Active Revision topology 或 Chunk schema 漂移。",
                 stage="retrieval.snapshot",
@@ -1742,6 +1819,7 @@ class SqliteControlStore:
             lexical_namespace=f"sqlite:{revision_id}",
             exact_namespace=f"sqlite:{revision_id}",
             chunk_payload_schema=payload_schema,
+            chunker_id=chunker_identity["name"],
             retrieval_policy=retrieval_policy,
             excluded_document_ids=tuple(
                 str(item[0]) for item in excluded_documents
@@ -1897,6 +1975,96 @@ class SqliteControlStore:
             )
         return tuple(hydrated)
 
+    def load_parent_passages(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        parent_passage_ids: tuple[str, ...],
+    ) -> tuple[ParentPassage, ...]:
+        """只从活动 revision 和仍有效的文档版本读取父级材料。"""
+        ordered = tuple(dict.fromkeys(parent_passage_ids))
+        if not ordered:
+            return ()
+        if len(ordered) > _MAX_HYDRATION_CHUNKS:
+            raise ValueError("单次父级来源回读上限为 200。")
+        revision = snapshot.revision
+        if revision.state is not IndexRevisionState.ACTIVE:
+            raise IndexCorrupt(
+                "父级来源需要活动快照。", stage="retrieval.parents"
+            )
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT p.parent_passage_id, p.passage_json, "
+                "p.project_id, p.knowledge_base_id, p.document_id, "
+                "p.document_version_id, p.content_sha256, "
+                "dv.content_sha256 AS document_content_sha256 "
+                "FROM parent_passages p "
+                "JOIN revision_documents rd ON rd.revision_id=p.revision_id "
+                "AND rd.document_id=p.document_id "
+                "AND rd.document_version_id=p.document_version_id "
+                "JOIN document_versions dv ON "
+                "dv.document_id=p.document_id "
+                "AND dv.document_version_id=p.document_version_id "
+                "JOIN documents d ON d.document_id=p.document_id "
+                "JOIN index_revisions r ON "
+                "r.index_revision_id=p.revision_id "
+                "WHERE p.revision_id=? AND p.parent_passage_id IN "
+                "(SELECT value FROM json_each(?)) "
+                "AND p.project_id=? AND p.knowledge_base_id=? "
+                "AND r.project_id=? AND r.knowledge_base_id=? "
+                "AND d.project_id=? AND d.knowledge_base_id=? "
+                "AND d.deleted_at IS NULL AND d.status='active' "
+                "AND d.lifecycle_status='active'",
+                (
+                    revision.index_revision_id,
+                    canonical_json(ordered),
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                ),
+            ).fetchall()
+        by_id = {str(row["parent_passage_id"]): row for row in rows}
+        if len(by_id) != len(ordered):
+            raise IndexCorrupt(
+                "父级材料缺失或来源不可见。",
+                stage="retrieval.parents",
+                details={
+                    "missing_parent_passage_ids": [
+                        item for item in ordered if item not in by_id
+                    ]
+                },
+            )
+        parents = []
+        for parent_id in ordered:
+            row = by_id[parent_id]
+            try:
+                parent = ParentPassage.model_validate_json(
+                    str(row["passage_json"])
+                )
+            except (TypeError, ValueError) as error:
+                raise IndexCorrupt(
+                    "父级材料 JSON 无法验证。", stage="retrieval.parents"
+                ) from error
+            if (
+                parent.parent_passage_id != parent_id
+                or parent.project_id != revision.project_id
+                or parent.knowledge_base_id != revision.knowledge_base_id
+                or parent.index_revision_id != revision.index_revision_id
+                or parent.version.document_id != row["document_id"]
+                or parent.version.document_version_id
+                != row["document_version_id"]
+                or parent.version.content_sha256
+                != row["document_content_sha256"]
+                or parent.content_sha256 != row["content_sha256"]
+            ):
+                raise IndexCorrupt(
+                    "父级材料身份漂移。", stage="retrieval.parents"
+                )
+            parents.append(parent)
+        return tuple(parents)
+
     def _source_document_row(
         self,
         connection: Connection,
@@ -1937,8 +2105,7 @@ class SqliteControlStore:
                 stage="retrieval.source_reader",
             )
         if (
-            row["document_version_id"]
-            != document_version.document_version_id
+            row["document_version_id"] != document_version.document_version_id
             or row["content_sha256"] != document_version.content_sha256
         ):
             raise IndexCorrupt(
@@ -2977,6 +3144,10 @@ class SqliteControlStore:
                 "DELETE FROM chunks WHERE revision_id=?", (revision_id,)
             )
             connection.execute(
+                "DELETE FROM parent_passages WHERE revision_id=?",
+                (revision_id,),
+            )
+            connection.execute(
                 "DELETE FROM revision_documents WHERE revision_id=?",
                 (revision_id,),
             )
@@ -3533,6 +3704,19 @@ class SqliteControlStore:
             ).fetchall()
         return tuple(
             Chunk.model_validate_json(str(row["chunk_json"])) for row in rows
+        )
+
+    def parent_rows(self, revision_id: str) -> tuple[ParentPassage, ...]:
+        """重新读取实际持久化父级材料，供激活前完整校验。"""
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT passage_json FROM parent_passages WHERE revision_id=? "
+                "ORDER BY parent_passage_id",
+                (revision_id,),
+            ).fetchall()
+        return tuple(
+            ParentPassage.model_validate_json(str(row["passage_json"]))
+            for row in rows
         )
 
     def parse_rows(

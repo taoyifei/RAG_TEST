@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
@@ -191,6 +191,8 @@ def build_components(
     profile: RagProfile | str | Path,
     registry: ComponentRegistry,
     overrides: Mapping[str, object] | None = None,
+    *,
+    parser_resolver: Callable[[ParserPort], ParserPort] | None = None,
 ) -> RagComponents:
     """验证并按固定顺序装配全部 P01 组件。
 
@@ -198,6 +200,7 @@ def build_components(
         profile: 已验证 Profile 或严格 JSON 文件路径。
         registry: 由可信代码显式注册的 Registry。
         overrides: 宿主按字段名直接注入的显式实例。
+        parser_resolver: 在计算索引指纹前应用的解析器路由。
 
     Returns:
         带两类指纹和幂等生命周期的组件集合。
@@ -293,6 +296,8 @@ def build_components(
                 created,
             ),
         )
+        if parser_resolver is not None:
+            parser = parser_resolver(parser)
         chunker = cast(
             ChunkerPort,
             _create(
@@ -304,7 +309,10 @@ def build_components(
                 config=(
                     chunking_policy
                     if resolved_profile.components.chunker
-                    == "docx-structural-v3"
+                    in {
+                        "docx-structural-v3",
+                        "weknora-adaptive-parent-child-v1",
+                    }
                     else None
                 ),
             ),
@@ -743,7 +751,11 @@ def _index_fingerprint_input(  # noqa: PLR0913
             {
                 "schema_version": (
                     "3"
-                    if chunker_descriptor.name == "docx-structural-v3"
+                    if chunker_descriptor.name
+                    in {
+                        "docx-structural-v3",
+                        "weknora-adaptive-parent-child-v1",
+                    }
                     else "1"
                 )
             }

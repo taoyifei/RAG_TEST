@@ -21,6 +21,7 @@ from typing import cast
 from cryptography.exceptions import InvalidTag
 
 from rag_app.adapters.stores import SqliteConnectionFactory
+from rag_app.application.answering.natural_answer import NaturalAnswerResult
 from rag_app.core.capabilities import (
     ComponentDescriptor,
     ComponentKind,
@@ -459,7 +460,7 @@ class ProductQueryHistory:
         self,
         trace_id: str,
         *,
-        result: SearchAnswerResult | None,
+        result: SearchAnswerResult | NaturalAnswerResult | None,
         error: RagError | None,
         cancelled: bool,
         cancelled_calls: tuple[ProviderCall, ...] = (),
@@ -673,7 +674,7 @@ class ProductQueryHistory:
         connection: sqlite3.Connection,
         trace_id: str,
         *,
-        result: SearchAnswerResult | None,
+        result: SearchAnswerResult | NaturalAnswerResult | None,
         error: RagError | None,
         cancelled: bool,
         cancelled_calls: tuple[ProviderCall, ...],
@@ -1945,14 +1946,31 @@ def _export_conflicts_with_clear(
 
 
 def _completion(
-    result: SearchAnswerResult | None,
+    result: SearchAnswerResult | NaturalAnswerResult | None,
     error: RagError | None,
     cancelled: bool,
     cancelled_calls: tuple[ProviderCall, ...] = (),
 ) -> tuple[str, dict[str, object]]:
     metadata: dict[str, object] = {}
     calls: tuple[ProviderCall, ...] = ()
-    if result is not None:
+    if isinstance(result, NaturalAnswerResult):
+        status = "ANSWERED" if result.reason_code == "ANSWERED" else "REFUSED"
+        metadata.update(
+            {
+                "engine_id": result.engine_id,
+                "validation_level": result.validation_level,
+                "reason_code": result.reason_code,
+                "active_index_revision_id": result.active_index_revision_id,
+                "index_fingerprint": result.index_fingerprint,
+                "serving_fingerprint": result.serving_fingerprint,
+                "degraded_reason_codes": list(result.degraded_reason_codes),
+                "document_ids": sorted(
+                    {item.document_id for item in result.references}
+                ),
+            }
+        )
+        calls = result.provider_calls
+    elif result is not None:
         status = "ANSWERED" if result.answer else "REFUSED"
         metadata.update(
             {
@@ -2005,7 +2023,7 @@ def _completion(
 
 def _usage_summary(
     calls: tuple[ProviderCall, ...],
-    result: SearchAnswerResult | None,
+    result: SearchAnswerResult | NaturalAnswerResult | None,
     error: RagError | None,
 ) -> list[dict[str, object]]:
     operations = {call.operation for call in calls} | {
@@ -2023,23 +2041,27 @@ def _usage_summary(
             (call.reason_code for call in actual if call.reason_code), None
         )
         if count == 0 and reason is None:
-            if result is not None and result.cache_hit:
+            if isinstance(result, SearchAnswerResult) and result.cache_hit:
                 reason = "CACHE_HIT"
             elif error is not None:
                 reason = error.code
             elif operation == "generation":
                 reason = (
                     result.generation_reason_code
-                    if result is not None
+                    if isinstance(result, SearchAnswerResult)
                     else None
                 ) or "GENERATOR_NOT_CONFIGURED"
             elif operation == "query.rewrite":
                 reason = (
-                    result.rewrite_reason_code if result is not None else None
+                    result.rewrite_reason_code
+                    if isinstance(result, SearchAnswerResult)
+                    else None
                 ) or "REWRITE_NOT_CONFIGURED"
             elif operation == "query.interpret":
                 reason = (
-                    result.interpret_reason_code if result is not None else None
+                    result.interpret_reason_code
+                    if isinstance(result, SearchAnswerResult)
+                    else None
                 ) or "INTERPRET_NOT_CONFIGURED"
             else:
                 reason = "LOCAL_OR_NOT_REQUIRED_BY_PLAN"

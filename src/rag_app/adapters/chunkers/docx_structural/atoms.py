@@ -124,11 +124,14 @@ def node_text_fragments(node: DocumentNode) -> tuple[SourceFragment, ...]:
             SourceSpanKind.DERIVED_CAPTION_OR_ASSOCIATION
         ),
     }
-    source_kind = (
-        source_kinds.get(origin, SourceSpanKind.ORIGINAL_TEXT)
-        if origin is not None
-        else SourceSpanKind.ORIGINAL_TEXT
+    artifact_basis = (
+        dict(node.metadata).get("citation_basis") == "parsed_artifact"
     )
+    source_kind = SourceSpanKind.ORIGINAL_TEXT
+    if origin is not None:
+        source_kind = source_kinds.get(origin, source_kind)
+    if artifact_basis:
+        source_kind = SourceSpanKind.PARSED_ARTIFACT_TEXT
     fragments.append(
         SourceFragment(
             text=exact_text,
@@ -137,7 +140,9 @@ def node_text_fragments(node: DocumentNode) -> tuple[SourceFragment, ...]:
             source_anchor=node.anchor,
             source_start_char=0,
             source_end_char=len(exact_text),
-            metadata=node.metadata if origin is not None else (),
+            metadata=node.metadata
+            if origin is not None or artifact_basis
+            else (),
         )
     )
     return tuple(fragments)

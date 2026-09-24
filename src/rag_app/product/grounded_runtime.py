@@ -48,6 +48,10 @@ from rag_app.adapters.providers.structured_contract import (
     wb08r_structured_output_profile,
 )
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
+from rag_app.application.answering.natural_answer import (
+    NaturalCompletion,
+    NaturalMessage,
+)
 from rag_app.application.answering.semantic_validation import (
     SemanticValidationRequest,
     SemanticValidationResponse,
@@ -545,6 +549,49 @@ class ProductGroundedModel:
             self._private_replay_recorder.record(request, result)
         return result
 
+    def complete_natural(
+        self,
+        messages: tuple[NaturalMessage, ...],
+        *,
+        source_identities: tuple[tuple[str, str], ...],
+        cancellation: CancellationPort,
+    ) -> NaturalCompletion:
+        """在同一知识库授权内执行普通聊天流，返回尚待引用检查的正文。
+
+        Args:
+            messages: 已由应用层预算和来源编号的消息。
+            source_identities: 本次送模材料对应的文档版本身份。
+            cancellation: 模型流的协作取消令牌。
+
+        Returns:
+            实际模型正文与脱敏调用记录。
+
+        """
+        hashes = self._source_hashes_for_identities(source_identities)
+        wire_messages = tuple(
+            ChatMessage(role=item.role, content=item.content)
+            for item in messages
+        )
+        with self._scope("generation", hashes):
+            completion, failed_calls = self._call_with_rotation(
+                lambda adapter: adapter.complete_stream(
+                    wire_messages,
+                    on_delta=lambda _delta: None,
+                    cancellation=cancellation,
+                )
+            )
+        return NaturalCompletion(
+            text=completion.content,
+            model=completion.model,
+            provider_calls=(*failed_calls, completion.call),
+        )
+
+    def validate_natural_sources(
+        self, source_identities: tuple[tuple[str, str], ...]
+    ) -> None:
+        """模型返回后再次核对引用的活动资料版本。"""
+        self._source_hashes_for_identities(source_identities)
+
     def _source_hashes(
         self,
         request: (
@@ -554,7 +601,6 @@ class ProductGroundedModel:
         ),
     ) -> tuple[str, ...]:
         """重新核对本次证据仍属于当前活动知识库版本。"""
-        hashes: set[str] = set()
         if isinstance(request, SemanticValidationRequest):
             bindings = dict(request.sent_packet.read_unit_bindings)
             selected_keys = {
@@ -575,6 +621,13 @@ class ProductGroundedModel:
                 (item.document_version_id, item.document_id)
                 for item in request.evidence
             )
+        return self._source_hashes_for_identities(source_identities)
+
+    def _source_hashes_for_identities(
+        self, source_identities: tuple[tuple[object, object], ...]
+    ) -> tuple[str, ...]:
+        """按真实文档版本身份复核来源并取得授权摘要。"""
+        hashes: set[str] = set()
         with self.connections.transaction() as connection:
             for document_version_id, document_id in source_identities:
                 if not isinstance(document_version_id, str) or not isinstance(
