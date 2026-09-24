@@ -20,6 +20,17 @@ function event(
   })}\n\n`;
 }
 
+function naturalEvent(
+  type: string,
+  sequence: number,
+  fields: Record<string, unknown> = {},
+) {
+  return event(type, sequence, {
+    protocol: "wanshitong-natural-sse-v1",
+    ...fields,
+  });
+}
+
 function streamResponse(body: string): Response {
   return new Response(
     new ReadableStream({
@@ -120,6 +131,81 @@ afterEach(() => {
 });
 
 describe("公共问答新话题生命周期", () => {
+  it("普通页面先显示真实增量，终态替换正文并恢复服务端历史", async () => {
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = pathOf(input);
+      if (path === "/api/public/session") {
+        return Promise.resolve(Response.json({
+          session_id: "wstsid_11111111111111111111111111111111",
+          csrf_token: "a".repeat(64),
+          expires_in: 3600,
+          deployment_id: "candidate_8289",
+          user: { user_id: "1001", display_name: "测试用户" },
+        }));
+      }
+      if (path === "/api/public/capabilities") {
+        return Promise.resolve(Response.json({
+          mode: "wanshitong",
+          stream: true,
+          stream_protocol: "wanshitong-public-sse-v1",
+          natural_stream_protocol: "wanshitong-natural-sse-v1",
+          document_visibility: "all_internal",
+          feedback: true,
+          shortcuts: [],
+        }));
+      }
+      if (path === "/api/public/conversations") {
+        return Promise.resolve(Response.json({ items: [] }));
+      }
+      if (path.startsWith("/api/public/conversations/")) {
+        return Promise.resolve(Response.json({ turns: [] }));
+      }
+      if (path === "/api/public/chat") {
+        return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(encoder.encode(
+              naturalEvent("meta", 0) +
+              naturalEvent("answer_delta", 1, {
+                text: "临时正文",
+                provisional: true,
+              }),
+            ));
+          },
+        }), { headers: { "Content-Type": "text/event-stream" } }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.submit("真实问题"));
+    await waitFor(() =>
+      expect(result.current.turns[0]?.provisionalAnswer).toBe("临时正文"),
+    );
+    expect(result.current.turns[0]?.answer).toBeUndefined();
+    const chatCall = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === "/api/public/chat",
+    );
+    expect(new Headers(chatCall?.[1]?.headers).get("X-Wanshitong-Stream-Protocol"))
+      .toBe("wanshitong-natural-sse-v1");
+    act(() => {
+      streamController.enqueue(encoder.encode(naturalEvent("final", 2, {
+        status: "ANSWERED",
+        published: true,
+        answer: "最终正文[S1]",
+        citation_status: "valid",
+        citations: [{ document_name: "依据.docx" }],
+      })));
+      streamController.close();
+    });
+    await waitFor(() =>
+      expect(result.current.turns[0]?.status).toBe("completed"),
+    );
+    expect(result.current.turns[0]?.answer).toBe("最终正文[S1]");
+    expect(result.current.turns[0]?.provisionalAnswer).toBeUndefined();
+  });
+
   it("新话题仅清本页上下文，追问沿新会话且不删除 History 或重建登录", async () => {
     const fetchMock = installFetch(() =>
       Promise.resolve(

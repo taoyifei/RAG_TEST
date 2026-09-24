@@ -84,6 +84,7 @@ class WeKnoraStandardPipeline:
         engine_id: Literal["wk-standard-v1", "wk-standard-pc-v1"],
         cancellation: CancellationPort,
         rewrite_enabled: bool = True,
+        on_delta: Callable[[str], None] | None = None,
     ) -> NaturalAnswerResult:
         """执行一次原问 Hybrid 检索、重排、回读和普通聊天。
 
@@ -92,6 +93,7 @@ class WeKnoraStandardPipeline:
             engine_id: 候选链与目标索引档位。
             cancellation: 覆盖所有 Provider 调用的取消令牌。
             rewrite_enabled: 是否对受控会话执行一次候选改写。
+            on_delta: 可选实时正文回调，最终结果仍独立核验引用。
 
         Returns:
             独立候选结果，引用仅通过别名与版本绑定核对。
@@ -369,10 +371,14 @@ class WeKnoraStandardPipeline:
             )
         )
         self._check_cancelled(cancellation)
+        completion_kwargs = (
+            {"on_delta": on_delta} if on_delta is not None else {}
+        )
         completion = model.complete_natural(
             messages,
             source_identities=source_identities,
             cancellation=cancellation,
+            **completion_kwargs,
         )
         provider_calls.extend(completion.provider_calls)
         all_aliases = frozenset(item.reference.alias for item in sent)
@@ -701,7 +707,14 @@ class WeKnoraStandardPipeline:
             )
             messages = self._messages(request.text, history, (*chosen, current))
             if self._message_tokens(messages) <= budget.input_limit:
-                chosen.append(current)
+                chosen.append(
+                    replace(
+                        current,
+                        reference=current.reference.model_copy(
+                            update={"excerpt": current.text[:1000]}
+                        ),
+                    )
+                )
                 decisions.append((identity, "INCLUDED_FULL"))
                 continue
             empty = replace(current, text="")
@@ -718,7 +731,14 @@ class WeKnoraStandardPipeline:
                 )
                 <= budget.input_limit
             ):
-                chosen.append(partial)
+                chosen.append(
+                    replace(
+                        partial,
+                        reference=partial.reference.model_copy(
+                            update={"excerpt": partial.text[:1000]}
+                        ),
+                    )
+                )
                 decisions.append((identity, "STRUCTURALLY_PARTIAL"))
             else:
                 decisions.append((identity, "OVER_BUDGET"))

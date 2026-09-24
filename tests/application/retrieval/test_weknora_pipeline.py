@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import queue
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -19,6 +22,7 @@ from rag_app.application.answering.natural_answer import (
     NaturalCompletion,
     NaturalMessage,
     NaturalReference,
+    check_citations,
 )
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.context_reader import ContextReadResult
@@ -145,6 +149,54 @@ def test_natural_path_uses_real_candidate_without_atom_chain() -> None:
     assert metadata["pipeline_revision"] == "weknora-natural-v3-02"
     assert metadata["citation_status"] == "valid"
     assert metadata["policy_fingerprint"] == NaturalBudget().identity
+
+
+def test_natural_delta_arrives_before_provider_completion() -> None:
+    service, model = _scenario()
+    release = threading.Event()
+    received: queue.Queue[str] = queue.Queue(maxsize=1)
+
+    def complete(_messages: object, **kwargs: object) -> NaturalCompletion:
+        on_delta = kwargs["on_delta"]
+        assert callable(on_delta)
+        on_delta("甲方")
+        assert release.wait(timeout=5)
+        return NaturalCompletion(
+            text="甲方负责核对记录。[S1]",
+            model="fixture-qwen",
+            provider_calls=(),
+            finish_reason="stop",
+        )
+
+    model.complete_natural.side_effect = complete
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            WeKnoraStandardPipeline(service).run,
+            _request(),
+            engine_id="wk-standard-v1",
+            cancellation=StreamCancellation(),
+            on_delta=received.put,
+        )
+        try:
+            assert received.get(timeout=5) == "甲方"
+            assert not future.done()
+        finally:
+            release.set()
+        assert future.result(timeout=5).answer == "甲方负责核对记录。[S1]"
+
+
+def test_literal_and_incomplete_citation_markers_are_not_rebound() -> None:
+    available = frozenset({"S1", "S12"})
+    assert check_citations(
+        "正文。[S1] `代码[S12]`", available
+    ).cited_aliases == ("S1",)
+    assert check_citations("\\[S12]", available).status == "missing"
+    assert check_citations("```\n[S12]\n```", available).status == "missing"
+    assert check_citations("正文。[S", available).status == "invalid"
+    assert check_citations("正文。[S12][S1]", available).cited_aliases == (
+        "S12",
+        "S1",
+    )
 
 
 @pytest.mark.parametrize("citation", ("[S9]", "[S100]", "[S0]", "[Sx]"))

@@ -135,6 +135,25 @@ export function WanshitongApp() {
         跳到主要内容
       </a>
       <div className="wst-toolbar">
+        {chat.historySessions.length > 0 && (
+          <details className="wst-history-menu">
+            <summary>历史会话</summary>
+            <div className="wst-history-list">
+              {chat.historySessions.map((item) => (
+                <button
+                  disabled={chat.busy}
+                  key={item.conversation_id}
+                  onClick={() => {
+                    void chat.openHistory(item.conversation_id);
+                  }}
+                  type="button"
+                >
+                  {item.title}
+                </button>
+              ))}
+            </div>
+          </details>
+        )}
         {chat.user ? (
           <>
             <span className="wst-account-name">{chat.user.displayName}</span>
@@ -180,6 +199,7 @@ export function WanshitongApp() {
           initialQuestion={restoredDraft}
           onFeedback={chat.submitFeedback}
           onFeedbackLogin={chat.login}
+          onDownloadReference={chat.downloadReference}
           onNewTopic={startNewTopic}
           onPopularQuestionSubmit={submitPopularQuestion}
           onRefresh={suggestions.refresh}

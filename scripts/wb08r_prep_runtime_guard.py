@@ -29,6 +29,8 @@ _BASE_IMAGE_LABELS = (
 _DEPARTMENT_SHADOW_KEY = "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
 _POPULAR_QUESTIONS_KEY = "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED"
 _WEKNORA_CHUNKER_KEY = "RAG_WK_CHUNKER_MODE"
+_NATURAL_PUBLIC_KEY = "RAG_WANSHITONG_NATURAL_PUBLIC_ENABLED"
+_NATURAL_ENGINE_KEY = "RAG_WANSHITONG_NATURAL_PUBLIC_ENGINE"
 _Q1_CAPTURE_KEYS = {
     "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_CAPTURE_SUCCESS": "true",
     "RAG_PRIVATE_PROVIDER_DIAGNOSTIC_MAX_FILES": "128",
@@ -430,7 +432,7 @@ def _compare_weknora_chunker(
     )
 
 
-def _compare_environment(  # noqa: PLR0913
+def _compare_environment(  # noqa: PLR0912, PLR0913
     report: _Report,
     baseline: dict[str, str],
     candidate: dict[str, str],
@@ -440,8 +442,30 @@ def _compare_environment(  # noqa: PLR0913
     allow_popular_questions_toggle: bool = False,
     allow_q1_private_capture: bool = False,
     allow_weknora_parent_child: bool = False,
+    allow_natural_public: bool = False,
 ) -> None:
     ignored_keys: set[str] = set()
+    natural_enabled = candidate.get(_NATURAL_PUBLIC_KEY)
+    natural_engine = candidate.get(_NATURAL_ENGINE_KEY)
+    baseline_natural = baseline.get(_NATURAL_PUBLIC_KEY)
+    baseline_engine = baseline.get(_NATURAL_ENGINE_KEY)
+    if (
+        baseline_natural in {None, "false"}
+        and baseline_engine in {None, "wk-standard-pc-v1"}
+        and natural_engine == "wk-standard-pc-v1"
+        and (
+            natural_enabled == "false"
+            or (allow_natural_public and natural_enabled == "true")
+        )
+    ):
+        ignored_keys.update({_NATURAL_PUBLIC_KEY, _NATURAL_ENGINE_KEY})
+        if natural_enabled == "true":
+            report.allow(
+                f"services.app.environment.{_NATURAL_PUBLIC_KEY}",
+                "仅在独立 8289 候选启用自然公共问答。",
+                baseline=baseline_natural,
+                candidate=natural_enabled,
+            )
     _compare_weknora_chunker(
         report,
         baseline,
@@ -1116,6 +1140,7 @@ def compare_runtime(  # noqa: PLR0913
     allow_popular_questions_toggle: bool = False,
     allow_q1_private_capture: bool = False,
     allow_weknora_parent_child: bool = False,
+    allow_natural_public: bool = False,
 ) -> dict[str, object]:
     """比较候选描述或创建后容器，返回无秘密的字段级报告。
 
@@ -1131,6 +1156,7 @@ def compare_runtime(  # noqa: PLR0913
         allow_popular_questions_toggle: 是否允许 F06 公共问题开关的声明差异。
         allow_q1_private_capture: 是否允许专用 8289 上的固定私有证据捕获。
         allow_weknora_parent_child: 是否允许独立候选数据使用父子分块。
+        allow_natural_public: 是否允许仅在独立候选启用自然公共问答。
 
     Returns:
         含逐类差异、各层摘要和 `ready` 判定的安全报告。
@@ -1176,6 +1202,7 @@ def compare_runtime(  # noqa: PLR0913
         allow_popular_questions_toggle=allow_popular_questions_toggle,
         allow_q1_private_capture=allow_q1_private_capture,
         allow_weknora_parent_child=allow_weknora_parent_child,
+        allow_natural_public=allow_natural_public,
     )
     _compare_mounts(
         report,
@@ -1319,6 +1346,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     compare.add_argument("--allow-q1-private-capture", action="store_true")
     compare.add_argument("--allow-weknora-parent-child", action="store_true")
+    compare.add_argument("--allow-natural-public", action="store_true")
     return parser
 
 
@@ -1353,6 +1381,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         allow_q1_private_capture=arguments.allow_q1_private_capture,
         allow_weknora_parent_child=arguments.allow_weknora_parent_child,
+        allow_natural_public=arguments.allow_natural_public,
     )
     _write_report(arguments.output, report)
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))

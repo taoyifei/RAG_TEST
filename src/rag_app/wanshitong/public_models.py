@@ -72,6 +72,7 @@ class PublicCapabilities(BaseModel):
     stream_protocol: Literal["wanshitong-public-sse-v1"] = (
         "wanshitong-public-sse-v1"
     )
+    natural_stream_protocol: Literal["wanshitong-natural-sse-v1"] | None = None
     trace_mode: Literal["SAFE"] = "SAFE"
     history_mode: Literal["full"] = "full"
     document_visibility: Literal["all_internal"] = "all_internal"

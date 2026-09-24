@@ -1742,6 +1742,45 @@ label:has(input[type="checkbox"]) {
   min-width: auto;
   cursor: pointer;
 }
+.wst-history-menu {
+  position: relative;
+}
+.wst-history-menu > summary {
+  min-height: 44px;
+  padding: 11px 16px;
+  border: 1px solid var(--wst-border);
+  border-radius: 999px;
+  background: rgb(39 44 43 / 92%);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+}
+.wst-history-list {
+  position: absolute;
+  right: 0;
+  width: min(340px, calc(100vw - 40px));
+  max-height: 360px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--wst-border);
+  border-radius: 14px;
+  background: var(--wst-panel-raised);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 25%);
+}
+.wst-history-list button {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.wst-history-list button:hover {
+  background: rgb(255 255 255 / 9%);
+}
 .wst-toolbar-error {
   position: fixed;
   z-index: 29;

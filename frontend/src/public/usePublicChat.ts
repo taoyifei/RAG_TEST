@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   createPublicSession,
+  getPublicNaturalHistory,
+  getPublicNaturalSessions,
+  getPublicNaturalSource,
   getPublicCapabilities,
   logoutPublicSession,
   openPublicChat,
@@ -11,6 +14,8 @@ import {
   type PublicFeedbackSubmission,
   type PublicSessionUser,
   type PublicUsageContext,
+  type PublicNaturalHistoryTurn,
+  type PublicNaturalSession,
 } from "./publicApi";
 import * as authNavigation from "./authNavigation";
 import {
@@ -54,6 +59,7 @@ export interface PublicTurn {
   lastSignalAt: number;
   claims: PublicClaim[];
   answer?: string;
+  provisionalAnswer?: string;
   citations: PublicCitation[];
   errorMessage?: string;
   partial: boolean;
@@ -65,6 +71,7 @@ export interface PublicTurn {
 
 interface StreamTracker {
   claimCount: number;
+  deltaCount: number;
   claimIndexes: Set<number>;
   lastSequence: number;
   terminal: boolean;
@@ -129,6 +136,7 @@ function resetTurn(turn: PublicTurn): PublicTurn {
     lastSignalAt: Date.now(),
     claims: [],
     answer: undefined,
+    provisionalAnswer: undefined,
     citations: [],
     errorMessage: undefined,
     partial: false,
@@ -136,6 +144,33 @@ function resetTurn(turn: PublicTurn): PublicTurn {
     feedback: "idle",
     feedbackError: undefined,
     feedbackUseful: undefined,
+  };
+}
+
+function restoreNaturalTurn(
+  conversationId: string,
+  item: PublicNaturalHistoryTurn,
+): PublicTurn {
+  const startedAt = Date.parse(item.created_at) || Date.now();
+  return {
+    id: item.turn_id,
+    conversationId,
+    question: item.question,
+    status: "completed",
+    stageHistory: [],
+    startedAt,
+    stageStartedAt: startedAt,
+    lastSignalAt: startedAt,
+    claims: [],
+    answer:
+      item.answer ??
+      (item.status === "SOURCE_UNAVAILABLE"
+        ? "原引用资料已变化，这条历史回答暂不可展示。"
+        : "暂未找到可以回答该问题的资料。"),
+    citations: item.citations,
+    partial: false,
+    traceId: item.trace_id,
+    feedback: "idle",
   };
 }
 
@@ -149,7 +184,11 @@ export function usePublicChat() {
   const [deploymentId, setDeploymentId] = useState<string>();
   const [feedbackDetailsEnabled, setFeedbackDetailsEnabled] = useState(false);
   const [usageContextEnabled, setUsageContextEnabled] = useState(false);
+  const [naturalProtocol, setNaturalProtocol] = useState<
+    "wanshitong-natural-sse-v1" | undefined
+  >();
   const [turns, setTurns] = useState<PublicTurn[]>([]);
+  const [historySessions, setHistorySessions] = useState<PublicNaturalSession[]>([]);
   const [conversationId, setConversationId] = useState(() => randomId("wst"));
   const csrfRef = useRef<string | undefined>(undefined);
   const conversationRef = useRef(conversationId);
@@ -161,6 +200,7 @@ export function usePublicChat() {
   const feedbackAttemptsRef = useRef(new Set<string>());
   const sessionChannelRef = useRef<PublicSessionChannel | undefined>(undefined);
   const identityChangedRef = useRef(false);
+  const historyKeyRef = useRef<string | undefined>(undefined);
 
   const clearLocalSession = useCallback((showLoggedOut: boolean) => {
     requestIdRef.current += 1;
@@ -171,17 +211,27 @@ export function usePublicChat() {
     streamControllerRef.current = undefined;
     activeTurnRef.current = undefined;
     csrfRef.current = undefined;
+    if (historyKeyRef.current) {
+      try {
+        window.sessionStorage.removeItem(historyKeyRef.current);
+      } catch {
+        // 浏览器禁用存储时不影响服务端会话授权。
+      }
+    }
+    historyKeyRef.current = undefined;
     const nextConversationId = randomId("wst");
     conversationRef.current = nextConversationId;
     setConversationId(nextConversationId);
     feedbackAttemptsRef.current.clear();
     setTurns([]);
+    setHistorySessions([]);
     setSessionReady(false);
     setSessionError(undefined);
     setLogoutError(undefined);
     setUser(undefined);
     setFeedbackDetailsEnabled(false);
     setUsageContextEnabled(false);
+    setNaturalProtocol(undefined);
     setLoggedOut(showLoggedOut);
     setPhase(showLoggedOut ? "idle" : "creating_session");
   }, []);
@@ -194,6 +244,13 @@ export function usePublicChat() {
     activeTurnRef.current = undefined;
     const nextConversationId = randomId("wst");
     conversationRef.current = nextConversationId;
+    if (historyKeyRef.current) {
+      try {
+        window.sessionStorage.setItem(historyKeyRef.current, nextConversationId);
+      } catch {
+        // 本次会话仍可继续使用。
+      }
+    }
     setConversationId(nextConversationId);
     feedbackAttemptsRef.current.clear();
     setTurns([]);
@@ -218,12 +275,42 @@ export function usePublicChat() {
     setDeploymentId(session.deploymentId);
     setFeedbackDetailsEnabled(capabilities.feedback_details === true);
     setUsageContextEnabled(capabilities.request_usage_context === true);
+    setNaturalProtocol(capabilities.natural_stream_protocol);
     setLoggedOut(false);
     if (session.deploymentId && session.user) {
       identityChangedRef.current = recordPublicIdentity(
         session.deploymentId,
         session.user.userId,
       );
+    }
+    if (capabilities.natural_stream_protocol) {
+      const identity = session.user?.userId ?? session.sessionId;
+      const key = `wst-natural-conversation:${session.deploymentId ?? "local"}:${identity}`;
+      historyKeyRef.current = key;
+      try {
+        const saved = window.sessionStorage.getItem(key);
+        const restored =
+          saved && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(saved)
+            ? saved
+            : conversationRef.current;
+        window.sessionStorage.setItem(key, restored);
+        conversationRef.current = restored;
+        setConversationId(restored);
+        const history = await getPublicNaturalHistory({
+          conversationId: restored,
+          csrfToken: session.csrfToken,
+          signal,
+        });
+        setTurns(history.map((item) => restoreNaturalTurn(restored, item)));
+        setHistorySessions(
+          await getPublicNaturalSessions({
+            csrfToken: session.csrfToken,
+            signal,
+          }),
+        );
+      } catch {
+        // 历史恢复失败时保留当前页面会话，后续请求仍由服务端鉴权。
+      }
     }
     setSessionReady(true);
     setSessionError(undefined);
@@ -305,6 +392,7 @@ export function usePublicChat() {
       streamControllerRef.current = controller;
       const tracker: StreamTracker = {
         claimCount: 0,
+        deltaCount: 0,
         claimIndexes: new Set(),
         lastSequence: -1,
         terminal: false,
@@ -347,6 +435,7 @@ export function usePublicChat() {
           question,
           signal: controller.signal,
           clientContext: usageContextEnabled ? clientContext : undefined,
+          naturalProtocol,
         });
         if (!response.body) {
           throw new TypeError("public stream body missing");
@@ -409,6 +498,17 @@ export function usePublicChat() {
             }));
             return true;
           }
+          if (event.type === "answer_delta") {
+            tracker.deltaCount += 1;
+            updateTurn(turnId, (turn) => ({
+              ...turn,
+              traceId: traceId ?? turn.traceId,
+              provisionalAnswer: (turn.provisionalAnswer ?? "") + event.text,
+              lastSignalAt: Date.now(),
+            }));
+            return true;
+          }
+          if (event.type === "references") return true;
           if (event.type === "final") {
             tracker.terminal = true;
             updateTurn(turnId, (turn) => ({
@@ -417,6 +517,7 @@ export function usePublicChat() {
               stageMessage: undefined,
               claims: [],
               answer: finalAnswerMessage(event),
+              provisionalAnswer: undefined,
               citations: event.citations,
               errorMessage: undefined,
               partial: false,
@@ -427,7 +528,10 @@ export function usePublicChat() {
           }
           if (event.type === "error") {
             tracker.terminal = true;
-            const partial = tracker.claimCount > 0 || event.partial === true;
+            const partial =
+              tracker.claimCount > 0 ||
+              tracker.deltaCount > 0 ||
+              event.partial === true;
             updateTurn(turnId, (turn) => ({
               ...turn,
               status: "failed",
@@ -447,7 +551,7 @@ export function usePublicChat() {
             status: "cancelled",
             stageMessage: undefined,
             errorMessage: "已停止回答",
-            partial: turn.claims.length > 0,
+            partial: turn.claims.length > 0 || Boolean(turn.provisionalAnswer),
             traceId: traceId ?? turn.traceId,
           }));
           setPhase("cancelled");
@@ -470,6 +574,11 @@ export function usePublicChat() {
         if (!tracker.terminal && isCurrent()) {
           throw new TypeError("public stream disconnected before terminal");
         }
+        if (naturalProtocol && isCurrent()) {
+          void getPublicNaturalSessions({ csrfToken })
+            .then(setHistorySessions)
+            .catch(() => undefined);
+        }
       } catch (error) {
         if (!isCurrent() || controller.signal.aborted) return;
         if (isSessionExpired(error)) {
@@ -479,7 +588,7 @@ export function usePublicChat() {
         }
         tracker.terminal = true;
         updateTurn(turnId, (turn) => {
-          const partial = turn.claims.length > 0;
+          const partial = turn.claims.length > 0 || Boolean(turn.provisionalAnswer);
           return {
             ...turn,
             status: "failed",
@@ -499,7 +608,7 @@ export function usePublicChat() {
         }
       }
     },
-    [clearLocalSession, sessionReady, updateTurn, usageContextEnabled],
+    [clearLocalSession, naturalProtocol, sessionReady, updateTurn, usageContextEnabled],
   );
 
   const submit = useCallback(
@@ -516,6 +625,36 @@ export function usePublicChat() {
   const startNewTopic = useCallback(() => {
     resetConversationState();
   }, [resetConversationState]);
+
+  const openHistory = useCallback(
+    async (selectedConversationId: string) => {
+      if (busyRef.current || !sessionReady || !naturalProtocol) return;
+      const csrfToken = csrfRef.current;
+      if (!csrfToken) return;
+      const history = await getPublicNaturalHistory({
+        conversationId: selectedConversationId,
+        csrfToken,
+      });
+      requestIdRef.current += 1;
+      conversationRef.current = selectedConversationId;
+      setConversationId(selectedConversationId);
+      setTurns(
+        history.map((item) => restoreNaturalTurn(selectedConversationId, item)),
+      );
+      if (historyKeyRef.current) {
+        try {
+          window.sessionStorage.setItem(
+            historyKeyRef.current,
+            selectedConversationId,
+          );
+        } catch {
+          // 服务端历史仍可访问。
+        }
+      }
+      setPhase("ready");
+    },
+    [naturalProtocol, sessionReady],
+  );
 
   const submitRecommendation = useCallback(
     (
@@ -557,7 +696,7 @@ export function usePublicChat() {
       status: "cancelled",
       stageMessage: undefined,
       errorMessage: "已停止回答",
-      partial: turn.claims.length > 0,
+      partial: turn.claims.length > 0 || Boolean(turn.provisionalAnswer),
     }));
     setPhase("cancelled");
   }, [updateTurn]);
@@ -599,6 +738,33 @@ export function usePublicChat() {
     [updateTurn],
   );
 
+  const downloadReference = useCallback(
+    async (
+      turnConversationId: string,
+      traceId: string,
+      referenceId: string,
+      documentName: string,
+    ) => {
+      const csrfToken = csrfRef.current;
+      if (!csrfToken) throw new Error("公共会话已失效。请重新登录。");
+      const blob = await getPublicNaturalSource({
+        conversationId: turnConversationId,
+        traceId,
+        referenceId,
+        csrfToken,
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = documentName.replace(/[\\/:*?"<>|]/g, "_");
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    },
+    [],
+  );
+
   const logout = useCallback(() => {
     const csrfToken = csrfRef.current;
     if (!csrfToken || !user) return;
@@ -633,11 +799,14 @@ export function usePublicChat() {
     busy,
     conversationId,
     deploymentId,
+    downloadReference,
     feedbackDetailsEnabled,
+    historySessions,
     loggedOut,
     login: () => authNavigation.redirectToSso(),
     logout,
     logoutError,
+    openHistory,
     phase,
     retry,
     retrySession: startSession,

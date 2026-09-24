@@ -1,5 +1,8 @@
 export interface PublicCitation {
   document_name: string;
+  reference_id?: string;
+  alias?: string;
+  source_kind?: string;
   department?: string;
   department_name?: string;
   category_path?: string | string[];
@@ -39,6 +42,20 @@ export interface PublicFinalEvent extends PublicEventBase {
   answer: string | null;
   user_message?: string;
   citations: PublicCitation[];
+  published?: boolean;
+  citation_status?: "valid" | "missing" | "invalid";
+  validation_level?: string;
+}
+
+export interface PublicAnswerDeltaEvent extends PublicEventBase {
+  type: "answer_delta";
+  text: string;
+  provisional: true;
+}
+
+export interface PublicReferencesEvent extends PublicEventBase {
+  type: "references";
+  items: PublicCitation[];
 }
 
 export interface PublicErrorEvent extends PublicEventBase {
@@ -57,6 +74,8 @@ export type PublicStreamEvent =
   | PublicMetaEvent
   | PublicStageEvent
   | PublicClaimEvent
+  | PublicAnswerDeltaEvent
+  | PublicReferencesEvent
   | PublicFinalEvent
   | PublicErrorEvent
   | PublicCancelledEvent;
@@ -125,6 +144,8 @@ const EVENT_TYPES = new Set([
   "meta",
   "stage",
   "claim",
+  "answer_delta",
+  "references",
   "final",
   "error",
   "cancelled",
@@ -136,6 +157,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isCitation(value: unknown): value is PublicCitation {
   if (!isRecord(value) || typeof value.document_name !== "string") return false;
+  if (
+    value.reference_id !== undefined &&
+    (typeof value.reference_id !== "string" ||
+      !/^ref_[0-9a-f]{32}$/.test(value.reference_id))
+  ) return false;
   if (value.department !== undefined && typeof value.department !== "string") {
     return false;
   }
@@ -183,6 +209,18 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
     throw new PublicSseParseError();
   }
   const type = typeof value.type === "string" ? value.type : frame.event;
+  const natural = value.protocol === "wanshitong-natural-sse-v1";
+  if (
+    value.protocol !== undefined &&
+    value.protocol !== "wanshitong-public-sse-v1" &&
+    !natural
+  ) {
+    throw new PublicSseParseError();
+  }
+  if (natural && type === "claim") throw new PublicSseParseError();
+  if ((type === "answer_delta" || type === "references") && !natural) {
+    throw new PublicSseParseError();
+  }
   const sequence = value.sequence;
   if (
     type !== frame.event ||
@@ -203,12 +241,41 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
     throw new PublicSseParseError();
   }
   if (
+    type === "answer_delta" &&
+    (typeof value.text !== "string" || value.provisional !== true)
+  ) {
+    throw new PublicSseParseError();
+  }
+  if (
+    type === "references" &&
+    (!Array.isArray(value.items) || !value.items.every(isCitation))
+  ) {
+    throw new PublicSseParseError();
+  }
+  if (
     type === "final" &&
     ((value.answer !== null && typeof value.answer !== "string") ||
       !Array.isArray(value.citations) ||
       !value.citations.every(isCitation) ||
       (value.user_message !== undefined &&
         typeof value.user_message !== "string"))
+  ) {
+    throw new PublicSseParseError();
+  }
+  if (
+    type === "final" && natural &&
+    (typeof value.published !== "boolean" ||
+      !["valid", "missing", "invalid"].includes(String(value.citation_status)))
+  ) {
+    throw new PublicSseParseError();
+  }
+  if (
+    type === "final" && natural &&
+    (value.published
+      ? value.citation_status !== "valid" ||
+        typeof value.answer !== "string" ||
+        (value.citations as unknown[]).length === 0
+      : value.answer !== null || (value.citations as unknown[]).length !== 0)
   ) {
     throw new PublicSseParseError();
   }

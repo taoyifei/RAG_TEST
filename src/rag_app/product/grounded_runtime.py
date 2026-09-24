@@ -617,6 +617,7 @@ class ProductGroundedModel:
         *,
         source_identities: tuple[tuple[str, str], ...],
         cancellation: CancellationPort,
+        on_delta: Callable[[str], None] | None = None,
     ) -> NaturalCompletion:
         """在同一知识库授权内执行普通聊天流，返回尚待引用检查的正文。
 
@@ -624,6 +625,7 @@ class ProductGroundedModel:
             messages: 已由应用层预算和来源编号的消息。
             source_identities: 本次送模材料对应的文档版本身份。
             cancellation: 模型流的协作取消令牌。
+            on_delta: 可选实时正文回调；首段后不切换模型。
 
         Returns:
             实际模型正文与脱敏调用记录。
@@ -634,13 +636,24 @@ class ProductGroundedModel:
             ChatMessage(role=item.role, content=item.content)
             for item in messages
         )
+        emitted = 0
+
+        def forward(delta: str) -> None:
+            nonlocal emitted
+            if not delta:
+                return
+            emitted += 1
+            if on_delta is not None:
+                on_delta(delta)
+
         with self._scope("generation", hashes):
             completion, failed_calls = self._call_with_rotation(
                 lambda adapter: adapter.complete_stream(
                     wire_messages,
-                    on_delta=lambda _delta: None,
+                    on_delta=forward,
                     cancellation=cancellation,
                 ),
+                can_rotate=lambda: emitted == 0,
                 adapters=self._candidate_adapters(rewrite=False),
             )
         return NaturalCompletion(
