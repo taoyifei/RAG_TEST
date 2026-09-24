@@ -14,7 +14,6 @@ from rag_app.core.ports import CancellationPort
 
 _CITATION = re.compile(r"\[S([0-9]+)\]")
 _CITATION_LIKE = re.compile(r"\[S[^\]]*\]")
-_REFUSAL = ("资料不足", "无法根据", "没有找到", "无法确认", "未找到")
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +31,18 @@ class NaturalCompletion:
     text: str
     model: str
     provider_calls: tuple[ProviderCall, ...]
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    finish_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CitationBinding:
+    """独立记录引用语法与别名绑定状态，不推断正文语义。"""
+
+    status: Literal["valid", "missing", "invalid"]
+    cited_aliases: tuple[str, ...] = ()
+    invalid_markers: tuple[str, ...] = ()
 
 
 class NaturalAnswerPort(Protocol):
@@ -61,6 +72,7 @@ class NaturalReference(FrozenModel):
     document_title: str
     chunk_ids: tuple[str, ...]
     source_spans: tuple[SourceSpan, ...]
+    parent_ranges: tuple[tuple[int, int], ...] = ()
     citation_basis: Literal["original", "parsed_artifact", "mixed"]
     source_complete: bool
 
@@ -71,42 +83,61 @@ class NaturalAnswerResult(FrozenModel):
     trace_id: str
     engine_id: Literal["wk-standard-v1", "wk-standard-pc-v1"]
     answer: str | None = Field(default=None, repr=False)
+    draft: str | None = Field(default=None, repr=False)
     reason_code: str
     references: tuple[NaturalReference, ...] = ()
     cited_aliases: tuple[str, ...] = ()
+    citation_status: Literal["valid", "missing", "invalid"] = "missing"
+    invalid_citations: tuple[str, ...] = ()
     validation_level: Literal["citation_binding_only"] = "citation_binding_only"
     active_index_revision_id: str
     index_fingerprint: str
     serving_fingerprint: str
+    pipeline_revision: str = "weknora-natural-v3-02"
+    policy_fingerprint: str | None = None
     selected_embedding_slot: str | None = None
     rerank_execution_mode: str
     degraded_reason_codes: tuple[str, ...] = ()
     generation_model: str | None = None
     input_packet_sha256: str | None = None
     estimated_input_tokens: int = 0
+    actual_prompt_tokens: int | None = None
+    finish_reason: str | None = None
     provider_calls: tuple[ProviderCall, ...] = Field(default=(), exclude=True)
 
 
-def cited_aliases(answer: str, available: frozenset[str]) -> tuple[str, ...]:
-    """仅允许回答引用本次实际送模的短来源别名。"""
+def check_citations(answer: str, available: frozenset[str]) -> CitationBinding:
+    """区分缺失与非法引用；只有本次实际送模的别名可绑定。"""
     markers = _CITATION_LIKE.findall(answer)
-    if any(_CITATION.fullmatch(marker) is None for marker in markers):
-        raise ValueError("模型回答包含无法识别的来源引用。")
+    invalid = tuple(
+        marker for marker in markers if _CITATION.fullmatch(marker) is None
+    )
     cited = tuple(
         dict.fromkeys(f"S{match}" for match in _CITATION.findall(answer))
     )
-    if not cited or any(alias not in available for alias in cited):
-        if any(marker in answer for marker in _REFUSAL) and not cited:
-            return ()
-        raise ValueError("模型回答缺少有效来源引用，或引用了未提供的来源。")
-    return cited
+    invalid += tuple(f"[{alias}]" for alias in cited if alias not in available)
+    if invalid:
+        return CitationBinding("invalid", invalid_markers=invalid)
+    if not cited:
+        return CitationBinding("missing")
+    return CitationBinding("valid", cited_aliases=cited)
+
+
+def cited_aliases(answer: str, available: frozenset[str]) -> tuple[str, ...]:
+    """兼容旧调用方的严格绑定接口。"""
+    binding = check_citations(answer, available)
+    if binding.status == "invalid":
+        raise ValueError("模型回答包含未提供或无法识别的来源引用。")
+    return binding.cited_aliases
 
 
 __all__ = [
+    "CitationBinding",
     "NaturalAnswerPort",
     "NaturalAnswerResult",
     "NaturalCompletion",
     "NaturalMessage",
     "NaturalReference",
+    "check_citations",
     "cited_aliases",
 ]

@@ -46,6 +46,7 @@ from rag_app.application.retrieval import (
     QueryDataPlaneContext,
     RetrievalService,
 )
+from rag_app.application.retrieval.natural_context import NaturalBudget
 from rag_app.application.revision_builder import RevisionBuilder
 from rag_app.application.revision_validator import RevisionValidator
 from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
@@ -667,6 +668,7 @@ class ProductProfileResolver:
             "legacy"
         ),
         contextual_rerank_mode: Literal["off", "active"] = "off",
+        natural_budget: NaturalBudget | None = None,
     ) -> None:
         """保存产品控制面。
 
@@ -685,6 +687,7 @@ class ProductProfileResolver:
             evidence_group_mode: 当前实例的结构组 off/shadow/active 开关。
             context_reader_mode: 来源回读 legacy/shadow/candidate 开关。
             contextual_rerank_mode: 当前实例的确定性重排上下文开关。
+            natural_budget: 候选自然问答的独立模型预算。
 
         Returns:
             无返回值。
@@ -711,6 +714,7 @@ class ProductProfileResolver:
         self._evidence_group_mode = evidence_group_mode
         self._context_reader_mode = context_reader_mode
         self._contextual_rerank_mode = contextual_rerank_mode
+        self._natural_budget = natural_budget or NaturalBudget()
         self._controlled_scope: ContextVar[_ControlledPilotScope | None] = (
             ContextVar("product_controlled_pilot", default=None)
         )
@@ -1505,6 +1509,7 @@ class ProductProfileResolver:
                 knowledge_base_id,
                 self._models.connections,
                 self._providers,
+                natural_budget=self._natural_budget,
             )
         else:
             model = ProductGroundedModel(
@@ -1513,6 +1518,7 @@ class ProductProfileResolver:
                 self._models.connections,
                 self._providers,
                 private_replay_recorder=self._private_replay_recorder,
+                natural_budget=self._natural_budget,
             )
         generation = _ResourceGeneration(
             knowledge_base_id=knowledge_base_id,
@@ -2136,6 +2142,16 @@ class ProductRuntime:
         self.close()
 
 
+def _natural_budget_from_environment() -> NaturalBudget:
+    """组合根只解析两个固定候选预算档位。"""
+    profile = os.environ.get("RAG_WK_NATURAL_PROFILE", "conservative-8k")
+    if profile == "conservative-8k":
+        return NaturalBudget()
+    if profile == "expanded-8k":
+        return NaturalBudget(input_cap=6144)
+    raise ValueError("RAG_WK_NATURAL_PROFILE 仅支持固定的 8K 候选档位。")
+
+
 def build_product_runtime(  # noqa: PLR0915
     settings: ProductRuntimeSettings,
     *,
@@ -2305,6 +2321,7 @@ def build_product_runtime(  # noqa: PLR0915
         evidence_group_mode=settings.evidence_group_mode,
         context_reader_mode=settings.context_reader_mode,
         contextual_rerank_mode=settings.contextual_rerank_mode,
+        natural_budget=_natural_budget_from_environment(),
     )
 
     def _status_overlay(status: SystemStatus) -> SystemStatus:

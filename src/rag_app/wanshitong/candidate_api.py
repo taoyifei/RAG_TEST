@@ -35,6 +35,7 @@ class CandidateChatRequest(FrozenModel):
     query: str = Field(min_length=1, max_length=8000)
     engine_id: Literal["wk-standard-v1", "wk-standard-pc-v1"] = "wk-standard-v1"
     conversation_context: tuple[str, ...] = Field(default=(), max_length=8)
+    rewrite_enabled: bool = True
     limit: int = Field(default=10, ge=1, le=50)
 
 
@@ -135,6 +136,7 @@ def register_candidate_routes(  # noqa: PLR0915
                             frozen,
                             engine_id=body.engine_id,
                             cancellation=cancellation,
+                            rewrite_enabled=body.rewrite_enabled,
                         )
             except QueryCancelled:
                 cancelled = True
