@@ -25,7 +25,7 @@ from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.generation_packet import stable_support_key
 from rag_app.core.models.query_plan import QueryPlan
 
-CONTEXT_READER_PACK_REVISION = "wb08r-context-reader-pack-v2"
+CONTEXT_READER_PACK_REVISION = "wb08r-context-reader-pack-v3"
 _SHA256_HEX_LENGTH = 64
 
 
@@ -41,7 +41,13 @@ def _evidence_group_id(group: ContextReadGroup) -> str:
 
 def _trusted_group(group: ContextReadGroup) -> EvidenceGroup:
     """用已核验的 canonical span 构造终端可复核的组成员映射。"""
-    members = group.candidates
+    materialized = tuple(piece for piece in group.pieces if piece.text.strip())
+    members = tuple(
+        {
+            piece.candidate.hydrated.chunk.chunk_id: piece.candidate
+            for piece in materialized
+        }.values()
+    )
     if not members:
         raise ValueError("空来源组不能成为可信结构组。")
     candidate_by_id = {
@@ -53,7 +59,7 @@ def _trusted_group(group: ContextReadGroup) -> EvidenceGroup:
             citation_text=candidate.hydrated.chunk.citation_text,
             source_spans=tuple(
                 piece.span
-                for piece in group.pieces
+                for piece in materialized
                 if piece.candidate.hydrated.chunk.chunk_id == chunk_id
             ),
         )

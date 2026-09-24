@@ -208,3 +208,47 @@ def test_support_key_separates_same_source_in_different_reader_groups() -> None:
     assert stable_support_key(first.evidence[0]) != stable_support_key(
         second.evidence[0]
     )
+
+
+def test_whitespace_only_source_span_does_not_break_group_certificate() -> None:
+    """回读可用空白补齐原节点，但发送包只需认证实际发送的正文。"""
+    text = "甲流程先登记。"
+    candidate = make_ranked_chunk(9, text + " ")
+    original = candidate.hydrated.chunk.source_spans[0]
+    main = original.model_copy(
+        update={"chunk_end_char": len(text), "source_end_char": len(text)}
+    )
+    blank = original.model_copy(
+        update={
+            "chunk_start_char": len(text),
+            "chunk_end_char": len(text) + 1,
+            "source_start_char": len(text),
+            "source_end_char": len(text) + 1,
+        }
+    )
+    chunk = candidate.hydrated.chunk.model_copy(
+        update={"source_spans": (main, blank)}
+    )
+    candidate = candidate.model_copy(
+        update={
+            "hydrated": candidate.hydrated.model_copy(update={"chunk": chunk})
+        }
+    )
+    group = ContextReadGroup(
+        group_id=canonical_sha256("blank-gap"),
+        kind="source_node",
+        seed_chunk_ids=(chunk.chunk_id,),
+        pieces=(
+            ContextReadPiece(candidate, main),
+            ContextReadPiece(candidate, blank),
+        ),
+        required_node_ids=(main.node_id or "",),
+        missing_node_ids=(),
+        source_complete=True,
+    )
+
+    pack = _pack(group)
+
+    assert len(pack.evidence) == 1
+    assert len(pack.trusted_source_groups) == 1
+    assert source_group_covered(pack.evidence, pack.trusted_source_groups[0])
