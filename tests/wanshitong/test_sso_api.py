@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
@@ -123,7 +123,10 @@ def _entry(harness: SsoHarness, return_to: str = "/kb/") -> str:
 
 
 def _login(
-    harness: SsoHarness, monkeypatch: pytest.MonkeyPatch
+    harness: SsoHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    identity: SsoIdentity | None = None,
 ) -> dict[str, object]:
     state = _entry(harness, "/kb/admin/history")
 
@@ -137,7 +140,7 @@ def _login(
         assert ticket == _TICKET
         assert service == _CALLBACK
         assert len(state) == 64
-        return _identity()
+        return identity or _identity()
 
     monkeypatch.setattr(SsoClient, "validate", _validate)
     callback = harness.browser.get(
@@ -174,6 +177,27 @@ def test_sso_entry_callback_bootstrap_and_admin_isolation(
 
     denied = sso_harness.browser.get("/kb/api/v1/admin/wanshitong/scope")
     assert denied.status_code == 401
+
+
+def test_large_idp_permissions_still_complete_login(
+    sso_harness: SsoHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    permissions = tuple(f"permission:{index}:{'x' * 80}" for index in range(80))
+    identity = replace(_identity(), permissions=permissions)
+
+    session = _login(sso_harness, monkeypatch, identity=identity)
+
+    assert session["user"] == {
+        "user_id": "1001",
+        "display_name": "测试用户",
+    }
+    cookie = sso_harness.browser.cookies[
+        sso_harness.sessions.cookie_name
+    ].strip('"')
+    assert len(cookie) <= 3500
+    principal = sso_harness.sessions.bootstrap(cookie).principal
+    assert principal.roles == ()
+    assert principal.permissions == ()
 
 
 def test_public_root_login_returns_to_root_and_keeps_admin_separate(
