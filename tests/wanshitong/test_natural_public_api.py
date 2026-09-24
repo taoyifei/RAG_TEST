@@ -9,7 +9,10 @@ from typing import cast
 
 import pytest
 
-from rag_app.application.answering.natural_answer import NaturalAnswerResult
+from rag_app.application.answering.natural_answer import (
+    NaturalAnswerResult,
+    NaturalReference,
+)
 from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import QueryCancelled
 from rag_app.core.models import KnowledgeBaseScope
@@ -58,6 +61,34 @@ def test_public_projection_never_contains_administrator_draft() -> None:
     assert public_natural_final(_result(finish_reason="length"))["status"] == (
         "TRUNCATED"
     )
+
+
+def test_published_projection_omits_absent_optional_fields() -> None:
+    """发布终态和引用不能把前端可选字符串编码成 null。"""
+    reference = NaturalReference(
+        alias="S1",
+        document_id="doc_" + "1" * 32,
+        document_version_id="dver_" + "2" * 32,
+        document_title="询价流程.docx",
+        chunk_ids=("chunk_" + "3" * 32,),
+        source_spans=(),
+        citation_basis="original",
+        source_complete=True,
+    )
+    projected = public_natural_final(
+        _result(
+            answer="询价至少三家。[S1]",
+            draft=None,
+            reason_code="ANSWERED",
+            citation_status="valid",
+            references=(reference,),
+        )
+    )
+    assert projected["published"] is True
+    assert "user_message" not in projected
+    citation = projected["citations"][0]
+    assert "locator" not in citation
+    assert "quote" not in citation
 
 
 def test_public_route_requires_explicit_natural_negotiation(

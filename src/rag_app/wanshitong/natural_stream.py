@@ -54,17 +54,18 @@ def public_natural_references(
             ),
             None,
         )
-        items.append(
-            {
-                "reference_id": natural_reference_id(trace_id, reference.alias),
-                "alias": reference.alias,
-                "document_name": reference.document_title,
-                "document_title": reference.document_title,
-                "locator": locator,
-                "quote": reference.excerpt,
-                "source_kind": reference.citation_basis,
-            }
-        )
+        citation: dict[str, object] = {
+            "reference_id": natural_reference_id(trace_id, reference.alias),
+            "alias": reference.alias,
+            "document_name": reference.document_title,
+            "document_title": reference.document_title,
+            "source_kind": reference.citation_basis,
+        }
+        if locator is not None:
+            citation["locator"] = locator
+        if reference.excerpt is not None:
+            citation["quote"] = reference.excerpt
+        items.append(citation)
     return items
 
 
@@ -96,13 +97,10 @@ def public_natural_final(result: NaturalAnswerResult) -> dict[str, object]:
         "NO_MATERIAL": "暂未找到可以回答该问题的资料。",
         "TRUNCATED": "回答未完整生成，请重新尝试。",
     }
-    return {
+    projection: dict[str, object] = {
         "status": status,
         "published": published,
         "answer": result.answer if published else None,
-        "user_message": None
-        if published
-        else messages.get(status, "暂未获得可核对的答复。"),
         "citation_status": result.citation_status,
         "validation_level": result.validation_level,
         "citations": (
@@ -111,6 +109,11 @@ def public_natural_final(result: NaturalAnswerResult) -> dict[str, object]:
             else []
         ),
     }
+    if not published:
+        projection["user_message"] = messages.get(
+            status, "暂未获得可核对的答复。"
+        )
+    return projection
 
 
 @dataclass(slots=True)
