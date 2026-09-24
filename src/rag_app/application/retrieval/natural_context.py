@@ -19,7 +19,7 @@ class NaturalBudget:
 
     context_window: int = 8192
     input_cap: int = 5000
-    output_tokens: int = 1536
+    output_tokens: int = 2048
     safety_margin: int = 512
     max_passages: int = 8
     rerank_pool: int = 24

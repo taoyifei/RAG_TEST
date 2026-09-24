@@ -472,7 +472,12 @@ def test_natural_budget_matches_final_provider_message_gate() -> None:
 
     assert estimate_natural_messages(messages) == message_token_estimate(wire)
     assert payload["max_tokens"] == budget.output_tokens
+    assert budget.output_tokens == 2048
     assert budget.input_limit == 5000
+    assert (
+        budget.input_limit + budget.output_tokens + budget.safety_margin
+        <= budget.context_window
+    )
 
 
 def test_candidate_rerank_view_keeps_middle_fact_and_original_text() -> None:
