@@ -63,7 +63,7 @@ def build_reading_view(
         )
         for span in body.spans
     )
-    return _normalize(
+    return normalize_reading_view(
         ReadingView(heading.text + body.text, (*heading.spans, *shifted))
     )
 
@@ -125,7 +125,8 @@ def slice_source_spans(
     return tuple(result)
 
 
-def _normalize(view: ReadingView) -> ReadingView:
+def normalize_reading_view(view: ReadingView) -> ReadingView:
+    """把换行规范化为 LF，并保留逐代码点来源对应。"""
     pieces: list[str] = []
     mapped: list[SourceSpan] = []
     cursor = 0

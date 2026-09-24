@@ -43,4 +43,30 @@ def searchable_upload_content(
     return output.getvalue()
 
 
-__all__ = ["is_template_source", "searchable_upload_content"]
+def validate_template_source(source_relative_path: str) -> None:
+    """上传入队前拒绝尚不支持的模板格式。"""
+    if is_template_source(source_relative_path) and (
+        extension_of(source_relative_path) != ".docx"
+    ):
+        raise AdminFacadeError(
+            "TEMPLATE_FORMAT_UNSUPPORTED",
+            "当前模板目录仅接受 DOCX；其他格式暂不入库。",
+            status_code=415,
+            stage="wanshitong.document.template",
+        )
+
+
+def template_index_markdown(document_title: str) -> str:
+    """只产生受控目录提示，绝不索引模板正文。"""
+    return (
+        f"模板目录项：{document_title}（模板）。"
+        "模板正文未入库；具体填写项、示例及要求请参考原始模板。"
+    )
+
+
+__all__ = [
+    "is_template_source",
+    "searchable_upload_content",
+    "template_index_markdown",
+    "validate_template_source",
+]

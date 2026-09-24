@@ -80,7 +80,7 @@ class WeKnoraDocumentRouter:
                 "upstream": _UPSTREAM_SHA,
                 "extensions": sorted(self._extensions),
                 "endpoint": self._endpoint,
-                "adapter": "weknora-document-router-v1",
+                "adapter": "weknora-document-router-v2",
             }
         )
         return ComponentDescriptor(
@@ -192,7 +192,11 @@ class WeKnoraDocumentRouter:
             parser_id = f"weknora-docreader-{engine}"
         if context.cancel_check is not None:
             context.cancel_check()
-        parser_version = _UPSTREAM_SHA if extension in _DOCR_EXTENSIONS else "1"
+        parser_version = (
+            f"{_UPSTREAM_SHA}+reading-v2"
+            if extension in _DOCR_EXTENSIONS
+            else "2"
+        )
         return build_reading_view_result(
             source,
             context,

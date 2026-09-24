@@ -265,12 +265,16 @@ class WeKnoraChunkingPolicy(ChunkingPolicy):
     hard_max_tokens: StrictInt = Field(default=4096, gt=0)
     overlap_cap_tokens: StrictInt = Field(default=80, ge=0)
     profile_hard_cap: StrictInt = Field(default=4096, gt=0)
-    strategy: Literal["auto"] = "auto"
+    strategy: Literal["auto", "heading", "heuristic", "recursive", "legacy"] = (
+        "auto"
+    )
     chunk_size_chars: StrictInt = Field(default=512, gt=0)
     overlap_chars: StrictInt = Field(default=80, ge=0)
     parent_size_chars: StrictInt = Field(default=4096, gt=0)
     child_size_chars: StrictInt = Field(default=384, gt=0)
-    reading_view_revision: str = Field(default="weknora-reading-view-v1")
+    reading_view_revision: str = Field(default="weknora-reading-domain-v2")
+    upstream_token_limit: StrictInt = Field(default=0, ge=0)
+    language_hints: tuple[str, ...] = ()
     upstream_commit: str = Field(
         default="1edcd54b43606d9079bb36650efe3f68707a79ea",
         pattern=r"^1edcd54b43606d9079bb36650efe3f68707a79ea$",
