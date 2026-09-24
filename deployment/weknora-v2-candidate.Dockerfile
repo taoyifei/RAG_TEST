@@ -7,7 +7,8 @@ USER root
 RUN python -c 'import pathlib,shutil; shutil.rmtree(pathlib.Path("/usr/local/lib/python3.11/site-packages/rag_app"))'
 COPY --chown=rag:rag src/rag_app/ /usr/local/lib/python3.11/site-packages/rag_app/
 COPY --chown=rag:rag migrations/universal_rag/0037_weknora_parent_passages.sql /app/migrations/universal_rag/0037_weknora_parent_passages.sql
-COPY --chmod=755 vendor/weknora-chunker/bin/linux-amd64/wb-chunker /usr/local/bin/wb-chunker
+COPY vendor/weknora-chunker/bin/linux-amd64/wb-chunker /usr/local/bin/wb-chunker
+RUN chmod 755 /usr/local/bin/wb-chunker
 COPY --chown=rag:rag vendor/weknora-chunker/LICENSE /app/licenses/WeKnora-LICENSE
 COPY --chown=rag:rag frontend/dist/ /app/frontend/
 RUN python -c 'import pathlib,sys; pathlib.Path("/usr/local/lib/python3.11/site-packages/rag_app/_build_revision.py").write_text("SOURCE_REVISION = " + repr(sys.argv[1]) + "\n", encoding="utf-8")' "${VCS_REF}" \

@@ -84,7 +84,8 @@ RUN python -m pip install \
 COPY --from=frontend-build --chown=rag:rag /build/frontend/dist/ ./frontend/
 COPY --chown=rag:rag docs/public/openapi-v1.json ./openapi/openapi-v1.json
 COPY --chown=rag:rag migrations/ ./migrations/
-COPY --chmod=755 vendor/weknora-chunker/bin/linux-amd64/wb-chunker /usr/local/bin/wb-chunker
+COPY vendor/weknora-chunker/bin/linux-amd64/wb-chunker /usr/local/bin/wb-chunker
+RUN chmod 755 /usr/local/bin/wb-chunker
 COPY --chown=rag:rag vendor/weknora-chunker/LICENSE ./licenses/WeKnora-LICENSE
 COPY --chown=rag:rag compatibility-manifest.json ./compatibility-manifest.json
 COPY --chown=rag:rag evaluation/__init__.py evaluation/p11_pilot.py evaluation/p11_pilot_data.py evaluation/p11_pilot_runtime.py ./evaluation/
