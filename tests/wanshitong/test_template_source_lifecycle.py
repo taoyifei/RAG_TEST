@@ -26,7 +26,7 @@ from tests.product_support import build_product_harness
 
 
 @pytest.mark.parametrize("chunker_mode", ["legacy", "parent-child"])
-def test_template_source_survives_upload_and_runtime_restart(
+def test_template_source_survives_upload_and_runtime_restart(  # noqa: PLR0915
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     chunker_mode: Literal["legacy", "parent-child"],
@@ -103,6 +103,22 @@ def test_template_source_survives_upload_and_runtime_restart(
         assert rows
         assert any("模板目录项" in row.citation_text for row in rows)
         assert all("内部填写说明" not in row.citation_text for row in rows)
+        search = harness.runtime.sdk.search(
+            binding.project_id,
+            binding.knowledge_base_id,
+            "申请表模板",
+        )
+        assert search.evidence
+        assert any(
+            "模板目录项" in item.citation_text for item in search.evidence
+        )
+        answer = harness.runtime.sdk.answer(
+            binding.project_id,
+            binding.knowledge_base_id,
+            "申请表模板在哪里？",
+        )
+        assert answer.answer is not None
+        assert "内部填写说明" not in answer.answer
     finally:
         harness.close()
 
@@ -154,3 +170,16 @@ def test_template_source_survives_upload_and_runtime_restart(
         assert all(
             "内部填写说明" not in item.citation_text for item in rebuilt.chunks
         )
+        recovered_search = reopened.sdk.search(
+            binding.project_id,
+            binding.knowledge_base_id,
+            "申请表模板",
+        )
+        assert recovered_search.evidence
+        recovered_answer = reopened.sdk.answer(
+            binding.project_id,
+            binding.knowledge_base_id,
+            "申请表模板在哪里？",
+        )
+        assert recovered_answer.answer is not None
+        assert "内部填写说明" not in recovered_answer.answer
