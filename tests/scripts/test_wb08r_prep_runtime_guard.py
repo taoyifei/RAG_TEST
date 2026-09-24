@@ -237,6 +237,46 @@ def test_rendered_candidate_preserves_semantics_and_isolates_writes(
     assert len(report["allowed_changes"]) >= 5
 
 
+def test_parent_child_chunker_requires_exact_isolated_candidate_transition(
+    tmp_path: Path,
+) -> None:
+    rendered = _rendered()
+    rendered["services"]["app"]["environment"][  # type: ignore[index]
+        "RAG_WK_CHUNKER_MODE"
+    ] = "parent-child"
+    baseline, candidate, image = _inputs(tmp_path, rendered)
+    arguments = {
+        "stage": "rendered_spec",
+        "baseline_inspect": baseline,
+        "candidate_input": candidate,
+        "target_image_inspect": image,
+        "candidate_root": PurePosixPath("/candidate"),
+        "forbidden_root": PurePosixPath("/production"),
+    }
+
+    assert guard.compare_runtime(**arguments)["ready"] is False
+    assert (
+        guard.compare_runtime(**arguments, allow_weknora_parent_child=True)[
+            "ready"
+        ]
+        is True
+    )
+    rendered["services"]["app"]["environment"][  # type: ignore[index]
+        "RAG_WK_CHUNKER_MODE"
+    ] = "legacy"
+    _write_json(candidate, rendered)
+    assert guard.compare_runtime(**arguments)["ready"] is True
+    rendered["services"]["app"]["environment"][  # type: ignore[index]
+        "RAG_WK_CHUNKER_MODE"
+    ] = "other"
+    _write_json(candidate, rendered)
+    invalid = guard.compare_runtime(
+        **arguments, allow_weknora_parent_child=True
+    )
+    assert invalid["ready"] is False
+    assert invalid["semantic_mismatches"]
+
+
 def test_phase04_allows_only_explicit_department_shadow_enable(
     tmp_path: Path,
 ) -> None:
@@ -397,16 +437,12 @@ def test_q1_private_capture_requires_exact_bounded_profile(
     }
 
     assert guard.compare_runtime(**arguments)["ready"] is False
-    accepted = guard.compare_runtime(
-        **arguments, allow_q1_private_capture=True
-    )
+    accepted = guard.compare_runtime(**arguments, allow_q1_private_capture=True)
     assert accepted["ready"] is True, accepted
 
     environment["RAG_PRIVATE_REPLAY_CAPTURE_LIMIT"] = "33"
     _write_json(candidate, rendered)
-    rejected = guard.compare_runtime(
-        **arguments, allow_q1_private_capture=True
-    )
+    rejected = guard.compare_runtime(**arguments, allow_q1_private_capture=True)
     assert rejected["ready"] is False
     assert any(
         item["field_path"].endswith("RAG_PRIVATE_REPLAY_CAPTURE_LIMIT")
@@ -432,10 +468,7 @@ def test_sso_changes_require_explicit_guard_flag(tmp_path: Path) -> None:
     changed_fields = {
         item["field_path"] for item in report["unclassified_changes"]
     }
-    assert (
-        "services.app.environment.RAG_WANSHITONG_AUTH_MODE"
-        in changed_fields
-    )
+    assert "services.app.environment.RAG_WANSHITONG_AUTH_MODE" in changed_fields
 
 
 def test_sso_guard_accepts_only_complete_registered_configuration(

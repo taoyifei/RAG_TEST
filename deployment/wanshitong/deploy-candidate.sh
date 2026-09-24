@@ -104,6 +104,12 @@ if grep -Eq \
   "${env_file}"; then
   q1_capture_guard_args+=(--allow-q1-private-capture)
 fi
+chunker_guard_args=()
+if grep -Eq \
+  "^RAG_WK_CHUNKER_MODE=(parent-child|'parent-child'|\"parent-child\")$" \
+  "${env_file}"; then
+  chunker_guard_args+=(--allow-weknora-parent-child)
+fi
 
 report_ready() {
   python3 - "$1" <<'PY'
@@ -142,6 +148,7 @@ PY
       "${sso_guard_args[@]}" \
       "${popular_guard_args[@]}" \
       "${q1_capture_guard_args[@]}" \
+      "${chunker_guard_args[@]}" \
       --output "${rendered_guard}"
     ;;
   create)
@@ -164,6 +171,7 @@ PY
       "${sso_guard_args[@]}" \
       "${popular_guard_args[@]}" \
       "${q1_capture_guard_args[@]}" \
+      "${chunker_guard_args[@]}" \
       --output "${created_guard}"
     ;;
   start)

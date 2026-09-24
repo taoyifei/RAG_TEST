@@ -181,9 +181,9 @@ def main() -> None:
     args = parser.parse_args()
     origin = _origin(args.origin)
     cases = _cases(args.cases)
+    jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(
-        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
-        _RejectRedirects(),
+        urllib.request.HTTPCookieProcessor(jar), _RejectRedirects()
     )
     token = args.token_file.read_text(encoding="utf-8").strip()
     if not token:
@@ -197,6 +197,12 @@ def main() -> None:
     csrf = login.get("csrf_token")
     if not isinstance(csrf, str) or not csrf:
         raise ValueError("管理员会话未返回 CSRF Token。")
+    # 仅在固定的本机 8289 Origin 将 /kb Cookie 用于直连内部 API 路由。
+    for cookie in list(jar):
+        jar.clear(cookie.domain, cookie.path, cookie.name)
+        cookie.path = "/"
+        cookie.path_specified = True
+        jar.set_cookie(cookie)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = os.open(args.output, flags, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
