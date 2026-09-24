@@ -17,6 +17,7 @@ _PREFIXES = frozenset(
         "dver",
         "node",
         "chunk",
+        "ppsg",
         "irev",
         "job",
         "trace",
@@ -25,7 +26,7 @@ _PREFIXES = frozenset(
     }
 )
 _ID_PATTERN = re.compile(
-    r"^(?P<prefix>prj|kb|doc|dver|node|chunk|irev|job|trace|bref|gcplan)_"
+    r"^(?P<prefix>prj|kb|doc|dver|node|chunk|ppsg|irev|job|trace|bref|gcplan)_"
     r"(?P<digest>[0-9a-f]{32})$"
 )
 _KEY_VALUE_ITEM_LENGTH = 2

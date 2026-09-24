@@ -19,6 +19,8 @@ class SourceSpanKind(StrEnum):
     """citation 字符的来源语义。"""
 
     ORIGINAL_TEXT = "original_text"
+    PARSED_ARTIFACT_TEXT = "parsed_artifact_text"
+    NORMALIZED_TEXT = "normalized_text"
     PDF_PARSED_TEXT = "pdf_parsed_text"
     OCR_TEXT = "ocr_text"
     DIAGRAM_RELATION = "diagram_relation"
@@ -135,7 +137,10 @@ def _validate_mapped_span(span: SourceSpan) -> None:
         raise ValueError("映射来源必须提供 source 字符范围。")
     if span.source_end_char <= span.source_start_char:
         raise ValueError("source 字符范围必须非空且前进。")
-    if (
+    if span.span_type is SourceSpanKind.NORMALIZED_TEXT:
+        if dict(span.metadata).get("normalization") != "crlf-to-lf-v1":
+            raise ValueError("规范化来源必须注明规则版本。")
+    elif (
         span.chunk_end_char - span.chunk_start_char
         != span.source_end_char - span.source_start_char
     ):
@@ -249,6 +254,35 @@ class ChunkingPolicy(FrozenModel):
         )
 
 
+class WeKnoraChunkingPolicy(ChunkingPolicy):
+    """固定上游自适应父子分块策略，与旧策略显式区分。"""
+
+    chunker_id: str = Field(
+        default="weknora-adaptive-parent-child-v1",
+        pattern=r"^weknora-adaptive-parent-child-v1$",
+    )
+    target_tokens: StrictInt = Field(default=1024, gt=0)
+    hard_max_tokens: StrictInt = Field(default=4096, gt=0)
+    overlap_cap_tokens: StrictInt = Field(default=80, ge=0)
+    profile_hard_cap: StrictInt = Field(default=4096, gt=0)
+    strategy: Literal["auto"] = "auto"
+    chunk_size_chars: StrictInt = Field(default=512, gt=0)
+    overlap_chars: StrictInt = Field(default=80, ge=0)
+    parent_size_chars: StrictInt = Field(default=4096, gt=0)
+    child_size_chars: StrictInt = Field(default=384, gt=0)
+    reading_view_revision: str = Field(default="weknora-reading-view-v1")
+    upstream_commit: str = Field(
+        default="1edcd54b43606d9079bb36650efe3f68707a79ea",
+        pattern=r"^1edcd54b43606d9079bb36650efe3f68707a79ea$",
+    )
+
+    @model_validator(mode="after")
+    def _validate_parent_child_sizes(self) -> Self:
+        if self.parent_size_chars <= self.child_size_chars:
+            raise ValueError("parent_size_chars 必须大于 child_size_chars。")
+        return self
+
+
 class Chunk(MetadataModel):
     """不依赖向量存储实现的 canonical Chunk V3。"""
 
@@ -272,6 +306,10 @@ class Chunk(MetadataModel):
     parent_node_id: str | None = Field(
         default=None,
         pattern=r"^node_[0-9a-f]{32}$",
+    )
+    parent_passage_id: str | None = Field(
+        default=None,
+        pattern=r"^ppsg_[0-9a-f]{32}$",
     )
     section_id: str = Field(default="root", min_length=1, max_length=160)
     neighbor_group_id: str = Field(
@@ -363,6 +401,40 @@ class Chunk(MetadataModel):
             self.heading_path
         ):
             raise ValueError("context dependencies 必须逐级对应 heading_path。")
+        return self
+
+
+class ParentPassage(MetadataModel):
+    """只供同版本回读的父级阅读材料，不进入检索索引。"""
+
+    parent_passage_id: str = Field(pattern=r"^ppsg_[0-9a-f]{32}$")
+    project_id: str = Field(pattern=r"^prj_[0-9a-f]{32}$")
+    knowledge_base_id: str = Field(pattern=r"^kb_[0-9a-f]{32}$")
+    index_revision_id: str = Field(pattern=r"^irev_[0-9a-f]{32}$")
+    version: DocumentVersionRef
+    citation_text: str = Field(min_length=1, repr=False)
+    source_spans: tuple[SourceSpan, ...] = Field(min_length=1)
+    child_chunk_ids: tuple[str, ...] = Field(min_length=1)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _validate_source_coverage(self) -> Self:
+        if not self.citation_text.strip():
+            raise ValueError("父级正文禁止仅含空白。")
+        if (
+            hashlib.sha256(self.citation_text.encode("utf-8")).hexdigest()
+            != self.content_sha256
+        ):
+            raise ValueError("父级正文摘要不匹配。")
+        cursor = 0
+        for span in self.source_spans:
+            if span.chunk_start_char != cursor:
+                raise ValueError("父级来源跨度必须连续。")
+            cursor = span.chunk_end_char
+        if cursor != len(self.citation_text):
+            raise ValueError("父级来源跨度未覆盖完整正文。")
+        if len(self.child_chunk_ids) != len(set(self.child_chunk_ids)):
+            raise ValueError("父级子块引用禁止重复。")
         return self
 
 
@@ -459,3 +531,4 @@ class ChunkingResult(FrozenModel):
 
     chunks: tuple[Chunk, ...]
     report: ChunkingReport
+    parent_passages: tuple[ParentPassage, ...] = ()

@@ -11,6 +11,7 @@ from rag_app.core.models import (
     DocumentVersionRef,
     HydratedChunk,
     KnowledgeBaseScope,
+    ParentPassage,
     RetrievalPolicy,
     SourceDocumentIdentity,
 )
@@ -87,6 +88,14 @@ class EvidenceSourcePort(Protocol):
             canonical chunks 和显示身份。
 
         """
+        ...
+
+    def load_parent_passages(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        parent_passage_ids: tuple[str, ...],
+    ) -> tuple[ParentPassage, ...]:
+        """从同一活动 revision 批量读取有界、可引用的父级材料。"""
         ...
 
     def load_document_ir(

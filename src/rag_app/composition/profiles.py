@@ -23,6 +23,7 @@ from rag_app.core.models import (
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
     EmbeddingTopology,
+    WeKnoraChunkingPolicy,
 )
 from rag_app.core.models.common import JsonObject, freeze_json_object
 from rag_app.core.policies import EgressPolicy, ParsingPolicy
@@ -323,9 +324,37 @@ class RagProfile(_ProfileModel):
     )
     components: ComponentsProfile = ComponentsProfile()
     parsing: ParsingPolicy = ParsingPolicy()
-    chunking: ChunkingPolicy = ChunkingPolicy()
+    chunking: ChunkingPolicy | WeKnoraChunkingPolicy = ChunkingPolicy()
     security: EgressPolicy = EgressPolicy()
     local_data: LocalDataProfile = LocalDataProfile()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_weknora_chunking(cls, value: object) -> object:
+        if not isinstance(value, dict) or "chunking" in value:
+            return value
+        components = value.get("components")
+        selected = (
+            components.chunker
+            if isinstance(components, ComponentsProfile)
+            else components.get("chunker")
+            if isinstance(components, dict)
+            else None
+        )
+        if selected == "weknora-adaptive-parent-child-v1":
+            return {**value, "chunking": WeKnoraChunkingPolicy()}
+        return value
+
+    @model_validator(mode="after")
+    def _match_chunker_policy(self) -> Self:
+        selected = self.components.chunker
+        if selected == "weknora-adaptive-parent-child-v1":
+            if isinstance(self.chunking, WeKnoraChunkingPolicy):
+                return self
+            raise ValueError("WeKnora chunker 必须使用对应的分块参数。")
+        if isinstance(self.chunking, WeKnoraChunkingPolicy):
+            raise ValueError("WeKnora 分块参数必须选择对应的 chunker。")
+        return self
 
     def redacted_dict(self) -> dict[str, JsonValue]:
         """导出不读取环境变量值的安全 Profile。

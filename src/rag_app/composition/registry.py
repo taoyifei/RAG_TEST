@@ -597,6 +597,7 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
     """
     from rag_app.adapters.chunkers import (  # noqa: PLC0415
         DocxStructuralChunker,
+        WeKnoraChunkerAdapter,
     )
     from rag_app.adapters.legacy.contracts import (  # noqa: PLC0415
         LegacyDocxParserAdapter,
@@ -640,7 +641,10 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         sqlite_control_factory,
         sqlite_fts_factory,
     )
-    from rag_app.core.models import ChunkingPolicy  # noqa: PLC0415
+    from rag_app.core.models import (  # noqa: PLC0415
+        ChunkingPolicy,
+        WeKnoraChunkingPolicy,
+    )
 
     registry.register_parser(
         "docx-ooxml-v4",
@@ -669,6 +673,20 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         ),
         descriptor=DocxStructuralChunker.descriptor,
         config_model=ChunkingPolicy,
+    )
+    registry.register_chunker(
+        "weknora-adaptive-parent-child-v1",
+        lambda config: WeKnoraChunkerAdapter(
+            policy=WeKnoraChunkingPolicy.model_validate(dict(config))
+        ),
+        descriptor=ComponentDescriptor(
+            kind=ComponentKind.CHUNKER,
+            name="weknora-adaptive-parent-child-v1",
+            version="1edcd54b43606d9079bb36650efe3f68707a79ea",
+            source="Tencent/WeKnora",
+            mode=ProviderMode.LOCAL,
+        ),
+        config_model=WeKnoraChunkingPolicy,
     )
     registry.register_chunker(
         "legacy-section-pack",

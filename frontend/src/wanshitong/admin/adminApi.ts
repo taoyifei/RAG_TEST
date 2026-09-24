@@ -15,6 +15,23 @@ import {
 const BASE_PATH = "/api/v1/admin/wanshitong";
 export const DOCX_MEDIA_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+export const UPLOAD_MEDIA_TYPES = {
+  ".docx": DOCX_MEDIA_TYPE,
+  ".md": "text/markdown",
+  ".txt": "text/plain",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".csv": "text/csv",
+} as const;
+
+export type UploadExtension = keyof typeof UPLOAD_MEDIA_TYPES;
+
+export function uploadMediaType(file: File): string {
+  const extension = `.${file.name.split(".").at(-1)?.toLowerCase()}` as UploadExtension;
+  const mediaType = UPLOAD_MEDIA_TYPES[extension];
+  if (!mediaType) throw new Error("不支持的文档格式。");
+  return mediaType;
+}
 
 export interface WanshitongScopeStatus {
   mode: "wanshitong";
@@ -114,6 +131,11 @@ export interface WanshitongOverview {
     doc: "enabled" | "disabled";
     excel: "enabled" | "disabled";
     zip: "enabled" | "disabled";
+    md?: "enabled" | "disabled";
+    txt?: "enabled" | "disabled";
+    pptx?: "enabled" | "disabled";
+    xlsx?: "enabled" | "disabled";
+    csv?: "enabled" | "disabled";
   };
   history_retention_days: number;
   recent_history: HistoryEntry[];
@@ -453,7 +475,7 @@ export const wanshitongAdminApi = {
       {
         method: "POST",
         headers: {
-          "Content-Type": DOCX_MEDIA_TYPE,
+          "Content-Type": uploadMediaType(file),
           "Idempotency-Key": idempotencyKey,
         },
         body: file,
@@ -473,7 +495,7 @@ export const wanshitongAdminApi = {
       {
         method: "POST",
         headers: {
-          "Content-Type": DOCX_MEDIA_TYPE,
+          "Content-Type": uploadMediaType(file),
           "Idempotency-Key": idempotencyKey,
         },
         body: file,

@@ -52,6 +52,7 @@ from rag_app.wanshitong.admin_models import (
     WanshitongTrafficOverrideRequest,
     WanshitongUploadReceipt,
 )
+from rag_app.wanshitong.candidate_api import register_candidate_routes
 from rag_app.wanshitong.document_metadata import (
     WanshitongDocumentMetadata,
     WanshitongDocumentMetadataStore,
@@ -71,7 +72,7 @@ from rag_app.wanshitong.scope_service import FixedScopeService
 from rag_app.wanshitong.template_catalog import searchable_upload_content
 from rag_app.wanshitong.upload_validation import (
     ValidatedDocxUpload,
-    read_and_validate_docx,
+    read_and_validate_upload,
 )
 
 ADMIN_BASE_PATH = "/api/v1/admin/wanshitong"
@@ -99,6 +100,7 @@ def register_admin_routes(  # noqa: PLR0913
     )
     _register_trace_routes(app, runtime, scope_service)
     _register_status_routes(app, runtime, scope_service, document_metadata)
+    register_candidate_routes(app, runtime, scope_service, _admin_scope)
 
 
 def _register_error_handler(app: FastAPI) -> None:
@@ -987,7 +989,7 @@ async def _validated_upload(
     relative_path: str,
 ) -> ValidatedDocxUpload:
     components = runtime.p09.retrieval_runtime.persistence.components
-    return await read_and_validate_docx(
+    return await read_and_validate_upload(
         request,
         relative_path=relative_path,
         document=DocumentRef(
@@ -996,7 +998,7 @@ async def _validated_upload(
             document_id=document_id,
             display_name="pending.docx",
         ),
-        parser=components.parser,
+        parser=runtime.ingestion_parser(binding.knowledge_base_id),
         parsing_policy=components.parsing_policy,
     )
 
@@ -1536,6 +1538,14 @@ def _overview_status(
         page_size=5,
     )
     _add_admin_history_metadata(runtime, recent_history, binding)
+    try:
+        available_formats = runtime.probe_upload_extensions(
+            binding.knowledge_base_id
+        )
+        format_probe_status = "available"
+    except Exception as error:
+        available_formats = frozenset({".docx"})
+        format_probe_status = f"unavailable:{type(error).__name__}"
     return {
         "scope": {
             "mode": "wanshitong",
@@ -1570,7 +1580,14 @@ def _overview_status(
             "doc": "disabled",
             "excel": "disabled",
             "zip": "disabled",
+            **{
+                extension.lstrip("."): (
+                    "enabled" if extension in available_formats else "disabled"
+                )
+                for extension in (".md", ".txt", ".pptx", ".xlsx", ".csv")
+            },
         },
+        "format_probe_status": format_probe_status,
         "history_retention_days": runtime.history.retention_days,
         "recent_history": recent_history["items"],
         "recent_errors": _recent_job_errors(runtime, job_page.items),

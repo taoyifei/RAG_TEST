@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AdminDocumentsPage, DOCX_ONLY_MESSAGE } from "./AdminDocumentsPage";
-import { DOCX_MEDIA_TYPE } from "./adminApi";
+import { DOCX_MEDIA_TYPE, uploadMediaType } from "./adminApi";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -51,6 +51,36 @@ function docx(name: string, relativePath?: string): File {
 afterEach(() => vi.restoreAllMocks());
 
 describe("湾事通 DOCX-only 文档管理", () => {
+  it("只对服务端确认启用的候选格式开放选择，并发送对应媒体类型", async () => {
+    let sentContentType = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = requestPath(input);
+      if (path.endsWith("/overview")) {
+        return Promise.resolve(response({
+          supported_formats: { docx: "enabled", md: "enabled", xlsx: "disabled" },
+        }));
+      }
+      if ((init?.method || "GET") === "GET") {
+        return Promise.resolve(response({ items: [], next_cursor: null }));
+      }
+      sentContentType = new Headers(init?.headers).get("Content-Type") || "";
+      return Promise.resolve(response({
+        document: { document_id: "doc_md", display_name: "说明.md" },
+        job: job("job_md", "succeeded", "activated"),
+      }, 202));
+    });
+    const user = userEvent.setup();
+    render(<AdminDocumentsPage />);
+    await waitFor(() => expect(screen.getByTestId("wst-document-files"))
+      .toHaveAttribute("accept", `.docx,${DOCX_MEDIA_TYPE},.md`));
+    await user.upload(
+      screen.getByTestId("wst-document-files"),
+      new File(["# 合成说明"], "说明.md", { type: "text/markdown" }),
+    );
+    await waitFor(() => expect(sentContentType).toBe("text/markdown"));
+    expect(uploadMediaType(new File(["x"], "数据.csv"))).toBe("text/csv");
+  });
+
   it("限制 accept，显示禁用提示与 WB-07 空状态", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       response({ items: [], next_cursor: null }),

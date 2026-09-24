@@ -39,6 +39,7 @@ from rag_app.core.models import (
     IndexRevisionRef,
     IndexRevisionState,
     NamedVectorPoint,
+    ParentPassage,
     ParseContext,
     ParseReport,
     ParseResult,
@@ -356,6 +357,14 @@ class _RevisionBuildControl(Protocol):
         """
         ...
 
+    def write_parent_passages(
+        self,
+        revision_id: str,
+        parents: Sequence[ParentPassage],
+    ) -> None:
+        """在 staging revision 中保存可独立验证的父级阅读材料。"""
+        ...
+
     def set_embedding_state(  # noqa: PLR0913
         self,
         revision_id: str,
@@ -651,7 +660,7 @@ class RevisionBuilder:
                 job_id,
                 attempt,
             )
-            chunks = self._parse_and_chunk(
+            chunks, parent_passages = self._parse_and_chunk(
                 documents,
                 revision_id=revision_id,
                 job_id=job_id,
@@ -669,6 +678,10 @@ class RevisionBuilder:
                 "chunk_persistence",
             ):
                 self._control.write_chunks(revision_id, chunks)
+                if parent_passages:
+                    self._control.write_parent_passages(
+                        revision_id, parent_passages
+                    )
             current_state = self._advance(
                 revision_id,
                 current_state,
@@ -848,8 +861,9 @@ class RevisionBuilder:
         revision_id: str,
         job_id: str,
         attempt: int,
-    ) -> tuple[Chunk, ...]:
+    ) -> tuple[tuple[Chunk, ...], tuple[ParentPassage, ...]]:
         all_chunks: list[Chunk] = []
+        all_parents: list[ParentPassage] = []
         for item in documents:
             self._control.assert_job_active(job_id)
             self._control.upsert_document(item.document)
@@ -942,7 +956,8 @@ class RevisionBuilder:
                     chunk_count=len(chunked.chunks),
                 )
             all_chunks.extend(chunked.chunks)
-        return tuple(all_chunks)
+            all_parents.extend(chunked.parent_passages)
+        return tuple(all_chunks), tuple(all_parents)
 
     @contextmanager
     def _document_stage(

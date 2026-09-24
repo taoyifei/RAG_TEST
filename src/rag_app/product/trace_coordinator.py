@@ -16,6 +16,7 @@ from time import monotonic
 from typing import Literal
 
 from rag_app.adapters.stores import SqliteConnectionFactory
+from rag_app.application.answering.natural_answer import NaturalAnswerResult
 from rag_app.core.capabilities import (
     ComponentDescriptor,
     ComponentKind,
@@ -76,7 +77,7 @@ _SESSION_SHARD_COUNT = 64
 class _QueryTraceSettlement:
     """一次查询终态写入 Trace 所需的不可变上下文。"""
 
-    result: SearchAnswerResult | None
+    result: SearchAnswerResult | NaturalAnswerResult | None
     error: RagError | None
     cancelled: bool
     cancelled_calls: tuple[ProviderCall, ...]
@@ -359,7 +360,7 @@ class ProductTraceCoordinator:
         self,
         trace_id: str,
         *,
-        result: SearchAnswerResult | None,
+        result: SearchAnswerResult | NaturalAnswerResult | None,
         error: RagError | None,
         cancelled: bool,
         cancelled_calls: tuple[ProviderCall, ...] = (),
@@ -392,7 +393,7 @@ class ProductTraceCoordinator:
         self,
         trace_id: str,
         *,
-        result: SearchAnswerResult | None,
+        result: SearchAnswerResult | NaturalAnswerResult | None,
         error: RagError | None,
         cancelled: bool,
         cancelled_calls: tuple[ProviderCall, ...],
@@ -1240,7 +1241,7 @@ class ProductTraceCoordinator:
                 )
                 self._query_idle.wait(timeout=wait_seconds)
 
-    def _finalize_query_trace(
+    def _finalize_query_trace(  # noqa: PLR0912
         self,
         session: TraceSession,
         settlement: _QueryTraceSettlement,
@@ -1248,7 +1249,13 @@ class ProductTraceCoordinator:
         result = settlement.result
         error = settlement.error
         cancelled_calls = settlement.cancelled_calls
-        if result is not None and result.diagnostics is not None:
+        if isinstance(result, NaturalAnswerResult):
+            for call in result.provider_calls:
+                _provider_span(session, call)
+        if (
+            isinstance(result, SearchAnswerResult)
+            and result.diagnostics is not None
+        ):
             diagnostics = result.diagnostics
             _record_stage_timings(session, diagnostics)
             _record_diagnostics(
@@ -1264,7 +1271,7 @@ class ProductTraceCoordinator:
         elif cancelled_calls:
             for call in cancelled_calls:
                 _provider_span(session, call)
-        if result is not None:
+        if isinstance(result, SearchAnswerResult):
             session.completed_span(
                 TraceSpanSpec(
                     name="query.semantics",
@@ -1287,7 +1294,10 @@ class ProductTraceCoordinator:
                     },
                 )
             )
-        if result is not None and result.data_plane is not None:
+        if (
+            isinstance(result, SearchAnswerResult)
+            and result.data_plane is not None
+        ):
             session.completed_span(
                 TraceSpanSpec(
                     name="query.data_plane",
@@ -1296,6 +1306,22 @@ class ProductTraceCoordinator:
                     reason_code=DecisionCode.AUTHORIZED_SCOPE,
                     attributes={
                         "data_plane": result.data_plane.model_dump(mode="json")
+                    },
+                )
+            )
+        if isinstance(result, NaturalAnswerResult):
+            session.completed_span(
+                TraceSpanSpec(
+                    name="query.natural_engine",
+                    kind=SpanKind.GUARDRAIL,
+                    parent_span_id=session.root.span_id,
+                    reason_code=DecisionCode.PUBLISHED,
+                    attributes={
+                        "engine_id": result.engine_id,
+                        "validation_level": result.validation_level,
+                        "revision_id": result.active_index_revision_id,
+                        "reference_count": len(result.references),
+                        "input_packet_sha256": result.input_packet_sha256,
                     },
                 )
             )
@@ -1310,18 +1336,30 @@ class ProductTraceCoordinator:
                         if result.answer is not None
                         else DecisionCode.REFUSED
                     ),
-                    attributes={
-                        "confidence_status": result.status.value,
-                        "answer_published": result.answer is not None,
-                        "generation_mode": result.generation_mode,
-                        "generation_reason_code": (
-                            result.generation_reason_code
-                        ),
-                        "degraded_reason_codes": list(
-                            result.degraded_reason_codes
-                        ),
-                        "evidence_count": len(result.evidence),
-                    },
+                    attributes=(
+                        {
+                            "engine_id": result.engine_id,
+                            "validation_level": result.validation_level,
+                            "answer_published": result.answer is not None,
+                            "degraded_reason_codes": list(
+                                result.degraded_reason_codes
+                            ),
+                            "reference_count": len(result.references),
+                        }
+                        if isinstance(result, NaturalAnswerResult)
+                        else {
+                            "confidence_status": result.status.value,
+                            "answer_published": result.answer is not None,
+                            "generation_mode": result.generation_mode,
+                            "generation_reason_code": (
+                                result.generation_reason_code
+                            ),
+                            "degraded_reason_codes": list(
+                                result.degraded_reason_codes
+                            ),
+                            "evidence_count": len(result.evidence),
+                        }
+                    ),
                 )
             )
         session.completed_span(
@@ -1782,11 +1820,16 @@ def _text(value: object) -> str | None:
 
 
 def _provider_call_count(
-    result: SearchAnswerResult | None,
+    result: SearchAnswerResult | NaturalAnswerResult | None,
     error: RagError | None,
     cancelled_calls: tuple[ProviderCall, ...] = (),
 ) -> int:
-    if result is not None and result.diagnostics is not None:
+    if isinstance(result, NaturalAnswerResult):
+        return sum(item.call_count for item in result.provider_calls)
+    if (
+        isinstance(result, SearchAnswerResult)
+        and result.diagnostics is not None
+    ):
         return sum(
             item.call_count for item in result.diagnostics.provider_calls
         )

@@ -15,6 +15,7 @@ import { useJobPolling } from "../../hooks/use-job-polling";
 import { stageLabel } from "../../pages/JobsPage";
 import {
   DOCX_MEDIA_TYPE,
+  type UploadExtension,
   wanshitongAdminApi,
   type WanshitongDocument,
 } from "./adminApi";
@@ -55,10 +56,25 @@ function containsControlCharacter(value: string): boolean {
   });
 }
 
-export function validateDocx(file: File, relativePath: string): string | null {
-  if (!file.name.toLowerCase().endsWith(".docx")) return DOCX_ONLY_MESSAGE;
-  if (file.type && file.type !== DOCX_MEDIA_TYPE) return DOCX_ONLY_MESSAGE;
-  if (!file.size) return "DOCX 文件不能为空。";
+const DEFAULT_FORMATS: UploadExtension[] = [".docx"];
+const EXTRA_FORMATS: UploadExtension[] = [".md", ".txt", ".pptx", ".xlsx", ".csv"];
+
+export function validateUpload(
+  file: File,
+  relativePath: string,
+  enabledFormats: readonly UploadExtension[],
+): string | null {
+  const extension = `.${file.name.split(".").at(-1)?.toLowerCase()}` as UploadExtension;
+  if (!enabledFormats.includes(extension)) {
+    return enabledFormats.length === 1
+      ? DOCX_ONLY_MESSAGE
+      : `不支持的文档格式；当前开放 ${enabledFormats.join("、")}。`;
+  }
+  // 浏览器对新增格式的 File.type 判断不一致；服务端按扩展名和内容预检。
+  if (extension === ".docx" && file.type && file.type !== DOCX_MEDIA_TYPE) {
+    return DOCX_ONLY_MESSAGE;
+  }
+  if (!file.size) return "文档不能为空。";
   if (
     !relativePath ||
     relativePath.startsWith("/") ||
@@ -73,6 +89,10 @@ export function validateDocx(file: File, relativePath: string): string | null {
     return "相对路径不能包含空路径段、. 或 ..。";
   }
   return null;
+}
+
+export function validateDocx(file: File, relativePath: string): string | null {
+  return validateUpload(file, relativePath, DEFAULT_FORMATS);
 }
 
 function uploadState(job: Job): UploadState {
@@ -98,6 +118,21 @@ export function AdminDocumentsPage() {
   const [error, setError] = useState<unknown>();
   const [dragging, setDragging] = useState(false);
   const [pollKey, setPollKey] = useState(0);
+  const [enabledFormats, setEnabledFormats] = useState<UploadExtension[]>(DEFAULT_FORMATS);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void wanshitongAdminApi.overview(controller.signal).then((overview) => {
+      if (controller.signal.aborted) return;
+      const extras = EXTRA_FORMATS.filter(
+        (extension) => overview.supported_formats?.[extension.slice(1) as keyof typeof overview.supported_formats] === "enabled",
+      );
+      setEnabledFormats([...DEFAULT_FORMATS, ...extras]);
+    }).catch(() => {
+      // 状态接口不可用时，只开放默认格式。
+    });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     uploadsRef.current = uploads;
@@ -214,7 +249,7 @@ export function AdminDocumentsPage() {
     const items = files.map((file): UploadItem => {
       // 新版本沿用逻辑文档登记的相对路径，不能被本次选择的 basename 覆盖。
       const relativePath = document?.relative_path || relativePathOf(file);
-      const validation = validateDocx(file, relativePath);
+      const validation = validateUpload(file, relativePath, enabledFormats);
       return {
         id: createIdempotencyKey("upload-row"),
         file,
@@ -295,7 +330,9 @@ export function AdminDocumentsPage() {
       <div className="section-heading">
         <div>
           <h2>文档管理</h2>
-          <p>{DOCX_ONLY_MESSAGE}</p>
+          <p>{enabledFormats.length === 1
+            ? DOCX_ONLY_MESSAGE
+            : `当前开放 ${enabledFormats.map((value) => value.slice(1).toUpperCase()).join("、")} 文档。`}</p>
         </div>
         <button className="secondary" onClick={() => void loadDocuments()}>
           <RefreshCw aria-hidden="true" size={17} />
@@ -303,12 +340,14 @@ export function AdminDocumentsPage() {
         </button>
       </div>
       {error !== undefined && <ErrorPanel error={error} />}
-      <section className="docx-upload-panel" aria-label="DOCX 上传">
+      <section className="docx-upload-panel" aria-label="文档上传">
         <div
           className={`docx-drop-zone ${dragging ? "dragging" : ""}`}
           role="button"
           tabIndex={0}
-          aria-label="拖拽 DOCX 到此处，或按回车选择文件"
+          aria-label={enabledFormats.length === 1
+            ? "拖拽 DOCX 到此处，或按回车选择文件"
+            : "拖拽文档到此处，或按回车选择文件"}
           onKeyDown={openPicker}
           onDragEnter={(event) => {
             event.preventDefault();
@@ -323,7 +362,7 @@ export function AdminDocumentsPage() {
           onDrop={drop}
         >
           <Upload aria-hidden="true" size={34} />
-          <strong>拖拽 DOCX 到这里</strong>
+          <strong>{enabledFormats.length === 1 ? "拖拽 DOCX 到这里" : "拖拽文档到这里"}</strong>
           <span>每个文件会独立上传并创建处理任务。</span>
         </div>
         <div className="row-actions">
@@ -335,7 +374,7 @@ export function AdminDocumentsPage() {
               data-testid="wst-document-files"
               type="file"
               multiple
-              accept={`.docx,${DOCX_MEDIA_TYPE}`}
+              accept={[`.docx`, DOCX_MEDIA_TYPE, ...enabledFormats.filter((value) => value !== ".docx")].join(",")}
               onChange={(event) => pick(event)}
             />
           </label>
@@ -347,7 +386,7 @@ export function AdminDocumentsPage() {
               data-testid="wst-document-directory"
               type="file"
               multiple
-              accept={`.docx,${DOCX_MEDIA_TYPE}`}
+              accept={[`.docx`, DOCX_MEDIA_TYPE, ...enabledFormats.filter((value) => value !== ".docx")].join(",")}
               onChange={(event) => pick(event)}
             />
           </label>
@@ -458,7 +497,7 @@ export function AdminDocumentsPage() {
                       上传新版本
                       <input
                         type="file"
-                        accept={`.docx,${DOCX_MEDIA_TYPE}`}
+                        accept={[`.docx`, DOCX_MEDIA_TYPE, ...enabledFormats.filter((value) => value !== ".docx")].join(",")}
                         onChange={(event) => pick(event, document)}
                       />
                     </label>

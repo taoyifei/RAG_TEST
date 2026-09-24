@@ -784,7 +784,7 @@ class ProductControlStore:
             raise ValueError("Embedding Dimension 必须为正数。")
         index_payload: dict[str, object] = {
             "resolved_index_contract": self.index_contract,
-            "chunker": "docx-structural-v3",
+            "chunker": _index_chunker_name(self.index_contract),
             "fts_analyzer": "deterministic-cjk-bigram-v2",
             "primary": primary_spec.semantic_identity(),
             "standby": None
@@ -1607,6 +1607,19 @@ def validate_connection_metadata(
     ):
         raise ValueError("Jina 连接不能保存百炼端点配置。")
     return draft
+
+
+def _index_chunker_name(index_contract: Mapping[str, object]) -> str:
+    """旧空合同沿用原默认值；显式合同必须给出真实分块器。"""
+    identity = index_contract.get("chunker_identity")
+    if identity is None:
+        return "docx-structural-v3"
+    if not isinstance(identity, Mapping):
+        raise ValueError("索引合同缺少有效 Chunker 身份。")
+    name = identity.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("索引合同缺少有效 Chunker 身份。")
+    return name
 
 
 __all__ = ["ProductControlStore", "validate_connection_metadata"]

@@ -203,6 +203,7 @@ class ActiveRevisionQuerySnapshot(FrozenModel):
     lexical_namespace: str = Field(min_length=1)
     exact_namespace: str = Field(min_length=1)
     chunk_payload_schema: str = Field(min_length=1)
+    chunker_id: str | None = None
     retrieval_policy: RetrievalPolicy
     profile_revision_id: str | None = None
     excluded_document_ids: tuple[str, ...] = ()

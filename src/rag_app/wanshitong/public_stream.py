@@ -6,6 +6,7 @@ import json
 from collections.abc import Iterator, Mapping
 from typing import cast
 
+from rag_app.core.document_formats import FORMAT_MEDIA_TYPES
 from rag_app.core.models import (
     CatalogCitation,
     EvidenceItem,
@@ -143,7 +144,10 @@ def _public_citation(evidence: EvidenceItem) -> dict[str, object]:
     source_relative_path = metadata.get("source_relative_path")
     if isinstance(source_relative_path, str):
         try:
-            safe_path, _ = normalize_source_relative_path(source_relative_path)
+            safe_path, _ = normalize_source_relative_path(
+                source_relative_path,
+                allowed_extensions=frozenset(FORMAT_MEDIA_TYPES),
+            )
         except AdminFacadeError:
             pass
         else:
@@ -169,7 +173,8 @@ def _public_catalog_citation(item: CatalogCitation) -> dict[str, object]:
     if item.source_relative_path:
         try:
             safe_path, _name = normalize_source_relative_path(
-                item.source_relative_path
+                item.source_relative_path,
+                allowed_extensions=frozenset(FORMAT_MEDIA_TYPES),
             )
         except AdminFacadeError:
             pass

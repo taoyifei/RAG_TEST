@@ -7,9 +7,14 @@ import { wanshitongAdminApi, type WanshitongOverview } from "./adminApi";
 
 const supportedFormats = [
   ["docx", "DOCX"],
+  ["md", "Markdown"],
+  ["txt", "TXT"],
+  ["pptx", "PPTX"],
+  ["xlsx", "XLSX"],
+  ["csv", "CSV"],
   ["pdf", "PDF"],
   ["doc", "DOC"],
-  ["excel", "Excel"],
+  ["excel", "旧版 Excel"],
   ["zip", "ZIP"],
 ] as const;
 

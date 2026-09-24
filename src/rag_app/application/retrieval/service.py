@@ -27,6 +27,10 @@ from rag_app.application.answering.grounded import (
     GroundedAnsweringService,
     GroundedOutcome,
 )
+from rag_app.application.answering.natural_answer import (
+    NaturalAnswerPort,
+    NaturalAnswerResult,
+)
 from rag_app.application.answering.source_projection import (
     SOURCE_PROJECTION_REVISION,
 )
@@ -134,6 +138,9 @@ from rag_app.application.retrieval.source_scope import (
     source_identity_allowed,
 )
 from rag_app.application.retrieval.structural import StructuralChannel
+from rag_app.application.retrieval.weknora_pipeline import (
+    WeKnoraStandardPipeline,
+)
 from rag_app.core.errors import (
     ChannelRateLimited,
     ChannelUnavailable,
@@ -779,6 +786,7 @@ class RetrievalService:
         reranker_descriptor = reranker.descriptor
         self._default_generator_descriptor = generator.descriptor
         self._grounded: GroundedAnsweringService | None = None
+        self._natural_model: NaturalAnswerPort | None = None
         self._interpreter: QueryInterpretPort | None = None
         self._adaptive_planner: AdaptivePlannerPort | None = None
         self._rewriter: QueryRewritePort | None = None
@@ -931,6 +939,10 @@ class RetrievalService:
             generator,
             critical_ocr_verifier=critical_ocr_verifier,
         )
+        if callable(getattr(generator, "complete_natural", None)) and callable(
+            getattr(generator, "validate_natural_sources", None)
+        ):
+            configured._natural_model = cast(NaturalAnswerPort, generator)
         configured._interpreter = interpreter
         configured._adaptive_planner = adaptive_planner
         configured._rewriter = rewriter
@@ -979,6 +991,7 @@ class RetrievalService:
         """
         configured = copy(self)
         configured._grounded = None
+        configured._natural_model = None
         configured._interpreter = None
         configured._adaptive_planner = None
         configured._rewriter = None
@@ -990,6 +1003,18 @@ class RetrievalService:
             }
         )
         return configured
+
+    def search_natural(
+        self,
+        request: SearchRequest,
+        *,
+        engine_id: Literal["wk-standard-v1", "wk-standard-pc-v1"],
+        cancellation: CancellationPort,
+    ) -> NaturalAnswerResult:
+        """从独立候选路径执行通用检索和自然回答。"""
+        return WeKnoraStandardPipeline(self).run(
+            request, engine_id=engine_id, cancellation=cancellation
+        )
 
     def execution_identity(
         self, request: SearchRequest

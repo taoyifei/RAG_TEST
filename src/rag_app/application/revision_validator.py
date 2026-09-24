@@ -10,6 +10,7 @@ from rag_app.core.models import (
     Chunk,
     ChunkingReport,
     DocumentIR,
+    ParentPassage,
     ParseReport,
     RevisionValidationEvidence,
     RevisionVectorSpec,
@@ -68,6 +69,10 @@ class _RevisionValidationStore(Protocol):
             持久化 Chunk 序列。
 
         """
+        ...
+
+    def parent_rows(self, revision_id: str) -> tuple[ParentPassage, ...]:
+        """读取 revision 的持久化父级材料。"""
         ...
 
     def parse_rows(
@@ -192,8 +197,16 @@ class RevisionValidator:
                 "DocumentVersion scope 验证失败。", stage="revision.validate"
             )
         chunks = self._control.chunk_rows(revision_id)
+        read_parents = getattr(self._control, "parent_rows", None)
+        if read_parents is None and any(
+            chunk.parent_passage_id is not None for chunk in chunks
+        ):
+            raise ValidationFailed(
+                "父级来源存储不可用。", stage="revision.validate"
+            )
+        parents = read_parents(revision_id) if read_parents is not None else ()
         report_checks = self._validate_documents(
-            chunks, self._control.parse_rows(revision_id)
+            chunks, parents, self._control.parse_rows(revision_id)
         )
         inventory = self._vector_store.audit_revision(spec)
         expected_inventory = tuple(
@@ -275,10 +288,12 @@ class RevisionValidator:
     def _validate_documents(
         self,
         chunks: Sequence[Chunk],
+        parents: Sequence[ParentPassage],
         rows: Sequence[tuple[DocumentIR, ParseReport, ChunkingReport]],
     ) -> dict[str, object]:
         checks: dict[str, object] = {}
         image_only_document_count = 0
+        seen_parent_ids: set[str] = set()
         for document_ir, parse_report, stored_report in rows:
             validate_document_ir(document_ir)
             if parse_report != document_ir.parse_report:
@@ -291,6 +306,33 @@ class RevisionValidator:
                 for chunk in chunks
                 if chunk.version == document_ir.version
             )
+            document_parents = tuple(
+                parent
+                for parent in parents
+                if parent.version == document_ir.version
+            )
+            seen_parent_ids.update(
+                parent.parent_passage_id for parent in document_parents
+            )
+            if document_parents or any(
+                chunk.parent_passage_id is not None for chunk in document_chunks
+            ):
+                validate_parents = getattr(
+                    self._chunk_validator, "validate_parent_passages", None
+                )
+                if validate_parents is None:
+                    raise ValidationFailed(
+                        "父级来源校验器不可用。", stage="revision.validate"
+                    )
+                try:
+                    validate_parents(
+                        document_parents, document_chunks, document_ir
+                    )
+                except ValueError as error:
+                    raise ValidationFailed(
+                        "父级来源或子级映射校验失败。",
+                        stage="revision.validate",
+                    ) from error
             if not document_chunks:
                 has_text = any(node.text.strip() for node in document_ir.nodes)
                 has_image = any(
@@ -330,6 +372,10 @@ class RevisionValidator:
             # 不阻断索引激活。
             checks["orphan_relation_count"] = int(
                 stored_report.orphan_relation_count
+            )
+        if len(seen_parent_ids) != len(parents):
+            raise ValidationFailed(
+                "父级来源存在未绑定文档版本。", stage="revision.validate"
             )
         checks["source_span_coverage"] = 1.0
         checks["image_only_document_count"] = image_only_document_count

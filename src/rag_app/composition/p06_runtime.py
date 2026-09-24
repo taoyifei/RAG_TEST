@@ -125,6 +125,7 @@ def build_p06_runtime(
         resolved,
         registry,
         overrides=None if trace_sink is None else {"trace_sink": trace_sink},
+        parser_resolver=parser_resolver,
     )
     if not isinstance(components.metadata_store, SqliteControlStore):
         components.close()
@@ -162,14 +163,8 @@ def build_p06_runtime(
         cast(ChunkValidationPort, components.chunker),
     )
     embedding = DocumentEmbeddingService(cache, control, providers)
-    parser = (
-        components.parser
-        if parser_resolver is None
-        else parser_resolver(components.parser)
-    )
+    parser = components.parser
     contracts = resolved_contracts(components)
-    if parser is not components.parser:
-        contracts["parser_identity"] = parser.descriptor.model_dump(mode="json")
     builder = RevisionBuilder(
         document_enricher=document_enricher,
         trace=components.trace_sink,

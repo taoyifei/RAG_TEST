@@ -41,9 +41,11 @@ from rag_app.core.models.chunk import (
     ChunkingReport,
     ChunkingResult,
     ChunkRole,
+    ParentPassage,
     SourceSpan,
     SourceSpanKind,
     TokenCountResult,
+    WeKnoraChunkingPolicy,
 )
 from rag_app.core.models.common import (
     FrozenModel,
@@ -351,6 +353,7 @@ __all__ = [
     "NormalizedOffsetSpan",
     "OcrClaimVerification",
     "OcrVerificationState",
+    "ParentPassage",
     "ParseContext",
     "ParseIssue",
     "ParsePolicy",
@@ -438,6 +441,7 @@ __all__ = [
     "VectorSearchRequest",
     "VectorSearchResult",
     "VectorWriteRequest",
+    "WeKnoraChunkingPolicy",
     "canonical_document_ir_json",
     "content_sha256",
     "text_payload",
