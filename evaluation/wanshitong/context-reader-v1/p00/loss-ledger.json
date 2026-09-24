@@ -1,0 +1,45 @@
+{
+  "case": "WB08R-F-017",
+  "baseline_trace": "trace_0583be0fb319e066b5be8c120235f6f8",
+  "active_index_revision": "irev_0329a35ca9ea700133f7b309160118f0",
+  "l1_retrieval": {
+    "status": "target chunks present in active index and rerank input",
+    "fused_count": 32,
+    "rerank_input_count": 24,
+    "rerank_output_count": 12,
+    "lost_target_chunks_at_rerank_output": 2,
+    "reason": "result_limit=12 and all 12 slots were filled by required_candidate_ids; actual model score order unknown"
+  },
+  "l2_source_read": {
+    "status": "incomplete",
+    "target_row_chunks_in_active_store": 7,
+    "target_row_chunks_returned_by_current_exact_reader": 2,
+    "table_header_chunks_returned": 1,
+    "missing_target_row_chunks": 5,
+    "verified_cause": "repeated spans with NULL source_anchor.row_index fail old SQL predicate; downstream identity check also rejects them",
+    "authoritative_ir_present": true,
+    "shared_node_exact_chars": 101,
+    "complete_source_range_available": "[0,101] after exact row mapping and overlap verification"
+  },
+  "l3_sent_packet": {
+    "status": "incomplete",
+    "request_evidence_count": 44,
+    "request_read_unit_count": 37,
+    "prepared_sent_source_count": 34,
+    "prepared_sent_read_unit_count": 19,
+    "removed_source_count": 10,
+    "retained_physical_table_facts": 1,
+    "retained_fact_scope": "row 2 time-limit column only",
+    "complete_shared_cell_fact_sent": false
+  },
+  "l4_answer": {
+    "status": "partial",
+    "published_claim_count": 1,
+    "semantic_contradiction_blocked_count": 1,
+    "atom_a1": "NOT_ANSWERED",
+    "atom_a2": "ANSWERED",
+    "public_answer_complete": false,
+    "terminal_label_is_success_metric": false
+  },
+  "correction": "P0-2885161.md contains a one-character typo in one Chunk ID; this ledger uses the active SQLite and raw Trace identities."
+}

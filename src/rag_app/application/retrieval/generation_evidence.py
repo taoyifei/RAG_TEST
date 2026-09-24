@@ -361,6 +361,7 @@ def project_evidence_read_units(
             item.publishable
             and item.source_spans
             and all(span.is_citable for span in item.source_spans)
+            and dict(item.metadata).get("context_reader_source_complete", True)
             for item in items
         )
 

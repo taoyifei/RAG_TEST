@@ -201,6 +201,7 @@ class ProductRuntimeSettings:
     local_ocr_model: str = "pp-ocrv5-server"
     local_ocr_timeout_seconds: float = 35.0
     evidence_group_mode: Literal["off", "shadow", "active"] = "off"
+    context_reader_mode: Literal["legacy", "shadow", "candidate"] = "legacy"
     contextual_rerank_mode: Literal["off", "active"] = "off"
 
     @classmethod
@@ -232,12 +233,19 @@ class ProductRuntimeSettings:
         migrations = os.environ.get("RAG_MIGRATIONS_DIR")
         local_ocr_token = os.environ.get("RAG_OCR_API_TOKEN_FILE")
         evidence_group_mode = os.environ.get("RAG_EVIDENCE_GROUP_MODE", "off")
+        context_reader_mode = os.environ.get(
+            "RAG_CONTEXT_READER_MODE", "legacy"
+        )
         contextual_rerank_mode = os.environ.get(
             "RAG_CONTEXTUAL_RERANK_MODE", "off"
         )
         if evidence_group_mode not in {"off", "shadow", "active"}:
             raise ValueError(
                 "RAG_EVIDENCE_GROUP_MODE 必须为 off/shadow/active。"
+            )
+        if context_reader_mode not in {"legacy", "shadow", "candidate"}:
+            raise ValueError(
+                "RAG_CONTEXT_READER_MODE 必须为 legacy/shadow/candidate。"
             )
         if contextual_rerank_mode not in {"off", "active"}:
             raise ValueError("RAG_CONTEXTUAL_RERANK_MODE 必须为 off/active。")
@@ -301,6 +309,10 @@ class ProductRuntimeSettings:
             ),
             evidence_group_mode=cast(
                 Literal["off", "shadow", "active"], evidence_group_mode
+            ),
+            context_reader_mode=cast(
+                Literal["legacy", "shadow", "candidate"],
+                context_reader_mode,
             ),
             contextual_rerank_mode=cast(
                 Literal["off", "active"], contextual_rerank_mode
@@ -637,6 +649,9 @@ class ProductProfileResolver:
         | None = None,
         private_replay_recorder: PrivateReplayDraftRecorder | None = None,
         evidence_group_mode: Literal["off", "shadow", "active"] = "off",
+        context_reader_mode: Literal["legacy", "shadow", "candidate"] = (
+            "legacy"
+        ),
         contextual_rerank_mode: Literal["off", "active"] = "off",
     ) -> None:
         """保存产品控制面。
@@ -654,6 +669,7 @@ class ProductProfileResolver:
             acceptance_egress_resolver: 受信任验收入口的有效累计授权解析器。
             private_replay_recorder: 默认关闭的受控私有模型草稿记录器。
             evidence_group_mode: 当前实例的结构组 off/shadow/active 开关。
+            context_reader_mode: 来源回读 legacy/shadow/candidate 开关。
             contextual_rerank_mode: 当前实例的确定性重排上下文开关。
 
         Returns:
@@ -679,6 +695,7 @@ class ProductProfileResolver:
         self._private_replay_recorder = private_replay_recorder
         self._department_shadow: DepartmentShadowObserverPort | None = None
         self._evidence_group_mode = evidence_group_mode
+        self._context_reader_mode = context_reader_mode
         self._contextual_rerank_mode = contextual_rerank_mode
         self._controlled_scope: ContextVar[_ControlledPilotScope | None] = (
             ContextVar("product_controlled_pilot", default=None)
@@ -1776,6 +1793,7 @@ class ProductProfileResolver:
                 "dense_semantic_calibration_state": readiness,
                 "dense_calibrated_vector_spaces": spaces,
                 "evidence_group_mode": self._evidence_group_mode,
+                "context_reader_mode": self._context_reader_mode,
                 "contextual_rerank_mode": self._contextual_rerank_mode,
             }
         )
@@ -2245,10 +2263,9 @@ def build_product_runtime(  # noqa: PLR0915
         content_identity=_content_identity,
         circuit_factory=circuit_factory,
         acceptance_egress_resolver=acceptance_egress_resolver,
-        private_replay_recorder=(
-            PrivateReplayDraftRecorder.from_environment()
-        ),
+        private_replay_recorder=(PrivateReplayDraftRecorder.from_environment()),
         evidence_group_mode=settings.evidence_group_mode,
+        context_reader_mode=settings.context_reader_mode,
         contextual_rerank_mode=settings.contextual_rerank_mode,
     )
 

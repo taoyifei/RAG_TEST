@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from sqlite3 import Connection, Row
+from typing import cast
 
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.adapters.stores.sqlite_fts5 import (
@@ -79,6 +81,8 @@ _TERMINAL_REVISION_STATES = {
     IndexRevisionState.FAILED_TERMINAL,
 }
 _MAX_HYDRATION_CHUNKS = 200
+_MAX_DOCUMENT_IR_BYTES = 64 * 1024 * 1024
+_MAX_SOURCE_NODE_IDS = 64
 _MAX_SECTION_CHUNKS = 20
 _MAX_CATALOG_DOCUMENTS = 5000
 _DEFAULT_LEASE_SECONDS = 300
@@ -1892,6 +1896,204 @@ class SqliteControlStore:
                 )
             )
         return tuple(hydrated)
+
+    def _source_document_row(
+        self,
+        connection: Connection,
+        snapshot: ActiveRevisionQuerySnapshot,
+        document_version: DocumentVersionRef,
+    ) -> Row:
+        """确认请求固定的 revision 与成对文档版本仍可安全回读。"""
+        revision = snapshot.revision
+        if revision.state is not IndexRevisionState.ACTIVE:
+            raise ValueError("来源回读只接受 Active Revision 快照。")
+        row = connection.execute(
+            "SELECT rd.document_version_id, dv.content_sha256, "
+            "length(CAST(rd.document_ir_json AS BLOB)) AS ir_bytes "
+            "FROM revision_documents rd "
+            "JOIN document_versions dv "
+            "ON dv.document_version_id=rd.document_version_id "
+            "AND dv.document_id=rd.document_id "
+            "JOIN index_revisions r "
+            "ON r.index_revision_id=rd.revision_id "
+            "JOIN documents d ON d.document_id=rd.document_id "
+            "WHERE rd.revision_id=? AND rd.document_id=? "
+            "AND r.project_id=? AND r.knowledge_base_id=? "
+            "AND d.project_id=? AND d.knowledge_base_id=? "
+            "AND d.deleted_at IS NULL AND d.status='active' "
+            "AND d.lifecycle_status='active'",
+            (
+                revision.index_revision_id,
+                document_version.document_id,
+                revision.project_id,
+                revision.knowledge_base_id,
+                revision.project_id,
+                revision.knowledge_base_id,
+            ),
+        ).fetchone()
+        if row is None:
+            raise IndexCorrupt(
+                "活动快照中的文档来源缺失或不可见。",
+                stage="retrieval.source_reader",
+            )
+        if (
+            row["document_version_id"]
+            != document_version.document_version_id
+            or row["content_sha256"] != document_version.content_sha256
+        ):
+            raise IndexCorrupt(
+                "活动快照中的文档版本身份漂移。",
+                stage="retrieval.source_reader",
+            )
+        return cast(Row, row)
+
+    def load_document_ir(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        document_version: DocumentVersionRef,
+        *,
+        max_bytes: int,
+    ) -> DocumentIR | None:
+        """按活动快照与成对版本读取权威 IR，超字节预算不读取正文。"""
+        if (
+            type(max_bytes) is not int
+            or not 0 < max_bytes <= _MAX_DOCUMENT_IR_BYTES
+        ):
+            raise ValueError("Document IR 字节上限必须位于 1..67108864。")
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            source = self._source_document_row(
+                connection, snapshot, document_version
+            )
+            if source["ir_bytes"] is None:
+                raise IndexCorrupt(
+                    "活动快照中的 Document IR 缺失。",
+                    stage="retrieval.source_reader",
+                )
+            if int(source["ir_bytes"]) > max_bytes:
+                return None
+            row = connection.execute(
+                "SELECT document_ir_json FROM revision_documents "
+                "WHERE revision_id=? AND document_id=? "
+                "AND document_version_id=?",
+                (
+                    revision.index_revision_id,
+                    document_version.document_id,
+                    document_version.document_version_id,
+                ),
+            ).fetchone()
+        if row is None:
+            raise IndexCorrupt(
+                "活动快照中的 Document IR 身份漂移。",
+                stage="retrieval.source_reader",
+            )
+        try:
+            document_ir = DocumentIR.model_validate_json(
+                str(row["document_ir_json"])
+            )
+        except (TypeError, ValueError) as error:
+            raise IndexCorrupt(
+                "权威 Document IR 无法验证。",
+                stage="retrieval.source_reader",
+            ) from error
+        if (
+            document_ir.version != document_version
+            or document_ir.source.document_id != document_version.document_id
+            or document_ir.source.document_version_id
+            != document_version.document_version_id
+            or document_ir.source.content_sha256
+            != document_version.content_sha256
+            or document_ir.document.document_id != document_version.document_id
+            or document_ir.document.project_id != revision.project_id
+            or document_ir.document.knowledge_base_id
+            != revision.knowledge_base_id
+        ):
+            raise IndexCorrupt(
+                "权威 Document IR 的来源身份漂移。",
+                stage="retrieval.source_reader",
+            )
+        return document_ir
+
+    def source_node_chunk_ids(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        document_version: DocumentVersionRef,
+        *,
+        node_ids: tuple[str, ...],
+        limit: int,
+    ) -> tuple[str, ...] | None:
+        """只返回同一 revision 与文档版本中包含指定原始节点的 Chunk。"""
+        if type(limit) is not int or not 0 < limit <= _MAX_HYDRATION_CHUNKS:
+            raise ValueError("来源节点 Chunk 上限必须位于 1..200。")
+        if (
+            not isinstance(node_ids, tuple)
+            or len(node_ids) > _MAX_SOURCE_NODE_IDS
+            or any(
+                not isinstance(node_id, str)
+                or re.fullmatch(r"node_[0-9a-f]{32}", node_id) is None
+                for node_id in node_ids
+            )
+        ):
+            raise ValueError("来源节点 ID 必须为不超过 64 个规范 node ID。")
+        requested = tuple(dict.fromkeys(node_ids))
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            self._source_document_row(connection, snapshot, document_version)
+            if not requested:
+                return ()
+            rows = connection.execute(
+                "SELECT c.chunk_id, c.chunk_json FROM chunks c "
+                "JOIN index_revisions r "
+                "ON r.index_revision_id=c.revision_id "
+                "JOIN documents d ON d.document_id=c.document_id "
+                "WHERE c.revision_id=? AND c.document_id=? "
+                "AND c.document_version_id=? "
+                "AND r.project_id=? AND r.knowledge_base_id=? "
+                "AND d.project_id=? AND d.knowledge_base_id=? "
+                "AND d.deleted_at IS NULL AND d.status='active' "
+                "AND d.lifecycle_status='active' "
+                "AND EXISTS (SELECT 1 FROM json_each(c.source_spans_json) s "
+                "WHERE json_extract(s.value, '$.node_id') "
+                "IN (SELECT value FROM json_each(?))) "
+                "ORDER BY c.row_id LIMIT ?",
+                (
+                    revision.index_revision_id,
+                    document_version.document_id,
+                    document_version.document_version_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    canonical_json(requested),
+                    limit + 1,
+                ),
+            ).fetchall()
+        if len(rows) > limit:
+            return None
+        matching_ids = set(requested)
+        for row in rows:
+            try:
+                chunk = Chunk.model_validate_json(str(row["chunk_json"]))
+            except (TypeError, ValueError) as error:
+                raise IndexCorrupt(
+                    "来源节点 Chunk 无法验证。",
+                    stage="retrieval.source_reader",
+                ) from error
+            if (
+                chunk.chunk_id != row["chunk_id"]
+                or chunk.version != document_version
+                or chunk.index_revision_id != revision.index_revision_id
+                or chunk.project_id != revision.project_id
+                or chunk.knowledge_base_id != revision.knowledge_base_id
+                or not matching_ids.intersection(
+                    span.node_id for span in chunk.source_spans
+                )
+            ):
+                raise IndexCorrupt(
+                    "来源节点 Chunk 身份或节点映射漂移。",
+                    stage="retrieval.source_reader",
+                )
+        return tuple(str(row["chunk_id"]) for row in rows)
 
     def load_document_structure(
         self,
