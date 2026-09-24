@@ -10,7 +10,7 @@ import json
 import secrets
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, cast
 
 from cryptography.exceptions import InvalidTag
@@ -189,36 +189,38 @@ class SsoSessionService:
         return pending
 
     def issue_user(self, identity: SsoIdentity) -> PublicSessionIssue:
-        """把受信任 RDMS claims 加密进固定两小时本地会话。"""
+        """只把公共会话需要的身份与显示名加密进两小时 Cookie。"""
         now = int(self._clock())
+        # RDMS 的角色、权限和部门声明不参与公共会话授权，不写入浏览器 Cookie。
         principal = PublicSessionPrincipal(
             session_id=f"{_SESSION_ID_PREFIX}{secrets.token_hex(16)}",
             owner_id=f"rdms:{identity.user_id}",
             expires_at=now + _SESSION_TTL_SECONDS,
             user_id=identity.user_id,
-            username=identity.username,
+            username=identity.username if identity.nick_name is None else None,
             nick_name=identity.nick_name,
-            dept_id=identity.dept_id,
-            roles=identity.roles,
-            permissions=identity.permissions,
         )
-        cookie = self._encode(
-            "user",
-            {
-                "aud": self._deployment_id,
-                "dept_id": principal.dept_id,
-                "exp": principal.expires_at,
-                "iat": now,
-                "iss": "rdms",
-                "nick_name": principal.nick_name,
-                "permissions": list(principal.permissions),
-                "roles": list(principal.roles),
-                "sid": principal.session_id,
-                "user_id": principal.user_id,
-                "username": principal.username,
-                "v": 1,
-            },
-        )
+        payload: dict[str, object] = {
+            "aud": self._deployment_id,
+            "dept_id": None,
+            "exp": principal.expires_at,
+            "iat": now,
+            "iss": "rdms",
+            "nick_name": principal.nick_name,
+            "permissions": [],
+            "roles": [],
+            "sid": principal.session_id,
+            "user_id": principal.user_id,
+            "username": principal.username,
+            "v": 1,
+        }
+        cookie = self._encode("user", payload)
+        if len(cookie) > _MAX_SESSION_COOKIE_CHARS:
+            # 极端显示名仍可能超过浏览器限制；保留用户 ID 完成登录。
+            principal = replace(principal, username=None, nick_name=None)
+            payload["nick_name"] = None
+            payload["username"] = None
+            cookie = self._encode("user", payload)
         if len(cookie) > _MAX_SESSION_COOKIE_CHARS:
             raise ValueError("SSO 用户 claims 超过 3500 bytes Cookie 上限。")
         return self._build_issue(principal, cookie)
