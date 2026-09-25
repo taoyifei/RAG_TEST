@@ -1,0 +1,493 @@
+package types
+
+import (
+	"context"
+	"database/sql/driver"
+	"encoding/json"
+	"strings"
+	"time"
+)
+
+// DefaultMaxContextTokens is the context window assumed for a model that does
+// not declare one. 200k matches typical windows on current chat/VLM models
+// (GPT-4.1, Claude, Gemini, Qwen, etc.).
+//
+// It is still below the largest windows on the market. Guessing high is
+// the dangerous direction: compaction never fires, and the first sign of
+// trouble is the provider rejecting the request. Guessing low only costs some
+// history that would have fit.
+const DefaultMaxContextTokens = 200000
+
+// AgentMaxContextTokens picks the context window for one agent run. An
+// explicit agent setting wins, then whatever the model declares, then the
+// assumed default.
+func AgentMaxContextTokens(configured, modelContextWindow int) int {
+	if configured > 0 {
+		return configured
+	}
+	if modelContextWindow > 0 {
+		return modelContextWindow
+	}
+	return DefaultMaxContextTokens
+}
+
+// DefaultSmartReasoningMaxCompletionTokens is the per-round budget when the
+// agent cannot emit write_sandbox_file / edit_sandbox_file. 4096 matches
+// typical OpenAI-compatible provider defaults and is enough for ordinary
+// tool-call JSON.
+const DefaultSmartReasoningMaxCompletionTokens = 4096
+
+// DefaultAgentMaxCompletionTokens is the per-round budget when the agent
+// can write or edit sandbox files. Those tool calls carry the file body in
+// JSON; a 4096 cap truncates mid-stream (finish_reason=length).
+const DefaultAgentMaxCompletionTokens = 24576
+
+// DefaultQuickAnswerMaxCompletionTokens is the RAG answer budget.
+const DefaultQuickAnswerMaxCompletionTokens = 2048
+
+// NeedsSandboxWriteCompletionBudget reports whether this agent may register
+// write_sandbox_file / edit_sandbox_file. Those tools follow the bound
+// sandbox, not the allowed_tools checklist.
+func NeedsSandboxWriteCompletionBudget(sandboxConfigID string) bool {
+	return strings.TrimSpace(sandboxConfigID) != ""
+}
+
+// DefaultMaxCompletionTokens is the unset-config default for one agent:
+// quick-answer 2048, smart-reasoning 4096, smart-reasoning with a sandbox 24576.
+func DefaultMaxCompletionTokens(agentMode, sandboxConfigID string) int {
+	if agentMode == AgentModeSmartReasoning {
+		if NeedsSandboxWriteCompletionBudget(sandboxConfigID) {
+			return DefaultAgentMaxCompletionTokens
+		}
+		return DefaultSmartReasoningMaxCompletionTokens
+	}
+	return DefaultQuickAnswerMaxCompletionTokens
+}
+
+// AgentRoundMaxCompletionTokens returns the completion-token budget for one
+// ReAct LLM round when no sandbox is bound. Zero (unset) uses
+// DefaultSmartReasoningMaxCompletionTokens. An explicit configured value is
+// honored as-is.
+func AgentRoundMaxCompletionTokens(configured int) int {
+	return AgentRoundMaxCompletionTokensFor(configured, "")
+}
+
+// MinSandboxWriteCompletionTokens is the floor applied to an explicitly
+// configured per-round budget when a sandbox is bound. write_sandbox_file and
+// edit_sandbox_file carry the whole file body inside the tool-call JSON, so a
+// cap sized for ordinary chat truncates the arguments mid-string on every
+// attempt — the agent then burns its rounds rewriting a file it can never
+// finish. Below this the setting is not a preference, it is a deadlock.
+const MinSandboxWriteCompletionTokens = 8192
+
+// AgentRoundMaxCompletionTokensFor is AgentRoundMaxCompletionTokens with
+// the agent's sandbox: unset + sandbox uses the large write-file budget, and a
+// configured value too small to hold a file write is raised to the floor.
+func AgentRoundMaxCompletionTokensFor(configured int, sandboxConfigID string) int {
+	if configured > 0 {
+		if NeedsSandboxWriteCompletionBudget(sandboxConfigID) &&
+			configured < MinSandboxWriteCompletionTokens {
+			return MinSandboxWriteCompletionTokens
+		}
+		return configured
+	}
+	return DefaultMaxCompletionTokens(AgentModeSmartReasoning, sandboxConfigID)
+}
+
+// UnlimitedMaxIterations is the stored MaxIterations value meaning the ReAct
+// loop has no round cap. Zero still means "unset, apply default" so agents
+// that omit the field keep their current behaviour.
+const UnlimitedMaxIterations = -1
+
+// AgentConfig represents the full agent configuration (used at tenant level and runtime)
+// This includes all configuration parameters for agent execution
+type AgentConfig struct {
+	// MaxIterations caps ReAct rounds. Zero is unset (filled with a default);
+	// a negative value is unlimited — the loop runs until the model stops,
+	// the user cancels, or another guard fires. See UnlimitedMaxIterations.
+	MaxIterations  int      `json:"max_iterations"`
+	AllowedTools   []string `json:"allowed_tools"`           // List of allowed tool names
+	Temperature    float64  `json:"temperature"`             // LLM temperature for agent
+	KnowledgeBases []string `json:"knowledge_bases"`         // Accessible knowledge base IDs
+	KnowledgeIDs   []string `json:"knowledge_ids"`           // Accessible knowledge IDs (individual documents)
+	SystemPrompt   string   `json:"system_prompt,omitempty"` // Unified system prompt (uses web_search_status placeholder for dynamic behavior)
+	// Deprecated: Use SystemPrompt instead. Kept for backward compatibility during migration.
+	SystemPromptWebEnabled  string        `json:"system_prompt_web_enabled,omitempty"`  // Deprecated: Custom prompt when web search is enabled
+	SystemPromptWebDisabled string        `json:"system_prompt_web_disabled,omitempty"` // Deprecated: Custom prompt when web search is disabled
+	UseCustomSystemPrompt   bool          `json:"use_custom_system_prompt"`             // Whether to use custom system prompt instead of default
+	LocalBrowserEnabled     bool          `json:"-"`                                    // Per-turn local_browser gate
+	WebSearchEnabled        bool          `json:"web_search_enabled"`                   // Whether web search tool is enabled
+	WebSearchMaxResults     int           `json:"web_search_max_results"`               // Maximum number of web search results (default: 5)
+	WebSearchProviderID     string        `json:"web_search_provider_id,omitempty"`     // WebSearchProviderEntity ID (resolved from agent config)
+	MultiTurnEnabled        bool          `json:"multi_turn_enabled"`                   // Whether multi-turn conversation is enabled
+	MemoryEnabled           *bool         `json:"memory_enabled,omitempty"`             // nil inherits workspace
+	SearchTargets           SearchTargets `json:"-"`                                    // Pre-computed unified search targets (runtime only)
+	// MCP service selection
+	MCPSelectionMode string   `json:"mcp_selection_mode"` // MCP selection mode: "all", "selected", "none"
+	MCPServices      []string `json:"mcp_services"`       // Selected MCP service IDs (when mode is "selected")
+	// MCPAuthWaitTimeout is how many seconds an agent run waits for
+	// in-conversation OAuth authorization before skipping. <=0 falls back to
+	// the gate's configured timeout. The wait is always bounded (no leak).
+	MCPAuthWaitTimeout int `json:"mcp_auth_wait_timeout,omitempty"`
+	// Whether to enable thinking mode (for models that support extended thinking)
+	Thinking *bool `json:"thinking"`
+	// ReasoningEffort is the graded thinking level; empty falls back to Thinking.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// Whether final answers include knowledge/web source citations. Nil defaults to true.
+	CitationEnabled *bool `json:"citation_enabled"`
+	// Whether to retrieve knowledge base only when explicitly mentioned with @ (default: false)
+	RetrieveKBOnlyWhenMentioned bool `json:"retrieve_kb_only_when_mentioned"`
+
+	// Whether to retain retrieval history (like wiki_read_page results) across turns (default: false)
+	RetainRetrievalHistory bool `json:"retain_retrieval_history"`
+
+	// Skills configuration (Progressive Disclosure pattern)
+	SkillsEnabled bool     `json:"skills_enabled"` // Whether skills are enabled (default: false)
+	SkillDirs     []string `json:"skill_dirs"`     // Directories to search for skills
+	AllowedSkills []string `json:"allowed_skills"` // Skill names whitelist (empty = allow all)
+
+	// Runtime-only fields (not persisted)
+	ChatModelSupportsVision bool   `json:"-"` // Resolved model capability, never supplied by tool input.
+	VLMModelID              string `json:"-"` // VLM model ID for tool images, resolved from CustomAgent config.
+	SandboxConfigID         string `json:"-"` // Workspace sandbox config ID for skill execution.
+	// TenantSkills are the skills installed into the selected sandbox config's
+	// snapshot image, already narrowed to the ones this run can actually
+	// invoke. Runtime only: it is derived per turn from the config the agent
+	// selected, never stored on the agent record.
+	TenantSkills []*TenantSkillEntity `json:"-"`
+	// Per-request @mention pins (runtime only; injected as <must_use> in the user message).
+	PinnedMCPServiceIDs []string `json:"-"`
+	PinnedSkillNames    []string `json:"-"`
+	// QuestionOrigin is the knowledge source of a suggested question the user
+	// picked, already checked to be inside KnowledgeBases (runtime only;
+	// rendered into runtime_context as a retrieval hint).
+	QuestionOrigin *QuestionOrigin `json:"-"`
+	// SharedAgentReadOnly prevents a shared agent from mutating resources in
+	// its source workspace. It is set from the verified share relation, never
+	// inferred from a client-provided tenant ID.
+	SharedAgentReadOnly bool `json:"-"`
+	// WritableKBIDs are the SearchTargets KBs this caller may modify (its own
+	// workspace's, or shared to it as editor+). Search targets only need read
+	// access, so tools that write (wiki pages and issues) are limited to this
+	// set; empty means read-only. Runtime only, derived per turn.
+	WritableKBIDs []string `json:"-"`
+	// LLM call timeout in seconds (default: 120). Controls the maximum time for a single LLM call.
+	LLMCallTimeout int `json:"llm_call_timeout,omitempty"`
+
+	// Maximum completion tokens for each ReAct LLM round. Zero means
+	// DefaultMaxCompletionTokens for this agent's mode and sandbox.
+	// Explicit values are sent as-is.
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
+
+	// Maximum character length for tool output (default: 16000).
+	// Outputs exceeding this limit are truncated with head + tail preservation.
+	MaxToolOutputChars int `json:"max_tool_output_chars,omitempty"`
+
+	// Maximum context window tokens for the agent. Zero means "use the
+	// model's context_window, or DefaultMaxContextTokens (200000)".
+	MaxContextTokens int `json:"max_context_tokens,omitempty"`
+
+	// ContextTokenScale is the provider's tokens per estimated token that the
+	// session's last calibrated turn measured (TokenUsage.ContextTokenScale).
+	// The engine starts its estimator at this scale. Zero means uncalibrated.
+	// Runtime only.
+	ContextTokenScale float64 `json:"-"`
+
+	// How much recent conversation a compaction keeps verbatim. Zero means
+	// compaction.DefaultKeepRecentTokens, scaled down on small windows. This
+	// is the knob that decides how often compaction runs: whatever the context
+	// grew to, it comes out of a compaction at roughly this size.
+	CompactionKeepRecentTokens int `json:"compaction_keep_recent_tokens,omitempty"`
+
+	// Whether to execute independent tool calls in parallel (default: false).
+	// When enabled and the LLM returns multiple tool calls, they run concurrently via errgroup.
+	ParallelToolCalls bool `json:"parallel_tool_calls,omitempty"`
+
+	// skillInstallMode routes this run's shell_exec to the privileged
+	// install-mode executor (root, skills image root writable). It is
+	// unexported on purpose: JSON cannot reach it, so no stored agent record
+	// and no API payload can request the privilege, and no other package can
+	// assign it. EnableSkillInstallMode is the only way in and it refuses
+	// every agent except the built-in skill installer.
+	skillInstallMode bool
+
+	// skillInstallDir is the one skill directory this install owns. The skill
+	// file tools are scoped to it, so an installer cannot write a neighbouring
+	// skill in the shared image. Unexported for the same reason as
+	// skillInstallMode: the scope of a privilege must not be settable by
+	// anything a tenant can store or send.
+	skillInstallDir string
+}
+
+// EnableSkillInstallMode grants install-mode shell execution to the built-in
+// skill installer agent and to nothing else, scoped to the skill directory it
+// was started for. The agent ID is checked here rather than at the call site
+// so there is exactly one place to audit.
+//
+// The privilege and its scope are granted together: a caller cannot obtain the
+// root shell without naming the directory the file tools will be confined to.
+// skillDir is stored verbatim and validated where the tools are constructed —
+// types cannot import the sandbox package that owns the path rules.
+func (c *AgentConfig) EnableSkillInstallMode(agentID, skillDir string) {
+	if c == nil || agentID != BuiltinSkillInstallerID {
+		return
+	}
+	c.skillInstallMode = true
+	c.skillInstallDir = skillDir
+}
+
+// SkillInstallMode reports whether this run may use the privileged
+// install-mode shell.
+func (c *AgentConfig) SkillInstallMode() bool {
+	return c != nil && c.skillInstallMode
+}
+
+// SkillInstallDir is the skill directory this install may write, or "" when
+// this run is not an install.
+func (c *AgentConfig) SkillInstallDir() string {
+	if c == nil || !c.skillInstallMode {
+		return ""
+	}
+	return c.skillInstallDir
+}
+
+// UnlimitedIterations reports whether the ReAct loop has no round cap.
+func (c *AgentConfig) UnlimitedIterations() bool {
+	return c != nil && c.MaxIterations < 0
+}
+
+// CitationsEnabled preserves citation output for legacy runtime configs that
+// predate the setting and therefore have a nil CitationEnabled value.
+func (c *AgentConfig) CitationsEnabled() bool {
+	return c == nil || c.CitationEnabled == nil || *c.CitationEnabled
+}
+
+// SessionAgentConfig represents session-level agent configuration
+// Sessions only store Enabled and KnowledgeBases; other configs are read from Tenant at runtime
+type SessionAgentConfig struct {
+	AgentModeEnabled bool     `json:"agent_mode_enabled"` // Whether agent mode is enabled for this session
+	WebSearchEnabled bool     `json:"web_search_enabled"` // Whether web search is enabled for this session
+	KnowledgeBases   []string `json:"knowledge_bases"`    // Accessible knowledge base IDs for this session
+	KnowledgeIDs     []string `json:"knowledge_ids"`      // Accessible knowledge IDs (individual documents) for this session
+}
+
+// Value implements driver.Valuer interface for AgentConfig
+func (c AgentConfig) Value() (driver.Value, error) {
+	return json.Marshal(c)
+}
+
+// Scan implements sql.Scanner interface for AgentConfig
+func (c *AgentConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
+		return nil
+	}
+	return json.Unmarshal(b, c)
+}
+
+// Value implements driver.Valuer interface for SessionAgentConfig
+func (c SessionAgentConfig) Value() (driver.Value, error) {
+	return json.Marshal(c)
+}
+
+// Scan implements sql.Scanner interface for SessionAgentConfig
+func (c *SessionAgentConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
+		return nil
+	}
+	return json.Unmarshal(b, c)
+}
+
+// ResolveSystemPrompt returns the prompt template for the given web search state.
+// It uses the unified SystemPrompt field, falling back to deprecated fields for backward compatibility.
+func (c *AgentConfig) ResolveSystemPrompt(webSearchEnabled bool) string {
+	if c == nil {
+		return ""
+	}
+
+	// First, try the new unified SystemPrompt field
+	if c.SystemPrompt != "" {
+		return c.SystemPrompt
+	}
+
+	// Fallback to deprecated fields for backward compatibility
+	if webSearchEnabled {
+		if c.SystemPromptWebEnabled != "" {
+			return c.SystemPromptWebEnabled
+		}
+	} else {
+		if c.SystemPromptWebDisabled != "" {
+			return c.SystemPromptWebDisabled
+		}
+	}
+
+	return ""
+}
+
+// Tool defines the interface that all agent tools must implement
+type Tool interface {
+	// Name returns the unique identifier for this tool
+	Name() string
+
+	// Description returns a human-readable description of what the tool does
+	Description() string
+
+	// Parameters returns the JSON Schema for the tool's parameters
+	Parameters() json.RawMessage
+
+	// Execute runs the tool with the given arguments
+	Execute(ctx context.Context, args json.RawMessage) (*ToolResult, error)
+}
+
+// Cleanable is an optional interface that tools can implement to release resources.
+// Tools implementing this interface will have their Cleanup method called during
+// registry cleanup (e.g., at the end of an agent session).
+type Cleanable interface {
+	Cleanup(ctx context.Context)
+}
+
+// ToolResult represents the result of a tool execution
+type ToolResult struct {
+	// OutputFiles holds sandbox references for this live result only. History
+	// uses the final answer's persistent resource references instead.
+	// A non-nil empty slice means output inspection found no eligible changes;
+	// nil means no output inspection result is available.
+	OutputFiles []string               `json:"-"`
+	Success     bool                   `json:"success"`          // Whether the tool executed successfully
+	Output      string                 `json:"output"`           // Human-readable output
+	Data        map[string]interface{} `json:"data,omitempty"`   // Structured data for programmatic use
+	Error       string                 `json:"error,omitempty"`  // Error message if execution failed
+	Images      []string               `json:"images,omitempty"` // Base64 data URIs from tool (e.g. MCP image content)
+}
+
+// ToolCall represents a single tool invocation within an agent step
+type ToolCall struct {
+	// Target identifies the actual proxy target; Name/Args retain the model call for replay.
+	Target           *ToolCallTarget        `json:"target,omitempty"`
+	ID               string                 `json:"id"`                          // Function call ID from LLM
+	Name             string                 `json:"name"`                        // Tool name
+	Args             map[string]interface{} `json:"args"`                        // Tool arguments
+	Result           *ToolResult            `json:"result"`                      // Execution result (contains Output)
+	Reflection       string                 `json:"reflection,omitempty"`        // Agent's reflection on this tool call result (if enabled)
+	Duration         int64                  `json:"duration"`                    // Execution time in milliseconds
+	ProviderMetadata ToolCallMetadata       `json:"provider_metadata,omitempty"` // Provider-specific tool-call state for replay
+}
+
+// ToolCallTarget identifies a resolved invocation without rewriting the model's
+// function call, which must be preserved for history replay and provider state.
+type ToolCallTarget struct {
+	Name        string                 `json:"name"`
+	Args        map[string]interface{} `json:"args"`
+	ServiceName string                 `json:"service_name"`
+	ToolName    string                 `json:"tool_name"`
+}
+
+// ExecutionName returns the resolved target name for presentation and tracing.
+func (t ToolCall) ExecutionName() string {
+	if t.Target != nil {
+		return t.Target.Name
+	}
+	return t.Name
+}
+
+// ExecutionArgs returns the resolved target arguments without changing replay data.
+func (t ToolCall) ExecutionArgs() map[string]interface{} {
+	if t.Target != nil {
+		return t.Target.Args
+	}
+	return t.Args
+}
+
+// PipelineToolCallIDPrefix marks a persisted tool call the model never made.
+// The fast-answer (KnowledgeQA) pipeline records its retrieval stages as tool
+// calls so a reloaded conversation can redraw the same timeline it showed while
+// streaming. History replay must skip them: asking the model to account for
+// calls it never issued, against tools it may not even have, breaks the
+// request protocol.
+const PipelineToolCallIDPrefix = "ragpipe-"
+
+// IsPipelineToolCallID reports whether a tool call was synthesized by the
+// fast-answer pipeline rather than requested by the model.
+func IsPipelineToolCallID(id string) bool {
+	return strings.HasPrefix(id, PipelineToolCallIDPrefix)
+}
+
+// AgentStep represents one iteration of the ReAct loop
+type AgentStep struct {
+	Iteration int    `json:"iteration"` // Iteration number (0-indexed)
+	Thought   string `json:"thought"`   // LLM's reasoning/thinking (Think phase)
+	// UserMessagesBefore records consumed steer rows in delivery order, before
+	// this model response. Unlike timestamps, this remains unambiguous on replay.
+	UserMessagesBefore []string `json:"user_messages_before,omitempty"`
+	// IntermediateAnswer preserves a plain answer followed by a loop-end steer.
+	// The canonical final answer is still stored in Message.Content.
+	IntermediateAnswer bool `json:"intermediate_answer,omitempty"`
+	// ReasoningContent stores the OpenAI-protocol reasoning_content emitted by the
+	// model in this round. Persisted on AgentStep so cross-turn replay can put it
+	// back on the assistant message — required by MiMo / DeepSeek V3.2+ thinking
+	// mode, ignored by providers that don't recognize the field.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// ReasoningSignature / ReasoningMetadata are the provider artifacts that
+	// must accompany ReasoningContent on replay (Anthropic signatures,
+	// OpenAI Responses encrypted reasoning items).
+	ReasoningSignature string           `json:"reasoning_signature,omitempty"`
+	ReasoningMetadata  ProviderMetadata `json:"reasoning_metadata,omitempty"`
+	ToolCalls          []ToolCall       `json:"tool_calls"` // Tools called in this step (Act phase)
+	Timestamp          time.Time        `json:"timestamp"`  // When this step occurred
+	// Truncated marks the round the completion-token cap cut off. It rides in
+	// the agent_steps JSON so a reloaded, shared or re-opened conversation can
+	// still show that the answer stops mid-sentence by design, rather than
+	// looking finished. Live streaming carries the same fact on the answer
+	// event; this is what survives the round trip.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// GetObservations returns observations from all tool calls in this step
+// This is a convenience method to maintain backward compatibility
+func (s *AgentStep) GetObservations() []string {
+	observations := make([]string, 0, len(s.ToolCalls))
+	for _, tc := range s.ToolCalls {
+		if tc.Result != nil && tc.Result.Output != "" {
+			observations = append(observations, tc.Result.Output)
+		}
+		if tc.Reflection != "" {
+			observations = append(observations, "Reflection: "+tc.Reflection)
+		}
+	}
+	return observations
+}
+
+// AgentState tracks the execution state of an agent across iterations
+type AgentState struct {
+	PendingSteerMessages []string        `json:"-"`
+	CurrentRound         int             `json:"current_round"`  // Current round number
+	RoundSteps           []AgentStep     `json:"round_steps"`    // All steps taken so far in the current round
+	IsComplete           bool            `json:"is_complete"`    // Whether agent has finished
+	FinalAnswer          string          `json:"final_answer"`   // The final answer to the query
+	KnowledgeRefs        []*SearchResult `json:"knowledge_refs"` // Collected knowledge references
+	TurnUsage            TokenUsage      `json:"turn_usage"`     // LLM usage accumulated across this turn
+}
+
+// FunctionDefinition represents a function definition for LLM function calling
+type FunctionDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}

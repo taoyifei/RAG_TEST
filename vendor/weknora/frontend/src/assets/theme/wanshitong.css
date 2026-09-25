@@ -1,0 +1,28 @@
+/* 湾事通管理端品牌色，仅在网关构建中启用。 */
+:root:root.wanshitong-admin {
+  --td-brand-color-1: #eaf3fb;
+  --td-brand-color-2: #d1e7f8;
+  --td-brand-color-3: #9bc9eb;
+  --td-brand-color-4: #155fa0;
+  --td-brand-color-5: #12558f;
+  --td-brand-color-6: #104d84;
+  --td-brand-color-7: #0d416f;
+  --td-brand-color-8: #0a355b;
+  --td-brand-color-9: #082a49;
+  --td-brand-color-10: #061f37;
+  --td-brand-color-disabled: #9bc9eb;
+}
+
+:root:root.wanshitong-admin[theme-mode="dark"] {
+  --td-brand-color-1: #112d48;
+  --td-brand-color-2: #18436b;
+  --td-brand-color-3: #205780;
+  --td-brand-color-4: #3076ad;
+  --td-brand-color-5: #4a91c6;
+  --td-brand-color-6: #67addc;
+  --td-brand-color-7: #85c3eb;
+  --td-brand-color-8: #a8d7f3;
+  --td-brand-color-9: #cbe8f8;
+  --td-brand-color-10: #e7f4fc;
+  --td-brand-color-disabled: #205780;
+}

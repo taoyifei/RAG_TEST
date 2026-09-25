@@ -1,0 +1,125 @@
+<template>
+  <div class="integrations-settings">
+    <div class="integrations-settings__body" :class="{ 'integrations-settings__body--landing': isLandingSection }">
+      <div v-if="tab === 'im'" class="section">
+        <div class="section-header">
+          <h2>{{ $t('agentEditor.im.title') }}</h2>
+          <p class="section-description">
+            {{ $t('agentEditor.im.description') }}
+            <a
+              href="https://github.com/Tencent/WeKnora/blob/main/website-docs/03-features/12-im-integration.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="doc-link"
+            >
+              {{ $t('agentEditor.im.docLink') }}
+              <t-icon name="link" class="link-icon" />
+            </a>
+          </p>
+        </div>
+        <IMChannelPanel v-model:filter-agent-id="filterAgentId" />
+      </div>
+
+      <div v-if="tab === 'embed'" class="section">
+        <div class="section-header">
+          <h2>{{ $t('agentEditor.embed.title') }}</h2>
+          <p class="section-description">{{ $t('agentEditor.embed.description') }}</p>
+        </div>
+        <AgentEmbedChannelPanel v-model:filter-agent-id="filterAgentId" />
+      </div>
+
+      <div v-if="tab === 'api'" class="section">
+        <div class="section-header">
+          <h2>{{ $t('integrations.api.title') }}</h2>
+          <p class="section-description">{{ $t('integrations.api.subtitle') }}</p>
+        </div>
+        <ApiIntegrationSettings />
+      </div>
+
+      <div v-if="tab === 'mcpserver'" class="section">
+        <div class="section-header">
+          <h2>{{ $t('integrations.mcpserver.title') }}</h2>
+          <p class="section-description">{{ $t('integrations.mcpserver.subtitle') }}</p>
+        </div>
+        <McpServerIntegrationSettings />
+      </div>
+
+      <ChromeExtensionLanding v-if="tab === 'chrome'" />
+      <ClawSkillLanding v-if="tab === 'claw'" />
+      <CliIntegrationLanding v-if="tab === 'cli'" />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import IMChannelPanel from '@/components/IMChannelPanel.vue'
+import AgentEmbedChannelPanel from '@/components/AgentEmbedChannelPanel.vue'
+import ApiIntegrationSettings from '@/views/integrations/ApiIntegrationSettings.vue'
+import McpServerIntegrationSettings from '@/views/integrations/McpServerIntegrationSettings.vue'
+import ChromeExtensionLanding from '@/views/integrations/ChromeExtensionLanding.vue'
+import ClawSkillLanding from '@/views/integrations/ClawSkillLanding.vue'
+import CliIntegrationLanding from '@/views/integrations/CliIntegrationLanding.vue'
+import type { IntegrationTab } from '@/config/integrations'
+
+const filterAgentId = ref('')
+
+const props = defineProps<{
+  tab: IntegrationTab
+}>()
+
+const route = useRoute()
+
+const isLandingSection = computed(
+  () => props.tab === 'chrome' || props.tab === 'claw' || props.tab === 'cli',
+)
+
+function applyAgentFilterFromRoute() {
+  filterAgentId.value = (route.query.agentId as string) || ''
+}
+
+watch(
+  () => route.query.agentId,
+  applyAgentFilterFromRoute,
+  { immediate: true },
+)
+</script>
+
+<style scoped lang="less">
+@import (reference) '@/components/css/settings-section.less';
+
+.integrations-settings {
+  display: flex;
+  flex-direction: column;
+}
+
+.integrations-settings__body {
+  min-width: 0;
+}
+
+.integrations-settings__body--landing {
+  max-width: 760px;
+}
+
+.section-header {
+  .settings-section-header();
+}
+
+.doc-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  color: var(--td-brand-color);
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.link-icon {
+  font-size: var(--app-text-md);
+}
+</style>

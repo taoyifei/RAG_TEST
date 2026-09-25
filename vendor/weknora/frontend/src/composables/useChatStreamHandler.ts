@@ -1,0 +1,1334 @@
+import { applyFinalArtifactContent } from '@/utils/finalArtifactContent'
+import { markRaw, nextTick, type Ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { ensureRagPipelineHistoryStream } from '@/utils/rag-pipeline-history'
+import { applyMessageCreatedAt, bindServerTurnTimestamps, ensureMessageCreatedAt } from '@/utils/messageTimestamp'
+import { expandSteerForksInHistory, forkAfterInjectedUser, steerStepEvents, resetSteerTurnForReplay } from '@/utils/steerStreamFork'
+
+export type ChatMessage = Record<string, unknown>
+
+export interface UseChatStreamHandlerOptions {
+  messagesList: ChatMessage[]
+  loading: Ref<boolean>
+  isReplying: Ref<boolean>
+  currentAssistantMessageId: Ref<string>
+  fullContent: Ref<string>
+  isAgentStreamSession: () => boolean
+  scrollToBottom: (force?: boolean) => void
+  onReplyComplete?: (content: string) => void
+  onTurnComplete?: (message: ChatMessage) => void
+  onError?: (message: string) => void
+  /** Main chat: keep the last incomplete message reactive for continue-stream. */
+  preserveIncompleteStreamReactive?: boolean
+  isFirstEnter?: Ref<boolean>
+  scrollContainer?: Ref<HTMLElement | null>
+  onAfterMsgList?: () => void | Promise<void>
+  onAgentQuery?: (
+    data: ChatMessage,
+    existingMessage: ChatMessage | undefined,
+    created: boolean,
+  ) => void
+  onMessageCreated?: (message: ChatMessage) => void
+  onMessageUpdated?: (message: ChatMessage, payload?: ChatMessage) => void
+  onAgentAnswerDone?: (message: ChatMessage) => void
+  onAgentChunkBound?: (message: ChatMessage, created: boolean) => void
+  onUserMessageInjected?: (steerId: string) => void
+  /** Remote or local stop: the composer overlay must drop server-discarded items. */
+  onGenerationStopped?: () => void
+  debug?: boolean
+}
+
+function mergeToolCallArguments(previous: unknown, incoming: unknown): Record<string, unknown> {
+  const prev =
+    previous && typeof previous === 'object' && !Array.isArray(previous)
+      ? (previous as Record<string, unknown>)
+      : {}
+  const next =
+    incoming && typeof incoming === 'object' && !Array.isArray(incoming)
+      ? (incoming as Record<string, unknown>)
+      : { value: incoming }
+  return { ...prev, ...next }
+}
+
+export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
+  const { t } = useI18n()
+  const {
+    messagesList,
+    loading,
+    isReplying,
+    currentAssistantMessageId,
+    fullContent,
+    isAgentStreamSession,
+    scrollToBottom,
+    onReplyComplete,
+    onTurnComplete,
+    onError,
+    preserveIncompleteStreamReactive = false,
+    isFirstEnter,
+    scrollContainer,
+    onAfterMsgList,
+    onAgentQuery,
+    onMessageCreated,
+    onMessageUpdated,
+    onAgentAnswerDone,
+    onAgentChunkBound,
+    onUserMessageInjected,
+    onGenerationStopped,
+    debug = false,
+  } = options
+
+  const emitMessageCreated = (message: ChatMessage) => {
+    ensureMessageCreatedAt(message)
+    onMessageCreated?.(message)
+  }
+
+  const emitMessageUpdated = (message: ChatMessage, payload?: ChatMessage) => {
+    if (payload) applyMessageCreatedAt(message, payload.created_at)
+    onMessageUpdated?.(message, payload)
+  }
+
+  const log = (...args: unknown[]) => {
+    if (debug) console.log(...args)
+  }
+
+  const findLastMessage = (predicate: (item: ChatMessage) => boolean) => {
+    for (let i = messagesList.length - 1; i >= 0; i--) {
+      const item = messagesList[i]
+      if (predicate(item)) return item
+    }
+    return undefined
+  }
+
+  /** Incomplete assistant for the current turn, even if a later user row is the tail. */
+  const getTrailingIncompleteAssistant = () => {
+    for (let i = messagesList.length - 1; i >= 0; i--) {
+      const item = messagesList[i]
+      if (item?.role === 'assistant' && !item.is_completed) return item
+    }
+    return undefined
+  }
+
+  const markAssistantStopped = (message: ChatMessage) => {
+    if (!message || message.is_completed) return
+    message.is_completed = true
+    if (message.isAgentMode) {
+      if (!message.agentEventStream) message.agentEventStream = []
+      const stream = message.agentEventStream as ChatMessage[]
+      if (!stream.some((e) => e.type === 'stop')) {
+        stream.push({
+          type: 'stop',
+          timestamp: Date.now(),
+          reason: 'user_requested',
+        })
+      }
+    }
+  }
+
+  /** Finalize any in-flight assistant rows before a new user query is sent. */
+  const prepareForNewOutgoingMessage = () => {
+    for (const msg of messagesList) {
+      if (msg.role === 'assistant' && !msg.is_completed) {
+        markAssistantStopped(msg)
+      }
+    }
+    fullContent.value = ''
+    currentAssistantMessageId.value = ''
+  }
+
+  /** Mark the assistant row being stopped without clearing its id (stop API still needs it). */
+  const markInFlightAssistantStopped = (messageId?: string) => {
+    let target: ChatMessage | undefined
+    if (messageId) {
+      target = messagesList.find(
+        (m) =>
+          m.role === 'assistant' &&
+          !m.is_completed &&
+          (m.id === messageId ||
+            m.assistant_message_id === messageId ||
+            m.request_id === messageId),
+      )
+    }
+    if (!target) target = getTrailingIncompleteAssistant()
+    if (target) markAssistantStopped(target)
+    fullContent.value = ''
+  }
+
+  const extractKnowledgeReferences = (data: ChatMessage) => {
+    const dataPayload = data.data as ChatMessage | undefined
+    const refs =
+      data.knowledge_references ||
+      dataPayload?.references ||
+      dataPayload?.knowledge_references ||
+      []
+    return Array.isArray(refs) ? refs : []
+  }
+
+  const replaySegments = new Map<string, ChatMessage>()
+
+  /** Match the in-flight assistant row by request id or assistant message id. */
+  const resolveActiveAssistantMessage = (data: ChatMessage) => {
+    const dataId = data.id as string | undefined
+    const assistantId =
+      (data.assistant_message_id as string | undefined) ||
+      currentAssistantMessageId.value ||
+      undefined
+
+    if (dataId && replaySegments.has(dataId)) return replaySegments.get(dataId)
+
+    const matched = findLastMessage((item) => {
+      if (item.role !== 'assistant') return false
+      if (dataId && (item.request_id === dataId || item.id === dataId)) return true
+      if (assistantId && (item.id === assistantId || item.request_id === assistantId)) return true
+      return false
+    })
+    if (matched) return matched
+
+    return getTrailingIncompleteAssistant()
+  }
+
+  const applyKnowledgeReferences = (data: ChatMessage) => {
+    const refs = extractKnowledgeReferences(data)
+    if (!refs.length) return undefined
+
+    let message = resolveActiveAssistantMessage(data)
+    const created = !message
+    if (!message) {
+      const rowId = (data.id as string | undefined) || currentAssistantMessageId.value
+      message = {
+        id: rowId,
+        request_id: rowId,
+        role: 'assistant',
+        content: '',
+        showThink: false,
+        thinkContent: '',
+        thinking: false,
+        is_completed: false,
+        knowledge_references: [],
+      }
+      ensureAgentMessageShell(message, data.id as string | undefined)
+      messagesList.push(message)
+      emitMessageCreated(message)
+      loading.value = false
+    } else {
+      ensureAgentMessageShell(message, data.id as string | undefined)
+    }
+
+    message.knowledge_references = refs.slice()
+    if (created) onAgentChunkBound?.(message, true)
+    emitMessageUpdated(message, data)
+    log('[References] Saved to message, count:', refs.length)
+    return message
+  }
+
+  // Records which long-term memories the answer saw. Unlike references this
+  // never creates a message shell: memory arrives before the first token, and
+  // an empty bubble that only says "3 memories" would be worse than waiting
+  // for the answer's own placeholder.
+  const applyUsedMemories = (data: ChatMessage) => {
+    const payload = (data.data ?? {}) as Record<string, unknown>
+    const memories = (payload.memories ?? data.memories) as unknown
+    if (!Array.isArray(memories) || memories.length === 0) return undefined
+
+    const message = resolveActiveAssistantMessage(data)
+    if (!message) {
+      log('[Memory] No assistant message to attach memories to')
+      return undefined
+    }
+    message.used_memories = memories.slice()
+    emitMessageUpdated(message, data)
+    log('[Memory] Saved to message, count:', memories.length)
+    return message
+  }
+
+  const ensureAgentMessageShell = (message: ChatMessage, requestId?: string) => {
+    if (message.role === 'user') return
+    message.isAgentMode = true
+    if (!isAgentStreamSession()) {
+      message.isRagMode = true
+    }
+    if (!message.agentEventStream) message.agentEventStream = []
+    if (!message._eventMap) message._eventMap = new Map()
+    if (!message._pendingToolCalls) message._pendingToolCalls = new Map()
+    if (requestId) {
+      if (!message.id) message.id = requestId
+      if (!message.request_id) message.request_id = requestId
+    }
+  }
+
+  const shouldRenderAssistantMessage = (session: ChatMessage) => {
+    if (!session?.isAgentMode) return true
+    if (!session.is_completed) return true
+    const stream = session.agentEventStream
+    if (Array.isArray(stream) && stream.length > 0) return true
+    if (Array.isArray(session.knowledge_references) && session.knowledge_references.length > 0) {
+      return true
+    }
+    // A turn can carry its answer as plain content with no timeline events —
+    // most visibly after a steer fork, where the events are split across
+    // segments and one segment can end up holding only the answer text.
+    // Hiding that row loses the reply entirely on reload.
+    if (typeof session.content === 'string' && session.content.trim()) return true
+    return false
+  }
+
+  const shouldShowGlobalTypingIndicator = (
+    messages: ChatMessage[],
+    isLoading: boolean,
+    isRecovering = false,
+  ) => {
+    if (!isLoading && !isRecovering) return false
+    if (messages.some((m) => m.role === 'assistant' && m.isAgentMode && !m.is_completed)) {
+      return false
+    }
+    return true
+  }
+
+  /** Quick-answer sessions: restore flags lost after history reload. */
+  const restoreQuickAnswerFlags = (item: ChatMessage) => {
+    if (isAgentStreamSession() || item.role !== 'assistant') return
+    item.isRagMode = true
+    if (
+      item.agent_steps &&
+      Array.isArray(item.agent_steps) &&
+      item.agent_steps.length > 0
+    ) {
+      item.isAgentMode = true
+      item.hideContent = true
+    }
+    ensureRagPipelineHistoryStream(item as Parameters<typeof ensureRagPipelineHistoryStream>[0])
+    if (item.isRagMode && item.agentEventStream) {
+      item.agentEventStream = markRaw(item.agentEventStream as object)
+    }
+  }
+
+  const recomposeAgentAnswer = (message: ChatMessage) => {
+    const stream = message.agentEventStream as Array<{
+      type?: string
+      superseded?: boolean
+      content?: string
+    }> | undefined
+    if (!stream) return ''
+    let out = ''
+    for (const e of stream) {
+      if (e.type === 'answer' && !e.superseded && e.content) {
+        out += e.content
+      }
+    }
+    return out
+  }
+
+  const agentStepsAreTruncated = (agentSteps: unknown[] | undefined) =>
+    Array.isArray(agentSteps) &&
+    agentSteps.some((step) => (step as ChatMessage | undefined)?.truncated === true)
+
+  const reconstructEventStreamFromSteps = (
+    agentSteps: unknown[],
+    messageContent: string,
+    isCompleted = false,
+    isFallback = false,
+    agentDurationMs = 0,
+    usage?: unknown,
+  ) => {
+    const events: ChatMessage[] = []
+
+    if (agentSteps && Array.isArray(agentSteps) && agentSteps.length > 0) {
+      agentSteps.forEach((rawStep) => {
+        const step = rawStep as ChatMessage
+        events.push(...steerStepEvents(step))
+        const stepTimestamp = step.timestamp ? new Date(String(step.timestamp)).getTime() : 0
+        const toolCalls = step.tool_calls
+        const hasToolCalls = toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0
+
+        const reasoningText =
+          step.reasoning_content && String(step.reasoning_content).trim()
+            ? String(step.reasoning_content)
+            : ''
+        if (reasoningText) {
+          events.push({
+            type: 'thinking',
+            event_id: `step-${step.iteration}-thought`,
+            content: reasoningText,
+            done: true,
+            thinking: false,
+            timestamp: stepTimestamp || undefined,
+            duration_ms: step.duration || undefined,
+          })
+        }
+        const preambleText = step.thought && String(step.thought).trim() ? String(step.thought) : ''
+        if (preambleText && step.intermediate_answer) {
+          events.push({ type: 'answer', event_id: `step-${step.iteration}-answer`,
+            content: preambleText, done: true, intermediate_answer: true, timestamp: stepTimestamp || undefined })
+        }
+        if (preambleText && hasToolCalls) {
+          events.push({
+            type: 'answer',
+            event_id: `step-${step.iteration}-preamble`,
+            content: preambleText,
+            done: true,
+            superseded: true,
+            timestamp: stepTimestamp || undefined,
+          })
+        }
+
+        if (toolCalls && Array.isArray(toolCalls)) {
+          toolCalls.forEach((toolCall: ChatMessage) => {
+            if (toolCall.name === 'final_answer') return
+            const result = toolCall.result as ChatMessage | undefined
+            const resultData = result?.data as ChatMessage | undefined
+            const target = toolCall.target as ChatMessage | undefined
+            events.push({
+              type: 'tool_call',
+              tool_call_id: toolCall.id,
+              tool_name: target?.name || toolCall.name,
+              arguments: target?.args || toolCall.args,
+              pending: false,
+              success: result?.success !== false,
+              output: result?.output || '',
+              error: result?.error || undefined,
+              timestamp: stepTimestamp || undefined,
+              duration: toolCall.duration,
+              duration_ms: toolCall.duration,
+              display_type: resultData?.display_type,
+              tool_data: result?.data,
+            })
+          })
+        }
+      })
+    }
+
+    if (agentDurationMs > 0 || usage) {
+      events.push({
+        type: 'agent_complete',
+        total_duration_ms: agentDurationMs,
+        usage,
+      })
+    }
+
+    if (messageContent && messageContent.trim()) {
+      const answerEvent: ChatMessage = {
+        type: 'answer',
+        content: messageContent,
+        done: true,
+      }
+      if (isFallback) answerEvent.is_fallback = true
+      // A round the completion cap cut off marks its step. Live streaming
+      // carries the same fact on the answer event, but history is rebuilt from
+      // agent_steps and never sees those events, so without this a reloaded
+      // half-written answer looks finished.
+      if (agentStepsAreTruncated(agentSteps)) answerEvent.truncated = true
+      events.push(answerEvent)
+    } else if (isCompleted) {
+      events.push({
+        type: 'stop',
+        timestamp: Date.now(),
+        reason: 'user_requested',
+      })
+    }
+
+    return events
+  }
+
+  const handleMsgList = async (
+    data: ChatMessage[],
+    isScrollType = false,
+    newScrollHeight?: number,
+  ) => {
+    const chatlist = [...data]
+    const existingIds = new Set(messagesList.map((m) => m.id).filter(Boolean))
+    const processed: ChatMessage[] = []
+
+    for (const raw of chatlist) {
+      const item = preserveIncompleteStreamReactive ? raw : { ...raw }
+      if (item.id && existingIds.has(item.id)) continue
+      if (item.id) existingIds.add(item.id)
+
+      item.isAgentMode = false
+      const willContinueStream = preserveIncompleteStreamReactive && !item.is_completed
+      if (willContinueStream) {
+        item.agentEventStream = item.agentEventStream || []
+        item._eventMap = new Map()
+        item._pendingToolCalls = new Map()
+      } else {
+        item.agent_steps = item.agent_steps ? markRaw(item.agent_steps as object) : item.agent_steps
+        item.agentEventStream = markRaw((item.agentEventStream as unknown[]) || [])
+        item._eventMap = markRaw(new Map())
+        item._pendingToolCalls = markRaw(new Map())
+      }
+
+      if (item.agent_steps && Array.isArray(item.agent_steps) && item.agent_steps.length > 0) {
+        item.isAgentMode = true
+        item.agentEventStream = markRaw(
+          reconstructEventStreamFromSteps(
+            item.agent_steps as unknown[],
+            String(item.content || ''),
+            Boolean(item.is_completed),
+            Boolean(item.is_fallback),
+            Number(item.agent_duration_ms) || 0,
+            item.usage,
+          ),
+        )
+        item.hideContent = true
+        if (agentStepsAreTruncated(item.agent_steps as unknown[])) item.truncated = true
+      }
+
+      restoreQuickAnswerFlags(item)
+
+      if (item.content) {
+        const content = String(item.content)
+        const thinkCloseTag = '</think>'
+        if (!content.includes('<think>') && !content.includes(thinkCloseTag)) {
+          item.thinkContent = ''
+          item.showThink = false
+          item.thinking = false
+        } else if (content.includes(thinkCloseTag)) {
+          item.showThink = true
+          item.thinking = false
+          const index = content.trim().lastIndexOf(thinkCloseTag)
+          item.thinkContent = content.trim().substring(0, index).replace('<think>', '').trim()
+          item.content = content.trim().substring(index + thinkCloseTag.length)
+        } else if (content.includes('<think>')) {
+          item.showThink = true
+          item.thinking = true
+          item.thinkContent = content.replace('<think>', '').trim()
+          item.content = ''
+        }
+      }
+
+      processed.push(item)
+    }
+
+    if (processed.length > 0) {
+      if (isScrollType) {
+        for (let i = processed.length - 1; i >= 0; i--) {
+          messagesList.unshift(processed[i])
+        }
+        const expanded = expandSteerForksInHistory([...messagesList])
+        messagesList.splice(0, messagesList.length, ...expanded)
+      } else {
+        messagesList.push(...expandSteerForksInHistory(processed))
+      }
+    }
+
+    if (isFirstEnter?.value) {
+      scrollToBottom(true)
+    } else if (isScrollType && scrollContainer?.value && typeof newScrollHeight === 'number') {
+      nextTick(() => {
+        if (!scrollContainer.value) return
+        const { scrollHeight } = scrollContainer.value
+        scrollContainer.value.scrollTop = scrollHeight - newScrollHeight
+      })
+    }
+
+    if (onAfterMsgList) {
+      await onAfterMsgList()
+    }
+  }
+
+  const updateAssistantSession = (payload: ChatMessage) => {
+    const message = findLastMessage((item) => {
+      if (item.role !== 'assistant') return false
+      if (item.request_id === payload.id) return true
+      return item.id === payload.id
+    })
+    if (message) {
+      if (payload.id && !message.request_id) message.request_id = payload.id
+      message.content = payload.content
+      message.thinking = payload.thinking
+      message.thinkContent = payload.thinkContent
+      message.showThink = payload.showThink
+      if (!message.knowledge_references) {
+        message.knowledge_references = payload.knowledge_references
+      }
+      if (payload.is_fallback) message.is_fallback = true
+      if (payload.is_completed) message.is_completed = true
+      emitMessageUpdated(message, payload)
+    } else {
+      const entry = { ...payload }
+      if (entry.id && !entry.request_id) entry.request_id = entry.id
+      messagesList.push(entry)
+      emitMessageCreated(entry)
+      emitMessageUpdated(entry, payload)
+    }
+    scrollToBottom()
+  }
+
+  const reportError = (errorMsg: string) => {
+    if (onError) {
+      onError(errorMsg)
+    }
+  }
+
+  const handleAgentChunk = (data: ChatMessage) => {
+    const dataId = data.id as string | undefined
+    let message = resolveActiveAssistantMessage(data)
+    let created = false
+
+    if (message?.role === 'user') {
+      message = undefined
+    }
+
+    if (!message) {
+      const newMsg: ChatMessage = {
+        id: dataId,
+        request_id: dataId,
+        role: 'assistant',
+        content: '',
+        isAgentMode: true,
+        isRagMode: !isAgentStreamSession(),
+        agentEventStream: [],
+        _eventMap: new Map(),
+        knowledge_references: [],
+      }
+      messagesList.push(newMsg)
+      emitMessageCreated(newMsg)
+      loading.value = false
+      scrollToBottom(true)
+      message = newMsg
+      created = true
+    } else {
+      onAgentChunkBound?.(message, false)
+    }
+
+    if (created) {
+      onAgentChunkBound?.(message, true)
+    }
+
+    ensureAgentMessageShell(message, dataId)
+    applyMessageCreatedAt(message, data.created_at)
+
+    if (
+      loading.value &&
+      (data.response_type === 'thinking' ||
+        data.response_type === 'answer' ||
+        data.response_type === 'tool_call' ||
+        data.response_type === 'tool_approval_required')
+    ) {
+      log('[Agent Chunk] Closing loading for continued stream')
+      loading.value = false
+    }
+
+    const responseType = data.response_type as string
+    const dataPayload = data.data as ChatMessage | undefined
+
+    switch (responseType) {
+      case 'thinking': {
+        const eventId = dataPayload?.event_id as string | undefined
+        log('[Thinking Event]', {
+          event_id: eventId,
+          done: data.done,
+          content_length: (data.content as string | undefined)?.length || 0,
+        })
+        if (!message.agentEventStream) message.agentEventStream = []
+        if (!message._eventMap) message._eventMap = new Map()
+        const eventMap = message._eventMap as Map<string, ChatMessage>
+        const stream = message.agentEventStream as ChatMessage[]
+
+        if (!data.done) {
+          let thinkingEvent = eventMap.get(eventId || '')
+          if (!thinkingEvent) {
+            log('[Thinking] Creating new thinking event, event_id:', eventId)
+            thinkingEvent = {
+              type: 'thinking',
+              event_id: eventId,
+              content: '',
+              done: false,
+              startTime: Date.now(),
+              thinking: true,
+            }
+            stream.push(thinkingEvent)
+            if (eventId) eventMap.set(eventId, thinkingEvent)
+          }
+          if (data.content) {
+            thinkingEvent.content = String(thinkingEvent.content || '') + String(data.content)
+            log('[Thinking] Event', eventId, 'accumulated:', String(thinkingEvent.content).length, 'chars')
+          }
+        } else {
+          const thinkingEvent = eventMap.get(eventId || '')
+          if (thinkingEvent) {
+            thinkingEvent.done = true
+            thinkingEvent.thinking = false
+            thinkingEvent.duration_ms =
+              dataPayload?.duration_ms || Date.now() - Number(thinkingEvent.startTime || Date.now())
+            thinkingEvent.completed_at = dataPayload?.completed_at || Date.now()
+            log('[Thinking] Event completed, duration:', thinkingEvent.duration_ms, 'ms')
+          } else {
+            console.warn('[Thinking] Received done for unknown event_id:', eventId)
+          }
+        }
+        break
+      }
+      case 'context_compacted': {
+        // Shown in the timeline rather than swallowed: after a compaction the
+        // agent no longer sees the earlier rounds, and without a marker that
+        // reads as the model ignoring what it was told.
+        if (!message.agentEventStream) message.agentEventStream = []
+        const d = dataPayload || {}
+        ;(message.agentEventStream as ChatMessage[]).push({
+          type: 'context_compacted',
+          event_id: data.id || `compaction-${Date.now()}`,
+          reason: d.reason,
+          round: d.round,
+          tokens_before: d.tokens_before,
+          tokens_after: d.tokens_after,
+          messages_before: d.messages_before,
+          messages_after: d.messages_after,
+          summary: d.summary,
+          degraded: d.degraded,
+          split_turn: d.split_turn,
+        })
+        break
+      }
+      case 'tool_approval_required': {
+        if (!message.agentEventStream) message.agentEventStream = []
+        const d = dataPayload || {}
+        ;(message.agentEventStream as ChatMessage[]).push({
+          type: 'tool_approval_required',
+          pending_id: d.pending_id,
+          service_name: d.service_name,
+          mcp_tool_name: d.mcp_tool_name,
+          description: d.description,
+          args_json: d.args_json,
+          timeout_seconds: d.timeout_seconds,
+          requested_at: d.requested_at,
+          tool_call_id: d.tool_call_id,
+          resolved: false,
+        })
+        break
+      }
+      case 'tool_approval_resolved': {
+        const d = dataPayload || {}
+        const pid = d.pending_id
+        const ev = (message.agentEventStream as ChatMessage[] | undefined)?.find(
+          (e) => e.type === 'tool_approval_required' && e.pending_id === pid,
+        )
+        if (ev) {
+          ev.resolved = true
+          ev.approved = d.approved
+          ev.resolve_reason = d.reason
+          ev.timed_out = d.timed_out
+          ev.canceled = d.canceled
+        }
+        break
+      }
+      case 'mcp_oauth_required': {
+        if (!message.agentEventStream) message.agentEventStream = []
+        const d = dataPayload || {}
+        ;(message.agentEventStream as ChatMessage[]).push({
+          type: 'mcp_oauth_required',
+          pending_id: d.pending_id,
+          service_id: d.service_id,
+          service_name: d.service_name,
+          mcp_tool_name: d.mcp_tool_name,
+          timeout_seconds: d.timeout_seconds,
+          requested_at: d.requested_at,
+          tool_call_id: d.tool_call_id,
+          resolved: false,
+        })
+        break
+      }
+      case 'mcp_oauth_resolved': {
+        const d = dataPayload || {}
+        const pid = d.pending_id
+        const sid = d.service_id
+        const list = message.agentEventStream as ChatMessage[] | undefined
+        // Resolve the matching card; also clear any other still-pending cards
+        // for the same service (parallel tool calls dedup to a single auth).
+        list?.forEach((e) => {
+          if (e.type !== 'mcp_oauth_required' || e.resolved) return
+          if (e.pending_id === pid || (sid && e.service_id === sid && d.authorized)) {
+            e.resolved = true
+            e.authorized = d.authorized
+            e.resolve_reason = d.reason
+            e.timed_out = d.timed_out
+            e.canceled = d.canceled
+          }
+        })
+        break
+      }
+      case 'tool_call': {
+        if (dataPayload?.tool_name === 'final_answer') break
+        if (message.agentEventStream) {
+          let retracted = false
+          for (const ev of message.agentEventStream as ChatMessage[]) {
+            if (ev.type === 'answer' && !ev.superseded && ev.content && String(ev.content).trim()) {
+              ev.superseded = true
+              ev.done = true
+              retracted = true
+            }
+          }
+          if (retracted) {
+            message.content = recomposeAgentAnswer(message)
+            fullContent.value = String(message.content || '')
+          }
+        }
+        if (dataPayload && (dataPayload.tool_name || dataPayload.tool_call_id)) {
+          if (!message.agentEventStream) message.agentEventStream = []
+          if (!message._pendingToolCalls) message._pendingToolCalls = new Map()
+          const pending = message._pendingToolCalls as Map<string, ChatMessage>
+          const stream = message.agentEventStream as ChatMessage[]
+          const incomingToolName = dataPayload.tool_name as string | undefined
+          const incomingArguments = dataPayload.arguments
+          const toolCallId =
+            (dataPayload.tool_call_id as string) ||
+            (incomingToolName ? `${incomingToolName}_${Date.now()}` : null)
+          if (!toolCallId) {
+            console.warn('[Tool Call] Received event without identifiable tool_call_id:', dataPayload)
+            break
+          }
+
+          log('[Tool Call]', {
+            tool_call_id: toolCallId,
+            tool_name: incomingToolName,
+            has_arguments: Boolean(incomingArguments),
+          })
+
+          let toolCallEvent = pending.get(toolCallId)
+          if (!toolCallEvent) {
+            toolCallEvent = stream.find(
+              (event) => event.type === 'tool_call' && event.tool_call_id === toolCallId,
+            )
+          }
+          if (toolCallEvent) {
+            const resolvedMcpTarget =
+              toolCallEvent.tool_name === 'call_mcp_tool' && incomingToolName?.startsWith('mcp_')
+            if (incomingToolName) toolCallEvent.tool_name = incomingToolName
+            if (incomingArguments) {
+              if (resolvedMcpTarget) {
+                // The executor now supplies the target's arguments; discard
+                // the streamed proxy envelope instead of mixing the two.
+                toolCallEvent.arguments = incomingArguments
+              } else {
+                toolCallEvent.arguments = mergeToolCallArguments(toolCallEvent.arguments, incomingArguments)
+              }
+            }
+            toolCallEvent.pending = true
+            if (!toolCallEvent.timestamp) toolCallEvent.timestamp = Date.now()
+            pending.set(toolCallId, toolCallEvent)
+          } else {
+            const newToolCallEvent = {
+              type: 'tool_call',
+              tool_call_id: toolCallId,
+              tool_name: incomingToolName,
+              arguments: incomingArguments,
+              timestamp: Date.now(),
+              pending: true,
+            }
+            stream.push(newToolCallEvent)
+            pending.set(toolCallId, newToolCallEvent)
+          }
+        }
+        break
+      }
+      case 'command_output': {
+        const toolCallId = dataPayload?.tool_call_id as string | undefined
+        if (!toolCallId) break
+        const tool = (message.agentEventStream as ChatMessage[] | undefined)?.find(
+          event => event.type === 'tool_call' && event.tool_call_id === toolCallId,
+        )
+        // Late progress must not resurrect a completed command or attach to
+        // another concurrent call just because it uses the same tool name.
+        if (tool?.pending && tool.tool_name === 'shell_exec' && !(tool.command_output as ChatMessage | undefined)?.done) {
+          tool.command_output = dataPayload
+        }
+        break
+      }
+      case 'tool_result':
+      case 'error': {
+        if (dataPayload) {
+          const toolCallId = dataPayload.tool_call_id as string | undefined
+          const toolName = dataPayload.tool_name as string | undefined
+          const success = responseType !== 'error' && dataPayload.success !== false
+          log('[Tool Result]', {
+            tool_call_id: toolCallId,
+            tool_name: toolName,
+            success,
+          })
+          let toolCallEvent: ChatMessage | undefined
+          const pending = message._pendingToolCalls as Map<string, ChatMessage> | undefined
+          if (pending) {
+            if (toolCallId && pending.has(toolCallId)) {
+              toolCallEvent = pending.get(toolCallId)
+              pending.delete(toolCallId)
+            } else {
+              Array.from(pending.entries()).some(([key, value]) => {
+                if (value.tool_name === toolName) {
+                  toolCallEvent = value
+                  pending.delete(key)
+                  return true
+                }
+                return false
+              })
+            }
+          }
+          if (toolCallEvent) {
+            toolCallEvent.pending = false
+            toolCallEvent.success = success
+            // Keep stdout/markdown on failure. The error field is often just
+            // "exited with code 1" plus a retry hint; the streams live on
+            // output / tool_data and are what the terminal card should show.
+            toolCallEvent.output = dataPayload.output || data.content
+            toolCallEvent.error = !success ? dataPayload.error || data.content : undefined
+            const duration =
+              dataPayload.duration_ms !== undefined ? dataPayload.duration_ms : dataPayload.duration
+            toolCallEvent.duration = duration
+            toolCallEvent.duration_ms = duration
+            toolCallEvent.display_type = dataPayload.display_type
+            toolCallEvent.tool_data = dataPayload
+            log('[Tool Result] Updated event in stream')
+          } else {
+            console.warn('[Tool Result] No pending tool call found for', toolCallId || toolName)
+          }
+          if (responseType === 'error' && !toolName) {
+            const errorMsg = String(data.content || t('chat.processError'))
+            message.content = errorMsg
+            message.is_completed = true
+            isReplying.value = false
+            loading.value = false
+            fullContent.value = ''
+            currentAssistantMessageId.value = ''
+            reportError(errorMsg)
+            console.error('[Chat Error]', errorMsg)
+          }
+        } else if (responseType === 'error') {
+          const errorMsg = String(data.content || t('chat.processError'))
+          message.content = errorMsg
+          message.is_completed = true
+          isReplying.value = false
+          loading.value = false
+          fullContent.value = ''
+          currentAssistantMessageId.value = ''
+          reportError(errorMsg)
+          console.error('[Chat Error]', errorMsg)
+        }
+        break
+      }
+      case 'answer': {
+        message.thinking = false
+        const eventId = dataPayload?.event_id as string | undefined
+        if (!message.agentEventStream) message.agentEventStream = []
+        if (!message._eventMap) message._eventMap = new Map()
+        const eventMap = message._eventMap as Map<string, ChatMessage>
+        const stream = message.agentEventStream as ChatMessage[]
+
+        let answerEvent = eventId
+          ? eventMap.get(eventId)
+          : stream.find((e) => e.type === 'answer' && !e.event_id)
+        if (!answerEvent) {
+          answerEvent = { type: 'answer', event_id: eventId, content: '', done: false }
+          stream.push(answerEvent)
+          if (eventId) eventMap.set(eventId, answerEvent)
+        }
+        if (!answerEvent.content && message.content && String(message.content).trim()) {
+          // Seeding exists for resume paths where message.content holds text no
+          // stream event carries. When a live prior answer event exists, its
+          // text is already counted by recomposeAgentAnswer, so seeding the new
+          // event would duplicate every prior round on the next recompose.
+          const hasLivePriorAnswer = stream.some(
+            (e) =>
+              e !== answerEvent &&
+              e.type === 'answer' &&
+              !e.superseded &&
+              e.content &&
+              String(e.content).trim(),
+          )
+          if (!hasLivePriorAnswer) {
+            answerEvent.content = message.content
+          }
+        }
+        if (data.content) {
+          answerEvent.content = String(answerEvent.content || '') + String(data.content)
+          message.content = recomposeAgentAnswer(message)
+          fullContent.value = String(message.content || '')
+        }
+        if (dataPayload?.is_fallback) {
+          answerEvent.is_fallback = true
+          message.is_fallback = true
+        }
+        // The completion cap cut this answer off. The backend sends it on the
+        // content chunks and again on the Done marker, because an answer that
+        // streamed live only learns of the cap at the close.
+        if (dataPayload?.truncated) {
+          answerEvent.truncated = true
+          message.truncated = true
+        }
+        if (data.done && !answerEvent.done) {
+          answerEvent.done = true
+          onAgentAnswerDone?.(message)
+          // This closes only the answer segment. Both Agent and quick-answer
+          // turns still have to collect artifacts/checkpoint/persist before
+          // `complete` makes their files readable and marks the session idle.
+        }
+        break
+      }
+      case 'artifacts_pending': {
+        const pendingCount = Number((dataPayload as any)?.count)
+        message.artifactsCollecting = true
+        if (Number.isFinite(pendingCount) && pendingCount > 0) {
+          message.artifactsPendingCount = pendingCount
+        }
+        break
+      }
+      case 'user_message_injected': {
+        // A message the user queued mid-run was accepted into the running
+        // turn. Place it under the work so far, then fork a continuation
+        // assistant so later thinking/tools/answer render below it.
+        const steerId = dataPayload?.steer_id as string | undefined
+        log('[Agent] User message injected, steer_id:', steerId)
+        let injectedUser: ChatMessage | undefined
+        let alreadyInList = false
+        if (steerId) {
+          const injectedId = dataPayload?.user_message_id as string | undefined
+          // Resuming a turn replays this event from the start of the log, by
+          // which point history has already loaded the persisted row. Reuse
+          // it — synthesizing here would show the same message twice.
+          injectedUser = messagesList.find(
+            (item) =>
+              item.role === 'user' &&
+              ((!!injectedId && item.id === injectedId) || item.steer_id === steerId),
+          )
+          alreadyInList = Boolean(injectedUser)
+          if (!injectedUser) {
+            // A restored event or promoted follow-up may arrive before its preview.
+            injectedUser = {
+              id: injectedId || steerId,
+              role: 'user',
+              content: String(dataPayload?.content || ''),
+              steer_id: steerId,
+              channel: 'web',
+              is_completed: true,
+            }
+            if (data.created_at) applyMessageCreatedAt(injectedUser, data.created_at)
+          }
+          if (injectedId) injectedUser.id = injectedId
+          if (data.created_at) applyMessageCreatedAt(injectedUser, data.created_at)
+        }
+        if (injectedUser) {
+          if (dataId && !injectedUser.request_id) injectedUser.request_id = dataId
+          const continuation = forkAfterInjectedUser(
+            messagesList,
+            message,
+            injectedUser,
+            steerId,
+          )
+          if (dataId && replaySegments.has(dataId)) replaySegments.set(dataId, continuation)
+          if (!alreadyInList) emitMessageCreated(injectedUser)
+          if (continuation !== message) {
+            emitMessageCreated(continuation)
+            onAgentChunkBound?.(continuation, true)
+          }
+          if (steerId) onUserMessageInjected?.(steerId)
+        }
+        break
+      }
+      case 'complete': {
+        if (dataId) replaySegments.delete(dataId)
+        log('[Agent] Complete event received')
+        applyFinalArtifactContent(message, (dataPayload as any)?.final_content)
+        loading.value = false
+        isReplying.value = false
+        message.is_completed = true
+        onReplyComplete?.(String(message.content || ''))
+        onTurnComplete?.(message)
+        fullContent.value = ''
+        currentAssistantMessageId.value = ''
+        // Hydrate skill-generated artifacts as soon as the SSE completion
+        // event arrives — without this the download button only appears
+        // after a page refresh (the assistant message row is fetched via
+        // getMessageList which does include the artifacts JSON column).
+        // botmsg.vue / AgentStreamDisplay.vue read `message.artifacts`
+        // reactively to decide whether to render the download button.
+        const streamedArtifacts = (dataPayload as any)?.artifacts
+        if (Array.isArray(streamedArtifacts) && streamedArtifacts.length) {
+          message.artifacts = streamedArtifacts
+        }
+        message.artifactsCollecting = false
+        const usage = (dataPayload as any)?.usage || (data as any).usage
+        if (usage) {
+          message.usage = usage
+        }
+        if (message.agentEventStream) {
+          ;(message.agentEventStream as ChatMessage[]).push({
+            type: 'agent_complete',
+            total_duration_ms: dataPayload?.total_duration_ms || 0,
+            total_steps: dataPayload?.total_steps || 0,
+            usage,
+          })
+        }
+        break
+      }
+      case 'stop': {
+        log('[Agent] Stop event received')
+        if (!message.agentEventStream) message.agentEventStream = []
+        ;(message.agentEventStream as ChatMessage[]).push({
+          type: 'stop',
+          timestamp: Date.now(),
+          reason: dataPayload?.reason || 'user_requested',
+        })
+        message.is_completed = true
+        loading.value = false
+        isReplying.value = false
+        fullContent.value = ''
+        currentAssistantMessageId.value = ''
+        message.artifactsCollecting = false
+        break
+      }
+    }
+
+    scrollToBottom()
+  }
+
+  const processStreamChunk = (data: ChatMessage) => {
+    log('[Agent Event Received]', {
+      response_type: data.response_type,
+      id: data.id,
+      done: data.done,
+      content_length: (data.content as string | undefined)?.length || 0,
+      content_preview: data.content ? String(data.content).substring(0, 50) : '',
+      data: data.data,
+      session_id: data.session_id,
+      assistant_message_id: data.assistant_message_id,
+    })
+
+    // Persistence can fail after the entire answer has streamed. Surface the
+    // failure separately; the generic error path replaces the answer content.
+    if (data.response_type === 'error' && (data.data as ChatMessage | undefined)?.stage === 'message_persistence') {
+      const message = resolveActiveAssistantMessage(data)
+      const errorMsg = String(data.content || t('chat.processError'))
+      if (message) {
+        message.persistence_error = errorMsg
+        message.is_completed = true
+        message.thinking = false
+        message.artifactsCollecting = false
+        emitMessageUpdated(message)
+      }
+      loading.value = false
+      isReplying.value = false
+      fullContent.value = ''
+      currentAssistantMessageId.value = ''
+      if (data.id) replaySegments.delete(String(data.id))
+      reportError(errorMsg)
+      scrollToBottom()
+      return
+    }
+
+    if (data.response_type === 'agent_query') {
+      if (data.id) replaySegments.delete(String(data.id))
+      const replay = resetSteerTurnForReplay(messagesList, String(data.id || ''))
+      if (replay) replaySegments.set(String(data.id), replay)
+      if (data.id) {
+        const earlyMsg = getTrailingIncompleteAssistant()
+        if (earlyMsg) earlyMsg.request_id = data.id
+      }
+      if (data.assistant_message_id) {
+        currentAssistantMessageId.value = data.assistant_message_id as string
+        log('[Agent Query] Saved assistant message ID:', data.assistant_message_id)
+      }
+      log('[Agent Query Event]', {
+        session_id: data.session_id || (data.data as ChatMessage | undefined)?.session_id,
+        assistant_message_id: data.assistant_message_id,
+        query: (data.data as ChatMessage | undefined)?.query,
+        request_id: (data.data as ChatMessage | undefined)?.request_id,
+      })
+
+      let existingMessage = replay || findLastMessage(
+        (item) =>
+          item.role === 'assistant' &&
+          (item.id === data.id || item.request_id === data.id),
+      )
+      const created = !existingMessage
+      if (!existingMessage) {
+        const assistantId = data.assistant_message_id as string | undefined
+        existingMessage = {
+          id: assistantId || data.id,
+          assistant_message_id: assistantId,
+          request_id: data.id,
+          role: 'assistant',
+          content: '',
+          isAgentMode: true,
+          isRagMode: !isAgentStreamSession(),
+          is_completed: false,
+          agentEventStream: [],
+          _eventMap: new Map(),
+          _pendingToolCalls: new Map(),
+          knowledge_references: [],
+        }
+        messagesList.push(existingMessage)
+        emitMessageCreated(existingMessage)
+        loading.value = false
+        scrollToBottom(true)
+        log('[Agent Query] Created agent placeholder message')
+      } else {
+        ensureAgentMessageShell(existingMessage, data.id as string | undefined)
+        if (data.assistant_message_id) {
+          existingMessage.id = data.assistant_message_id as string
+          existingMessage.assistant_message_id = data.assistant_message_id
+        }
+        log('[Agent Query] Continuing stream for existing message')
+      }
+      bindServerTurnTimestamps(
+        messagesList,
+        (data.data as Record<string, unknown> | undefined) || data,
+        existingMessage,
+      )
+      onAgentQuery?.(data, existingMessage, created)
+      return
+    }
+
+    const isAgentOnlyResponse =
+      data.response_type === 'thinking' ||
+      data.response_type === 'tool_call' ||
+      data.response_type === 'tool_result' ||
+      data.response_type === 'command_output' ||
+      data.response_type === 'reflection' ||
+      data.response_type === 'artifacts_pending' ||
+      data.response_type === 'context_compacted' ||
+      data.response_type === 'user_message_injected'
+
+    const activeAssistant = getTrailingIncompleteAssistant()
+    const isCurrentlyAgentMode = activeAssistant?.isAgentMode === true
+    const targetsActiveAgentRequest =
+      isAgentStreamSession() &&
+      !!data.id &&
+      (data.id === currentAssistantMessageId.value ||
+        activeAssistant?.request_id === data.id ||
+        activeAssistant?.id === data.id)
+    const isAgentAnswerChunk =
+      data.response_type === 'answer' && (isAgentStreamSession() || targetsActiveAgentRequest)
+    const isAgentCompleteChunk =
+      data.response_type === 'complete' && (isAgentStreamSession() || targetsActiveAgentRequest)
+
+    const shouldHandleAsAgent =
+      isAgentOnlyResponse ||
+      isCurrentlyAgentMode ||
+      isAgentAnswerChunk ||
+      isAgentCompleteChunk
+
+    if (data.response_type === 'references') {
+      applyKnowledgeReferences(data)
+      scrollToBottom()
+      return
+    }
+
+    if (data.response_type === 'memory_recalled') {
+      applyUsedMemories(data)
+      return
+    }
+
+    if (shouldHandleAsAgent) {
+      handleAgentChunk(data)
+      if (data.response_type === 'stop') {
+        log('[Stop Event] Generation stopped')
+        const stoppedMessage = resolveActiveAssistantMessage(data)
+        if (stoppedMessage) markAssistantStopped(stoppedMessage)
+        if (data.id) replaySegments.delete(String(data.id))
+        loading.value = false
+        isReplying.value = false
+        currentAssistantMessageId.value = ''
+        onGenerationStopped?.()
+      }
+      return
+    }
+
+    if (data.response_type === 'stop') {
+      log('[Stop Event] Non-agent generation stopped')
+      const stoppedMessage = findLastMessage((item) => {
+        if (item.role !== 'assistant') return false
+        if (item.request_id === data.id) return true
+        return item.id === data.id
+      })
+      if (stoppedMessage) stoppedMessage.is_completed = true
+      loading.value = false
+      isReplying.value = false
+      fullContent.value = ''
+      currentAssistantMessageId.value = ''
+      onGenerationStopped?.()
+      return
+    }
+
+    const existingMessage = findLastMessage((item) => {
+      if (item.role !== 'assistant') return false
+      if (item.request_id === data.id) return true
+      return item.id === data.id
+    })
+    if (data.response_type === 'complete' && existingMessage) {
+      if (existingMessage.is_completed) return
+      const metadata = data.data as ChatMessage | undefined
+      applyFinalArtifactContent(existingMessage, metadata?.final_content)
+      if (Array.isArray(metadata?.artifacts)) existingMessage.artifacts = metadata.artifacts
+      const usage = metadata?.usage || data.usage
+      if (usage) existingMessage.usage = usage
+      existingMessage.artifactsCollecting = false
+      existingMessage.thinking = false
+      existingMessage.is_completed = true
+      loading.value = false
+      isReplying.value = false
+      fullContent.value = ''
+      currentAssistantMessageId.value = ''
+      emitMessageUpdated(existingMessage, { ...data, is_completed: true })
+      onReplyComplete?.(String(existingMessage.content || ''))
+      onTurnComplete?.(existingMessage)
+      scrollToBottom()
+      return
+    }
+    if (existingMessage?.is_completed && data.done && !data.content) {
+      log('[Non-Agent] Ignoring duplicate completion event for completed message')
+      return
+    }
+
+    fullContent.value += (data.content as string) || ''
+    const obj: ChatMessage = {
+      ...data,
+      content: '',
+      role: 'assistant',
+      showThink: false,
+      is_completed: false,
+    }
+
+    if ((data.data as ChatMessage | undefined)?.is_fallback) obj.is_fallback = true
+
+    const thinkCloseTag = '</think>'
+    if (fullContent.value.includes('<think>') && !fullContent.value.includes(thinkCloseTag)) {
+      obj.thinking = true
+      obj.showThink = true
+      obj.content = ''
+      obj.thinkContent = fullContent.value.replace('<think>', '').trim()
+    } else if (fullContent.value.includes('<think>') && fullContent.value.includes(thinkCloseTag)) {
+      obj.thinking = false
+      obj.showThink = true
+      const index = fullContent.value.lastIndexOf(thinkCloseTag)
+      obj.thinkContent = fullContent.value.substring(0, index).replace('<think>', '').trim()
+      obj.content = fullContent.value.substring(index + thinkCloseTag.length).trim()
+    } else {
+      obj.content = fullContent.value
+    }
+
+    if (!existingMessage) loading.value = false
+
+    // answer.done closes the token stream, not the persisted turn. In
+    // particular the final image retry must wait for the subsequent complete.
+    // Untyped legacy streams retain their original done behavior.
+    const turnDone = data.done && data.response_type !== 'answer'
+    if (turnDone) {
+      obj.is_completed = true
+      onReplyComplete?.(String(obj.content || ''))
+      isReplying.value = false
+      fullContent.value = ''
+      currentAssistantMessageId.value = ''
+    }
+    updateAssistantSession(obj)
+    if (turnDone) {
+      const completed = resolveActiveAssistantMessage(data) || obj
+      onTurnComplete?.(completed)
+    }
+  }
+
+  return {
+    findLastMessage,
+    shouldRenderAssistantMessage,
+    shouldShowGlobalTypingIndicator,
+    handleMsgList,
+    processStreamChunk,
+    prepareForNewOutgoingMessage,
+    markInFlightAssistantStopped,
+  }
+}

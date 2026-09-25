@@ -1,0 +1,33 @@
+{
+  "component": "Tencent/WeKnora",
+  "repository": "https://github.com/Tencent/WeKnora.git",
+  "tag": "v0.8.2",
+  "commit_sha": "3e8b0bfc80b845b2d4b2ed683994748741450a97",
+  "tree_sha": "9533ab2071e71f4bc2ebb09c85d3ac246841ff9a",
+  "source_path": "vendor/weknora",
+  "import_method": "git archive of verified tag commit",
+  "archive_prefix": "vendor/weknora/",
+  "archive_sha256": "cce114bc9adf6c3276afcb017b079b52bc6ad7e1eb76645f4d1a0c1df0760380",
+  "source_file_count": 4355,
+  "source_size_bytes": 100176331,
+  "source_matches_checked_out_tag": false,
+  "source_note": "原始导入包与上游 tag 一致；当前 vendor/weknora/frontend 已做湾事通白标与管理认证适配，原生 Go/Docreader 镜像未改造。",
+  "license_files": [
+    {
+      "path": "vendor/weknora/LICENSE",
+      "sha256": "25cfeca2c3eee245313b1106cf1b27244e47b682802a02cc536f8f1beb6a29a6"
+    },
+    {
+      "path": "vendor/weknora/THIRD_PARTY_NOTICES.md",
+      "sha256": "8018c8ddcb92ccbcd2259acbe9d14524889a23114df4470cc5838a8aa8bac953"
+    }
+  ],
+  "image_digests": {
+    "app": "wechatopenai/weknora-app@sha256:bc8a534799fcb54045100daf4bc5db86270b38ae45c5f761c410c50b4dcd6cdc",
+    "ui_original_reference_only": "wechatopenai/weknora-ui@sha256:83cfd9272e1219b5b5729f89d9c3f8d15a16e1b8cc17cacf638153cc0417290f",
+    "docreader": "wechatopenai/weknora-docreader@sha256:3c36e7e738ba515315523876d8041f9bb02809145a4e3b331e2550e4bff98b7a",
+    "postgres": "paradedb/paradedb@sha256:58bf87d2a6f1e72f56590b0f0ae1467e82c3f99ca203dde646672c8ac13148b2",
+    "redis": "redis@sha256:c9d92d840fd011c908f040592857c724ae6d877f2aba5c40ad963276507386b2"
+  },
+  "image_digests_status": "VERIFIED_ON_SERVER_60; CANDIDATE_WRAPPER_BUILT_AND_PINNED_IN_SERVER_ENV"
+}

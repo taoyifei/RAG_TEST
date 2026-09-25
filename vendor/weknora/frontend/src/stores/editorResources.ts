@@ -1,0 +1,305 @@
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import {
+  getStorageEngineConfig,
+  getStorageEngineStatus,
+  getPromptTemplates,
+  getParserEngines,
+  getSystemInfo,
+  type PromptTemplatesConfig,
+  type StorageEngineStatusItem,
+  type ParserEngineInfo,
+  type SystemInfo,
+} from '@/api/system'
+import { listMCPServices, type MCPService } from '@/api/mcp-service'
+import {
+  listSkillCatalog,
+  listSkills,
+  type AgentScope,
+  type SkillCatalogItem,
+  type SkillInfo,
+} from '@/api/skill'
+import { getAgentTypePresets, getPlaceholders, type AgentTypePreset, type PlaceholdersResponse } from '@/api/agent'
+import { getTenantRetrievalConfig } from '@/api/retrieval'
+import { isStorageConfigDenied } from './storageEngineAccess'
+
+const CACHE_TTL_MS = 60_000
+
+export function pickUsableStorageProvider(
+  candidate: string | undefined,
+  engines: StorageEngineStatusItem[],
+  allowedProviders: string[],
+): string {
+  const provider = candidate?.trim() || ''
+  const isUsable = (name: string) => {
+    if (!name) return false
+    const status = engines.find((item) => item.name === name)
+    if (status) return status.allowed !== false && status.available !== false
+    if (engines.length > 0) return false
+    if (allowedProviders.length > 0) return allowedProviders.includes(name)
+    return false
+  }
+
+  if (isUsable(provider)) return provider
+  const fallback = engines.find((item) => item.allowed !== false && item.available !== false)?.name
+  if (fallback) return fallback
+  return allowedProviders[0] || provider || 'local'
+}
+
+type EditorResourceKey =
+  | 'storageEngine'
+  | 'mcpServices'
+  | 'skills'
+  | 'skillCatalog'
+  | 'agentTypePresets'
+  | 'promptTemplates'
+  | 'placeholders'
+  | 'tenantRetrievalConfig'
+  | 'parserEngines'
+  | 'systemInfo'
+
+export const useEditorResourcesStore = defineStore('editorResources', () => {
+  const storageConfig = ref<Awaited<ReturnType<typeof getStorageEngineConfig>>['data'] | null>(null)
+  const storageStatus = ref<StorageEngineStatusItem[]>([])
+  const storageAllowedProviders = ref<string[]>([])
+  const mcpServices = ref<MCPService[]>([])
+  const mcpServicesScope = ref('')
+  const skills = ref<SkillInfo[]>([])
+  const skillsAvailable = ref(false)
+  const skillsConfigId = ref('')
+  const skillCatalog = ref<SkillCatalogItem[]>([])
+  const agentTypePresets = ref<AgentTypePreset[]>([])
+  const promptTemplates = ref<PromptTemplatesConfig | null>(null)
+  const placeholders = ref<PlaceholdersResponse | null>(null)
+  const tenantRetrievalConfig = ref<Record<string, unknown> | null>(null)
+  const parserEngines = ref<ParserEngineInfo[]>([])
+  const systemInfo = ref<SystemInfo | null>(null)
+
+  const loadedAt = ref<Partial<Record<EditorResourceKey, number>>>({})
+  const inflight = new Map<EditorResourceKey, Promise<void>>()
+
+  function isFresh(key: EditorResourceKey): boolean {
+    const at = loadedAt.value[key]
+    return !!at && Date.now() - at < CACHE_TTL_MS
+  }
+
+  async function runOnce(key: EditorResourceKey, force: boolean, loader: () => Promise<void>): Promise<void> {
+    if (!force && isFresh(key)) return
+    const existing = inflight.get(key)
+    if (existing) return existing
+    const p = loader().finally(() => inflight.delete(key))
+    inflight.set(key, p)
+    return p
+  }
+
+  async function ensureStorageEngine(force = false): Promise<void> {
+    return runOnce('storageEngine', force, async () => {
+      const [configRes, statusRes] = await Promise.all([
+        // The config endpoint is admin-only (it carries integration secrets),
+        // while every creator — Contributors included — needs the status list
+        // to pick a usable provider. A permission rejection on the config
+        // call must therefore degrade to "no admin config", not break the
+        // whole editor dependency chain (#2991).
+        getStorageEngineConfig().catch((error: unknown) => {
+          if (isStorageConfigDenied(error)) return null
+          throw error
+        }),
+        getStorageEngineStatus(),
+      ])
+      storageConfig.value = configRes?.data ?? null
+      storageStatus.value = statusRes?.data?.engines ?? []
+      storageAllowedProviders.value = statusRes?.data?.allowed_providers ?? []
+      loadedAt.value.storageEngine = Date.now()
+    })
+  }
+
+  function resolveUsableStorageProvider(candidate?: string): string {
+    return pickUsableStorageProvider(
+      candidate,
+      storageStatus.value || [],
+      storageAllowedProviders.value || [],
+    )
+  }
+
+  async function ensureMcpServices(agent?: AgentScope, force = false): Promise<void> {
+    const key = scopeKey('', agent)
+    if (key !== mcpServicesScope.value) {
+      force = true
+    }
+    return runOnce('mcpServices', force, async () => {
+      mcpServicesScope.value = key
+      const list = await listMCPServices(agent)
+      mcpServices.value = Array.isArray(list) ? list : []
+      loadedAt.value.mcpServices = Date.now()
+    })
+  }
+
+  // A shared agent's skills and MCP services live in its owner's workspace and
+  // are an entirely different set from this workspace's. The cache key has to
+  // carry the agent, or switching agents would leave another workspace's
+  // entries in the @ picker.
+  function scopeKey(configId: string, agent?: AgentScope): string {
+    if (!agent?.agentId || !agent?.sourceTenantId) return configId
+    return `${configId}@${agent.sourceTenantId}:${agent.agentId}`
+  }
+
+  async function ensureSkills(
+    sandboxConfigId?: string,
+    agent?: AgentScope,
+    force = false,
+  ): Promise<void> {
+    const configId = sandboxConfigId?.trim() || ''
+    const key = scopeKey(configId, agent)
+    if (key !== skillsConfigId.value) {
+      force = true
+    }
+    return runOnce('skills', force, async () => {
+      skillsConfigId.value = key
+      // No sandbox config means no skills, for a shared agent too: its config
+      // id is part of the agent config this caller already holds. The backend
+      // re-reads it from the agent, so what is sent here only has to be
+      // non-empty when the agent actually has one.
+      if (!configId) {
+        skillsAvailable.value = false
+        skills.value = []
+        loadedAt.value.skills = Date.now()
+        return
+      }
+      try {
+        const skillsRes = await listSkills(configId, agent)
+        skillsAvailable.value = skillsRes.skills_available !== false
+        skills.value = skillsRes.data && skillsRes.data.length > 0 ? skillsRes.data : []
+      } catch {
+        skillsAvailable.value = false
+        skills.value = []
+      }
+      loadedAt.value.skills = Date.now()
+    })
+  }
+
+  async function ensureSkillCatalog(force = false): Promise<void> {
+    return runOnce('skillCatalog', force, async () => {
+      const res = await listSkillCatalog()
+      skillCatalog.value = Array.isArray(res?.data) ? res.data : []
+      loadedAt.value.skillCatalog = Date.now()
+    })
+  }
+
+  async function ensureAgentTypePresets(force = false): Promise<void> {
+    return runOnce('agentTypePresets', force, async () => {
+      const presetsRes: any = await getAgentTypePresets()
+      agentTypePresets.value = presetsRes?.data && Array.isArray(presetsRes.data) ? presetsRes.data : []
+      loadedAt.value.agentTypePresets = Date.now()
+    })
+  }
+
+  async function ensurePromptTemplates(force = false): Promise<void> {
+    return runOnce('promptTemplates', force, async () => {
+      const tmplRes = await getPromptTemplates()
+      promptTemplates.value = tmplRes?.data ?? null
+      loadedAt.value.promptTemplates = Date.now()
+    })
+  }
+
+  async function ensurePlaceholders(force = false): Promise<void> {
+    return runOnce('placeholders', force, async () => {
+      const placeholdersRes = await getPlaceholders()
+      placeholders.value = placeholdersRes?.data ?? null
+      loadedAt.value.placeholders = Date.now()
+    })
+  }
+
+  async function ensureTenantRetrievalConfig(force = false): Promise<void> {
+    return runOnce('tenantRetrievalConfig', force, async () => {
+      const retrievalRes: any = await getTenantRetrievalConfig()
+      tenantRetrievalConfig.value = retrievalRes?.data ?? null
+      loadedAt.value.tenantRetrievalConfig = Date.now()
+    })
+  }
+
+  async function ensureParserEngines(force = false): Promise<void> {
+    return runOnce('parserEngines', force, async () => {
+      const resp = await getParserEngines()
+      parserEngines.value = resp?.data && Array.isArray(resp.data) ? resp.data : []
+      loadedAt.value.parserEngines = Date.now()
+    })
+  }
+
+  async function ensureSystemInfo(force = false): Promise<void> {
+    return runOnce('systemInfo', force, async () => {
+      const response = await getSystemInfo()
+      systemInfo.value = response?.data ?? null
+      loadedAt.value.systemInfo = Date.now()
+    })
+  }
+
+  /** 智能体编辑器打开时预取的依赖（不含 IM channels / 单 KB shares） */
+  async function prefetchAgentEditorDeps(force = false): Promise<void> {
+    await Promise.all([
+      // The editor only edits this workspace's agents, so its MCP services
+      // are this workspace's too.
+      ensureMcpServices(undefined, force),
+      ensureAgentTypePresets(force),
+      ensurePromptTemplates(force),
+      ensureStorageEngine(force),
+      ensurePlaceholders(force),
+      ensureTenantRetrievalConfig(force),
+    ])
+  }
+
+  function invalidate(...keys: EditorResourceKey[]) {
+    if (keys.length === 0) {
+      loadedAt.value = {}
+      storageConfig.value = null
+      storageStatus.value = []
+      storageAllowedProviders.value = []
+      mcpServices.value = []
+      mcpServicesScope.value = ''
+      skills.value = []
+      skillsAvailable.value = false
+      skillsConfigId.value = ''
+      skillCatalog.value = []
+      agentTypePresets.value = []
+      promptTemplates.value = null
+      placeholders.value = null
+      tenantRetrievalConfig.value = null
+      parserEngines.value = []
+      systemInfo.value = null
+      inflight.clear()
+      return
+    }
+    keys.forEach((k) => {
+      delete loadedAt.value[k]
+      inflight.delete(k)
+    })
+  }
+
+  return {
+    storageConfig,
+    storageStatus,
+    storageAllowedProviders,
+    mcpServices,
+    skills,
+    skillsAvailable,
+    skillCatalog,
+    agentTypePresets,
+    promptTemplates,
+    placeholders,
+    tenantRetrievalConfig,
+    parserEngines,
+    systemInfo,
+    ensureStorageEngine,
+    resolveUsableStorageProvider,
+    ensureMcpServices,
+    ensureSkills,
+    ensureSkillCatalog,
+    ensureAgentTypePresets,
+    ensurePromptTemplates,
+    ensurePlaceholders,
+    ensureTenantRetrievalConfig,
+    ensureParserEngines,
+    ensureSystemInfo,
+    prefetchAgentEditorDeps,
+    invalidate,
+  }
+})

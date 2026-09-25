@@ -1,0 +1,201 @@
+package agent
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/Tencent/WeKnora/internal/agent/compaction"
+	"github.com/Tencent/WeKnora/internal/browserskill"
+	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/google/uuid"
+)
+
+const (
+	// DefaultAgentTemperature is the default temperature for the agent
+	DefaultAgentTemperature = 0.7
+	// DefaultAgentMaxIterations is the default maximum number of iterations for the agent
+	DefaultAgentMaxIterations = 20
+	// DefaultUseCustomSystemPrompt is the default whether to use custom system prompt for the agent
+	DefaultUseCustomSystemPrompt = false
+
+	// defaultLLMStallTimeout is how long a single LLM stream may produce no
+	// output before it is cancelled. It is a stall budget, not a total budget:
+	// a round that streams a whole file body inside a write_sandbox_file call
+	// runs for minutes while emitting continuously, and killing it on elapsed
+	// time throws away the half-assembled call. The overall ceiling belongs to
+	// the provider transport (WEKNORA_LLM_STREAM_TIMEOUT_SECONDS).
+	// Can be overridden via AgentConfig.LLMCallTimeout.
+	defaultLLMStallTimeout = 120 * time.Second
+
+	// defaultToolExecTimeout is the default maximum time for a single tool execution.
+	// Prevents long-running tools (web_fetch, database_query) from hanging indefinitely.
+	defaultToolExecTimeout = 60 * time.Second
+	// shellExecToolTimeout is slightly longer than shell_exec's own hard
+	// 600-second command timeout so the tool can return a structured timeout
+	// result instead of being cancelled first by the generic agent wrapper.
+	shellExecToolTimeout = 10*time.Minute + 5*time.Second
+
+	// maxLLMRetries is the maximum number of retries for transient LLM errors.
+	maxLLMRetries = 2
+
+	// maxEmptyResponseRetries is the maximum number of retries when the LLM
+	// returns an empty content with a natural stop (no tool calls). This guards
+	// against the agent completing with an empty answer when the LLM fails to
+	// produce content (e.g., thinking-only loops without KB).
+	// Trade-off: each retry costs ~2s of LLM latency; 2 retries = max 4s extra.
+	maxEmptyResponseRetries = 2
+
+	// maxRepeatedResponseRounds is the maximum number of consecutive rounds
+	// where the LLM returns identical content without any tool calls before
+	// the loop is forcibly terminated. This catches stuck loops caused by
+	// unhandled finish reasons (e.g., content_filter not caught elsewhere).
+	// "Identical" includes an identical lack of content: consecutive empty
+	// rounds are the clearest stuck loop there is.
+	maxRepeatedResponseRounds = 2
+
+	// maxConsecutiveLengthRounds is how many rounds in a row may be cut off at
+	// the completion-token cap before the loop gives up. A truncated answer
+	// already ends the turn (analyzeResponse Case 2), so reaching this limit
+	// means round after round is truncating inside tool-call arguments: the
+	// model is told to re-issue the call, writes an even longer one, and hits
+	// the cap again. Without this the turn burns its whole round budget.
+	maxConsecutiveLengthRounds = 3
+)
+
+// truncatedAnswerFallback is delivered when every attempt at this turn was cut
+// off at the completion cap and none of them produced answer text — there is
+// nothing partial to hand over, so say what happened instead of finishing with
+// an empty message.
+const truncatedAnswerFallback = "Sorry, this answer kept hitting the model's per-response output limit " +
+	"before any text was produced. Try narrowing the question, or raise the agent's " +
+	"max_completion_tokens setting."
+
+// stalledAnswerFallback is delivered when a no-progress guard stopped the turn
+// and the round that tripped it produced no text.
+const stalledAnswerFallback = "I'm sorry, I was unable to generate a response. Please try again."
+
+func toolExecutionTimeout(toolName string, arguments ...string) time.Duration {
+	if toolName == "local_browser" && len(arguments) > 0 {
+		var input struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal([]byte(arguments[0]), &input) == nil && browserskill.IsHumanStep(input.Method) {
+			return browserskill.HumanStepTimeout
+		}
+	}
+	if toolName == "shell_exec" {
+		return shellExecToolTimeout
+	}
+	return defaultToolExecTimeout
+}
+
+// transientErrorMarkers are substrings that indicate a transient (retryable) error.
+var transientErrorMarkers = []string{
+	"429", "rate limit",
+	"500", "502", "503", "504",
+	"overloaded", "timeout", "timed out",
+	"connection", "server error", "temporarily unavailable",
+	// A broken or silent stream is worth one more attempt: the round produced
+	// no usable turn, and the alternative is ending the conversation on a
+	// partial response.
+	"deadline exceeded", "stalled",
+}
+
+// isTransientError checks whether an error is likely transient and worth retrying.
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	for _, marker := range transientErrorMarkers {
+		if strings.Contains(errStr, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// getLLMStallTimeout returns how long an LLM stream may go silent before it is
+// cancelled, from AgentConfig.LLMCallTimeout or the default.
+func (e *AgentEngine) getLLMStallTimeout() time.Duration {
+	if e.config.LLMCallTimeout > 0 {
+		return time.Duration(e.config.LLMCallTimeout) * time.Second
+	}
+	return defaultLLMStallTimeout
+}
+
+// contextSafetyTokens is slack between what we estimate the request costs and
+// what the provider will actually count. Token estimation is approximate and
+// providers add their own scaffolding; without a margin the request that
+// exactly fits by our arithmetic is the one that gets rejected.
+const contextSafetyTokens = 4096
+
+// getCompletionTokenBudget is the single completion budget for each ReAct LLM
+// round. The chat layer maps it to max_tokens or max_completion_tokens per
+// provider. Unset without a sandbox is 4096; unset with a sandbox
+// (write_sandbox_file / edit_sandbox_file) is 24576.
+func (e *AgentEngine) getCompletionTokenBudget() int {
+	return completionTokenBudgetFor(e.config)
+}
+
+func completionTokenBudgetFor(cfg *types.AgentConfig) int {
+	configured := 0
+	sandboxID := ""
+	if cfg != nil {
+		configured = cfg.MaxCompletionTokens
+		sandboxID = cfg.SandboxConfigID
+	}
+	return types.AgentRoundMaxCompletionTokensFor(configured, sandboxID)
+}
+
+// contextReserveTokens is the part of the window that history may not occupy,
+// because the next response has to fit there. Sizing it from the round's own
+// completion budget is what a fixed reserve gets wrong: an agent allowed to
+// emit 24576 tokens needs at least that much free, or the request is accepted
+// and the reply is truncated.
+func (e *AgentEngine) contextReserveTokens() int {
+	return reserveTokensFor(e.config)
+}
+
+func reserveTokensFor(cfg *types.AgentConfig) int {
+	return max(completionTokenBudgetFor(cfg)+contextSafetyTokens, compaction.DefaultReserveTokens)
+}
+
+// HistoryTokenBudget is how much stored history one run of cfg may load: the
+// whole context window, deliberately more than the compaction threshold.
+//
+// The loader drops the oldest turns that do not fit, and what it drops is
+// lost: it is neither replayed nor summarized. With a budget equal to the
+// threshold the loader always trimmed first, so whenever one turn was larger
+// than the system prompt plus the new question the request never crossed the
+// threshold, nothing was summarized, and the session became a sliding window
+// that never got a checkpoint. Loading up to the window leaves the overflow
+// to the first round's compaction instead, which summarizes it and persists a
+// checkpoint. The compactor bounds its own summarizer input, so a history this
+// large cannot make the summarization request itself overflow.
+func HistoryTokenBudget(cfg *types.AgentConfig) int {
+	if cfg != nil && cfg.MaxContextTokens > 0 {
+		return cfg.MaxContextTokens
+	}
+	return types.DefaultMaxContextTokens
+}
+
+// clampCompletionBudgetToContext shrinks the round's completion budget to what
+// is actually left in the window. Asking for more output than the window can
+// hold is a request the provider rejects outright, which reads to the agent as
+// an unexplained failure.
+func (e *AgentEngine) clampCompletionBudgetToContext(currentTokens int) int {
+	budget := e.getCompletionTokenBudget()
+	if e.config == nil || e.config.MaxContextTokens <= 0 {
+		return budget
+	}
+	available := e.config.MaxContextTokens - currentTokens - contextSafetyTokens
+	return max(min(budget, available), 1)
+}
+
+// generateEventID generates a unique event ID with type suffix for better traceability
+func generateEventID(suffix string) string {
+	return fmt.Sprintf("%s-%s", uuid.New().String()[:8], suffix)
+}
