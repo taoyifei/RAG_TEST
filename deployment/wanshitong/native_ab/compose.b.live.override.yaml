@@ -1,0 +1,66 @@
+# 与锁定的 Tencent/WeKnora v0.8.2 docker-compose.yml 合并。
+# 原生 UI 只绑定 60 的私网地址，由 54 的独立 TCP 转发提供试用入口。
+services:
+  app:
+    image: wechatopenai/weknora-app:v0.8.2
+    pull_policy: never
+    container_name: wklive-b-app
+    ports: !override
+      - "127.0.0.1:18390:8080"
+    volumes: !override
+      - data-files:/data/files
+      - docreader-tmp:/tmp/docreader:ro
+      - ./config/config.eval.yaml:/app/config/config.yaml:ro
+      - ./config/builtin_models.yaml:/app/config/builtin_models.yaml:ro
+    depends_on:
+      rerank-adapter:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: wechatopenai/weknora-ui:v0.8.2
+    pull_policy: never
+    container_name: wklive-b-frontend
+    ports: !override
+      - "10.242.180.60:18391:80"
+    restart: unless-stopped
+
+  docreader:
+    image: wechatopenai/weknora-docreader:v0.8.2
+    pull_policy: never
+    container_name: wklive-b-docreader
+    restart: unless-stopped
+
+  postgres:
+    image: paradedb/paradedb@sha256:58bf87d2a6f1e72f56590b0f0ae1467e82c3f99ca203dde646672c8ac13148b2
+    pull_policy: never
+    container_name: wklive-b-postgres
+    restart: unless-stopped
+
+  redis:
+    image: redis@sha256:c9d92d840fd011c908f040592857c724ae6d877f2aba5c40ad963276507386b2
+    pull_policy: never
+    container_name: wklive-b-redis
+    restart: unless-stopped
+
+  rerank-adapter:
+    image: python:3.11-slim-bookworm
+    pull_policy: never
+    container_name: wklive-b-rerank-adapter
+    command: ["python", "/adapter/rerank_adapter.py"]
+    environment:
+      RERANK_UPSTREAM_URL: http://host.docker.internal:8092/rerank
+      RERANK_UPSTREAM_TIMEOUT_SECONDS: "30"
+      RERANK_ADAPTER_PORT: "8080"
+    volumes:
+      - ./rerank_adapter.py:/adapter/rerank_adapter.py:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - WeKnora-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped

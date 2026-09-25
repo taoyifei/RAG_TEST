@@ -33,3 +33,5 @@
 上游默认重排模型不会自动绑定到主 KnowledgeQA 会话。B 通过上游现有 quick-answer 配置给原生会话指定聊天与 Reranker 模型；Embedding 由知识库模型配置提供，并用 `agent_enabled=false` 调用标准路由。B 默认 1024 输出的开发冒烟曾触发 8192 上下文超限，主配置固定 `rerank_top_k=6`、`max_completion_tokens=2680`、`temperature=0`、`fallback_strategy=fixed`，不改上游 Go 问答源码。A 使用现有 Q1 配置。
 
 完整执行身份、输入哈希、请求结果、引用支持和清理结果见同分支的试验报告。发布或迁移不属于本目录的自动动作。
+
+2026-09-25 恢复的腾讯原版 B 独立试用入口、实例边界和实际验证见 [LIVE_README.md](LIVE_README.md)。
