@@ -1,0 +1,31 @@
+{
+  "observed_date": "2026-09-25",
+  "deployment_status": "NO_CQ1_DEPLOYMENT",
+  "reason": "P0_REVIEWER_FALSE_ACCEPTS",
+  "production_18288": {
+    "route": "54:18288 -> 60:8288 -> 60:127.0.0.1:18290",
+    "container": "wanshitong-wb08r-root-production-app",
+    "image_sha256": "de954cbe430b7ae95050a034f8919c259e5125fa8266e9b41ddd82ad62770b0c8",
+    "observed_state": "healthy",
+    "changed_in_this_task": false
+  },
+  "existing_8289": {
+    "route": "54:8289 -> 60:18289 -> 60:127.0.0.1:8289",
+    "container": "wanshitong-sso-candidate-app",
+    "image_sha256": "ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06",
+    "observed_state": "healthy",
+    "changed_in_this_task": false
+  },
+  "model_qualification": {
+    "api": "http://10.242.180.54:18000/v1",
+    "model": "Qwen/Qwen3-8B-AWQ",
+    "max_model_len": 8192,
+    "output_tokens": 2680,
+    "disable_thinking": false,
+    "cases": 10,
+    "false_accepts": 4
+  },
+  "go_chunker_sha256": "491a0bd01577ecff835b0e2c93112e141f550e7bd07fabc523b98f8433e75f6f",
+  "go_rebuild_or_test": false,
+  "image_cleanup": "No image was created by this task; inventory found no identifiable expired 8289 image safe to delete. No image was removed."
+}

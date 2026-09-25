@@ -1,0 +1,55 @@
+{
+  "plan_revision": "CQ1-v1",
+  "review_date": "2026-09-25",
+  "repository": "taoyifei/RAG_TEST",
+  "base_branch": "codex/wb08r-q1-algorithm-debt",
+  "base_commit": "dca24a80823b4e5d24dbbdd725e10c97167ad7a5",
+  "upstream_reference": {
+    "repository": "Tencent/WeKnora",
+    "tag": "v0.8.2",
+    "commit": "3e8b0bfc80b845b2d4b2ed683994748741450a97",
+    "usage": "history/streaming UX reference, not semantic correctness guarantee"
+  },
+  "status": {
+    "plan_only": true,
+    "server_tests_in_this_turn": false,
+    "source_scope_regex_replay": "performed on extracted expressions, not full application"
+  },
+  "evidence_files": [
+    {
+      "name": "AB实测结果_20260925.zip",
+      "bytes": 84049463,
+      "sha256": "53c08b132b9b739b0a83bc795ce4c5c600556226ef48e54e34e86d1dc82c622e"
+    },
+    {
+      "name": "01_决策报告.md",
+      "bytes": 11376,
+      "sha256": "01916d5199d37c2bab606d761f10ec6ade5271b7046c18b87ad34dc176fdea12"
+    },
+    {
+      "name": "04_已填AI初评对照.html",
+      "bytes": 444010,
+      "sha256": "bc5c074a7d0e656e8eba3411f27eb891396c82d07ac438220430dea470b6dd0b"
+    }
+  ],
+  "confirmed_code_paths": [
+    "src/rag_app/application/retrieval/natural_source_scope.py",
+    "src/rag_app/application/retrieval/weknora_pipeline.py",
+    "src/rag_app/application/answering/natural_answer.py",
+    "src/rag_app/wanshitong/public_api.py"
+  ],
+  "actual_symbols_to_resolve_before_edit": [
+    "stream_natural_chat",
+    "conversation persistence and event replay implementation",
+    "template ingestion/read-view exclusion logic"
+  ],
+  "exclusions": [
+    "whole WeKnora migration",
+    "PDF/OCR",
+    "new document formats",
+    "Go chunker upgrade",
+    "general retrieval redesign",
+    "uncited public factual drafts"
+  ],
+  "readiness": "NOT_IMPLEMENTED"
+}
