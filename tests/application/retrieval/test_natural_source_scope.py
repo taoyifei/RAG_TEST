@@ -81,6 +81,20 @@ def test_quoted_explicit_scope_is_exact_and_versioned() -> None:
     )
 
 
+def test_within_quoted_document_requires_location_suffix() -> None:
+    document = _document(1, "研发项目命名规范")
+
+    hard = resolve_natural_source_scope(
+        "在《研发项目命名规范》中有哪些要求？", (document,)
+    )
+    ordinary = resolve_natural_source_scope(
+        "在《研发项目命名规范》发布后有哪些要求？", (document,)
+    )
+
+    assert hard.mode == "HARD_RESOLVED"
+    assert ordinary.mode == "OPEN"
+
+
 @pytest.mark.parametrize(
     "documents",
     ((), (_document(1, "同名规范"), _document(2, "同名规范"))),
