@@ -47,6 +47,7 @@ from rag_app.core.models import (
     SearchRequest,
     SourceSpan,
 )
+from rag_app.core.ports.evidence_source import CatalogDocument
 from rag_app.product.query_history import _completion
 from tests.application.retrieval.helpers import make_ranked_chunk
 
@@ -330,6 +331,20 @@ def test_rewrite_cannot_drop_explicit_number_or_negation() -> None:
 
 def test_rewrite_cannot_drop_explicit_document_title() -> None:
     service, model = _scenario()
+    hit = service._lexical.search.return_value[0]
+    service._source_catalog_context.return_value = (
+        (
+            CatalogDocument(
+                document_id=hit.document_id,
+                document_version_id=hit.document_version_id,
+                chunk_id=hit.chunk_id,
+                title="电子资源管理办法",
+                metadata=(),
+            ),
+        ),
+        True,
+        f"sha256:{'3' * 64}",
+    )
     model.complete_query_understanding.return_value = NaturalCompletion(
         text='{"query":"由谁负责审批？"}',
         model="fixture-qwen",

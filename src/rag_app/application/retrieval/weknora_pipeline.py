@@ -20,9 +20,10 @@ from rag_app.application.retrieval.natural_context import (
     NaturalBudget,
     estimate_natural_messages,
 )
-from rag_app.application.retrieval.source_scope import (
-    query_requires_source_resolution,
-    resolve_query_source_context,
+from rag_app.application.retrieval.natural_source_scope import (
+    NATURAL_SOURCE_SCOPE_REVISION,
+    needs_natural_source_catalog,
+    resolve_natural_source_scope,
 )
 from rag_app.application.retrieval.weknora_query import understand_query
 from rag_app.core.errors import (
@@ -44,7 +45,6 @@ from rag_app.core.models import (
     SourceSpan,
 )
 from rag_app.core.models.chunk import ParentPassage
-from rag_app.core.models.query_plan import SourceResolution
 from rag_app.core.ports import CancellationPort
 
 if TYPE_CHECKING:
@@ -137,28 +137,41 @@ class WeKnoraStandardPipeline:
                 "budget_profile": "estimated",
             },
         )
-        need_scope = query_requires_source_resolution(request.text)
+        need_scope = needs_natural_source_catalog(
+            request.text, selected=bool(request.selected_documents)
+        )
         catalog, _complete, registry = service._source_catalog_context(
             request, snapshot, resolution_required=need_scope
         )
-        source_context = resolve_query_source_context(
-            request.text, catalog, registry_revision=registry
+        source_context = resolve_natural_source_scope(
+            request.text,
+            catalog,
+            selected_documents=request.selected_documents,
         )
-        if source_context.resolution not in {
-            SourceResolution.OPEN,
-            SourceResolution.RESOLVED,
-        }:
+        service._record(
+            trace_id,
+            "weknora_source_scope",
+            {
+                "revision": NATURAL_SOURCE_SCOPE_REVISION,
+                "scope_mode": source_context.mode,
+                "scope_trigger": source_context.trigger,
+                "scope_mentions": source_context.mentions,
+                "scope_resolution": source_context.resolution,
+                "soft_hint": source_context.soft_hint,
+                "allowed_document_count": len(source_context.allowed_documents),
+                "source_registry_revision": registry,
+            },
+        )
+        if source_context.mode == "HARD_UNRESOLVED":
             raise PolicyDenied(
                 "问题中的文档来源无法唯一绑定到活动版本。",
                 stage="retrieval.source_scope",
                 code="SOURCE_SCOPE_NOT_RESOLVED",
             )
         allowed = (
-            source_context.allowed_documents
-            if source_context.resolution is SourceResolution.RESOLVED
-            else None
+            source_context.allowed_documents if source_context.is_hard else None
         )
-        query = source_context.query_view.business_query.strip() or request.text
+        query = request.text
         understanding = (
             understand_query(request, model, cancellation)
             if rewrite_enabled
@@ -170,17 +183,19 @@ class WeKnoraStandardPipeline:
             understanding.provider_calls if understanding is not None else ()
         )
         rewrite = understanding.rewrite if understanding is not None else None
-        if rewrite is not None and query_requires_source_resolution(rewrite):
-            rewritten_scope = resolve_query_source_context(
-                rewrite, catalog, registry_revision=registry
-            )
+        if rewrite is not None:
+            rewritten_scope = resolve_natural_source_scope(rewrite, catalog)
             if (
-                rewritten_scope.resolution
-                not in {
-                    SourceResolution.OPEN,
-                    SourceResolution.RESOLVED,
-                }
-                or rewritten_scope.allowed_documents != allowed
+                rewritten_scope.is_hard
+                and (
+                    source_context.mode != "HARD_RESOLVED"
+                    or rewritten_scope.mode != "HARD_RESOLVED"
+                    or rewritten_scope.allowed_documents != allowed
+                )
+            ) or (
+                source_context.is_hard
+                and not request.selected_documents
+                and rewritten_scope.allowed_documents != allowed
             ):
                 rewrite = None
                 degraded.append("REWRITE_SOURCE_SCOPE_CHANGED")
