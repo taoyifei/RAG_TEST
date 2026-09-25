@@ -1,0 +1,18 @@
+# 构建上下文为仓库根目录。基础镜像须预加载且固定为 digest/镜像 ID，
+# 并已包含 pyproject.toml 所列的 Python 3.11 运行依赖。
+ARG WST_GATEWAY_RUNTIME_IMAGE
+FROM ${WST_GATEWAY_RUNTIME_IMAGE}
+
+USER root
+WORKDIR /opt/wst
+COPY src/ /opt/wst/src/
+RUN chmod -R a+rX /opt/wst/src && mkdir -p /data && chown -R 10001:10001 /data
+
+ENV PYTHONPATH=/opt/wst/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER 10001:10001
+EXPOSE 8088
+ENTRYPOINT []
+CMD ["python", "-m", "uvicorn", "wanshitong_gateway.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8088", "--no-proxy-headers"]

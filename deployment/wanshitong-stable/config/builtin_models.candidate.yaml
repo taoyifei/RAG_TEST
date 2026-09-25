@@ -1,0 +1,36 @@
+# WeKnora v0.8.2 声明式模型，仅供本轮隔离 A/B。
+# 端点来自 2026-09-25 现场盘点；API Key 不写入此文件。
+builtin_models:
+  - id: wkab-qwen3-8b-awq
+    type: KnowledgeQA
+    source: remote
+    is_default: true
+    name: Qwen/Qwen3-8B-AWQ
+    parameters:
+      base_url: http://10.242.180.54:18000/v1
+      provider: generic
+      context_window: 7936
+      max_output_tokens: 2048
+
+  - id: wkab-qwen3-embedding-0-6b
+    type: Embedding
+    source: remote
+    is_default: true
+    name: Qwen3-Embedding-0.6B
+    parameters:
+      base_url: http://host.docker.internal:8091/v1
+      provider: generic
+      embedding_parameters:
+        dimension: 1024
+        truncate_prompt_tokens: 0
+
+  - id: wkab-qwen3-reranker-0-6b
+    type: Rerank
+    source: remote
+    is_default: true
+    name: Qwen3-Reranker-0.6B
+    parameters:
+      base_url: http://rerank-adapter:8080
+      provider: generic
+      extra_config:
+        score_scale: probability

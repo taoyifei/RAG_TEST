@@ -1,0 +1,122 @@
+# W02/W03 包装层。与 compose.engine.yaml 一起使用；W01 原生验证不加载本文件。
+services:
+  gateway:
+    image: ${WST_GATEWAY_IMAGE:?必须填写本次构建后固定的网关镜像引用}
+    pull_policy: never
+    environment:
+      TZ: Asia/Shanghai
+      RAG_ROOT_PATH: /kb
+      WANSHITONG_GATEWAY_DATA_DIR: /data
+      WANSHITONG_GATEWAY_DEPLOYMENT_ID: ${WST_DEPLOYMENT_ID:?必须填写独立候选部署 ID}
+      RAG_WANSHITONG_SSO_DEPLOYMENT_ID: ${WST_DEPLOYMENT_ID:?必须填写独立候选部署 ID}
+      RAG_WANSHITONG_AUTH_MODE: sso
+      RAG_WANSHITONG_SSO_ENTRIES: ${WST_SSO_ENTRIES:?必须填写现场真实登记的入口 JSON}
+      RAG_WANSHITONG_SSO_VALIDATE_URL: ${WST_SSO_VALIDATE_URL:?必须填写内网验证地址}
+      RAG_WANSHITONG_SSO_CLIENT_ID: ${WST_SSO_CLIENT_ID:?必须填写候选 Client ID}
+      RAG_WANSHITONG_SSO_CLIENT_SECRET_FILE: /run/wst-secrets/sso_client_secret
+      RAG_MASTER_KEY_FILE: /run/wst-secrets/gateway_master_key
+      RAG_ADMIN_BOOTSTRAP_TOKEN_FILE: /run/wst-secrets/gateway_admin_bootstrap_token
+      RAG_TRUSTED_ORIGINS: ${WST_PUBLIC_ORIGIN:?必须填写已登记的候选 Origin}
+      RAG_TRUSTED_PROXIES: ${WST_TRUSTED_PROXY_IPS:-}
+      WEKNORA_BASE_URL: http://app:8080
+      WEKNORA_TENANT_ID: ${WST_WEKNORA_TENANT_ID:?必须填写原生 workspace 的真实 tenant ID}
+      WEKNORA_PUBLIC_KB_IDS: ${WST_PUBLIC_KB_IDS:?必须填写已发布的非空原生 KB ID 列表}
+      WEKNORA_API_KEY_FILE: /run/wst-secrets/workspace_api_key
+      WEKNORA_EXTERNAL_SIGNING_KEY_FILE: /run/wst-secrets/external_signing_key
+      WEKNORA_ADMIN_EMAIL: ${WST_WEKNORA_ADMIN_EMAIL:?必须填写候选专属原生管理员邮箱}
+      WEKNORA_ADMIN_PASSWORD_FILE: /run/wst-secrets/weknora_admin_password
+      WANSHITONG_MIGRATION_MANIFEST_FILE: /run/wst-evidence/migration-manifest.json
+      WANSHITONG_LEGACY_SNAPSHOT_FILE: /run/wst-legacy/legacy-8289.sqlite3
+      WANSHITONG_LEGACY_MASTER_KEY_FILE: /run/wst-secrets/legacy_master_key
+    volumes:
+      - gateway-data:/data
+      - type: bind
+        source: ${WST_SECRET_DIR:?必须使用独立绝对路径}/sso_client_secret
+        target: /run/wst-secrets/sso_client_secret
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WST_SECRET_DIR:?必须使用独立绝对路径}/gateway_master_key
+        target: /run/wst-secrets/gateway_master_key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WST_SECRET_DIR:?必须使用独立绝对路径}/gateway_admin_bootstrap_token
+        target: /run/wst-secrets/gateway_admin_bootstrap_token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WST_SECRET_DIR:?必须使用独立绝对路径}/workspace_api_key
+        target: /run/wst-secrets/workspace_api_key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WST_SECRET_DIR:?必须使用独立绝对路径}/external_signing_key
+        target: /run/wst-secrets/external_signing_key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WST_SECRET_DIR:?必须使用独立绝对路径}/weknora_admin_password
+        target: /run/wst-secrets/weknora_admin_password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WST_MIGRATION_MANIFEST_FILE:?必须使用候选只读迁移清单}
+        target: /run/wst-evidence/migration-manifest.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WST_LEGACY_SNAPSHOT_FILE:?必须使用切换前只读备份}
+        target: /run/wst-legacy/legacy-8289.sqlite3
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${WST_SECRET_DIR:?必须使用独立绝对路径}/legacy_master_key
+        target: /run/wst-secrets/legacy_master_key
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - front
+      - engine
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+  edge:
+    image: ${WST_EDGE_IMAGE:?必须填写本次构建后固定的静态前端镜像引用}
+    pull_policy: never
+    ports:
+      - ${WST_BIND_IP:-127.0.0.1}:${WST_CANDIDATE_PORT:?初始使用已核查空闲的临时端口，8289测试切换须先保留旧版}:8080
+    depends_on:
+      - gateway
+    networks:
+      - front
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=16m
+      - /var/run:size=2m
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  front: {}
+
+volumes:
+  gateway-data: {}

@@ -1,0 +1,17 @@
+[Unit]
+Description=Wanshitong WeKnora candidate RDMS SSO relay
+Wants=network-online.target
+After=network-online.target docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=user4a
+Group=user4a
+ExecStart=/usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -i /data/tyf/wanshitong-weknora-stable-candidate-20260925/secrets/sso_relay_ed25519 -L 192.168.48.1:42100:172.24.7.172:21000 user4a@10.242.180.54
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

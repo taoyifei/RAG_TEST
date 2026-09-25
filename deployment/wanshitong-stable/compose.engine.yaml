@@ -1,0 +1,208 @@
+name: ${WST_PROJECT_NAME:?必须使用经现场核查的独立 Compose 项目名}
+
+# W01 原生最小栈。所有镜像必须预先离线加载并以 digest 或镜像 ID 固定。
+services:
+  app:
+    image: wechatopenai/weknora-app@sha256:bc8a534799fcb54045100daf4bc5db86270b38ae45c5f761c410c50b4dcd6cdc
+    pull_policy: never
+    entrypoint: ["/bin/sh", "/opt/wst/weknora-secrets-entrypoint.sh"]
+    command: ["./WeKnora"]
+    environment:
+      TZ: Asia/Shanghai
+      GIN_MODE: release
+      LOG_LEVEL: info
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      UV_OFFLINE: "true"
+      PIP_NO_INDEX: "1"
+      AUTO_MIGRATE: "true"
+      DB_DRIVER: postgres
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: wst_candidate
+      DB_NAME: wst_weknora_candidate
+      RETRIEVE_DRIVER: postgres
+      DOCREADER_ADDR: docreader:50051
+      DOCREADER_TRANSPORT: grpc
+      REDIS_ADDR: redis:6379
+      REDIS_PREFIX: wst_candidate
+      STORAGE_TYPE: local
+      LOCAL_STORAGE_BASE_DIR: /data/files
+      DISABLE_REGISTRATION: ${WST_DISABLE_REGISTRATION:-true}
+      WEKNORA_TENANT_SELF_SERVICE_CREATION_ENABLED: "false"
+      WEKNORA_TENANT_ENABLE_CROSS_TENANT_ACCESS: "false"
+      WEKNORA_SANDBOX_DOCKER_ENABLED: "false"
+      BROWSERSKILL_BINARY: ""
+      OLLAMA_BASE_URL: http://127.0.0.1:11434
+      OLLAMA_OPTIONAL: "true"
+      LANGFUSE_ENABLED: "false"
+      SSRF_DNS_WHITELIST_ONLY: "true"
+      SSRF_WHITELIST: ${WST_ALLOWED_MODEL_HOSTS:?必须填内网模型服务主机白名单}
+      SSRF_WHITELIST_EXTRA: docreader
+      CONCURRENCY_POOL_SIZE: "4"
+      WEKNORA_MODEL_MAX_CONCURRENCY: "1"
+    secrets:
+      - db_password
+      - redis_password
+      - jwt_secret
+      - system_aes_key
+      - system_signing_key
+    volumes:
+      - native-files:/data/files
+      - docreader-tmp:/tmp/docreader:ro
+      - ./config/config.candidate.yaml:/app/config/config.yaml:ro
+      - ./config/builtin_models.candidate.yaml:/app/config/builtin_models.yaml:ro
+      - ./weknora-secrets-entrypoint.sh:/opt/wst/weknora-secrets-entrypoint.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      docreader:
+        condition: service_healthy
+      rerank-adapter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - engine
+      - data
+      - model-egress
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  docreader:
+    image: wechatopenai/weknora-docreader@sha256:3c36e7e738ba515315523876d8041f9bb02809145a4e3b331e2550e4bff98b7a
+    pull_policy: never
+    environment:
+      TZ: Asia/Shanghai
+      DOCREADER_IMAGE_OUTPUT_DIR: /tmp/docreader
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      UV_OFFLINE: "true"
+      PIP_NO_INDEX: "1"
+      DOCREADER_GRPC_PORT: "50051"
+      DOCREADER_ODL_HYBRID: "off"
+      SSRF_DNS_WHITELIST_ONLY: "true"
+      SSRF_WHITELIST_EXTRA: ""
+    volumes:
+      - docreader-tmp:/tmp/docreader
+    expose:
+      - "50051"
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - engine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: paradedb/paradedb@sha256:58bf87d2a6f1e72f56590b0f0ae1467e82c3f99ca203dde646672c8ac13148b2
+    pull_policy: never
+    environment:
+      POSTGRES_USER: wst_candidate
+      POSTGRES_DB: wst_weknora_candidate
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets:
+      - db_password
+    volumes:
+      - native-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wst_candidate -d wst_weknora_candidate"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - data
+    restart: unless-stopped
+    stop_grace_period: 1m
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis@sha256:c9d92d840fd011c908f040592857c724ae6d877f2aba5c40ad963276507386b2
+    pull_policy: never
+    entrypoint: ["/bin/sh", "/opt/wst/redis-secrets-entrypoint.sh"]
+    secrets:
+      - redis_password
+    volumes:
+      - native-redis:/data
+      - ./redis-secrets-entrypoint.sh:/opt/wst/redis-secrets-entrypoint.sh:ro
+      - ./redis-healthcheck.sh:/opt/wst/redis-healthcheck.sh:ro
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/opt/wst/redis-healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  rerank-adapter:
+    image: python@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b
+    pull_policy: never
+    command: ["python", "/adapter/rerank_adapter.py"]
+    environment:
+      RERANK_UPSTREAM_URL: http://host.docker.internal:8092/rerank
+      RERANK_UPSTREAM_TIMEOUT_SECONDS: "30"
+      RERANK_ADAPTER_PORT: "8080"
+    volumes:
+      - ./rerank_adapter.py:/adapter/rerank_adapter.py:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - engine
+      - model-egress
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  db_password:
+    file: ${WST_SECRET_DIR:?必须使用独立绝对路径}/db_password
+  redis_password:
+    file: ${WST_SECRET_DIR:?必须使用独立绝对路径}/redis_password
+  jwt_secret:
+    file: ${WST_SECRET_DIR:?必须使用独立绝对路径}/jwt_secret
+  system_aes_key:
+    file: ${WST_SECRET_DIR:?必须使用独立绝对路径}/system_aes_key
+  system_signing_key:
+    file: ${WST_SECRET_DIR:?必须使用独立绝对路径}/system_signing_key
+
+networks:
+  engine:
+    internal: true
+  data:
+    internal: true
+  model-egress: {}
+
+volumes:
+  native-postgres: {}
+  native-redis: {}
+  native-files: {}
+  docreader-tmp: {}

@@ -1,0 +1,13 @@
+# 仅在 docker load 的离线主机上叠加；镜像 ID 从随包清单核验后填写。
+# docker save/load 不保证恢复 RepoDigest，因此离线启动使用内容固定的 Image ID。
+services:
+  app:
+    image: ${WST_APP_IMAGE_ID:?填写离线加载后核验的 WeKnora app Image ID}
+  docreader:
+    image: ${WST_DOCREADER_IMAGE_ID:?填写离线加载后核验的 Docreader Image ID}
+  postgres:
+    image: ${WST_POSTGRES_IMAGE_ID:?填写离线加载后核验的 ParadeDB Image ID}
+  redis:
+    image: ${WST_REDIS_IMAGE_ID:?填写离线加载后核验的 Redis Image ID}
+  rerank-adapter:
+    image: ${WST_PYTHON_IMAGE_ID:?填写离线加载后核验的 Python Image ID}
