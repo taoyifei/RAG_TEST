@@ -154,6 +154,7 @@ class SearchRequest(FrozenModel):
     text: str = Field(min_length=1, max_length=8000, repr=False)
     limit: StrictInt = Field(default=10, gt=0, le=50)
     conversation_context: tuple[str, ...] = Field(default=(), max_length=8)
+    selected_documents: tuple[SourceDocumentIdentity, ...] = ()
     metadata_filters: JsonObject = ()
     access_filters: JsonObject = ()
     dense_required: bool = False
