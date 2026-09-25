@@ -19,7 +19,8 @@ class NaturalBudget:
 
     context_window: int = 8192
     input_cap: int = 5000
-    output_tokens: int = 2048
+    # 在既有 8192 上下文、5000 输入上限和 512 预留内用足可用输出空间。
+    output_tokens: int = 2680
     safety_margin: int = 512
     max_passages: int = 8
     rerank_pool: int = 24

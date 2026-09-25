@@ -732,21 +732,25 @@ class ProviderHttpClient:
                             )
                         try:
                             recorder = self._private_diagnostic_recorder
-                            capture_success = (
+                            capture_private_stream = (
                                 recorder is not None
-                                and recorder.capture_success
                                 and operation in {
                                     "generation",
                                     "query.interpret",
                                     "query.rewrite",
                                 }
                             )
+                            capture_success = (
+                                capture_private_stream
+                                and recorder is not None
+                                and recorder.capture_success
+                            )
                             private_body = bytearray()
                             chunks = _bounded_stream_bytes(
                                 response.iter_bytes(),
                                 self._max_response_bytes,
                             )
-                            if capture_success:
+                            if capture_private_stream:
                                 chunks = _capture_private_stream_bytes(
                                     chunks, private_body
                                 )
@@ -844,12 +848,40 @@ class ProviderHttpClient:
                         except (OverflowError, TypeError, ValueError) as error:
                             detail = getattr(error, "reason_code", None)
                             diagnostics = {
-                                "contract_exception_type": type(error).__name__
+                                "contract_exception_type": type(error).__name__,
                             }
                             if isinstance(detail, str) and re.fullmatch(
                                 r"CHAT_[A-Z0-9_]{4,64}", detail
                             ):
                                 diagnostics["contract_detail"] = detail
+                            if capture_private_stream:
+                                diagnostics["stream_capture_bytes"] = len(
+                                    private_body
+                                )
+                                private_status = self._record_private_response(
+                                    request_id=request_id,
+                                    attempt_id=f"{request_id}-{attempt}",
+                                    operation=operation,
+                                    method=method,
+                                    path=path,
+                                    headers=headers,
+                                    payload=payload,
+                                    response=response,
+                                    response_body=bytes(private_body),
+                                    response_truncated=(
+                                        response.num_bytes_downloaded
+                                        > len(private_body)
+                                    ),
+                                )
+                                if private_status is not None:
+                                    diagnostics["private_diagnostic_status"] = (
+                                        private_status
+                                    )
+                            reason_code = (
+                                "CHAT_OUTPUT_TRUNCATED"
+                                if detail == "CHAT_OUTPUT_TRUNCATED"
+                                else "INVALID_STREAM_SCHEMA"
+                            )
                             call = self._call(
                                 provider_id,
                                 operation,
@@ -858,7 +890,7 @@ class ProviderHttpClient:
                                 attempt,
                                 started,
                                 "RESPONSE_CONTRACT",
-                                "INVALID_STREAM_SCHEMA",
+                                reason_code,
                                 input_count,
                                 estimated_tokens,
                                 last_retry_after_ms,
@@ -873,7 +905,7 @@ class ProviderHttpClient:
                             self._observe(call)
                             raise ProviderHttpError(
                                 ProviderFailureCategory.RESPONSE_CONTRACT,
-                                "INVALID_STREAM_SCHEMA",
+                                reason_code,
                                 call,
                             ) from error
                         call = self._call(

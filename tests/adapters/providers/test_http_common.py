@@ -4,6 +4,7 @@ import base64
 import json
 import socket
 import ssl
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NoReturn
 
@@ -266,7 +267,7 @@ def test_stream_contract_keeps_only_safe_failure_code() -> None:
             cancellation=StreamCancellation(),
         )
     client.close()
-    assert captured.value.reason_code == "INVALID_STREAM_SCHEMA"
+    assert captured.value.reason_code == "CHAT_OUTPUT_TRUNCATED"
     assert dict(captured.value.call.transport_diagnostics) == {
         "contract_detail": "CHAT_OUTPUT_TRUNCATED",
         "contract_exception_type": "ChatResponseError",
@@ -668,6 +669,62 @@ def test_private_success_capture_records_streamed_chat(tmp_path: Path) -> None:
         == "WRITTEN"
     )
     assert "synthetic draft" not in result.call.model_dump_json()
+
+
+def test_private_stream_contract_failure_captures_consumed_bytes(
+    tmp_path: Path,
+) -> None:
+    """流式合同失败仅在私有目录保存已消费的原始帧。"""
+    private_directory = tmp_path / "private"
+    private_directory.mkdir(mode=0o700)
+    response_body = b'data: {"private":"synthetic draft"}\n\n'
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    content=response_body,
+                    headers={"Content-Type": "text/event-stream"},
+                )
+            )
+        ),
+        private_diagnostic_recorder=PrivateProviderDiagnosticRecorder(
+            private_directory
+        ),
+    )
+
+    def consume(chunks: Iterator[bytes]) -> NoReturn:
+        for _ in chunks:
+            pass
+        raise ChatResponseError("CHAT_OUTPUT_TRUNCATED")
+
+    with pytest.raises(ProviderHttpError) as captured:
+        client.request_stream(
+            "POST",
+            "/chat/completions",
+            payload={"private": "question"},
+            headers={"Authorization": "Bearer synthetic-secret"},
+            provider_id="test-provider",
+            operation="generation",
+            model="test-model",
+            input_count=1,
+            estimated_tokens=4,
+            consumer=consume,
+            cancellation=StreamCancellation(),
+        )
+    client.close()
+
+    files = tuple(private_directory.glob("provider-http-private-*.json"))
+    assert len(files) == 1
+    saved = json.loads(files[0].read_text(encoding="utf-8"))
+    assert base64.b64decode(saved["response_body_base64"]) == response_body
+    assert saved["request_headers"]["Authorization"] == "REDACTED"
+    assert saved["response_truncated"] is False
+    diagnostics = dict(captured.value.call.transport_diagnostics)
+    assert diagnostics["private_diagnostic_status"] == "WRITTEN"
+    assert diagnostics["stream_capture_bytes"] == len(response_body)
+    assert "synthetic draft" not in captured.value.call.model_dump_json()
 
 
 def test_close_is_idempotent_and_rejects_future_calls() -> None:
