@@ -45,6 +45,7 @@ export function WanshitongChat({
     traceId: string,
     referenceId: string,
     documentName: string,
+    original?: boolean,
   ) => Promise<void>;
   onNewTopic: () => void;
   onPopularQuestionSubmit: (question: PublicPopularQuestion) => void;
@@ -87,12 +88,13 @@ export function WanshitongChat({
                 onFeedbackLogin={onFeedbackLogin}
                 onDownloadReference={
                   turn.traceId && onDownloadReference
-                    ? (referenceId, documentName) =>
+                    ? (referenceId, documentName, original) =>
                         onDownloadReference(
                           turn.conversationId,
                           turn.traceId!,
                           referenceId,
                           documentName,
+                          original,
                         )
                     : undefined
                 }

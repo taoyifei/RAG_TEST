@@ -32,7 +32,10 @@ function groupCitations(citations: PublicCitation[]): CitationGroup[] {
           department ?? "",
           category ?? "",
         ])}`
-      : `unpathed:${index}`;
+      : citation.source_kind === "weknora" &&
+          citation.native_knowledge_id
+        ? `native:${citation.native_knowledge_id}`
+        : `unpathed:${index}`;
     const existing = groups.get(key);
     if (existing) {
       existing.citations.push(citation);
@@ -55,7 +58,11 @@ export function PublicCitations({
   onDownloadReference,
 }: {
   citations: PublicCitation[];
-  onDownloadReference?: (referenceId: string, documentName: string) => Promise<void>;
+  onDownloadReference?: (
+    referenceId: string,
+    documentName: string,
+    original?: boolean,
+  ) => Promise<void>;
 }) {
   const [downloadError, setDownloadError] = useState<string>();
   const visible = citations.filter(
@@ -114,22 +121,49 @@ export function PublicCitations({
                       {citation.quote && (
                         <blockquote>{citation.quote}</blockquote>
                       )}
-                      {citation.reference_id && onDownloadReference && (
-                        <button
-                          onClick={() => {
-                            setDownloadError(undefined);
-                            void onDownloadReference(
-                              citation.reference_id!,
-                              citation.document_name,
-                            ).catch(() => {
-                              setDownloadError("原件暂不可用，请稍后重试。");
-                            });
-                          }}
-                          type="button"
-                        >
-                          下载本次引用的原件
-                        </button>
-                      )}
+                      {citation.reference_id &&
+                        onDownloadReference &&
+                        (citation.source_kind !== "weknora" ||
+                          citation.source_available) && (
+                          <button
+                            onClick={() => {
+                              setDownloadError(undefined);
+                              void onDownloadReference(
+                                citation.reference_id!,
+                                citation.document_name,
+                              ).catch(() => {
+                                setDownloadError(
+                                  "引用内容暂不可用，请稍后重试。",
+                                );
+                              });
+                            }}
+                            type="button"
+                          >
+                            {citation.source_kind === "weknora"
+                              ? "查看引用片段"
+                              : "下载本次引用的原件"}
+                          </button>
+                        )}
+                      {citation.reference_id &&
+                        citation.source_kind === "weknora" &&
+                        citation.original_available &&
+                        onDownloadReference && (
+                          <button
+                            onClick={() => {
+                              setDownloadError(undefined);
+                              void onDownloadReference(
+                                citation.reference_id!,
+                                citation.document_name,
+                                true,
+                              ).catch(() => {
+                                setDownloadError("原件暂不可用，请稍后重试。");
+                              });
+                            }}
+                            type="button"
+                          >
+                            下载原件
+                          </button>
+                        )}
                     </li>
                   ))}
                 </ol>

@@ -31,6 +31,17 @@ function naturalEvent(
   });
 }
 
+function weknoraEvent(
+  type: string,
+  sequence: number,
+  fields: Record<string, unknown> = {},
+) {
+  return event(type, sequence, {
+    protocol: "wanshitong-weknora-sse-v1",
+    ...fields,
+  });
+}
+
 function streamResponse(body: string): Response {
   return new Response(
     new ReadableStream({
@@ -130,53 +141,203 @@ afterEach(() => {
   window.sessionStorage.clear();
 });
 
-describe("公共问答新话题生命周期", () => {
-  it("普通页面先显示真实增量，终态替换正文并恢复服务端历史", async () => {
-    let streamController!: ReadableStreamDefaultController<Uint8Array>;
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+describe("WeKnora 问答流", () => {
+  function installGatewayFetch(chat: () => Response) {
+    return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const path = pathOf(input);
       if (path === "/api/public/session") {
-        return Promise.resolve(Response.json({
-          session_id: "wstsid_11111111111111111111111111111111",
-          csrf_token: "a".repeat(64),
-          expires_in: 3600,
-          deployment_id: "candidate_8289",
-          user: { user_id: "1001", display_name: "测试用户" },
-        }));
+        return Promise.resolve(
+          Response.json({
+            session_id: "wstsid_11111111111111111111111111111111",
+            csrf_token: "a".repeat(64),
+            expires_in: 3600,
+            deployment_id: "candidate_8289",
+            user: { user_id: "1001", display_name: "测试用户" },
+          }),
+        );
       }
       if (path === "/api/public/capabilities") {
-        return Promise.resolve(Response.json({
-          mode: "wanshitong",
-          stream: true,
-          stream_protocol: "wanshitong-public-sse-v1",
-          natural_stream_protocol: "wanshitong-natural-sse-v1",
-          document_visibility: "all_internal",
-          feedback: true,
-          shortcuts: [],
-        }));
+        return Promise.resolve(
+          Response.json({
+            mode: "wanshitong",
+            stream: true,
+            stream_protocol: "wanshitong-weknora-sse-v1",
+            natural_stream_protocol: "wanshitong-weknora-sse-v1",
+            document_visibility: "all_internal",
+            feedback: true,
+            shortcuts: [],
+          }),
+        );
       }
+      if (path === "/api/public/chat") return Promise.resolve(chat());
       if (path === "/api/public/conversations") {
         return Promise.resolve(Response.json({ items: [] }));
       }
       if (path.startsWith("/api/public/conversations/")) {
         return Promise.resolve(Response.json({ turns: [] }));
       }
-      if (path === "/api/public/chat") {
-        return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
-          start(controller) {
-            streamController = controller;
-            controller.enqueue(encoder.encode(
-              naturalEvent("meta", 0) +
-              naturalEvent("answer_delta", 1, {
-                text: "临时正文",
-                provisional: true,
-              }),
-            ));
-          },
-        }), { headers: { "Content-Type": "text/event-stream" } }));
-      }
       return Promise.resolve(new Response(null, { status: 404 }));
     });
+  }
+
+  it("保留原生正文，及时显示引用，收到 complete 后才完成", async () => {
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const citation = {
+      document_name: "依据.md",
+      reference_id: `ref_${"b".repeat(32)}`,
+      source_kind: "weknora",
+      native_chunk_id: "chunk-1",
+      quote: "引文",
+    };
+    const fetchMock = installGatewayFetch(
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamController = controller;
+              controller.enqueue(
+                encoder.encode(
+                  weknoraEvent("meta", 0, { native_session_id: "session-1" }) +
+                    weknoraEvent("answer_delta", 1, { text: "# 标题\n" }) +
+                    weknoraEvent("references", 2, { items: [citation] }) +
+                    weknoraEvent("native_event", 3, {
+                      response_type: "thinking",
+                      native: {
+                        response_type: "thinking",
+                        content: "原生推理过程",
+                      },
+                    }),
+                ),
+              );
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        ),
+    );
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.submit("测试原生回答"));
+    await waitFor(() =>
+      expect(result.current.turns[0]?.citations).toEqual([citation]),
+    );
+    expect(result.current.turns[0]?.provisionalAnswer).toBe("# 标题\n");
+    expect(result.current.turns[0]?.status).toBe("streaming");
+    const chatCall = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === "/api/public/chat",
+    );
+    expect(
+      new Headers(chatCall?.[1]?.headers).get("X-Wanshitong-Stream-Protocol"),
+    ).toBe("wanshitong-weknora-sse-v1");
+
+    act(() => {
+      streamController.enqueue(
+        encoder.encode(
+          weknoraEvent("final", 4, {
+            answer: "# 标题\n",
+            citations: [citation],
+            truncated: true,
+            finish_reason: "length",
+            native_message_id: "message-1",
+            native_request_id: "request-1",
+          }),
+        ),
+      );
+      streamController.close();
+    });
+    await waitFor(() =>
+      expect(result.current.turns[0]?.status).toBe("completed"),
+    );
+    expect(result.current.turns[0]).toMatchObject({
+      answer: "# 标题\n",
+      truncated: true,
+      finishReason: "length",
+      nativeMessageId: "message-1",
+      nativeRequestId: "request-1",
+      citations: [citation],
+    });
+  });
+
+  it("原生流只给局部 done、EOF 无 complete 时标记失败", async () => {
+    installGatewayFetch(() =>
+      streamResponse(
+        weknoraEvent("meta", 0) +
+          weknoraEvent("answer_delta", 1, { text: "未完成正文" }) +
+          weknoraEvent("native_event", 2, {
+            response_type: "answer",
+            done: true,
+            native: { response_type: "answer", done: true },
+          }),
+      ),
+    );
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.submit("断流问题"));
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("failed"));
+    expect(result.current.turns[0]?.provisionalAnswer).toBe("未完成正文");
+    expect(result.current.turns[0]?.partial).toBe(true);
+  });
+});
+
+describe("公共问答新话题生命周期", () => {
+  it("普通页面先显示真实增量，终态替换正文并恢复服务端历史", async () => {
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(
+            Response.json({
+              session_id: "wstsid_11111111111111111111111111111111",
+              csrf_token: "a".repeat(64),
+              expires_in: 3600,
+              deployment_id: "candidate_8289",
+              user: { user_id: "1001", display_name: "测试用户" },
+            }),
+          );
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(
+            Response.json({
+              mode: "wanshitong",
+              stream: true,
+              stream_protocol: "wanshitong-public-sse-v1",
+              natural_stream_protocol: "wanshitong-natural-sse-v1",
+              document_visibility: "all_internal",
+              feedback: true,
+              shortcuts: [],
+            }),
+          );
+        }
+        if (path === "/api/public/conversations") {
+          return Promise.resolve(Response.json({ items: [] }));
+        }
+        if (path.startsWith("/api/public/conversations/")) {
+          return Promise.resolve(Response.json({ turns: [] }));
+        }
+        if (path === "/api/public/chat") {
+          return Promise.resolve(
+            new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  streamController = controller;
+                  controller.enqueue(
+                    encoder.encode(
+                      naturalEvent("meta", 0) +
+                        naturalEvent("answer_delta", 1, {
+                          text: "临时正文",
+                          provisional: true,
+                        }),
+                    ),
+                  );
+                },
+              }),
+              { headers: { "Content-Type": "text/event-stream" } },
+            ),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
     const { result } = renderHook(() => usePublicChat());
     await waitFor(() => expect(result.current.sessionReady).toBe(true));
     act(() => result.current.submit("真实问题"));
@@ -187,16 +348,21 @@ describe("公共问答新话题生命周期", () => {
     const chatCall = fetchMock.mock.calls.find(
       ([input]) => pathOf(input) === "/api/public/chat",
     );
-    expect(new Headers(chatCall?.[1]?.headers).get("X-Wanshitong-Stream-Protocol"))
-      .toBe("wanshitong-natural-sse-v1");
+    expect(
+      new Headers(chatCall?.[1]?.headers).get("X-Wanshitong-Stream-Protocol"),
+    ).toBe("wanshitong-natural-sse-v1");
     act(() => {
-      streamController.enqueue(encoder.encode(naturalEvent("final", 2, {
-        status: "ANSWERED",
-        published: true,
-        answer: "最终正文[S1]",
-        citation_status: "valid",
-        citations: [{ document_name: "依据.docx" }],
-      })));
+      streamController.enqueue(
+        encoder.encode(
+          naturalEvent("final", 2, {
+            status: "ANSWERED",
+            published: true,
+            answer: "最终正文[S1]",
+            citation_status: "valid",
+            citations: [{ document_name: "依据.docx" }],
+          }),
+        ),
+      );
       streamController.close();
     });
     await waitFor(() =>
@@ -208,61 +374,82 @@ describe("公共问答新话题生命周期", () => {
 
   it("自然流停止时向服务端发送带会话身份的取消请求", async () => {
     const traceId = `trace_${"a".repeat(32)}`;
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-      const path = pathOf(input);
-      if (path === "/api/public/session") {
-        return Promise.resolve(Response.json({
-          session_id: "wstsid_11111111111111111111111111111111",
-          csrf_token: "a".repeat(64),
-          expires_in: 3600,
-          deployment_id: "candidate_8289",
-          user: { user_id: "1001", display_name: "测试用户" },
-        }));
-      }
-      if (path === "/api/public/capabilities") {
-        return Promise.resolve(Response.json({
-          mode: "wanshitong",
-          stream: true,
-          stream_protocol: "wanshitong-public-sse-v1",
-          natural_stream_protocol: "wanshitong-natural-sse-v1",
-          document_visibility: "all_internal",
-          feedback: true,
-          shortcuts: [],
-        }));
-      }
-      if (path === "/api/public/conversations") {
-        return Promise.resolve(Response.json({ items: [] }));
-      }
-      if (path === "/api/public/chat") {
-        return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(encoder.encode(naturalEvent("meta", 0, {
-              trace_id: traceId,
-            })));
-          },
-        }), { headers: { "Content-Type": "text/event-stream" } }));
-      }
-      if (path === `/api/public/chat/${traceId}/stop`) {
-        return Promise.resolve(Response.json({ cancelled: true }));
-      }
-      return Promise.resolve(new Response(null, { status: 404 }));
-    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(
+            Response.json({
+              session_id: "wstsid_11111111111111111111111111111111",
+              csrf_token: "a".repeat(64),
+              expires_in: 3600,
+              deployment_id: "candidate_8289",
+              user: { user_id: "1001", display_name: "测试用户" },
+            }),
+          );
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(
+            Response.json({
+              mode: "wanshitong",
+              stream: true,
+              stream_protocol: "wanshitong-public-sse-v1",
+              natural_stream_protocol: "wanshitong-natural-sse-v1",
+              document_visibility: "all_internal",
+              feedback: true,
+              shortcuts: [],
+            }),
+          );
+        }
+        if (path === "/api/public/conversations") {
+          return Promise.resolve(Response.json({ items: [] }));
+        }
+        if (path === "/api/public/chat") {
+          return Promise.resolve(
+            new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(
+                    encoder.encode(
+                      naturalEvent("meta", 0, {
+                        trace_id: traceId,
+                      }),
+                    ),
+                  );
+                },
+              }),
+              { headers: { "Content-Type": "text/event-stream" } },
+            ),
+          );
+        }
+        if (path === `/api/public/chat/${traceId}/stop`) {
+          return Promise.resolve(Response.json({ cancelled: true }));
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
     const { result } = renderHook(() => usePublicChat());
     await waitFor(() => expect(result.current.sessionReady).toBe(true));
     act(() => result.current.submit("需要停止的问题"));
     await waitFor(() => expect(result.current.turns[0]?.traceId).toBe(traceId));
     const conversationId = result.current.turns[0].conversationId;
     act(() => result.current.stop());
-    await waitFor(() => expect(fetchMock.mock.calls.some(
-      ([input]) => pathOf(input) === `/api/public/chat/${traceId}/stop`,
-    )).toBe(true));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) => pathOf(input) === `/api/public/chat/${traceId}/stop`,
+        ),
+      ).toBe(true),
+    );
     const stopCall = fetchMock.mock.calls.find(
       ([input]) => pathOf(input) === `/api/public/chat/${traceId}/stop`,
     );
     expect(stopCall?.[1]?.method).toBe("POST");
-    expect(new Headers(stopCall?.[1]?.headers).get("X-CSRF-Token"))
-      .toBe("a".repeat(64));
-    expect(JSON.parse(String(stopCall?.[1]?.body))).toEqual({
+    expect(new Headers(stopCall?.[1]?.headers).get("X-CSRF-Token")).toBe(
+      "a".repeat(64),
+    );
+    const stopBody = stopCall?.[1]?.body;
+    expect(JSON.parse(typeof stopBody === "string" ? stopBody : "{}")).toEqual({
       conversation_id: conversationId,
     });
     expect(result.current.turns[0]?.status).toBe("cancelled");

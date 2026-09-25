@@ -8,6 +8,7 @@ import { ErrorPanel } from "./components/ui";
 import { WanshitongApp } from "./public/WanshitongApp";
 import { ConsoleProvider } from "./state/console-context";
 import { WanshitongAdminShell } from "./wanshitong/admin/WanshitongAdminShell";
+import { WanshitongOpsApp } from "./wanshitong/ops/WanshitongOpsApp";
 
 type ModeState =
   | { state: "loading" }
@@ -61,6 +62,9 @@ export default function App() {
   }
   if (modeState.mode === "wanshitong" && !isWanshitongAdminPath(location)) {
     return <WanshitongApp />;
+  }
+  if (modeState.mode === "wanshitong" && location.startsWith("/admin/ops")) {
+    return <WanshitongOpsApp />;
   }
   if (modeState.mode === "wanshitong") {
     return (

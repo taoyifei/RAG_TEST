@@ -81,7 +81,10 @@ describe("湾事通 SSE parser", () => {
     const onActivity = vi.fn();
     const controller = new AbortController();
     await consumePublicSse(
-      body(": heartbeat 2000\n\n", 'event: stage\ndata: {"type":"stage","sequence":0,"stage":"generation"}\n\n'),
+      body(
+        ": heartbeat 2000\n\n",
+        'event: stage\ndata: {"type":"stage","sequence":0,"stage":"generation"}\n\n',
+      ),
       vi.fn(),
       controller.signal,
       onActivity,
@@ -124,5 +127,74 @@ describe("湾事通 SSE parser", () => {
         ),
       ).rejects.toBeInstanceOf(PublicSseParseError);
     }
+  });
+
+  it("WeKnora 流保留原生正文与引用顺序，并接受诊断事件", async () => {
+    const controller = new AbortController();
+    const seen: unknown[] = [];
+    const protocol = "wanshitong-weknora-sse-v1";
+    const citation = {
+      document_name: "政策.md",
+      reference_id: `ref_${"a".repeat(32)}`,
+      native_chunk_id: "chunk-1",
+      native_knowledge_id: "knowledge-1",
+      quote: "第一段",
+    };
+    const frame = (type: string, sequence: number, fields: object) =>
+      `event: ${type}\ndata: ${JSON.stringify({ protocol, type, sequence, ...fields })}\n\n`;
+    await consumePublicSse(
+      body(
+        frame("meta", 0, { native_session_id: "session-1" }) +
+          frame("answer_delta", 1, {
+            text: "# 标题\n\n|甲|乙|\n|--|--|\n|1|2|",
+            native_request_id: "request-1",
+          }) +
+          frame("references", 2, { items: [citation] }) +
+          frame("native_event", 3, {
+            response_type: "thinking",
+            done: false,
+            native: { response_type: "thinking", content: "原生过程" },
+          }) +
+          frame("final", 4, {
+            answer: "# 标题\n\n|甲|乙|\n|--|--|\n|1|2|",
+            citations: [citation],
+            truncated: false,
+            finish_reason: "stop",
+            native_message_id: "message-1",
+          }),
+      ),
+      (event) => {
+        seen.push(event);
+      },
+      controller.signal,
+    );
+    expect(seen).toHaveLength(5);
+    expect(seen[1]).toMatchObject({
+      type: "answer_delta",
+      native_request_id: "request-1",
+    });
+    expect(seen[2]).toMatchObject({ type: "references", items: [citation] });
+    expect(seen[3]).toMatchObject({
+      type: "native_event",
+      response_type: "thinking",
+    });
+    expect(seen[4]).toMatchObject({
+      type: "final",
+      citations: [citation],
+      finish_reason: "stop",
+    });
+  });
+
+  it("WeKnora 流缺少原生终态字段时拒绝伪造 final", async () => {
+    const controller = new AbortController();
+    await expect(
+      consumePublicSse(
+        body(
+          'event: final\ndata: {"protocol":"wanshitong-weknora-sse-v1","type":"final","sequence":1,"answer":"正文","citations":[],"published":true}\n\n',
+        ),
+        vi.fn(),
+        controller.signal,
+      ),
+    ).rejects.toBeInstanceOf(PublicSseParseError);
   });
 });

@@ -1,6 +1,9 @@
 import { RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
+import { withAppBase } from "../app/basePath";
 import { PublicCitations } from "./PublicCitations";
 import { PublicFeedback } from "./PublicFeedback";
 import { PUBLIC_STAGE_LABELS } from "./publicSse";
@@ -26,7 +29,7 @@ function progressHint(
   }
   if (stageMessage !== PUBLIC_STAGE_LABELS.generation) return undefined;
   if (claimCount > 0) {
-    return `已先显示 ${claimCount} 条已核验内容，完整答案仍在生成。`;
+    return `已收到 ${claimCount} 段实时内容，完整答案仍在生成。`;
   }
   if (stageSeconds >= 20) {
     return signalAgeSeconds <= 5
@@ -35,10 +38,78 @@ function progressHint(
   }
   if (stageSeconds >= 6) {
     return signalAgeSeconds <= 5
-      ? "连接正常，正在等待回答服务返回可核对的内容。"
-      : "正在等待回答服务返回可核对的内容。";
+      ? "连接正常，正在等待回答服务返回内容。"
+      : "正在等待回答服务返回内容。";
   }
-  return "正在生成答复；有可核对的内容会先显示。";
+  return "正在生成答复；收到内容后会实时显示。";
+}
+
+function MarkdownAnswer({
+  content,
+  turn,
+}: {
+  content: string;
+  turn: PublicTurn;
+}) {
+  return (
+    <div className="wst-final-answer">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={(url, key, node) =>
+          key === "src" &&
+          node.tagName === "img" &&
+          url.startsWith("resource://")
+            ? url
+            : defaultUrlTransform(url)
+        }
+        components={{
+          a: ({ children, href, title }) =>
+            href ? (
+              <a
+                href={href}
+                rel="noopener noreferrer"
+                target="_blank"
+                title={title}
+              >
+                {children}
+              </a>
+            ) : (
+              <span>{children}</span>
+            ),
+          img: ({ alt, src }) => {
+            if (!src) return <span>{alt}</span>;
+            if (src.startsWith("resource://")) {
+              if (!turn.traceId || turn.status !== "completed") {
+                return <span>{alt}</span>;
+              }
+              const path =
+                `/api/public/conversations/${encodeURIComponent(turn.conversationId)}` +
+                `/turns/${encodeURIComponent(turn.traceId)}/resources` +
+                `?file_path=${encodeURIComponent(src)}`;
+              return (
+                <img
+                  alt={alt ?? ""}
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  src={withAppBase(path)}
+                />
+              );
+            }
+            return (
+              <img
+                alt={alt ?? ""}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                src={src}
+              />
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 export function PublicAnswer({
@@ -52,7 +123,11 @@ export function PublicAnswer({
   feedbackDetailsEnabled?: boolean;
   onFeedback: (feedback: PublicFeedbackSubmission) => void;
   onFeedbackLogin?: () => void;
-  onDownloadReference?: (referenceId: string, documentName: string) => Promise<void>;
+  onDownloadReference?: (
+    referenceId: string,
+    documentName: string,
+    original?: boolean,
+  ) => Promise<void>;
   onRetry: () => void;
   turn: PublicTurn;
 }) {
@@ -66,7 +141,8 @@ export function PublicAnswer({
     0,
     elapsedSeconds - Math.floor((turn.lastSignalAt - turn.startedAt) / 1000),
   );
-  const waitingForGeneration = turn.stageMessage === PUBLIC_STAGE_LABELS.generation;
+  const waitingForGeneration =
+    turn.stageMessage === PUBLIC_STAGE_LABELS.generation;
   const hint = progressHint(
     turn.stageMessage,
     turn.claims.length + (turn.provisionalAnswer ? 1 : 0),
@@ -134,20 +210,20 @@ export function PublicAnswer({
           </div>
         )}
         {turn.answer !== undefined ? (
-          <div className="wst-final-answer">{turn.answer}</div>
+          <MarkdownAnswer content={turn.answer} turn={turn} />
+        ) : turn.provisionalAnswer ? (
+          <div className="wst-claims">
+            <p>
+              {active
+                ? "回答生成中 · 以下为实时正文"
+                : "回答已中断 · 以下为已收到的正文片段"}
+            </p>
+            <MarkdownAnswer content={turn.provisionalAnswer} turn={turn} />
+          </div>
         ) : (
-          turn.provisionalAnswer ? (
+          turn.claims.length > 0 && (
             <div className="wst-claims">
-              <p>
-                {active
-                  ? "生成中，引用待核对 · 以下是临时正文"
-                  : "回答已中断 · 以下内容未经最终核对"}
-              </p>
-              <div className="wst-final-answer">{turn.provisionalAnswer}</div>
-            </div>
-          ) : turn.claims.length > 0 && (
-            <div className="wst-claims">
-              <p>已核验 {turn.claims.length} 条内容 · 暂非最终答案</p>
+              <p>已收到 {turn.claims.length} 条内容 · 暂非最终答案</p>
               {turn.claims.map((claim) => (
                 <div className="wst-claim" key={claim.claimIndex}>
                   {claim.text}
@@ -155,6 +231,28 @@ export function PublicAnswer({
               ))}
             </div>
           )
+        )}
+        {turn.nativeEvents && turn.nativeEvents.length > 0 && (
+          <section className="wst-native-events" aria-label="知识库处理过程">
+            {turn.nativeEvents.map((event) => {
+              const content = event.payload.content;
+              return (
+                <div className="wst-native-event" key={event.sequence}>
+                  <strong>{event.responseType}</strong>
+                  {typeof content === "string" && content && (
+                    <MarkdownAnswer content={content} turn={turn} />
+                  )}
+                  <details>
+                    <summary>原生事件详情</summary>
+                    <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+                  </details>
+                </div>
+              );
+            })}
+          </section>
+        )}
+        {turn.truncated && turn.status === "completed" && (
+          <p className="wst-answer-notice">知识库提示本次回答已截断。</p>
         )}
         {turn.errorMessage && (
           <div
@@ -169,7 +267,7 @@ export function PublicAnswer({
             )}
           </div>
         )}
-        {turn.status === "completed" && (
+        {turn.citations.length > 0 && (
           <>
             <PublicCitations
               citations={turn.citations}
@@ -180,14 +278,14 @@ export function PublicAnswer({
         {(turn.status === "completed" ||
           (turn.status === "failed" && !turn.partial)) &&
           turn.traceId && (
-          <PublicFeedback
-            detailsEnabled={feedbackDetailsEnabled}
-            errorMessage={turn.feedbackError}
-            onLogin={onFeedbackLogin}
-            onSubmit={onFeedback}
-            status={turn.feedback}
-          />
-        )}
+            <PublicFeedback
+              detailsEnabled={feedbackDetailsEnabled}
+              errorMessage={turn.feedbackError}
+              onLogin={onFeedbackLogin}
+              onSubmit={onFeedback}
+              status={turn.feedback}
+            />
+          )}
       </div>
     </section>
   );

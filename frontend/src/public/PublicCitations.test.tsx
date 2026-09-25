@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import { PublicCitations } from "./PublicCitations";
 import type { PublicCitation } from "./publicSse";
@@ -92,6 +92,33 @@ it("同路径的相同引文不去重并保留不同定位", () => {
   expect(within(group).getAllByText("相同合成引文")).toHaveLength(2);
 });
 
+it("原生引用缺少路径时仍按知识 ID 聚合同一文件", () => {
+  render(
+    <PublicCitations
+      citations={[
+        citation(1, {
+          source_kind: "weknora",
+          source_relative_path: undefined,
+          native_knowledge_id: "knowledge-1",
+        }),
+        citation(2, {
+          source_kind: "weknora",
+          source_relative_path: undefined,
+          native_knowledge_id: "knowledge-1",
+        }),
+        citation(3, {
+          source_kind: "weknora",
+          source_relative_path: undefined,
+          native_knowledge_id: "knowledge-2",
+        }),
+      ]}
+    />,
+  );
+  expect(screen.getAllByRole("article")).toHaveLength(2);
+  expect(screen.getByText("2段")).toBeInTheDocument();
+  expect(screen.getByText("1段")).toBeInTheDocument();
+});
+
 it("空引用不渲染，旧响应缺少可选字段时仍可展开", () => {
   const { container, rerender } = render(<PublicCitations citations={[]} />);
   expect(container).toBeEmptyDOMElement();
@@ -101,4 +128,63 @@ it("空引用不渲染，旧响应缺少可选字段时仍可展开", () => {
   expect(screen.getByText("引用依据（1段）")).toBeInTheDocument();
   expect(screen.getByText("旧版合成资料")).toBeInTheDocument();
   expect(screen.getByText("1段")).toBeInTheDocument();
+});
+
+it("仅对标记原件可用的 WeKnora 引用展示下载入口", () => {
+  const referenceId = `ref_${"a".repeat(32)}`;
+  const { container, rerender } = render(
+    <PublicCitations
+      citations={[
+        citation(1, {
+          source_kind: "weknora",
+          reference_id: referenceId,
+          source_available: false,
+        }),
+      ]}
+      onDownloadReference={() => Promise.resolve()}
+    />,
+  );
+  expect(container.querySelector(".wst-citation-segment button")).toBeNull();
+  rerender(
+    <PublicCitations
+      citations={[
+        citation(1, {
+          source_kind: "weknora",
+          reference_id: referenceId,
+          source_available: true,
+        }),
+      ]}
+      onDownloadReference={() => Promise.resolve()}
+    />,
+  );
+  expect(
+    container.querySelector(".wst-citation-segment button"),
+  ).toBeInTheDocument();
+  expect(screen.getByText("查看引用片段")).toBeInTheDocument();
+});
+
+it("原生引用的片段与原件分别使用明确入口", async () => {
+  const user = userEvent.setup();
+  const onDownload = vi.fn().mockResolvedValue(undefined);
+  render(
+    <PublicCitations
+      citations={[
+        citation(1, {
+          source_kind: "weknora",
+          reference_id: `ref_${"b".repeat(32)}`,
+          source_available: true,
+          original_available: true,
+        }),
+      ]}
+      onDownloadReference={onDownload}
+    />,
+  );
+  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByText("开发中心三种工作模式"));
+  await user.click(screen.getByRole("button", { name: "下载原件" }));
+  expect(onDownload).toHaveBeenCalledWith(
+    `ref_${"b".repeat(32)}`,
+    "开发中心三种工作模式",
+    true,
+  );
 });

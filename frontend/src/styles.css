@@ -1781,6 +1781,69 @@ label:has(input[type="checkbox"]) {
 .wst-history-list button:hover {
   background: rgb(255 255 255 / 9%);
 }
+.wst-legacy-overlay {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(0 0 0 / 65%);
+}
+.wst-legacy-panel {
+  width: min(100%, 1050px);
+  max-height: min(85vh, 900px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--wst-border);
+  border-radius: 18px;
+  background: var(--wst-panel-raised);
+  box-shadow: 0 20px 50px rgb(0 0 0 / 40%);
+}
+.wst-legacy-panel > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.wst-legacy-panel h2,
+.wst-legacy-panel h3 {
+  margin: 0 0 8px;
+}
+.wst-legacy-panel > header p {
+  margin: 0 0 18px;
+}
+.wst-legacy-content {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr);
+  gap: 20px;
+}
+.wst-legacy-content nav {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  max-height: 65vh;
+  overflow: auto;
+}
+.wst-legacy-content nav button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+.wst-legacy-content article {
+  min-width: 0;
+  max-height: 65vh;
+  overflow: auto;
+}
+.wst-legacy-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .wst-legacy-content {
+    grid-template-columns: 1fr;
+  }
+}
 .wst-toolbar-error {
   position: fixed;
   z-index: 29;
@@ -2351,6 +2414,67 @@ label:has(input[type="checkbox"]) {
   line-height: 1.85;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+.wst-final-answer {
+  overflow-x: auto;
+  white-space: normal;
+}
+.wst-final-answer > :first-child {
+  margin-top: 0;
+}
+.wst-final-answer > :last-child {
+  margin-bottom: 0;
+}
+.wst-final-answer p,
+.wst-final-answer li,
+.wst-final-answer blockquote {
+  white-space: pre-wrap;
+}
+.wst-final-answer pre {
+  overflow-x: auto;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 20%);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.wst-final-answer pre code {
+  white-space: pre;
+}
+.wst-final-answer :not(pre) > code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgb(128 150 140 / 18%);
+}
+.wst-final-answer table {
+  border-collapse: collapse;
+  min-width: max-content;
+  width: 100%;
+  font-size: 14px;
+}
+.wst-final-answer th,
+.wst-final-answer td {
+  border: 1px solid rgb(128 150 140 / 40%);
+  padding: 7px 10px;
+  text-align: left;
+}
+.wst-final-answer a {
+  color: #64dec1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.wst-final-answer img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 12px 0;
+  border-radius: 8px;
+}
+.wst-root[data-theme="light"] .wst-final-answer pre {
+  background: #edf3ee;
+}
+.wst-root[data-theme="light"] .wst-final-answer a {
+  color: #0b6856;
 }
 .wst-claims > p {
   margin: 1px 0 14px;
@@ -2944,4 +3068,79 @@ label:has(input[type="checkbox"]) {
   .topbar {
     align-items: center;
   }
+}
+.wst-ops {
+  min-height: 100vh;
+  padding: 2rem clamp(1rem, 4vw, 4rem);
+  background: #f5f8fb;
+  color: #14324b;
+}
+
+.wst-ops-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.wst-ops-header nav {
+  display: flex;
+  gap: 1rem;
+}
+
+.wst-ops section {
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  overflow-x: auto;
+  border: 1px solid #d8e5ee;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.wst-ops-login {
+  max-width: 28rem;
+}
+
+.wst-ops-login label,
+.wst-ops-login input {
+  display: block;
+  width: 100%;
+  margin: 0.6rem 0;
+}
+
+.wst-ops input,
+.wst-ops button {
+  border: 1px solid #b8ccda;
+  border-radius: 8px;
+  padding: 0.55rem 0.8rem;
+}
+
+.wst-ops button {
+  margin-right: 0.5rem;
+  cursor: pointer;
+  background: #e5f2f7;
+  color: #114961;
+}
+
+.wst-ops button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.wst-ops table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.wst-ops th,
+.wst-ops td {
+  padding: 0.7rem;
+  border-bottom: 1px solid #e0eaf0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.wst-ops-detail p {
+  overflow-wrap: anywhere;
 }

@@ -30,6 +30,7 @@ import {
   type PublicCitation,
   type PublicErrorEvent,
   type PublicStreamEvent,
+  WEKNORA_STREAM_PROTOCOL,
 } from "./publicSse";
 
 export type PublicChatPhase =
@@ -48,6 +49,12 @@ export interface PublicClaim {
   text: string;
 }
 
+export interface PublicNativeActivity {
+  sequence: number;
+  responseType: string;
+  payload: Record<string, unknown>;
+}
+
 export interface PublicTurn {
   id: string;
   conversationId: string;
@@ -59,12 +66,17 @@ export interface PublicTurn {
   stageStartedAt: number;
   lastSignalAt: number;
   claims: PublicClaim[];
+  nativeEvents?: PublicNativeActivity[];
   answer?: string;
   provisionalAnswer?: string;
   citations: PublicCitation[];
   errorMessage?: string;
   partial: boolean;
   traceId?: string;
+  truncated?: boolean;
+  finishReason?: string | null;
+  nativeMessageId?: string | null;
+  nativeRequestId?: string | null;
   feedback: "idle" | "submitting" | "sent" | "failed";
   feedbackUseful?: boolean;
   feedbackError?: string;
@@ -142,6 +154,10 @@ function resetTurn(turn: PublicTurn): PublicTurn {
     errorMessage: undefined,
     partial: false,
     traceId: undefined,
+    truncated: undefined,
+    finishReason: undefined,
+    nativeMessageId: undefined,
+    nativeRequestId: undefined,
     feedback: "idle",
     feedbackError: undefined,
     feedbackUseful: undefined,
@@ -186,10 +202,12 @@ export function usePublicChat() {
   const [feedbackDetailsEnabled, setFeedbackDetailsEnabled] = useState(false);
   const [usageContextEnabled, setUsageContextEnabled] = useState(false);
   const [naturalProtocol, setNaturalProtocol] = useState<
-    "wanshitong-natural-sse-v1" | undefined
+    "wanshitong-natural-sse-v1" | typeof WEKNORA_STREAM_PROTOCOL | undefined
   >();
   const [turns, setTurns] = useState<PublicTurn[]>([]);
-  const [historySessions, setHistorySessions] = useState<PublicNaturalSession[]>([]);
+  const [historySessions, setHistorySessions] = useState<
+    PublicNaturalSession[]
+  >([]);
   const [conversationId, setConversationId] = useState(() => randomId("wst"));
   const csrfRef = useRef<string | undefined>(undefined);
   const conversationRef = useRef(conversationId);
@@ -250,7 +268,10 @@ export function usePublicChat() {
     conversationRef.current = nextConversationId;
     if (historyKeyRef.current) {
       try {
-        window.sessionStorage.setItem(historyKeyRef.current, nextConversationId);
+        window.sessionStorage.setItem(
+          historyKeyRef.current,
+          nextConversationId,
+        );
       } catch {
         // 本次会话仍可继续使用。
       }
@@ -279,7 +300,12 @@ export function usePublicChat() {
     setDeploymentId(session.deploymentId);
     setFeedbackDetailsEnabled(capabilities.feedback_details === true);
     setUsageContextEnabled(capabilities.request_usage_context === true);
-    setNaturalProtocol(capabilities.natural_stream_protocol);
+    setNaturalProtocol(
+      capabilities.natural_stream_protocol ??
+        (capabilities.stream_protocol === WEKNORA_STREAM_PROTOCOL
+          ? WEKNORA_STREAM_PROTOCOL
+          : undefined),
+    );
     setLoggedOut(false);
     if (session.deploymentId && session.user) {
       identityChangedRef.current = recordPublicIdentity(
@@ -287,7 +313,10 @@ export function usePublicChat() {
         session.user.userId,
       );
     }
-    if (capabilities.natural_stream_protocol) {
+    if (
+      capabilities.natural_stream_protocol ||
+      capabilities.stream_protocol === WEKNORA_STREAM_PROTOCOL
+    ) {
       const identity = session.user?.userId ?? session.sessionId;
       const key = `wst-natural-conversation:${session.deploymentId ?? "local"}:${identity}`;
       historyKeyRef.current = key;
@@ -514,11 +543,37 @@ export function usePublicChat() {
               ...turn,
               traceId: traceId ?? turn.traceId,
               provisionalAnswer: (turn.provisionalAnswer ?? "") + event.text,
+              nativeMessageId: event.native_message_id ?? turn.nativeMessageId,
+              nativeRequestId: event.native_request_id ?? turn.nativeRequestId,
               lastSignalAt: Date.now(),
             }));
             return true;
           }
-          if (event.type === "references") return true;
+          if (event.type === "references") {
+            updateTurn(turnId, (turn) => ({
+              ...turn,
+              traceId: traceId ?? turn.traceId,
+              citations: event.items,
+              lastSignalAt: Date.now(),
+            }));
+            return true;
+          }
+          if (event.type === "native_event") {
+            updateTurn(turnId, (turn) => ({
+              ...turn,
+              traceId: traceId ?? turn.traceId,
+              nativeEvents: [
+                ...(turn.nativeEvents ?? []),
+                {
+                  sequence: event.sequence,
+                  responseType: event.response_type,
+                  payload: event.native,
+                },
+              ],
+              lastSignalAt: Date.now(),
+            }));
+            return true;
+          }
           if (event.type === "final") {
             tracker.terminal = true;
             updateTurn(turnId, (turn) => ({
@@ -526,12 +581,19 @@ export function usePublicChat() {
               status: "completed",
               stageMessage: undefined,
               claims: [],
-              answer: finalAnswerMessage(event),
+              answer:
+                event.protocol === WEKNORA_STREAM_PROTOCOL
+                  ? (event.answer ?? "")
+                  : finalAnswerMessage(event),
               provisionalAnswer: undefined,
               citations: event.citations,
               errorMessage: undefined,
               partial: false,
               traceId: traceId ?? turn.traceId,
+              truncated: event.truncated,
+              finishReason: event.finish_reason,
+              nativeMessageId: event.native_message_id ?? turn.nativeMessageId,
+              nativeRequestId: event.native_request_id ?? turn.nativeRequestId,
             }));
             setPhase("completed");
             return false;
@@ -598,7 +660,8 @@ export function usePublicChat() {
         }
         tracker.terminal = true;
         updateTurn(turnId, (turn) => {
-          const partial = turn.claims.length > 0 || Boolean(turn.provisionalAnswer);
+          const partial =
+            turn.claims.length > 0 || Boolean(turn.provisionalAnswer);
           return {
             ...turn,
             status: "failed",
@@ -619,14 +682,19 @@ export function usePublicChat() {
         }
       }
     },
-    [clearLocalSession, naturalProtocol, sessionReady, updateTurn, usageContextEnabled],
+    [
+      clearLocalSession,
+      naturalProtocol,
+      sessionReady,
+      updateTurn,
+      usageContextEnabled,
+    ],
   );
 
   const submit = useCallback(
     (question: string) => {
-      const value = question.trim();
-      if (!value || busyRef.current) return;
-      void runTurn(randomId("turn"), value, conversationRef.current, false, {
+      if (!question.trim() || busyRef.current) return;
+      void runTurn(randomId("turn"), question, conversationRef.current, false, {
         entrypoint: "manual",
       });
     },
@@ -673,9 +741,8 @@ export function usePublicChat() {
       recommendationId?: string,
       entrypoint: "suggestion" | "popular" = "suggestion",
     ) => {
-      const value = question.trim();
-      if (!value || busyRef.current) return;
-      void runTurn(randomId("turn"), value, conversationRef.current, false, {
+      if (!question.trim() || busyRef.current) return;
+      void runTurn(randomId("turn"), question, conversationRef.current, false, {
         entrypoint: recommendationId ? entrypoint : "manual",
         ...(recommendationId ? { recommendation_id: recommendationId } : {}),
       });
@@ -771,6 +838,7 @@ export function usePublicChat() {
       traceId: string,
       referenceId: string,
       documentName: string,
+      original = false,
     ) => {
       const csrfToken = csrfRef.current;
       if (!csrfToken) throw new Error("公共会话已失效。请重新登录。");
@@ -779,11 +847,17 @@ export function usePublicChat() {
         traceId,
         referenceId,
         csrfToken,
+        original,
       });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = documentName.replace(/[\\/:*?"<>|]/g, "_");
+      if (!original && blob.type.startsWith("text/plain")) {
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+      } else {
+        anchor.download = documentName.replace(/[\\/:*?"<>|]/g, "_");
+      }
       document.body.append(anchor);
       anchor.click();
       anchor.remove();

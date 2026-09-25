@@ -1,7 +1,7 @@
 import { ArrowUp, Square } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 
-const PLACEHOLDER = "今天想了解什么？我会从内部资料中查找并核对来源";
+const PLACEHOLDER = "今天想了解什么？";
 
 export function PublicChatComposer({
   busy,
@@ -18,9 +18,8 @@ export function PublicChatComposer({
 }) {
   const [question, setQuestion] = useState(initialQuestion);
   const send = () => {
-    const value = question.trim();
-    if (!value || busy) return;
-    onSubmit(value);
+    if (!question.trim() || busy) return;
+    onSubmit(question);
     setQuestion("");
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {

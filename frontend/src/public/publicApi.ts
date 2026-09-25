@@ -25,8 +25,10 @@ export interface PublicShortcut {
 export interface PublicCapabilities {
   mode: "wanshitong";
   stream: true;
-  stream_protocol: "wanshitong-public-sse-v1";
-  natural_stream_protocol?: "wanshitong-natural-sse-v1";
+  stream_protocol: "wanshitong-public-sse-v1" | "wanshitong-weknora-sse-v1";
+  natural_stream_protocol?:
+    | "wanshitong-natural-sse-v1"
+    | "wanshitong-weknora-sse-v1";
   document_visibility: "all_internal";
   feedback: boolean;
   feedback_details?: boolean;
@@ -118,6 +120,47 @@ export interface PublicNaturalSession {
   updated_at: string;
 }
 
+export interface LegacyHistoryItem {
+  engine: "legacy";
+  read_only: true;
+  trace_id: string;
+  created_at: string;
+  status: string;
+  duration_ms: number | null;
+  body_available: boolean;
+  body_unavailable_reason: string | null;
+}
+
+export interface LegacyHistoryDetail extends LegacyHistoryItem {
+  question: string | null;
+  answer: string | null;
+  events: { occurred_at: string; event_name: string }[];
+}
+
+export async function getLegacyHistory(): Promise<LegacyHistoryItem[]> {
+  const session = await createPublicSession();
+  const response = await fetch(withAppBase("/api/public/legacy/history"), {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": session.csrfToken },
+  });
+  const result = await requireJson<{ items: LegacyHistoryItem[] }>(response);
+  return result.items;
+}
+
+export async function getLegacyHistoryDetail(
+  traceId: string,
+): Promise<LegacyHistoryDetail> {
+  const session = await createPublicSession();
+  const response = await fetch(
+    withAppBase(`/api/public/legacy/history/${encodeURIComponent(traceId)}`),
+    {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": session.csrfToken },
+    },
+  );
+  return requireJson<LegacyHistoryDetail>(response);
+}
+
 async function readError(response: Response): Promise<PublicApiError> {
   let body: PublicErrorBody = {};
   try {
@@ -204,7 +247,7 @@ export async function openPublicChat(options: {
   question: string;
   signal: AbortSignal;
   clientContext?: PublicUsageContext;
-  naturalProtocol?: "wanshitong-natural-sse-v1";
+  naturalProtocol?: "wanshitong-natural-sse-v1" | "wanshitong-weknora-sse-v1";
 }): Promise<Response> {
   const response = await fetch(withAppBase(PUBLIC_CHAT_PATH), {
     method: "POST",
@@ -266,7 +309,9 @@ export async function getPublicNaturalHistory(options: {
     },
     signal: options.signal,
   });
-  const body = await requireJson<{ turns: PublicNaturalHistoryTurn[] }>(response);
+  const body = await requireJson<{ turns: PublicNaturalHistoryTurn[] }>(
+    response,
+  );
   return body.turns;
 }
 
@@ -291,11 +336,12 @@ export async function getPublicNaturalSource(options: {
   traceId: string;
   referenceId: string;
   csrfToken: string;
+  original?: boolean;
 }): Promise<Blob> {
   const path =
     `/api/public/conversations/${encodeURIComponent(options.conversationId)}` +
     `/turns/${encodeURIComponent(options.traceId)}` +
-    `/references/${encodeURIComponent(options.referenceId)}/source`;
+    `/references/${encodeURIComponent(options.referenceId)}/${options.original ? "original" : "source"}`;
   const response = await fetch(withAppBase(path), {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": options.csrfToken },

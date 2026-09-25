@@ -1,6 +1,10 @@
 export interface PublicCitation {
   document_name: string;
   reference_id?: string;
+  source_available?: boolean;
+  original_available?: boolean;
+  native_chunk_id?: string | number | null;
+  native_knowledge_id?: string | number | null;
   alias?: string;
   source_kind?: string;
   department?: string;
@@ -10,6 +14,7 @@ export interface PublicCitation {
   source_relative_path?: string;
   locator?: string;
   quote?: string;
+  native_reference?: Record<string, unknown>;
 }
 
 interface PublicEventBase {
@@ -17,7 +22,12 @@ interface PublicEventBase {
   type: string;
   trace_id?: string;
   sequence: number;
+  native_request_id?: string | null;
+  native_message_id?: string | null;
+  native_session_id?: string | null;
 }
+
+export const WEKNORA_STREAM_PROTOCOL = "wanshitong-weknora-sse-v1" as const;
 
 export interface PublicMetaEvent extends PublicEventBase {
   type: "meta";
@@ -45,12 +55,15 @@ export interface PublicFinalEvent extends PublicEventBase {
   published?: boolean;
   citation_status?: "valid" | "missing" | "invalid";
   validation_level?: string;
+  truncated?: boolean;
+  finish_reason?: string | null;
 }
 
 export interface PublicAnswerDeltaEvent extends PublicEventBase {
   type: "answer_delta";
   text: string;
-  provisional: true;
+  provisional?: true;
+  truncated?: boolean;
 }
 
 export interface PublicReferencesEvent extends PublicEventBase {
@@ -70,6 +83,13 @@ export interface PublicCancelledEvent extends PublicEventBase {
   type: "cancelled";
 }
 
+export interface PublicNativeEvent extends PublicEventBase {
+  type: "native_event";
+  response_type: string;
+  done?: unknown;
+  native: Record<string, unknown>;
+}
+
 export type PublicStreamEvent =
   | PublicMetaEvent
   | PublicStageEvent
@@ -78,7 +98,8 @@ export type PublicStreamEvent =
   | PublicReferencesEvent
   | PublicFinalEvent
   | PublicErrorEvent
-  | PublicCancelledEvent;
+  | PublicCancelledEvent
+  | PublicNativeEvent;
 
 export interface SseFrame {
   event: string;
@@ -149,6 +170,7 @@ const EVENT_TYPES = new Set([
   "final",
   "error",
   "cancelled",
+  "native_event",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,7 +183,25 @@ function isCitation(value: unknown): value is PublicCitation {
     value.reference_id !== undefined &&
     (typeof value.reference_id !== "string" ||
       !/^ref_[0-9a-f]{32}$/.test(value.reference_id))
-  ) return false;
+  )
+    return false;
+  for (const key of ["native_chunk_id", "native_knowledge_id"]) {
+    const id = value[key];
+    if (
+      id !== undefined &&
+      id !== null &&
+      typeof id !== "string" &&
+      typeof id !== "number"
+    ) {
+      return false;
+    }
+  }
+  if (
+    value.source_available !== undefined &&
+    typeof value.source_available !== "boolean"
+  ) {
+    return false;
+  }
   if (value.department !== undefined && typeof value.department !== "string") {
     return false;
   }
@@ -210,17 +250,25 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
   }
   const type = typeof value.type === "string" ? value.type : frame.event;
   const natural = value.protocol === "wanshitong-natural-sse-v1";
+  const weknora = value.protocol === WEKNORA_STREAM_PROTOCOL;
   if (
     value.protocol !== undefined &&
     value.protocol !== "wanshitong-public-sse-v1" &&
-    !natural
+    !natural &&
+    !weknora
   ) {
     throw new PublicSseParseError();
   }
-  if (natural && type === "claim") throw new PublicSseParseError();
-  if ((type === "answer_delta" || type === "references") && !natural) {
+  if ((natural || weknora) && type === "claim") throw new PublicSseParseError();
+  if (weknora && type === "stage") throw new PublicSseParseError();
+  if (
+    (type === "answer_delta" || type === "references") &&
+    !natural &&
+    !weknora
+  ) {
     throw new PublicSseParseError();
   }
+  if (type === "native_event" && !weknora) throw new PublicSseParseError();
   const sequence = value.sequence;
   if (
     type !== frame.event ||
@@ -242,7 +290,17 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
   }
   if (
     type === "answer_delta" &&
-    (typeof value.text !== "string" || value.provisional !== true)
+    (typeof value.text !== "string" ||
+      (!weknora && value.provisional !== true) ||
+      (weknora &&
+        value.truncated !== undefined &&
+        typeof value.truncated !== "boolean"))
+  ) {
+    throw new PublicSseParseError();
+  }
+  if (
+    type === "native_event" &&
+    (typeof value.response_type !== "string" || !isRecord(value.native))
   ) {
     throw new PublicSseParseError();
   }
@@ -263,14 +321,16 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
     throw new PublicSseParseError();
   }
   if (
-    type === "final" && natural &&
+    type === "final" &&
+    natural &&
     (typeof value.published !== "boolean" ||
       !["valid", "missing", "invalid"].includes(String(value.citation_status)))
   ) {
     throw new PublicSseParseError();
   }
   if (
-    type === "final" && natural &&
+    type === "final" &&
+    natural &&
     (value.published
       ? value.citation_status !== "valid" ||
         typeof value.answer !== "string" ||
@@ -278,6 +338,29 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
       : value.answer !== null || (value.citations as unknown[]).length !== 0)
   ) {
     throw new PublicSseParseError();
+  }
+  if (
+    type === "final" &&
+    weknora &&
+    (typeof value.answer !== "string" ||
+      typeof value.truncated !== "boolean" ||
+      (value.finish_reason !== undefined &&
+        value.finish_reason !== null &&
+        typeof value.finish_reason !== "string"))
+  ) {
+    throw new PublicSseParseError();
+  }
+  if (weknora) {
+    for (const key of [
+      "native_request_id",
+      "native_message_id",
+      "native_session_id",
+    ]) {
+      const id = value[key];
+      if (id !== undefined && id !== null && typeof id !== "string") {
+        throw new PublicSseParseError();
+      }
+    }
   }
   return value as unknown as PublicStreamEvent;
 }

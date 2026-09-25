@@ -180,14 +180,16 @@ describe("湾事通公共应用", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.getByPlaceholderText(
-        "今天想了解什么？我会从内部资料中查找并核对来源",
+        "今天想了解什么？",
       ),
     ).toBeInTheDocument();
-    expect(fetchMock.mock.calls.map(([input]) => pathOf(input))).toEqual([
-      "/api/public/session",
-      "/api/public/capabilities",
-      "/api/public/popular-questions",
-    ]);
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([input]) => pathOf(input))).toEqual([
+        "/api/public/session",
+        "/api/public/capabilities",
+        "/api/public/popular-questions",
+      ]),
+    );
     expect(screen.queryByText("管理员登录")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "大家常问" })).toBeDisabled();
     expect(screen.getByText(/当前展示示例问题/)).toBeVisible();
