@@ -1,4 +1,4 @@
-"""模板原件可回读，索引只包含目录提示。"""
+"""模板原件、填写指引与重启后的索引保持一致。"""
 
 from __future__ import annotations
 
@@ -32,8 +32,12 @@ def test_template_source_survives_upload_and_runtime_restart(  # noqa: PLR0915
     chunker_mode: Literal["legacy", "parent-child"],
 ) -> None:
     monkeypatch.setenv("RAG_PRODUCT_MODE", "wanshitong")
+    guidance = "请写明项目目标和范围。"
+    example = "例如达到约定的响应指标。"
     source = build_package(
-        "<w:p><w:r><w:t>合成模板内部填写说明，不应进入索引。</w:t></w:r></w:p>"
+        f"<w:p><w:r><w:t>{guidance}</w:t></w:r></w:p>"
+        f"<w:p><w:r><w:t>{example}</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>XX 产品</w:t></w:r></w:p>"
     )
     expected_hash = hashlib.sha256(source).hexdigest()
     harness = build_product_harness(tmp_path, weknora_chunker_mode=chunker_mode)
@@ -101,24 +105,11 @@ def test_template_source_survives_upload_and_runtime_restart(  # noqa: PLR0915
         persistence = harness.runtime.p09.retrieval_runtime.persistence
         rows = persistence.control.chunk_rows(job.revision_id)
         assert rows
-        assert any("模板目录项" in row.citation_text for row in rows)
-        assert all("内部填写说明" not in row.citation_text for row in rows)
-        search = harness.runtime.sdk.search(
-            binding.project_id,
-            binding.knowledge_base_id,
-            "申请表模板",
-        )
-        assert search.evidence
-        assert any(
-            "模板目录项" in item.citation_text for item in search.evidence
-        )
-        answer = harness.runtime.sdk.answer(
-            binding.project_id,
-            binding.knowledge_base_id,
-            "申请表模板在哪里？",
-        )
-        assert answer.answer is not None
-        assert "内部填写说明" not in answer.answer
+        indexed_text = "\n".join(row.citation_text for row in rows)
+        assert guidance in indexed_text
+        assert example in indexed_text
+        assert "XX 产品" in indexed_text
+        assert "模板正文未入库" not in indexed_text
     finally:
         harness.close()
 
@@ -167,19 +158,12 @@ def test_template_source_survives_upload_and_runtime_restart(  # noqa: PLR0915
             ),
         )
         assert rebuilt.chunks
-        assert all(
-            "内部填写说明" not in item.citation_text for item in rebuilt.chunks
-        )
-        recovered_search = reopened.sdk.search(
-            binding.project_id,
-            binding.knowledge_base_id,
-            "申请表模板",
-        )
-        assert recovered_search.evidence
-        recovered_answer = reopened.sdk.answer(
-            binding.project_id,
-            binding.knowledge_base_id,
-            "申请表模板在哪里？",
-        )
-        assert recovered_answer.answer is not None
-        assert "内部填写说明" not in recovered_answer.answer
+        rebuilt_text = "\n".join(item.citation_text for item in rebuilt.chunks)
+        assert guidance in rebuilt_text
+        assert example in rebuilt_text
+        persisted_rows = persistence.control.chunk_rows(job.revision_id)
+        assert persisted_rows
+        persisted_text = "\n".join(row.citation_text for row in persisted_rows)
+        assert guidance in persisted_text
+        assert example in persisted_text
+        assert "XX 产品" in persisted_text

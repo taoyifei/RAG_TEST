@@ -38,13 +38,17 @@ def catalog_identity(relative_path: str) -> tuple[str, str, dict[str, object]]:
         raise ImportContractError("模板不属于固定四空间。")
     alias = "/".join((*normalized[:-1], normalized[-1] + "x"))
     title = html.unescape(PurePosixPath(normalized[-1]).stem) + "（原件 .doc）"
-    return alias, title, {
-        "source_relative_path": alias,
-        "department_name": normalized[0],
-        "category_path": list(normalized[1:-1]),
-        "document_title": title,
-        "topic_keys": [],
-    }
+    return (
+        alias,
+        title,
+        {
+            "source_relative_path": alias,
+            "department_name": normalized[0],
+            "category_path": list(normalized[1:-1]),
+            "document_title": title,
+            "topic_keys": [],
+        },
+    )
 
 
 def prepare_catalog(
@@ -68,12 +72,10 @@ def prepare_catalog(
         raise ImportContractError("目录项产物必须是新建的 DOCX 文件。")
     # 60 主机只执行 upload，不要求它安装本地 DOCX 生成依赖。
     from rag_app.wanshitong.template_catalog import (  # noqa: PLC0415
-        searchable_upload_content,
+        legacy_template_catalog_content,
     )
 
-    content = searchable_upload_content(
-        b"", source_relative_path=alias, document_title=title
-    )
+    content = legacy_template_catalog_content(title)
     artifact.write_bytes(content)
     return {
         "source_relative_path": relative_path,
