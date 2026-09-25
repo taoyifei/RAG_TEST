@@ -5,19 +5,22 @@ from __future__ import annotations
 import hmac
 import logging
 from html import escape
+from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlencode, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.responses import Response as StarletteResponse
 
-from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import PolicyDenied
 from rag_app.product.http_security import effective_request_scheme
 from rag_app.wanshitong.public_session import PUBLIC_SESSION_COOKIE
 from rag_app.wanshitong.sso_client import SsoClient, SsoValidationError
 from rag_app.wanshitong.sso_session import SsoSessionService
 from rag_app.wanshitong.sso_settings import SsoEntry, SsoSettings
+
+if TYPE_CHECKING:
+    from rag_app.composition.product_runtime import ProductRuntime
 
 SSO_ENTRY_PATH = "/sso/entry"
 SSO_CALLBACK_PATH = "/sso/callback"
@@ -26,24 +29,35 @@ _NO_STORE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 _LOGGER = logging.getLogger(__name__)
 
 
-def register_sso_routes(
+def register_sso_routes(  # noqa: PLR0913 - 兼容旧 Runtime 与独立代理参数。
     app: FastAPI,
     *,
-    runtime: ProductRuntime,
     settings: SsoSettings,
     sessions: SsoSessionService,
     client: SsoClient,
+    runtime: ProductRuntime | None = None,
+    trusted_proxies: frozenset[str] | None = None,
 ) -> None:
     """注册只在显式 SSO 模式启用的浏览器端点。
 
     Args:
         app: 已安装 Product 安全中间件的 FastAPI 应用。
-        runtime: 用于读取可信代理边界的 Product Runtime。
+        runtime: 旧 Product 调用方的可信代理配置来源。
         settings: 已 fail-fast 校验的有限入口配置。
         sessions: 部署隔离的 pending 与用户会话服务。
         client: 无重试的 RDMS validate 客户端。
+        trusted_proxies: 独立网关直接提供的可信代理 IP 集合。
 
     """
+    if runtime is None and trusted_proxies is None:
+        raise ValueError("SSO 必须显式提供可信代理配置。")
+    proxies = (
+        runtime.settings.trusted_proxies
+        if trusted_proxies is None and runtime is not None
+        else trusted_proxies
+    )
+    if proxies is None:
+        raise AssertionError("SSO 可信代理配置未解析。")
 
     @app.get(
         SSO_ENTRY_PATH,
@@ -51,7 +65,7 @@ def register_sso_routes(
         response_model=None,
     )
     def _entry(request: Request) -> StarletteResponse:
-        return _handle_entry(request, runtime, settings, sessions)
+        return _handle_entry(request, proxies, settings, sessions)
 
     @app.get(
         SSO_CALLBACK_PATH,
@@ -59,7 +73,7 @@ def register_sso_routes(
         response_model=None,
     )
     def _callback(request: Request) -> StarletteResponse:
-        return _handle_callback(request, runtime, settings, sessions, client)
+        return _handle_callback(request, proxies, settings, sessions, client)
 
     @app.get(SSO_LOGOUT_PATH, include_in_schema=False)
     def _logout_confirmation() -> HTMLResponse:
@@ -72,12 +86,12 @@ def register_sso_routes(
 
 def _handle_entry(
     request: Request,
-    runtime: ProductRuntime,
+    trusted_proxies: frozenset[str],
     settings: SsoSettings,
     sessions: SsoSessionService,
 ) -> StarletteResponse:
     try:
-        entry = _request_entry(request, runtime, settings)
+        entry = _request_entry(request, trusted_proxies, settings)
         return_to = _safe_return_to(
             request.query_params.get("return_to"),
             entry=entry,
@@ -113,7 +127,7 @@ def _handle_entry(
 
 def _handle_callback(  # noqa: PLR0911 - 安全回调必须显式失败关闭。
     request: Request,
-    runtime: ProductRuntime,
+    trusted_proxies: frozenset[str],
     settings: SsoSettings,
     sessions: SsoSessionService,
     client: SsoClient,
@@ -146,7 +160,7 @@ def _handle_callback(  # noqa: PLR0911 - 安全回调必须显式失败关闭。
         )
     try:
         entry = settings.entry_by_id(pending.origin_id)
-        current_entry = _request_entry(request, runtime, settings)
+        current_entry = _request_entry(request, trusted_proxies, settings)
     except ValueError as error:
         return _error_page("AUTH_ORIGIN_INVALID", str(error), status_code=400)
     if current_entry != entry or pending.service != entry.callback_url:
@@ -252,12 +266,12 @@ def _logout_error() -> JSONResponse:
 
 def _request_entry(
     request: Request,
-    runtime: ProductRuntime,
+    trusted_proxies: frozenset[str],
     settings: SsoSettings,
 ) -> SsoEntry:
     peer = request.client.host if request.client else ""
     host = request.headers.get("Host", "")
-    if peer in runtime.settings.trusted_proxies:
+    if peer in trusted_proxies:
         forwarded_host = request.headers.get("X-Forwarded-Host", "")
         if forwarded_host:
             host = forwarded_host
@@ -270,7 +284,7 @@ def _request_entry(
     ):
         raise ValueError("请求 Host 无效。")
     scheme = effective_request_scheme(
-        request, trusted_proxies=runtime.settings.trusted_proxies
+        request, trusted_proxies=trusted_proxies
     )
     return settings.entry_for_origin(f"{scheme}://{host}")
 
