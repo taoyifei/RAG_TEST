@@ -1,0 +1,35 @@
+[
+  {
+    "id": "source_scope_p0",
+    "query": "研发项目命名规范中，研发项目名称由哪些要素组成？"
+  },
+  {
+    "id": "explicit_document",
+    "query": "根据《附件4：研发项目命名规范》，研发项目名称由哪些要素组成？"
+  },
+  {
+    "id": "long_original_p0",
+    "query": "请完整说明研发项目从立项、实施、结题到验收的阶段、每阶段责任部门和需要提交的材料，并逐项给出来源。"
+  },
+  {
+    "id": "long_work_hours",
+    "query": "请说明研发工时的适用范围、填报方式、各方职责和审核要求，并逐项引用依据。"
+  },
+  {
+    "id": "short_project_start",
+    "query": "研发项目立项由哪些部门负责？"
+  },
+  {
+    "id": "follow_up",
+    "query": "那工时由谁审核？",
+    "conversation_context": ["刚才讨论了研发工时管理实施指引中的工时填报。"]
+  },
+  {
+    "id": "no_answer",
+    "query": "火星基地科研项目由哪个部门审批？"
+  },
+  {
+    "id": "explicit_missing",
+    "query": "根据《不存在的规范》，研发项目名称有哪些要素？"
+  }
+]

@@ -1,0 +1,50 @@
+{
+  "goal": "V3-03H source scope and request-local citations",
+  "base_commit": "9b366520453229e5b05770ae350ac9fe27ced69b",
+  "tested_commit": "5d2f723f8a18b04fb7dc75281a289c370c33200e",
+  "upstream_reviewed": "3e8b0bfc80b845b2d4b2ed683994748741450a97",
+  "environment": {
+    "candidate_port": 8289,
+    "production_port": 18288,
+    "candidate_image_id": "sha256:734df5b2ef4d01da5ca7b72b6cd431c542e5d70233f8cc4932bb2db107490f07",
+    "old_comparison_commit": "9b366520453229e5b05770ae350ac9fe27ced69b",
+    "comparison_active_index_revision_id": "irev_54dbcdc61a0fc99ad1004a51e6a2f60d",
+    "baseline_8289_container_id": "14c0f9a42c1479ef9c272ef4ff9f0c352c3855d292e9a5c9821f3021c0fdb591",
+    "baseline_8289_image_id": "sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06",
+    "production_18288_container_id": "fb65fdaeaec49c161bc6a7e73c9af7eca01cb9c5858341c073c75a64d64abf47",
+    "production_18288_image_id": "sha256:96f1aa48eed69de4a98f48af6f4fa89ebf5b35a6392c30697ee855b105f5ecd9"
+  },
+  "documents": [
+    {"title": "附件4：研发项目命名规范.docx", "sha256": "9b5a0d87e4439c3d2a2f95ce840094482fc14d2cd896fc589803490a78242241"},
+    {"title": "中移湾区（广东）创新研究院有限公司研发项目管理办法（V3.0）.docx", "sha256": "6214ee3ba9be300e24525696211a878e188dfe75d7ae9465e9b5f6651d302b8b"},
+    {"title": "中移湾区（广东）创新研究院有限公司研发工时管理实施指引V2.0.docx", "sha256": "3db328883e64cff30c27376973b1a75ea513bdc41dc647e3d4ae36d4823db5d0"},
+    {"title": "附件1：中国移动研发项目管理办法（2024版）.docx", "sha256": "e3ff175cd14e4a38f69b7fb5516ad2f693249cda1c0e7e6615611bc1694b629c"},
+    {"title": "附件4：研发项目命名规范.docx（同名隔离副本）", "sha256": "9b5a0d87e4439c3d2a2f95ce840094482fc14d2cd896fc589803490a78242241"}
+  ],
+  "verification": {
+    "python_targeted_passed": 60,
+    "frontend_targeted_passed": 13,
+    "frontend_build": "passed",
+    "ruff": "passed",
+    "ruff_format": "passed",
+    "mypy": "passed",
+    "go_chunker_unchanged_sha256": "491a0bd01577ecff835b0e2c93112e141f550e7bd07fabc523b98f8433e75f6f",
+    "sso_sessions_answered": 4,
+    "explicit_stop_trace": "trace_27fab426dc8a3aaea7e9231a7c9c1d28",
+    "explicit_stop_status": "CANCELLED",
+    "disconnect_trace": "trace_3809f79d8638a84595b1a199f7a33151",
+    "disconnect_status": "ANSWERED"
+  },
+  "cleanup": {
+    "isolated_container_removed": true,
+    "temporary_images_removed": true,
+    "isolated_root_removed": true,
+    "qdrant_new_collections_deleted": 5,
+    "qdrant_baseline_collections_preserved": 66,
+    "temporary_ssh_keys_removed_from_54_and_60": true,
+    "local_private_key_removed": true,
+    "baseline_8289_restored_healthy": true,
+    "production_18288_unchanged_healthy": true,
+    "both_pages_http_200": true
+  }
+}
