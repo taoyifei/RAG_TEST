@@ -1,0 +1,24 @@
+# 仅构建隔离 A 的后端镜像，不修改或重标记现有 8289/18288 镜像。
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG SOURCE_SHA
+USER root
+
+RUN rm -rf /usr/local/lib/python3.11/site-packages/rag_app
+COPY --chown=rag:rag src/rag_app/ /usr/local/lib/python3.11/site-packages/rag_app/
+COPY --chown=rag:rag migrations/universal_rag/ /app/migrations/universal_rag/
+COPY vendor/weknora-chunker/bin/linux-amd64/wb-chunker /usr/local/bin/wb-chunker
+COPY --chown=rag:rag vendor/weknora-chunker/LICENSE /app/licenses/WeKnora-LICENSE
+
+RUN chmod 755 /usr/local/bin/wb-chunker \
+    && chmod -R go-w /app/migrations/universal_rag /usr/local/lib/python3.11/site-packages/rag_app /app/licenses \
+    && python -c 'import pathlib,sys; pathlib.Path("/usr/local/lib/python3.11/site-packages/rag_app/_build_revision.py").write_text("SOURCE_REVISION = " + repr(sys.argv[1]) + "\n", encoding="utf-8")' "${SOURCE_SHA}" \
+    && python -c 'from rag_app.product.compatibility import write_manifest; write_manifest("/app/compatibility-manifest.json")' \
+    && python -c 'import pathlib,sys; from rag_app.product.asset_manifest import write_product_asset_manifest; write_product_asset_manifest(root=pathlib.Path("/app"), manifest_path=pathlib.Path("/app/product-assets.json"), source_revision=sys.argv[1])' "${SOURCE_SHA}" \
+    && chown rag:rag /app/compatibility-manifest.json /app/product-assets.json
+
+LABEL org.opencontainers.image.revision="${SOURCE_SHA}"
+USER rag:rag
+
+RUN rag-app product-asset-selfcheck --expected-revision "${SOURCE_SHA}"

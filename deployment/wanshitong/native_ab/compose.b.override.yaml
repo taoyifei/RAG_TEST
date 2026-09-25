@@ -1,0 +1,58 @@
+# 与 Tencent/WeKnora v0.8.2 原版 docker-compose.yml 合并使用。
+# 使用独立 project、容器名、卷和本机回环端口；上游问答源码不变。
+services:
+  app:
+    image: wechatopenai/weknora-app@sha256:bc8a534799fcb54045100daf4bc5db86270b38ae45c5f761c410c50b4dcd6cdc
+    pull_policy: never
+    container_name: wkab-native-b-app
+    ports: !override
+      - "127.0.0.1:18390:8080"
+    volumes:
+      - ./config/builtin_models.yaml:/app/config/builtin_models.yaml:ro
+    depends_on:
+      rerank-adapter:
+        condition: service_healthy
+
+  frontend:
+    image: wechatopenai/weknora-ui@sha256:83cfd9272e1219b5b5729f89d9c3f8d15a16e1b8cc17cacf638153cc0417290f
+    pull_policy: never
+    container_name: wkab-native-b-frontend
+    ports: !override
+      - "127.0.0.1:18391:80"
+
+  docreader:
+    image: wechatopenai/weknora-docreader@sha256:3c36e7e738ba515315523876d8041f9bb02809145a4e3b331e2550e4bff98b7a
+    pull_policy: never
+    container_name: wkab-native-b-docreader
+
+  postgres:
+    image: paradedb/paradedb@sha256:58bf87d2a6f1e72f56590b0f0ae1467e82c3f99ca203dde646672c8ac13148b2
+    pull_policy: never
+    container_name: wkab-native-b-postgres
+
+  redis:
+    image: redis@sha256:c9d92d840fd011c908f040592857c724ae6d877f2aba5c40ad963276507386b2
+    pull_policy: never
+    container_name: wkab-native-b-redis
+
+  rerank-adapter:
+    image: python:3.11-slim-bookworm
+    pull_policy: never
+    container_name: wkab-native-b-rerank-adapter
+    command: ["python", "/adapter/rerank_adapter.py"]
+    environment:
+      RERANK_UPSTREAM_URL: http://host.docker.internal:8092/rerank
+      RERANK_UPSTREAM_TIMEOUT_SECONDS: "30"
+      RERANK_ADAPTER_PORT: "8080"
+    volumes:
+      - ./rerank_adapter.py:/adapter/rerank_adapter.py:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - WeKnora-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped

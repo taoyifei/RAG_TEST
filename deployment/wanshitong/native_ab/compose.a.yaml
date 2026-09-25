@@ -1,0 +1,57 @@
+name: wkab-native-a-20260925
+
+services:
+  app:
+    image: rag-test-wanshitong:wkab-a-dca24a8
+    pull_policy: never
+    container_name: wkab-native-a-app
+    env_file:
+      - ./a.env.private
+    volumes:
+      - ${AB_A_ROOT:?required}/data:/data
+      - ${AB_A_ROOT:?required}/logs:/logs
+      - ${AB_A_ROOT:?required}/private-diagnostics:/private-diagnostics
+      - ${AB_A_SECRET_DIR:?required}:/run/rag-secrets:ro
+    ports:
+      - "127.0.0.1:18389:8088"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - internal
+      - egress
+    depends_on:
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.3
+    pull_policy: never
+    container_name: wkab-native-a-qdrant
+    environment:
+      QDRANT__SERVICE__API_KEY: ${AB_A_QDRANT_API_KEY:?required}
+    volumes:
+      - ${AB_A_ROOT:?required}/qdrant:/qdrant/storage
+    networks:
+      - internal
+    restart: "no"
+
+networks:
+  internal:
+    internal: true
+  egress:
+    driver: bridge
