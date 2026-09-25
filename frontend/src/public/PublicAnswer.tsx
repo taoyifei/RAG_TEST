@@ -14,6 +14,12 @@ const PROGRESS_STAGES = [
   { label: PUBLIC_STAGE_LABELS.generation, short: "组织回答" },
   { label: PUBLIC_STAGE_LABELS.validation, short: "核对来源" },
 ] as const;
+const GROUNDED_PROGRESS_STAGES = [
+  { label: PUBLIC_STAGE_LABELS.retrieval, short: "检索依据" },
+  { label: PUBLIC_STAGE_LABELS.evidence_organization, short: "整理依据" },
+  { label: PUBLIC_STAGE_LABELS.support_review, short: "核对支持" },
+  { label: PUBLIC_STAGE_LABELS.publication, short: "发布答复" },
+] as const;
 
 function progressHint(
   stageMessage: string | undefined,
@@ -47,6 +53,7 @@ export function PublicAnswer({
   onFeedbackLogin,
   onDownloadReference,
   onRetry,
+  onReleaseSource,
   turn,
 }: {
   feedbackDetailsEnabled?: boolean;
@@ -54,6 +61,7 @@ export function PublicAnswer({
   onFeedbackLogin?: () => void;
   onDownloadReference?: (referenceId: string, documentName: string) => Promise<void>;
   onRetry: () => void;
+  onReleaseSource?: () => void;
   turn: PublicTurn;
 }) {
   const active = turn.status === "submitting" || turn.status === "streaming";
@@ -106,7 +114,9 @@ export function PublicAnswer({
             )}
             {turn.stageHistory.length > 0 && (
               <ol className="wst-stage-history" aria-label="处理进度">
-                {PROGRESS_STAGES.map((stage) => (
+                {(turn.naturalProtocol === "wanshitong-natural-sse-v2"
+                  ? GROUNDED_PROGRESS_STAGES
+                  : PROGRESS_STAGES).map((stage) => (
                   <li
                     className={
                       stage.label === turn.stageMessage
@@ -165,6 +175,18 @@ export function PublicAnswer({
               <button onClick={onRetry} type="button">
                 <RotateCcw aria-hidden="true" size={15} />
                 重新尝试
+              </button>
+            )}
+          </div>
+        )}
+        {turn.publicationStatus === "SOURCE_CLARIFICATION" && (
+          <div className="wst-answer-notice">
+            <p>
+              问题中的《资料名称》无法唯一对应本知识库中的文档。你可以修改问题，写出准确文件名；也可以明确解除来源限定，搜索本知识库。
+            </p>
+            {onReleaseSource && (
+              <button onClick={onReleaseSource} type="button">
+                解除来源限定，搜索本知识库
               </button>
             )}
           </div>

@@ -22,6 +22,7 @@ _BOOK_TITLE = re.compile(r"《([^》]{1,160})》")
 _NEGATION = re.compile(r"不得|禁止|不能|不可|不允许|尚未|没有|不是|\bnot\b")
 _MAX_REWRITE_CHARS = 512
 _MAX_RESPONSE_CHARS = 2048
+_MAX_HISTORY_PROMPT_CHARS = 1000
 _SYSTEM = (
     "仅根据最近会话消解本次问题中的指代，输出一个完整检索问句。"
     "本次问题明确的对象、来源、否定、数值和时间范围必须保留；"
@@ -40,19 +41,33 @@ class QueryUnderstanding:
     model: str | None = None
 
 
-def understand_query(  # noqa: PLR0911
+def understand_query(  # noqa: PLR0911, PLR0912
     request: SearchRequest,
     model: object,
     cancellation: CancellationPort,
 ) -> QueryUnderstanding:
     """从有限测试会话生成至多一个附加检索问句。"""
-    if not request.conversation_context:
+    if not request.conversation_context and not request.natural_history:
         return QueryUnderstanding(None, "NO_HISTORY")
     method = getattr(model, "complete_query_understanding", None)
     if not callable(method):
         return QueryUnderstanding(None, "REWRITE_MODEL_UNAVAILABLE")
     complete = cast(Callable[..., NaturalCompletion], method)
-    history = "\n".join(request.conversation_context[-2:])[:1000]
+    if request.natural_history:
+        pairs = [
+            f"用户：{question}\n助手：{answer}"
+            for question, answer in request.natural_history[-2:]
+        ]
+        selected: list[str] = []
+        for pair in reversed(pairs):
+            if len("\n".join([pair, *selected])) > _MAX_HISTORY_PROMPT_CHARS:
+                break
+            selected.insert(0, pair)
+        if not selected:
+            return QueryUnderstanding(None, "HISTORY_PAIR_TOO_LONG")
+        history = "\n".join(selected)
+    else:
+        history = "\n".join(request.conversation_context[-2:])[:1000]
     messages = (
         NaturalMessage(role="system", content=_SYSTEM),
         NaturalMessage(

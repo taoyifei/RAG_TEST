@@ -1004,7 +1004,7 @@ class RetrievalService:
         )
         return configured
 
-    def search_natural(
+    def search_natural(  # noqa: PLR0913
         self,
         request: SearchRequest,
         *,
@@ -1012,6 +1012,8 @@ class RetrievalService:
         cancellation: CancellationPort,
         rewrite_enabled: bool = True,
         on_delta: Callable[[str], None] | None = None,
+        grounded: bool = False,
+        on_stage: Callable[[str], None] | None = None,
     ) -> NaturalAnswerResult:
         """从独立候选路径执行通用检索和自然回答。"""
         return WeKnoraStandardPipeline(self).run(
@@ -1020,6 +1022,8 @@ class RetrievalService:
             cancellation=cancellation,
             rewrite_enabled=rewrite_enabled,
             on_delta=on_delta,
+            grounded=grounded,
+            on_stage=on_stage,
         )
 
     def execution_identity(

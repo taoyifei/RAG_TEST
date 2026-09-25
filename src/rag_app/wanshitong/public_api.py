@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException, Path, Request, Response
+from fastapi import FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
@@ -23,7 +23,9 @@ from rag_app.query_executor import QueryAdmissionError
 from rag_app.tracing import TraceMode
 from rag_app.wanshitong.natural_stream import (
     NATURAL_PUBLIC_PROTOCOL,
+    NATURAL_PUBLIC_PROTOCOL_V2,
     NaturalPublicStream,
+    NaturalStreamExpiredError,
     NaturalStreamRegistry,
     public_natural_references,
 )
@@ -62,6 +64,7 @@ PUBLIC_SESSION_PATH = "/api/public/session"
 PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities"
 PUBLIC_CHAT_PATH = "/api/public/chat"
 PUBLIC_CHAT_STOP_PATH = "/api/public/chat/{trace_id}/stop"
+PUBLIC_CHAT_CONTINUE_PATH = "/api/public/chat/{trace_id}/continue"
 PUBLIC_FEEDBACK_PATH = "/api/public/feedback"
 PUBLIC_POPULAR_QUESTIONS_PATH = "/api/public/popular-questions"
 PUBLIC_CONVERSATIONS_PATH = "/api/public/conversations"
@@ -107,6 +110,7 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
     sessions: PublicSessionProvider,
     recommendations: QuestionRecommendationService,
     natural_public_enabled: bool = False,
+    natural_public_v2_enabled: bool = False,
     natural_public_engine: Literal["wk-standard-v1", "wk-standard-pc-v1"] = (
         "wk-standard-pc-v1"
     ),
@@ -120,6 +124,7 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
         sessions: 由部署主密钥派生的匿名会话服务。
         recommendations: 已审核公共题目录。
         natural_public_enabled: 仅候选部署启用的自然流开关。
+        natural_public_v2_enabled: 候选环境显式启用可信答复与可续接协议。
         natural_public_engine: 服务器固定的自然问答引擎。
 
     """
@@ -189,7 +194,11 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
         scope_service.binding()
         return PublicCapabilities(
             natural_stream_protocol=(
-                NATURAL_PUBLIC_PROTOCOL if natural_public_enabled else None
+                NATURAL_PUBLIC_PROTOCOL_V2
+                if natural_public_v2_enabled
+                else NATURAL_PUBLIC_PROTOCOL
+                if natural_public_enabled
+                else None
             ),
             shortcuts=tuple(
                 PublicShortcut(
@@ -271,14 +280,32 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
             binding.project_id, binding.knowledge_base_id
         )
         requested_protocol = request.headers.get("X-Wanshitong-Stream-Protocol")
+        if (
+            body.source_mode == "open"
+            and requested_protocol != NATURAL_PUBLIC_PROTOCOL_V2
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="source_mode open requires natural stream v2",
+            )
         if requested_protocol is not None:
-            if requested_protocol != NATURAL_PUBLIC_PROTOCOL:
+            if requested_protocol not in {
+                NATURAL_PUBLIC_PROTOCOL,
+                NATURAL_PUBLIC_PROTOCOL_V2,
+            }:
                 raise HTTPException(
                     status_code=406, detail="unsupported stream protocol"
                 )
             if not natural_public_enabled:
                 raise HTTPException(
                     status_code=409, detail="natural stream disabled"
+                )
+            if (
+                requested_protocol == NATURAL_PUBLIC_PROTOCOL_V2
+                and not natural_public_v2_enabled
+            ):
+                raise HTTPException(
+                    status_code=409, detail="natural stream v2 disabled"
                 )
             if body.conversation_id is None:
                 raise HTTPException(
@@ -300,6 +327,8 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
                 authorization_guard=lambda: _validate_stream_session(
                     sessions, cookie_value, principal
                 ),
+                protocol=requested_protocol,
+                ignore_mentioned_sources=body.source_mode == "open",
             )
             try:
                 natural_iterator = natural.start()
@@ -311,7 +340,25 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
                     retryable=True,
                     trace_id=trace_id,
                 ) from error
-            natural_streams.register(natural)
+            try:
+                natural_streams.register(natural)
+            except RuntimeError:
+                natural.cancel()
+                raise HTTPException(
+                    status_code=503, detail="natural stream capacity full"
+                ) from None
+
+            if requested_protocol == NATURAL_PUBLIC_PROTOCOL_V2:
+                return StreamingResponse(
+                    natural_iterator,
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-store, no-transform",
+                        "X-Accel-Buffering": "no",
+                        "X-Trace-Id": trace_id,
+                        "X-Run-Id": trace_id,
+                    },
+                )
 
             def cleanup_natural_stream() -> None:
                 try:
@@ -393,13 +440,76 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
                 status_code=404, detail="natural stream disabled"
             )
         principal, _ = _authenticate_public_request(request, sessions)
+        binding = scope_service.binding()
         return {
             "cancelled": natural_streams.cancel_owned(
                 trace_id,
                 owner_id=principal.owner_id,
                 conversation_id=body.conversation_id,
+                scope=KnowledgeBaseScope(
+                    project_id=binding.project_id,
+                    knowledge_base_id=binding.knowledge_base_id,
+                ),
             )
         }
+
+    @app.get(PUBLIC_CHAT_CONTINUE_PATH, tags=["wanshitong-public"])
+    def _continue_natural_chat(
+        request: Request,
+        trace_id: Annotated[str, Path(pattern=r"^trace_[0-9a-f]{32}$")],
+        conversation_id: Annotated[
+            str,
+            Query(
+                min_length=1,
+                max_length=128,
+                pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            ),
+        ],
+        last_sequence: Annotated[int, Query(ge=-1)] = -1,
+    ) -> StreamingResponse:
+        """按已鉴权运行的生产端序号重放并续接，不重新提交问题。"""
+        if not natural_public_v2_enabled:
+            raise HTTPException(
+                status_code=404, detail="natural stream v2 disabled"
+            )
+        if set(request.query_params) - {"conversation_id", "last_sequence"}:
+            raise HTTPException(
+                status_code=400, detail="unexpected query parameter"
+            )
+        principal, cookie_value = _authenticate_public_request(
+            request, sessions
+        )
+        binding = scope_service.binding()
+        stream = natural_streams.get_owned(
+            trace_id,
+            owner_id=principal.owner_id,
+            conversation_id=conversation_id,
+            scope=KnowledgeBaseScope(
+                project_id=binding.project_id,
+                knowledge_base_id=binding.knowledge_base_id,
+            ),
+        )
+        if stream is None:
+            raise HTTPException(
+                status_code=410, detail="run expired or unavailable"
+            )
+        try:
+            stream.assert_replayable(last_sequence)
+        except NaturalStreamExpiredError:
+            raise HTTPException(
+                status_code=410, detail="run events expired"
+            ) from None
+        _validate_stream_session(sessions, cookie_value, principal)
+        return StreamingResponse(
+            stream.iterate_after(last_sequence),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store, no-transform",
+                "X-Accel-Buffering": "no",
+                "X-Trace-Id": trace_id,
+                "X-Run-Id": trace_id,
+            },
+        )
 
     @app.get(PUBLIC_CONVERSATIONS_PATH, tags=["wanshitong-public"])
     def _natural_sessions(request: Request) -> dict[str, object]:
@@ -457,14 +567,34 @@ def register_public_routes(  # noqa: PLR0913, PLR0915
         records = runtime.conversations.natural_turns(
             scope, conversation_id, owner_id=principal.owner_id
         )
+        active = natural_streams.active_owned(
+            owner_id=principal.owner_id,
+            conversation_id=conversation_id,
+            scope=scope,
+        )
+        if active is not None and any(
+            item.trace_id == active.trace_id for item in records
+        ):
+            active = None
         return {
             "conversation_id": conversation_id,
+            "active_run": (
+                {
+                    "run_id": active.trace_id,
+                    "trace_id": active.trace_id,
+                    "question": active.question,
+                    "last_sequence": active.last_sequence,
+                }
+                if active is not None
+                else None
+            ),
             "turns": [
                 {
                     "turn_id": item.trace_id,
                     "trace_id": item.trace_id,
                     "question": item.question,
                     "status": item.status,
+                    "publication_status": item.publication_status,
                     "answer": item.answer,
                     "citation_status": item.citation_status,
                     "validation_level": item.validation_level,

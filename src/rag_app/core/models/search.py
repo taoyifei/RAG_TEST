@@ -154,6 +154,10 @@ class SearchRequest(FrozenModel):
     text: str = Field(min_length=1, max_length=8000, repr=False)
     limit: StrictInt = Field(default=10, gt=0, le=50)
     conversation_context: tuple[str, ...] = Field(default=(), max_length=8)
+    natural_history: tuple[tuple[str, str], ...] = Field(
+        default=(), max_length=8
+    )
+    ignore_mentioned_sources: bool = False
     selected_documents: tuple[SourceDocumentIdentity, ...] = ()
     metadata_filters: JsonObject = ()
     access_filters: JsonObject = ()
@@ -185,6 +189,22 @@ class SearchRequest(FrozenModel):
             for item in value
         ):
             raise ValueError("conversation turn 必须非空且有界。")
+        return value
+
+    @field_validator("natural_history")
+    @classmethod
+    def _bound_natural_history(
+        cls, value: tuple[tuple[str, str], ...]
+    ) -> tuple[tuple[str, str], ...]:
+        """仅接受完整、有界的原问与已批准答复。"""
+        if any(
+            not question.strip()
+            or not answer.strip()
+            or len(question) > _MAX_CONVERSATION_TURN_LENGTH
+            or len(answer) > _MAX_CONVERSATION_TURN_LENGTH
+            for question, answer in value
+        ):
+            raise ValueError("自然历史必须包含完整且有界的问答对。")
         return value
 
     @field_validator("metadata_filters", "access_filters", mode="before")

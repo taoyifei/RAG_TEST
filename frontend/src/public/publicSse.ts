@@ -10,6 +10,7 @@ export interface PublicCitation {
   source_relative_path?: string;
   locator?: string;
   quote?: string;
+  answer_unit_id?: string;
 }
 
 interface PublicEventBase {
@@ -162,6 +163,11 @@ function isCitation(value: unknown): value is PublicCitation {
     (typeof value.reference_id !== "string" ||
       !/^ref_[0-9a-f]{32}$/.test(value.reference_id))
   ) return false;
+  if (
+    value.answer_unit_id !== undefined &&
+    (typeof value.answer_unit_id !== "string" ||
+      !/^u[1-9][0-9]*$/.test(value.answer_unit_id))
+  ) return false;
   if (value.department !== undefined && typeof value.department !== "string") {
     return false;
   }
@@ -209,7 +215,9 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
     throw new PublicSseParseError();
   }
   const type = typeof value.type === "string" ? value.type : frame.event;
-  const natural = value.protocol === "wanshitong-natural-sse-v1";
+  const naturalV1 = value.protocol === "wanshitong-natural-sse-v1";
+  const naturalV2 = value.protocol === "wanshitong-natural-sse-v2";
+  const natural = naturalV1 || naturalV2;
   if (
     value.protocol !== undefined &&
     value.protocol !== "wanshitong-public-sse-v1" &&
@@ -219,6 +227,9 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
   }
   if (natural && type === "claim") throw new PublicSseParseError();
   if ((type === "answer_delta" || type === "references") && !natural) {
+    throw new PublicSseParseError();
+  }
+  if (naturalV2 && type === "answer_delta") {
     throw new PublicSseParseError();
   }
   const sequence = value.sequence;
@@ -327,6 +338,9 @@ export const PUBLIC_STAGE_LABELS: Readonly<Record<string, string>> = {
   retrieval: "正在检索内部资料",
   generation: "正在组织回答",
   validation: "正在核对回答与来源",
+  evidence_organization: "正在整理依据",
+  support_review: "正在核对答案",
+  publication: "正在发布答案",
 };
 
 export function publicStageLabel(stage: string): string {

@@ -1,0 +1,82 @@
+[
+  {
+    "case_id": "V01_DIRECT",
+    "question": "谁负责核对记录？",
+    "source": "甲方负责核对记录。",
+    "draft": "甲方负责核对记录。[S1]",
+    "expected_verdict": "supported",
+    "expected_coverage": "complete"
+  },
+  {
+    "case_id": "V02_SPECIFIC_ENTITY",
+    "question": "星海项目由谁审批？",
+    "source": "综合办公室负责项目审批工作。",
+    "draft": "星海项目由综合办公室审批。[S1]",
+    "expected_verdict": "unsupported",
+    "expected_coverage": "none"
+  },
+  {
+    "case_id": "V03_REVERSED_EXCEPTION",
+    "question": "合同另有约定时还需要财务审核吗？",
+    "source": "除非合同另有约定，申请须经财务审核。",
+    "draft": "即使合同另有约定，申请也必须经财务审核。[S1]",
+    "expected_verdict": "contradicted",
+    "expected_coverage": "none"
+  },
+  {
+    "case_id": "V04_AMOUNT_RATIO",
+    "question": "研发投入比例是多少？",
+    "source": "研发投入金额为300万元。",
+    "draft": "研发投入比例为30%。[S1]",
+    "expected_verdict": "unsupported",
+    "expected_coverage": "none"
+  },
+  {
+    "case_id": "V05_WORKING_DAYS",
+    "question": "通知后多少天提交？",
+    "source": "申请须自收到通知之日起10个工作日内提交。",
+    "draft": "申请须自收到通知之日起10个自然日内提交。[S1]",
+    "expected_verdict": "contradicted",
+    "expected_coverage": "none"
+  },
+  {
+    "case_id": "V06_TEMPLATE_EXAMPLE",
+    "question": "所有项目的验收指标是什么？",
+    "source": "指标可量化。例如，某项目可设置1000并发、2秒响应作为示例目标。",
+    "draft": "公司所有项目验收必须达到1000并发、2秒响应。[S1]",
+    "expected_verdict": "unsupported",
+    "expected_coverage": "none"
+  },
+  {
+    "case_id": "V07_COMPOSITE_HALF",
+    "question": "谁负责核对并批准预算？",
+    "source": "甲方负责核对记录。",
+    "draft": "甲方负责核对记录并批准预算。[S1]",
+    "expected_verdict": "unsupported",
+    "expected_coverage": "none"
+  },
+  {
+    "case_id": "V08_IRRELEVANT_ANSWER",
+    "question": "谁批准预算？",
+    "source": "甲方负责核对记录。",
+    "draft": "甲方负责核对记录。[S1]",
+    "expected_verdict": "unsupported",
+    "expected_coverage": "none"
+  },
+  {
+    "case_id": "V09_WRONG_TABLE_ROW",
+    "question": "B级对应金额是多少？",
+    "source": "等级|金额\nA级|1000元\nB级|2000元",
+    "draft": "B级对应金额是1000元。[S1]",
+    "expected_verdict": "contradicted",
+    "expected_coverage": "none"
+  },
+  {
+    "case_id": "V10_MISSING_CITATION",
+    "question": "谁负责核对记录？",
+    "source": "甲方负责核对记录。",
+    "draft": "甲方负责核对记录。",
+    "expected_verdict": "supported",
+    "expected_coverage": "complete"
+  }
+]

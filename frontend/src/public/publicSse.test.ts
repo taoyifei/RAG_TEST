@@ -125,4 +125,28 @@ describe("湾事通 SSE parser", () => {
       ).rejects.toBeInstanceOf(PublicSseParseError);
     }
   });
+
+  it("可信答复协议只接受阶段与最终答复，拒绝任何草稿增量", async () => {
+    const controller = new AbortController();
+    const seen: string[] = [];
+    await consumePublicSse(
+      body(
+        'event: stage\ndata: {"protocol":"wanshitong-natural-sse-v2","type":"stage","sequence":1,"stage":"support_review"}\n\n' +
+          'event: final\ndata: {"protocol":"wanshitong-natural-sse-v2","type":"final","sequence":2,"status":"SOURCE_CLARIFICATION","published":false,"answer":null,"citation_status":"missing","citations":[]}\n\n',
+      ),
+      (event) => {
+        seen.push(event.type);
+      },
+      controller.signal,
+    );
+    expect(seen).toEqual(["stage", "final"]);
+    expect(publicStageLabel("support_review")).toBe("正在核对答案");
+    await expect(
+      consumePublicSse(
+        body('event: answer_delta\ndata: {"protocol":"wanshitong-natural-sse-v2","type":"answer_delta","sequence":1,"text":"草稿","provisional":true}\n\n'),
+        vi.fn(),
+        controller.signal,
+      ),
+    ).rejects.toBeInstanceOf(PublicSseParseError);
+  });
 });

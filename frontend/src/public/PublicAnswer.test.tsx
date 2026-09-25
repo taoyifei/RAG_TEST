@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { PublicAnswer } from "./PublicAnswer";
@@ -45,4 +45,36 @@ it("生成等待期间只报告真实的连接活动，不伪造阶段进度", a
   expect(
     screen.getByText("暂未收到新数据，仍在等待回答服务；如需可停止后重试。"),
   ).toBeInTheDocument();
+});
+
+it("来源澄清显示明确解除操作，只有用户点击才触发", () => {
+  const release = vi.fn();
+  const now = Date.now();
+  render(
+    <PublicAnswer
+      onFeedback={vi.fn()}
+      onReleaseSource={release}
+      onRetry={vi.fn()}
+      turn={{
+        id: "turn-source",
+        conversationId: "wst-test",
+        question: "《规范》是什么？",
+        status: "completed",
+        publicationStatus: "SOURCE_CLARIFICATION",
+        stageHistory: [],
+        startedAt: now,
+        stageStartedAt: now,
+        lastSignalAt: now,
+        claims: [],
+        answer: "请明确要查询的资料或对象后重试。",
+        citations: [],
+        partial: false,
+        feedback: "idle",
+      }}
+    />,
+  );
+  expect(screen.getByText(/准确文件名/)).toBeInTheDocument();
+  expect(release).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "解除来源限定，搜索本知识库" }));
+  expect(release).toHaveBeenCalledTimes(1);
 });

@@ -26,7 +26,9 @@ export interface PublicCapabilities {
   mode: "wanshitong";
   stream: true;
   stream_protocol: "wanshitong-public-sse-v1";
-  natural_stream_protocol?: "wanshitong-natural-sse-v1";
+  natural_stream_protocol?:
+    | "wanshitong-natural-sse-v1"
+    | "wanshitong-natural-sse-v2";
   document_visibility: "all_internal";
   feedback: boolean;
   feedback_details?: boolean;
@@ -107,6 +109,7 @@ export interface PublicNaturalHistoryTurn {
   trace_id: string;
   question: string;
   status: string;
+  publication_status?: string | null;
   answer: string | null;
   citations: PublicCitation[];
   created_at: string;
@@ -116,6 +119,18 @@ export interface PublicNaturalSession {
   conversation_id: string;
   title: string;
   updated_at: string;
+}
+
+export interface PublicNaturalActiveRun {
+  run_id: string;
+  trace_id: string;
+  question: string;
+  last_sequence: number;
+}
+
+export interface PublicNaturalConversation {
+  turns: PublicNaturalHistoryTurn[];
+  active_run?: PublicNaturalActiveRun | null;
 }
 
 async function readError(response: Response): Promise<PublicApiError> {
@@ -204,7 +219,10 @@ export async function openPublicChat(options: {
   question: string;
   signal: AbortSignal;
   clientContext?: PublicUsageContext;
-  naturalProtocol?: "wanshitong-natural-sse-v1";
+  naturalProtocol?:
+    | "wanshitong-natural-sse-v1"
+    | "wanshitong-natural-sse-v2";
+  sourceMode?: "auto" | "open";
 }): Promise<Response> {
   const response = await fetch(withAppBase(PUBLIC_CHAT_PATH), {
     method: "POST",
@@ -220,6 +238,7 @@ export async function openPublicChat(options: {
     body: JSON.stringify({
       conversation_id: options.conversationId,
       query: options.question,
+      ...(options.sourceMode === "open" ? { source_mode: "open" } : {}),
       ...(options.clientContext
         ? { client_context: options.clientContext }
         : {}),
@@ -252,11 +271,40 @@ export async function stopPublicNaturalChat(options: {
   return result.cancelled;
 }
 
-export async function getPublicNaturalHistory(options: {
+export async function continuePublicNaturalChat(options: {
+  conversationId: string;
+  csrfToken: string;
+  traceId: string;
+  lastSequence: number;
+  signal: AbortSignal;
+}): Promise<Response> {
+  const query = new URLSearchParams({
+    conversation_id: options.conversationId,
+    last_sequence: String(options.lastSequence),
+  });
+  const path =
+    `/api/public/chat/${encodeURIComponent(options.traceId)}/continue?` +
+    query.toString();
+  const response = await fetch(withAppBase(path), {
+    credentials: "same-origin",
+    headers: {
+      Accept: "text/event-stream",
+      "X-CSRF-Token": options.csrfToken,
+    },
+    signal: options.signal,
+  });
+  if (!response.ok) throw await readError(response);
+  if (!response.body) {
+    throw new PublicApiError("回答流不可用。", { status: response.status });
+  }
+  return response;
+}
+
+export async function getPublicNaturalConversation(options: {
   conversationId: string;
   csrfToken: string;
   signal?: AbortSignal;
-}): Promise<PublicNaturalHistoryTurn[]> {
+}): Promise<PublicNaturalConversation> {
   const path = `/api/public/conversations/${encodeURIComponent(options.conversationId)}`;
   const response = await fetch(withAppBase(path), {
     credentials: "same-origin",
@@ -266,8 +314,15 @@ export async function getPublicNaturalHistory(options: {
     },
     signal: options.signal,
   });
-  const body = await requireJson<{ turns: PublicNaturalHistoryTurn[] }>(response);
-  return body.turns;
+  return requireJson<PublicNaturalConversation>(response);
+}
+
+export async function getPublicNaturalHistory(options: {
+  conversationId: string;
+  csrfToken: string;
+  signal?: AbortSignal;
+}): Promise<PublicNaturalHistoryTurn[]> {
+  return (await getPublicNaturalConversation(options)).turns;
 }
 
 export async function getPublicNaturalSessions(options: {

@@ -262,7 +262,9 @@ describe("公共问答新话题生命周期", () => {
     expect(stopCall?.[1]?.method).toBe("POST");
     expect(new Headers(stopCall?.[1]?.headers).get("X-CSRF-Token"))
       .toBe("a".repeat(64));
-    expect(JSON.parse(String(stopCall?.[1]?.body))).toEqual({
+    const stopBody = stopCall?.[1]?.body;
+    if (typeof stopBody !== "string") throw new Error("停止请求缺少 JSON 正文");
+    expect(JSON.parse(stopBody)).toEqual({
       conversation_id: conversationId,
     });
     expect(result.current.turns[0]?.status).toBe("cancelled");
@@ -409,5 +411,243 @@ describe("公共问答新话题生命周期", () => {
     expect(redirect).not.toHaveBeenCalled();
     expect(chatBodies(fetchMock)).toHaveLength(2);
     act(() => result.current.stop());
+  });
+
+  it("v2 断线从生产端序号续接同一 run，且不重交问题", async () => {
+    const traceId = `trace_${"a".repeat(32)}`;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = pathOf(input);
+      if (path === "/api/public/session") return Promise.resolve(Response.json({
+        session_id: "wstsid_11111111111111111111111111111111",
+        csrf_token: "a".repeat(64),
+        expires_in: 3600,
+        deployment_id: "candidate_8289",
+        user: { user_id: "1001", display_name: "测试用户" },
+      }));
+      if (path === "/api/public/capabilities") return Promise.resolve(Response.json({
+        mode: "wanshitong",
+        stream: true,
+        stream_protocol: "wanshitong-public-sse-v1",
+        natural_stream_protocol: "wanshitong-natural-sse-v2",
+        document_visibility: "all_internal",
+        feedback: true,
+        shortcuts: [],
+      }));
+      if (path === "/api/public/conversations") {
+        return Promise.resolve(Response.json({ items: [] }));
+      }
+      if (path.startsWith("/api/public/conversations/")) {
+        return Promise.resolve(Response.json({ turns: [], active_run: null }));
+      }
+      if (path === "/api/public/chat") {
+        return Promise.resolve(streamResponse(
+          event("meta", 0, { protocol: "wanshitong-natural-sse-v2", trace_id: traceId }) +
+          event("stage", 1, { protocol: "wanshitong-natural-sse-v2", trace_id: traceId, stage: "retrieval" }),
+        ));
+      }
+      if (path === `/api/public/chat/${traceId}/continue`) {
+        return Promise.resolve(streamResponse(event("final", 2, {
+          protocol: "wanshitong-natural-sse-v2",
+          trace_id: traceId,
+          status: "INSUFFICIENT_EVIDENCE",
+          published: false,
+          answer: null,
+          citation_status: "missing",
+          citations: [],
+          user_message: "当前资料不足以形成可核对的答复。",
+        })));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.submit("资料中有说明吗？"));
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("completed"));
+    expect(result.current.turns[0]?.publicationStatus).toBe("INSUFFICIENT_EVIDENCE");
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(input) === "/api/public/chat")).toHaveLength(1);
+    const replay = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === `/api/public/chat/${traceId}/continue`,
+    );
+    expect(replay).toBeDefined();
+    const replayInput = replay?.[0];
+    if (replayInput === undefined) throw new Error("缺少续接请求");
+    const replayUrl = typeof replayInput === "string"
+      ? replayInput
+      : replayInput instanceof URL
+        ? replayInput.href
+        : replayInput.url;
+    expect(new URL(replayUrl, "http://localhost").searchParams.get("last_sequence"))
+      .toBe("1");
+  });
+
+  it("v2 来源解除仅在用户操作后写入 source_mode=open", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = pathOf(input);
+      if (path === "/api/public/session") return Promise.resolve(Response.json({
+        session_id: "wstsid_11111111111111111111111111111111",
+        csrf_token: "a".repeat(64),
+        expires_in: 3600,
+        deployment_id: "candidate_8289",
+        user: { user_id: "1001", display_name: "测试用户" },
+      }));
+      if (path === "/api/public/capabilities") return Promise.resolve(Response.json({
+        mode: "wanshitong",
+        stream: true,
+        stream_protocol: "wanshitong-public-sse-v1",
+        natural_stream_protocol: "wanshitong-natural-sse-v2",
+        document_visibility: "all_internal",
+        feedback: true,
+        shortcuts: [],
+      }));
+      if (path === "/api/public/conversations") {
+        return Promise.resolve(Response.json({ items: [] }));
+      }
+      if (path.startsWith("/api/public/conversations/")) {
+        return Promise.resolve(Response.json({ turns: [{
+          turn_id: "trace_" + "b".repeat(32),
+          trace_id: "trace_" + "b".repeat(32),
+          question: "《规范》是什么？",
+          status: "NO_MATERIAL",
+          publication_status: "SOURCE_CLARIFICATION",
+          answer: null,
+          citations: [],
+          created_at: "2026-09-25T00:00:00Z",
+        }], active_run: null }));
+      }
+      if (path === "/api/public/chat") return Promise.resolve(streamResponse(
+        event("final", 0, {
+          protocol: "wanshitong-natural-sse-v2",
+          status: "INSUFFICIENT_EVIDENCE",
+          published: false,
+          answer: null,
+          citation_status: "missing",
+          citations: [],
+        }),
+      ));
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.turns[0]?.publicationStatus).toBe("SOURCE_CLARIFICATION"));
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(input) === "/api/public/chat")).toHaveLength(0);
+    act(() => result.current.releaseSource(
+      result.current.turns[0].id,
+      result.current.turns[0].question,
+      result.current.turns[0].conversationId,
+    ));
+    await waitFor(() => expect(result.current.turns[1]?.status).toBe("completed"));
+    expect(chatBodies(fetchMock)[0]).toMatchObject({
+      query: "《规范》是什么？",
+      source_mode: "open",
+    });
+  });
+
+  it("刷新后从服务端 active_run 恢复，不创建第二次生成", async () => {
+    const traceId = `trace_${"c".repeat(32)}`;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = pathOf(input);
+      if (path === "/api/public/session") return Promise.resolve(Response.json({
+        session_id: "wstsid_11111111111111111111111111111111",
+        csrf_token: "a".repeat(64),
+        expires_in: 3600,
+        deployment_id: "candidate_8289",
+        user: { user_id: "1001", display_name: "测试用户" },
+      }));
+      if (path === "/api/public/capabilities") return Promise.resolve(Response.json({
+        mode: "wanshitong",
+        stream: true,
+        stream_protocol: "wanshitong-public-sse-v1",
+        natural_stream_protocol: "wanshitong-natural-sse-v2",
+        document_visibility: "all_internal",
+        feedback: true,
+        shortcuts: [],
+      }));
+      if (path === "/api/public/conversations") {
+        return Promise.resolve(Response.json({ items: [] }));
+      }
+      if (path.startsWith("/api/public/conversations/")) {
+        return Promise.resolve(Response.json({
+          turns: [],
+          active_run: {
+            run_id: traceId,
+            trace_id: traceId,
+            question: "刷新前的问题",
+            last_sequence: 1,
+          },
+        }));
+      }
+      if (path === `/api/public/chat/${traceId}/continue`) {
+        return Promise.resolve(streamResponse(
+          event("meta", 0, { protocol: "wanshitong-natural-sse-v2", trace_id: traceId }) +
+          event("final", 1, {
+            protocol: "wanshitong-natural-sse-v2",
+            trace_id: traceId,
+            status: "INSUFFICIENT_EVIDENCE",
+            published: false,
+            answer: null,
+            citation_status: "missing",
+            citations: [],
+          }),
+        ));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("completed"));
+    expect(result.current.turns[0]?.question).toBe("刷新前的问题");
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(input) === "/api/public/chat")).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(
+      ([input]) => pathOf(input) === `/api/public/chat/${traceId}/continue`,
+    )).toHaveLength(1);
+  });
+
+  it("v2 停止等待服务端确认，不先把运行标为已取消", async () => {
+    const traceId = `trace_${"d".repeat(32)}`;
+    const stopResponse = deferredResponse();
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = pathOf(input);
+      if (path === "/api/public/session") return Promise.resolve(Response.json({
+        session_id: "wstsid_11111111111111111111111111111111",
+        csrf_token: "a".repeat(64),
+        expires_in: 3600,
+        deployment_id: "candidate_8289",
+        user: { user_id: "1001", display_name: "测试用户" },
+      }));
+      if (path === "/api/public/capabilities") return Promise.resolve(Response.json({
+        mode: "wanshitong",
+        stream: true,
+        stream_protocol: "wanshitong-public-sse-v1",
+        natural_stream_protocol: "wanshitong-natural-sse-v2",
+        document_visibility: "all_internal",
+        feedback: true,
+        shortcuts: [],
+      }));
+      if (path === "/api/public/conversations") return Promise.resolve(Response.json({ items: [] }));
+      if (path.startsWith("/api/public/conversations/")) {
+        return Promise.resolve(Response.json({ turns: [], active_run: null }));
+      }
+      if (path === "/api/public/chat") {
+        return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(event("meta", 0, {
+              protocol: "wanshitong-natural-sse-v2",
+              trace_id: traceId,
+            })));
+          },
+        }), { headers: { "Content-Type": "text/event-stream" } }));
+      }
+      if (path === `/api/public/chat/${traceId}/stop`) return stopResponse.promise;
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.submit("待停止的问题"));
+    await waitFor(() => expect(result.current.turns[0]?.traceId).toBe(traceId));
+    act(() => result.current.stop());
+    expect(result.current.turns[0].status).toBe("streaming");
+    await act(async () => {
+      stopResponse.resolve(Response.json({ cancelled: true }));
+      await stopResponse.promise;
+    });
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("cancelled"));
   });
 });

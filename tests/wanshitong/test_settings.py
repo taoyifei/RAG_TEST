@@ -48,7 +48,25 @@ def test_natural_public_defaults_off_and_has_fixed_engine() -> None:
         }
     )
     assert candidate.natural_public_enabled is True
+    assert candidate.natural_public_v2_enabled is False
     assert candidate.natural_public_engine == "wk-standard-pc-v1"
+    v2 = WanshitongSettings.from_environment(
+        {
+            "RAG_PRODUCT_MODE": "wanshitong",
+            "RAG_WANSHITONG_NATURAL_PUBLIC_ENABLED": "true",
+            "RAG_WANSHITONG_NATURAL_PUBLIC_V2_ENABLED": "true",
+        }
+    )
+    assert v2.natural_public_v2_enabled is True
+    assert (
+        WanshitongSettings.from_environment(
+            {
+                "RAG_PRODUCT_MODE": "wanshitong",
+                "RAG_WANSHITONG_NATURAL_PUBLIC_V2_ENABLED": "true",
+            }
+        ).natural_public_v2_enabled
+        is False
+    )
     with pytest.raises(ValueError, match="不是受支持的引擎"):
         WanshitongSettings.from_environment(
             {

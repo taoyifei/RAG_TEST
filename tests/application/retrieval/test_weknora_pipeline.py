@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -25,7 +26,11 @@ from rag_app.application.answering.natural_answer import (
     check_citations,
 )
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
-from rag_app.application.retrieval.context_reader import ContextReadResult
+from rag_app.application.retrieval.context_reader import (
+    ContextReadGroup,
+    ContextReadPiece,
+    ContextReadResult,
+)
 from rag_app.application.retrieval.expansion import RuleBasedNormalizer
 from rag_app.application.retrieval.natural_context import (
     NaturalBudget,
@@ -152,6 +157,124 @@ def test_natural_path_uses_real_candidate_without_atom_chain() -> None:
     assert metadata["pipeline_revision"] == "weknora-natural-v3-03h"
     assert metadata["citation_status"] == "valid"
     assert metadata["policy_fingerprint"] == NaturalBudget().identity
+
+
+def test_grounded_path_keeps_draft_private_until_support_review() -> None:
+    service, model = _scenario()
+    stages: list[str] = []
+    deltas: list[str] = []
+
+    def complete(
+        _messages: tuple[NaturalMessage, ...], **kwargs: object
+    ) -> NaturalCompletion:
+        if model.complete_natural.call_count == 1:
+            callback = kwargs.get("on_delta")
+            assert callable(callback)
+            callback("尚未核对的错误事实")
+            return NaturalCompletion(
+                text='甲方负责核对记录。<ref id="c1"/>',
+                model="fixture-qwen",
+                provider_calls=(),
+                finish_reason="stop",
+            )
+        return NaturalCompletion(
+            text=json.dumps(
+                {
+                    "coverage": "complete",
+                    "units": [
+                        {
+                            "unit_id": "u1",
+                            "verdict": "supported",
+                            "evidence": [
+                                {
+                                    "source_handle": "c1",
+                                    "quote": "甲方负责核对记录。",
+                                }
+                            ],
+                            "reason_code": "DIRECT_SUPPORT",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            model="fixture-qwen",
+            provider_calls=(),
+            finish_reason="stop",
+        )
+
+    model.complete_natural.side_effect = complete
+    result = WeKnoraStandardPipeline(service).run(
+        _request(),
+        engine_id="wk-standard-v1",
+        cancellation=StreamCancellation(),
+        grounded=True,
+        on_delta=deltas.append,
+        on_stage=stages.append,
+    )
+
+    assert result.publication_status == "GROUNDED_ANSWER"
+    assert (
+        result.validation_level == "source_binding_and_automated_support_review"
+    )
+    assert result.answer == "甲方负责核对记录。[S1]"
+    assert result.references[0].excerpt == "甲方负责核对记录。"
+    assert result.reviewed_units == result.supported_units == 1
+    assert model.complete_natural.call_count == 2
+    assert deltas == ["MODEL_DELTA_RECEIVED"]
+    assert stages == [
+        "retrieval",
+        "evidence_organization",
+        "support_review",
+        "publication",
+    ]
+    assert "尚未核对的错误事实" not in repr(deltas)
+
+
+def test_grounded_path_can_recover_missing_citation_only_after_review() -> None:
+    service, model = _scenario("甲方负责核对记录。")
+    model.complete_natural.side_effect = (
+        NaturalCompletion(
+            text="甲方负责核对记录。",
+            model="fixture-qwen",
+            provider_calls=(),
+            finish_reason="stop",
+        ),
+        NaturalCompletion(
+            text=json.dumps(
+                {
+                    "coverage": "complete",
+                    "units": [
+                        {
+                            "unit_id": "u1",
+                            "verdict": "supported",
+                            "evidence": [
+                                {
+                                    "source_handle": "c1",
+                                    "quote": "甲方负责核对记录。",
+                                }
+                            ],
+                            "reason_code": "DIRECT_SUPPORT",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            model="fixture-qwen",
+            provider_calls=(),
+            finish_reason="stop",
+        ),
+    )
+
+    result = WeKnoraStandardPipeline(service).run(
+        _request(),
+        engine_id="wk-standard-v1",
+        cancellation=StreamCancellation(),
+        grounded=True,
+    )
+
+    assert result.publication_status == "GROUNDED_ANSWER"
+    assert result.answer == "甲方负责核对记录。[S1]"
+    assert model.complete_natural.call_count == 2
 
 
 def test_natural_delta_arrives_before_provider_completion() -> None:
@@ -547,6 +670,68 @@ def test_natural_budget_matches_final_provider_message_gate() -> None:
         budget.input_limit + budget.output_tokens + budget.safety_margin
         <= budget.context_window
     )
+
+
+def test_context_group_maps_each_original_span_to_sent_text() -> None:
+    first = make_ranked_chunk(1, "甲方负责核对。")
+    second = make_ranked_chunk(2, "乙方负责存档。")
+    group = ContextReadGroup(
+        group_id="fixture-group",
+        kind="list",
+        seed_chunk_ids=(first.hydrated.chunk.chunk_id,),
+        pieces=(
+            ContextReadPiece(first, first.hydrated.chunk.source_spans[0]),
+            ContextReadPiece(second, second.hydrated.chunk.source_spans[0]),
+        ),
+        required_node_ids=(),
+        missing_node_ids=(),
+        source_complete=True,
+    )
+    service, _model = _scenario()
+    service._context_reader.read.return_value = ContextReadResult(
+        groups=(group,)
+    )
+
+    passages = WeKnoraStandardPipeline(service)._passages(
+        SimpleNamespace(), (first, second), "wk-standard-v1"
+    )
+
+    assert len(passages) == 1
+    assert passages[0].text == "甲方负责核对。\n乙方负责存档。"
+    spans = passages[0].reference.source_spans
+    assert [(s.chunk_start_char, s.chunk_end_char) for s in spans] == [
+        (0, len("甲方负责核对。")),
+        (len("甲方负责核对。") + 1, len(passages[0].text)),
+    ]
+    assert spans[1].source_start_char == 0
+
+
+def test_grounded_history_keeps_complete_recent_role_pairs() -> None:
+    service, _model = _scenario()
+    old_question = "旧问题" * 450
+    old_answer = "旧答复" * 450
+    recent = ("这个由谁负责？", "甲方负责核对记录。[S1]")
+    request = _request().model_copy(
+        update={
+            "conversation_context": ("旧的非角色检索包",),
+            "natural_history": ((old_question, old_answer), recent),
+        }
+    )
+
+    messages, _sent, _decisions = WeKnoraStandardPipeline(
+        service
+    )._fit_messages(request, (), NaturalBudget(), grounded=True)
+
+    assert [message.role for message in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert messages[1].content == recent[0]
+    assert messages[2].content == recent[1]
+    assert old_question not in tuple(message.content for message in messages)
+    assert "旧的非角色检索包" not in messages[-1].content
 
 
 def test_candidate_rerank_view_keeps_middle_fact_and_original_text() -> None:

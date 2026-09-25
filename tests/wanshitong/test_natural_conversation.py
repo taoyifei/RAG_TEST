@@ -90,6 +90,46 @@ def test_natural_history_is_scoped_encrypted_and_revoked(
             in store.context(scope, "natural-case", owner_id="owner-a")[0]
         )
         assert (
+            store.natural_history(scope, "natural-case", owner_id="owner-a")
+            == ()
+        )
+        grounded_question = "继续追问 MX-41？"
+        grounded = result.model_copy(
+            update={
+                "trace_id": new_id("trace"),
+                "publication_status": "GROUNDED_ANSWER",
+                "validation_level": (
+                    "source_binding_and_automated_support_review"
+                ),
+            }
+        )
+        assert store.commit_natural(
+            scope,
+            "natural-case",
+            grounded_question,
+            grounded,
+            owner_id="owner-a",
+        )
+        insufficient = result.model_copy(
+            update={
+                "trace_id": new_id("trace"),
+                "answer": None,
+                "references": (),
+                "citation_status": "missing",
+                "publication_status": "INSUFFICIENT_EVIDENCE",
+            }
+        )
+        assert store.commit_natural(
+            scope,
+            "natural-case",
+            "上轮资料是否足够？",
+            insufficient,
+            owner_id="owner-a",
+        )
+        assert store.natural_history(
+            scope, "natural-case", owner_id="owner-a"
+        ) == ((grounded_question, result.answer),)
+        assert (
             question.encode()
             not in harness.runtime.connections.database_path.read_bytes()
         )
@@ -118,7 +158,7 @@ def test_natural_history_is_scoped_encrypted_and_revoked(
         assert stale.references == ()
         assert (
             store.clear(scope, "natural-case", owner_id="owner-a").deleted_turns
-            == 1
+            == 3
         )
     finally:
         harness.close()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 from rag_app.wanshitong.mode import ProductMode
 from rag_app.wanshitong.sso_settings import SsoSettings
@@ -15,6 +15,7 @@ _DEMO_ALLOW_HTTP_ENVIRONMENT_KEY = "RAG_WANSHITONG_DEMO_ALLOW_HTTP"
 _DEPARTMENT_SHADOW_ENVIRONMENT_KEY = "RAG_WANSHITONG_DEPARTMENT_SHADOW_ENABLED"
 _POPULAR_QUESTIONS_ENVIRONMENT_KEY = "RAG_WANSHITONG_POPULAR_QUESTIONS_ENABLED"
 _NATURAL_PUBLIC_ENVIRONMENT_KEY = "RAG_WANSHITONG_NATURAL_PUBLIC_ENABLED"
+_NATURAL_PUBLIC_V2_ENVIRONMENT_KEY = "RAG_WANSHITONG_NATURAL_PUBLIC_V2_ENABLED"
 _NATURAL_ENGINE_ENVIRONMENT_KEY = "RAG_WANSHITONG_NATURAL_PUBLIC_ENGINE"
 
 
@@ -27,6 +28,7 @@ class WanshitongSettings:
     department_shadow_enabled: bool = False
     popular_questions_enabled: bool = True
     natural_public_enabled: bool = False
+    natural_public_v2_enabled: bool = False
     natural_public_engine: Literal["wk-standard-v1", "wk-standard-pc-v1"] = (
         "wk-standard-pc-v1"
     )
@@ -101,6 +103,16 @@ class WanshitongSettings:
             raise ValueError(
                 "RAG_WANSHITONG_NATURAL_PUBLIC_ENABLED 仅支持 true 或 false。"
             )
+        raw_natural_v2 = (
+            source.get(_NATURAL_PUBLIC_V2_ENVIRONMENT_KEY, "false")
+            .strip()
+            .casefold()
+        )
+        if raw_natural_v2 not in {"true", "false"}:
+            raise ValueError(
+                "RAG_WANSHITONG_NATURAL_PUBLIC_V2_ENABLED "
+                "仅支持 true 或 false。"
+            )
         natural_engine = source.get(
             _NATURAL_ENGINE_ENVIRONMENT_KEY, "wk-standard-pc-v1"
         ).strip()
@@ -124,7 +136,15 @@ class WanshitongSettings:
             natural_public_enabled=(
                 product_mode is ProductMode.WANSHITONG and raw_natural == "true"
             ),
-            natural_public_engine=natural_engine,
+            natural_public_v2_enabled=(
+                product_mode is ProductMode.WANSHITONG
+                and raw_natural == "true"
+                and raw_natural_v2 == "true"
+            ),
+            natural_public_engine=cast(
+                Literal["wk-standard-v1", "wk-standard-pc-v1"],
+                natural_engine,
+            ),
             sso=(
                 SsoSettings.from_environment(
                     source,

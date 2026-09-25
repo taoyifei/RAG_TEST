@@ -156,6 +156,7 @@ def configure_wanshitong_app(
         sessions=public_sessions,
         recommendations=recommendations,
         natural_public_enabled=resolved.natural_public_enabled,
+        natural_public_v2_enabled=resolved.natural_public_v2_enabled,
         natural_public_engine=resolved.natural_public_engine,
     )
     return service

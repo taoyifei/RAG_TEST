@@ -78,6 +78,9 @@ class NaturalReference(FrozenModel):
     citation_basis: Literal["original", "parsed_artifact", "mixed"]
     source_complete: bool
     excerpt: str | None = Field(default=None, max_length=1000, repr=False)
+    answer_unit_id: str | None = Field(default=None, pattern=r"^u[1-9][0-9]*$")
+    support_start_char: int | None = Field(default=None, ge=0)
+    support_end_char: int | None = Field(default=None, gt=0)
 
 
 class NaturalAnswerResult(FrozenModel):
@@ -92,7 +95,27 @@ class NaturalAnswerResult(FrozenModel):
     cited_aliases: tuple[str, ...] = ()
     citation_status: Literal["valid", "missing", "invalid"] = "missing"
     invalid_citations: tuple[str, ...] = ()
-    validation_level: Literal["citation_binding_only"] = "citation_binding_only"
+    validation_level: Literal[
+        "citation_binding_only", "source_binding_and_automated_support_review"
+    ] = "citation_binding_only"
+    publication_status: (
+        Literal[
+            "GROUNDED_ANSWER",
+            "GROUNDED_PARTIAL",
+            "INSUFFICIENT_EVIDENCE",
+            "SOURCE_CLARIFICATION",
+            "EXECUTION_ERROR",
+            "CANCELLED",
+        ]
+        | None
+    ) = None
+    reviewed_units: int = 0
+    supported_units: int = 0
+    support_review_ms: int = 0
+    support_review_model: str | None = None
+    support_review_prompt_tokens: int | None = None
+    support_review_completion_tokens: int | None = None
+    support_packet_sha256: str | None = None
     active_index_revision_id: str
     index_fingerprint: str
     serving_fingerprint: str

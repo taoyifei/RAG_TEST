@@ -58,6 +58,7 @@ class NaturalTurnRecord:
     question: str
     answer: str | None
     status: str
+    publication_status: str | None
     citation_status: str
     validation_level: str
     references: tuple[NaturalReference, ...]
@@ -455,11 +456,21 @@ class ProductConversationStore:
             and result.citation_status == "valid"
             and result.finish_reason == "stop"
             and bool(result.references)
+            and result.publication_status
+            in {
+                None,
+                "GROUNDED_ANSWER",
+                "GROUNDED_PARTIAL",
+            }
         )
-        no_material = result.reason_code in {
-            "NO_RETRIEVAL_MATERIAL",
-            "NO_BOUNDED_SOURCE_PASSAGE",
-        }
+        no_material = result.publication_status in {
+            "INSUFFICIENT_EVIDENCE",
+            "SOURCE_CLARIFICATION",
+        } or (
+            result.publication_status is None
+            and result.reason_code
+            in {"NO_RETRIEVAL_MATERIAL", "NO_BOUNDED_SOURCE_PASSAGE"}
+        )
         if not answered and not no_material:
             return False
         status = "ANSWERED" if answered else "NO_MATERIAL"
@@ -472,6 +483,7 @@ class ProductConversationStore:
             "status": status,
             "citation_status": result.citation_status,
             "validation_level": result.validation_level,
+            "publication_status": result.publication_status,
             "pipeline_revision": result.pipeline_revision,
             "references": [item.model_dump(mode="json") for item in references],
         }
@@ -684,6 +696,25 @@ class ProductConversationStore:
         except sqlite3.Error as error:
             raise _unavailable("conversation.natural_turns") from error
 
+    def natural_history(
+        self,
+        scope: KnowledgeBaseScope,
+        conversation_id: str,
+        *,
+        owner_id: str,
+    ) -> tuple[tuple[str, str], ...]:
+        """返回当前来源有效的完整问答对，供本轮模型理解指代。"""
+        return tuple(
+            (record.question, record.answer)
+            for record in self.natural_turns(
+                scope, conversation_id, owner_id=owner_id
+            )
+            if record.status == "ANSWERED"
+            and record.answer is not None
+            and record.publication_status
+            in {"GROUNDED_ANSWER", "GROUNDED_PARTIAL"}
+        )
+
     def natural_sessions(
         self,
         scope: KnowledgeBaseScope,
@@ -803,6 +834,11 @@ class ProductConversationStore:
             status=str(row["terminal_status"])
             if current
             else "SOURCE_UNAVAILABLE",
+            publication_status=(
+                str(payload["publication_status"])
+                if current and payload.get("publication_status") is not None
+                else None
+            ),
             citation_status=str(payload.get("citation_status", "missing")),
             validation_level=str(
                 payload.get("validation_level", "citation_binding_only")

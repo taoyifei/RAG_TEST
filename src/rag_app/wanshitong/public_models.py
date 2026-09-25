@@ -72,7 +72,9 @@ class PublicCapabilities(BaseModel):
     stream_protocol: Literal["wanshitong-public-sse-v1"] = (
         "wanshitong-public-sse-v1"
     )
-    natural_stream_protocol: Literal["wanshitong-natural-sse-v1"] | None = None
+    natural_stream_protocol: (
+        Literal["wanshitong-natural-sse-v1", "wanshitong-natural-sse-v2"] | None
+    ) = None
     trace_mode: Literal["SAFE"] = "SAFE"
     history_mode: Literal["full"] = "full"
     document_visibility: Literal["all_internal"] = "all_internal"
@@ -115,6 +117,7 @@ class PublicChatRequest(PublicRequest):
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
     )
     client_context: object | None = None
+    source_mode: Literal["auto", "open"] = "auto"
 
     @field_validator("query")
     @classmethod

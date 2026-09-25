@@ -204,6 +204,7 @@ export function WanshitongApp() {
           onPopularQuestionSubmit={submitPopularQuestion}
           onRefresh={suggestions.refresh}
           onRetry={chat.retry}
+          onReleaseSource={chat.releaseSource}
           onStop={chat.stop}
           onSubmit={submitCurrentQuestion}
           onSuggestedQuestionSubmit={submitSuggestedQuestion}
