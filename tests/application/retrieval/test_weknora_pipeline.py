@@ -52,7 +52,9 @@ from rag_app.product.query_history import _completion
 from tests.application.retrieval.helpers import make_ranked_chunk
 
 
-def _scenario(answer: str = "甲方负责核对记录。[S1]") -> tuple[object, Mock]:
+def _scenario(
+    answer: str = '甲方负责核对记录。<ref id="c1"/>',
+) -> tuple[object, Mock]:
     ranked = make_ranked_chunk(1, "甲方负责核对记录。")
     chunk = ranked.hydrated.chunk
     hit = ChannelHit(
@@ -147,7 +149,7 @@ def test_natural_path_uses_real_candidate_without_atom_chain() -> None:
     status, metadata = _completion(result, None, False)
     assert status == "ANSWERED"
     assert metadata["engine_id"] == "wk-standard-v1"
-    assert metadata["pipeline_revision"] == "weknora-natural-v3-02"
+    assert metadata["pipeline_revision"] == "weknora-natural-v3-03h"
     assert metadata["citation_status"] == "valid"
     assert metadata["policy_fingerprint"] == NaturalBudget().identity
 
@@ -163,7 +165,7 @@ def test_natural_delta_arrives_before_provider_completion() -> None:
         on_delta("甲方")
         assert release.wait(timeout=5)
         return NaturalCompletion(
-            text="甲方负责核对记录。[S1]",
+            text='甲方负责核对记录。<ref id="c1"/>',
             model="fixture-qwen",
             provider_calls=(),
             finish_reason="stop",
@@ -204,7 +206,7 @@ def test_literal_and_incomplete_citation_markers_are_not_rebound() -> None:
 def test_unbound_citation_is_recorded_without_public_answer(
     citation: str,
 ) -> None:
-    service, model = _scenario(f"甲方负责核对记录。[S1]{citation}")
+    service, model = _scenario(f'甲方负责核对记录。<ref id="c1"/>{citation}')
 
     result = WeKnoraStandardPipeline(service).run(
         _request(),
@@ -213,7 +215,7 @@ def test_unbound_citation_is_recorded_without_public_answer(
     )
 
     assert result.answer is None
-    assert result.draft == f"甲方负责核对记录。[S1]{citation}"
+    assert result.draft == "甲方负责核对记录。[S1]"
     assert result.reason_code == "CITATION_INVALID"
     assert result.citation_status == "invalid"
     assert result.invalid_citations

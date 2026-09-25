@@ -8,7 +8,7 @@ from rag_app.application.answering.natural_answer import NaturalMessage
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.tokenization import estimate_tokens
 
-NATURAL_PIPELINE_REVISION = "weknora-natural-v3-02"
+NATURAL_PIPELINE_REVISION = "weknora-natural-v3-03h"
 _MESSAGE_OVERHEAD = 16  # 与现有 Chat adapter 的消息封装估算一致。
 _MIN_NATURAL_INPUT_TOKENS = 256
 

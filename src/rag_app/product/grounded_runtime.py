@@ -490,7 +490,7 @@ class ProductGroundedModel:
                         prompt_version=(
                             "weknora-query-v3-02"
                             if rewrite
-                            else "weknora-natural-v3-02"
+                            else "weknora-natural-v3-03h"
                         ),
                     ),
                 )

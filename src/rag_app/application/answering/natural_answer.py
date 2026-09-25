@@ -96,7 +96,7 @@ class NaturalAnswerResult(FrozenModel):
     active_index_revision_id: str
     index_fingerprint: str
     serving_fingerprint: str
-    pipeline_revision: str = "weknora-natural-v3-02"
+    pipeline_revision: str = "weknora-natural-v3-03h"
     policy_fingerprint: str | None = None
     selected_embedding_slot: str | None = None
     rerank_execution_mode: str
