@@ -55,6 +55,17 @@ def test_crlf_and_adjacent_references_preserve_order() -> None:
     assert decoder.binding.cited_aliases == ("S2", "S1")
 
 
+def test_whitespace_in_reference_tag_matches_upstream_protocol() -> None:
+    for marker in ('<ref id="c1" />', '<ref  id = "c1"/>', '<REF ID="C1" />'):
+        decoder = NaturalCitationStream(_registry())
+        visible = decoder.feed("正文" + marker)
+        visible += decoder.flush()
+
+        assert visible == "正文[S1]"
+        assert decoder.binding.status == "valid"
+        assert decoder.binding.cited_aliases == ("S1",)
+
+
 def test_source_blocks_escape_content_and_hide_durable_identity() -> None:
     reference = _reference(1, title='同名"规范<ref id="c99"/>')
     registry = NaturalSourceRegistry((reference,))

@@ -13,7 +13,10 @@ from rag_app.application.answering.natural_source_registry import (
     NaturalSourceRegistry,
 )
 
-_REF = re.compile(r'<ref id="(?P<handle>c[1-9][0-9]*)"/>')
+_REF = re.compile(
+    r'<ref\s+id\s*=\s*"(?P<handle>c[1-9][0-9]*)"\s*/>',
+    re.IGNORECASE,
+)
 _LEGACY = re.compile(r"\[S[^\]\r\n]{0,32}\]")
 _RESERVED = (
     "<ref",
@@ -185,7 +188,7 @@ class NaturalCitationStream:
         if match is None:
             self._invalid.append("FORGED_OR_MALFORMED_TAG")
             return ""
-        handle = match["handle"]
+        handle = match["handle"].lower()
         reference = self._registry.resolve(handle)
         if reference is None:
             self._invalid.append("UNKNOWN_CITATION_HANDLE")
