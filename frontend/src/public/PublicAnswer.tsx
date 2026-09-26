@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { withAppBase } from "../app/basePath";
 import { PublicCitations } from "./PublicCitations";
 import { PublicFeedback } from "./PublicFeedback";
+import { PublicProcess } from "./PublicProcess";
 import { PUBLIC_STAGE_LABELS } from "./publicSse";
 import type { PublicFeedbackSubmission } from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
@@ -132,6 +133,8 @@ export function PublicAnswer({
   turn: PublicTurn;
 }) {
   const active = turn.status === "submitting" || turn.status === "streaming";
+  const nativeProcess =
+    turn.nativeProtocol === true || Boolean(turn.nativeEvents?.length);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const stageSeconds = Math.max(
     0,
@@ -168,7 +171,8 @@ export function PublicAnswer({
         湾
       </div>
       <div className="wst-answer-body">
-        {active && turn.stageMessage && (
+        {nativeProcess && <PublicProcess turn={turn} />}
+        {!nativeProcess && active && turn.stageMessage && (
           <div className="wst-progress">
             <p className="wst-stage">
               <span aria-hidden="true" className="wst-stage-dot" />
@@ -212,12 +216,16 @@ export function PublicAnswer({
         {turn.answer !== undefined ? (
           <MarkdownAnswer content={turn.answer} turn={turn} />
         ) : turn.provisionalAnswer ? (
-          <div className="wst-claims">
-            <p>
-              {active
-                ? "回答生成中 · 以下为实时正文"
-                : "回答已中断 · 以下为已收到的正文片段"}
-            </p>
+          <div
+            className={nativeProcess && active ? "wst-streaming-answer" : "wst-claims"}
+          >
+            {!nativeProcess && (
+              <p>
+                {active
+                  ? "回答生成中 · 以下为实时正文"
+                  : "回答已中断 · 以下为已收到的正文片段"}
+              </p>
+            )}
             <MarkdownAnswer content={turn.provisionalAnswer} turn={turn} />
           </div>
         ) : (
@@ -231,25 +239,6 @@ export function PublicAnswer({
               ))}
             </div>
           )
-        )}
-        {turn.nativeEvents && turn.nativeEvents.length > 0 && (
-          <section className="wst-native-events" aria-label="知识库处理过程">
-            {turn.nativeEvents.map((event) => {
-              const content = event.payload.content;
-              return (
-                <div className="wst-native-event" key={event.sequence}>
-                  <strong>{event.responseType}</strong>
-                  {typeof content === "string" && content && (
-                    <MarkdownAnswer content={content} turn={turn} />
-                  )}
-                  <details>
-                    <summary>原生事件详情</summary>
-                    <pre>{JSON.stringify(event.payload, null, 2)}</pre>
-                  </details>
-                </div>
-              );
-            })}
-          </section>
         )}
         {turn.truncated && turn.status === "completed" && (
           <p className="wst-answer-notice">知识库提示本次回答已截断。</p>

@@ -66,7 +66,7 @@ export function PublicQuestionTabs({
       ) : (
         <div className="wst-popular-list" role="tabpanel">
           <p className="wst-question-note">
-            根据最近 {popular.window_days} 天已完成统计排序 · 更新于{" "}
+            运营审核通过的题目，优先按最近 {popular.window_days} 天真实提问排序 · 最近审核于{" "}
             {popular.generated_at
               ? new Date(popular.generated_at).toLocaleString("zh-CN")
               : "未知"}

@@ -67,6 +67,7 @@ export interface PublicTurn {
   lastSignalAt: number;
   claims: PublicClaim[];
   nativeEvents?: PublicNativeActivity[];
+  nativeProtocol?: boolean;
   answer?: string;
   provisionalAnswer?: string;
   citations: PublicCitation[];
@@ -148,6 +149,7 @@ function resetTurn(turn: PublicTurn): PublicTurn {
     stageStartedAt: Date.now(),
     lastSignalAt: Date.now(),
     claims: [],
+    nativeEvents: [],
     answer: undefined,
     provisionalAnswer: undefined,
     citations: [],
@@ -167,6 +169,7 @@ function resetTurn(turn: PublicTurn): PublicTurn {
 function restoreNaturalTurn(
   conversationId: string,
   item: PublicNaturalHistoryTurn,
+  nativeProtocol: boolean,
 ): PublicTurn {
   const startedAt = Date.parse(item.created_at) || Date.now();
   return {
@@ -179,6 +182,7 @@ function restoreNaturalTurn(
     stageStartedAt: startedAt,
     lastSignalAt: startedAt,
     claims: [],
+    nativeProtocol,
     answer:
       item.answer ??
       (item.status === "SOURCE_UNAVAILABLE"
@@ -334,7 +338,16 @@ export function usePublicChat() {
           csrfToken: session.csrfToken,
           signal,
         });
-        setTurns(history.map((item) => restoreNaturalTurn(restored, item)));
+        setTurns(
+          history.map((item) =>
+            restoreNaturalTurn(
+              restored,
+              item,
+              (capabilities.natural_stream_protocol ??
+                capabilities.stream_protocol) === WEKNORA_STREAM_PROTOCOL,
+            ),
+          ),
+        );
         setHistorySessions(
           await getPublicNaturalSessions({
             csrfToken: session.csrfToken,
@@ -447,6 +460,7 @@ export function usePublicChat() {
             stageStartedAt: Date.now(),
             lastSignalAt: Date.now(),
             claims: [],
+            nativeProtocol: naturalProtocol === WEKNORA_STREAM_PROTOCOL,
             citations: [],
             partial: false,
             feedback: "idle",
@@ -718,7 +732,13 @@ export function usePublicChat() {
       conversationRef.current = selectedConversationId;
       setConversationId(selectedConversationId);
       setTurns(
-        history.map((item) => restoreNaturalTurn(selectedConversationId, item)),
+        history.map((item) =>
+          restoreNaturalTurn(
+            selectedConversationId,
+            item,
+            naturalProtocol === WEKNORA_STREAM_PROTOCOL,
+          ),
+        ),
       );
       if (historyKeyRef.current) {
         try {

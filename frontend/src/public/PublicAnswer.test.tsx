@@ -115,6 +115,61 @@ it("实时正文与引用可同时显示，且不宣称内容已核验", () => {
   expect(screen.queryByText(/已核验/)).not.toBeInTheDocument();
 });
 
+it("原生流只显示检索过程和实时答案，不暴露事件正文", () => {
+  const now = Date.now();
+  const turn: PublicTurn = {
+    id: "turn-native",
+    conversationId: "wst-test",
+    question: "开发中心是干嘛的",
+    status: "streaming",
+    nativeProtocol: true,
+    stageHistory: [],
+    startedAt: now,
+    stageStartedAt: now,
+    lastSignalAt: now,
+    claims: [],
+    provisionalAnswer: "开发中心负责**研发项目**。",
+    nativeEvents: [
+      {
+        sequence: 1,
+        responseType: "tool_result",
+        payload: {
+          content: "不应显示的原生理解详情",
+          data: { tool_name: "query_understand", success: true },
+        },
+      },
+      {
+        sequence: 2,
+        responseType: "tool_call",
+        payload: { data: { tool_name: "knowledge_search" } },
+      },
+      {
+        sequence: 3,
+        responseType: "tool_result",
+        payload: {
+          content: "不应显示的检索详情",
+          data: { tool_name: "knowledge_search", success: true, count: 6 },
+        },
+      },
+    ],
+    citations: [
+      { document_name: "职责.docx", native_knowledge_id: "doc-1" },
+      { document_name: "职责.docx", native_knowledge_id: "doc-1" },
+      { document_name: "流程.docx", native_knowledge_id: "doc-2" },
+    ],
+    partial: false,
+    feedback: "idle",
+  };
+  render(<PublicAnswer onFeedback={vi.fn()} onRetry={vi.fn()} turn={turn} />);
+  expect(screen.getByText("检索完成 · 引用了 2 篇文档")).toBeVisible();
+  expect(screen.getByText("已完成问题理解")).toBeVisible();
+  expect(screen.getByText("检索知识库 · 找到 6 个结果")).toBeVisible();
+  expect(screen.getByText("研发项目").tagName).toBe("STRONG");
+  expect(screen.queryByText("原生事件详情")).not.toBeInTheDocument();
+  expect(screen.queryByText("不应显示的检索详情")).not.toBeInTheDocument();
+  expect(screen.getByText("引用依据（3段）")).toBeInTheDocument();
+});
+
 it("原生消息资源图片在完成后走同源会话鉴权地址", () => {
   const now = Date.now();
   const turn: PublicTurn = {

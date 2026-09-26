@@ -2321,6 +2321,57 @@ label:has(input[type="checkbox"]) {
 .wst-answer-body {
   min-width: 0;
 }
+.wst-native-process {
+  margin: 0 0 20px;
+  color: #aebbb5;
+  font-size: 13px;
+}
+.wst-native-process > summary {
+  width: fit-content;
+  cursor: pointer;
+  line-height: 1.6;
+}
+.wst-native-process > summary:hover,
+.wst-native-process > summary:focus-visible {
+  color: #d7e5dc;
+}
+.wst-native-process ol {
+  margin: 14px 0 0 6px;
+  padding: 0 0 0 22px;
+  border-left: 1px solid rgb(160 180 169 / 25%);
+  list-style: none;
+}
+.wst-native-process li {
+  position: relative;
+  min-height: 29px;
+  padding: 0 0 11px 8px;
+  line-height: 1.5;
+}
+.wst-native-process li::before {
+  position: absolute;
+  top: 3px;
+  left: -29px;
+  width: 9px;
+  height: 9px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: #17191b;
+  content: "";
+}
+.wst-native-process li:last-child {
+  padding-bottom: 0;
+  color: #82d7b9;
+}
+.wst-streaming-answer::after {
+  display: inline-block;
+  width: 7px;
+  height: 16px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--wst-accent);
+  content: "";
+  animation: wst-pulse 1s steps(2, start) infinite;
+}
 .wst-progress {
   width: min(520px, 100%);
   max-width: 100%;
@@ -2733,15 +2784,18 @@ label:has(input[type="checkbox"]) {
   color: #dce3df;
   background: transparent;
 }
+.wst-chat-suggestions {
+  margin-top: 56px;
+}
 .wst-chat-composer {
   position: sticky;
   z-index: 10;
   bottom: 0;
-  margin-top: 56px;
+  margin-top: 24px;
   padding: 26px 0 24px;
   background: linear-gradient(to bottom, transparent, #17191b 24%);
 }
-.wst-chat-composer .wst-suggestions {
+.wst-chat-suggestions .wst-suggestions {
   margin: 0 0 14px;
   animation: wst-fade 220ms ease-out both;
 }
@@ -2855,6 +2909,19 @@ label:has(input[type="checkbox"]) {
 .wst-root[data-theme="light"] .wst-answer-brand {
   border-color: #b8dfcc;
   background: #e9f7ee;
+}
+.wst-root[data-theme="light"] .wst-native-process {
+  color: #53685b;
+}
+.wst-root[data-theme="light"] .wst-native-process > summary:hover,
+.wst-root[data-theme="light"] .wst-native-process > summary:focus-visible {
+  color: #0b6856;
+}
+.wst-root[data-theme="light"] .wst-native-process li::before {
+  background: #f7f9f7;
+}
+.wst-root[data-theme="light"] .wst-native-process li:last-child {
+  color: #0b6856;
 }
 .wst-root[data-theme="light"] .wst-progress {
   border-color: #dce5df;
@@ -2973,6 +3040,12 @@ label:has(input[type="checkbox"]) {
   }
   to {
     transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wst-streaming-answer::after {
+    animation: none;
   }
 }
 

@@ -106,10 +106,10 @@ export function WanshitongChat({
             </article>
           ))}
         </div>
-        <div className="wst-chat-composer">
-          {!busy &&
-            turns.at(-1)?.status !== "submitting" &&
-            turns.at(-1)?.status !== "streaming" && (
+        {!busy &&
+          turns.at(-1)?.status !== "submitting" &&
+          turns.at(-1)?.status !== "streaming" && (
+            <div className="wst-chat-suggestions">
               <PublicQuestionTabs
                 busy={busy}
                 heading="换个话题"
@@ -119,7 +119,9 @@ export function WanshitongChat({
                 popular={popular}
                 suggestions={questions}
               />
-            )}
+            </div>
+          )}
+        <div className="wst-chat-composer">
           <PublicChatComposer
             busy={busy}
             compact
