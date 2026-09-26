@@ -4,6 +4,8 @@
 
 2026-09-26 的现场测试入口是 `http://10.242.180.54:8289/kb/`，由 54 的原测试转发进入 60 上独立候选栈。原 8289 应用容器已停止但保留（`14c0f9a42c14`），原镜像 `sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06`、数据及切换前 SQLite 快照均保留。生产 `54:18288`、`60:18288`、`60:18290` 及其镜像不在本目录的操作范围内。具体结果和未完成项见 [验收记录](ACCEPTANCE-20260926.md)。
 
+源码分支 `wanshitong-stable` 在 `/home/jerry/work/RAG-wanshitong-stable` 独立 worktree 中。VS Code 应直接打开此目录；Git 不允许同一分支同时检出到原目录 `/home/jerry/work/RAG`。
+
 ## 固定版本与隔离
 
 基于 `vendor/weknora` 的 v0.8.2（`3e8b0bfc80b845b2d4b2ed683994748741450a97`）。原版 Compose 的固定 `container_name`、宿主端口和可选服务已去掉。候选服务不设置 `container_name`；网络和卷由独立 `WST_PROJECT_NAME` 前缀命名。PostgreSQL 只使用 `native-postgres` 新卷与 `wst_weknora_candidate` 数据库，文件、Redis、Docreader 临时目录和网关 SQLite 也各用候选卷。不得复用旧 8289 或 18288 的卷、网络、配置目录、容器名和数据库。
@@ -32,6 +34,8 @@ Compose 对所有运行镜像使用 `pull_policy: never`，没有 `build:`，不
 原生模型、embedding、reranker、OCR 的连接信息由 WeKnora 管理配置负责。`WST_ALLOWED_MODEL_HOSTS` 填经现场核实的内网主机白名单。`model-egress` 网络只给原生 app 访问内网模型；Docker 网络本身不保证禁止公网，60 主机须用出站策略限制它。Docreader 只在内部网络；默认不启用 ODL hybrid、沙箱、联网、MCP、图谱或 Langfuse。现场 Qwen3-8B-AWQ 物理上下文为 8192；原生候选配置将 `max_completion_tokens/max_output_tokens` 设为 2048、`rerank_top_k` 设为 3 后，原先触发 400 的真实问题可完成。这个额度只配置 WeKnora 原生模型请求，湾事通网关和前端不裁剪问题或答案；内容质量仍须逐题核查。`CONCURRENCY_POOL_SIZE=4` 不是共享模型全局四并发保证，仍须测原生额外模型调用和旧服务共享负载。
 
 原生应用的 `AUTO_MIGRATE=true` 仅作用于候选新卷。升级前备份该卷；旧镜像不可直接连接升级后的数据库。`DISABLE_REGISTRATION=true`，原生候选管理员已在不对外暴露原生 API 的条件下建立。白标管理端通过网关受控代理使用原生知识库、文档、任务、分块和模型接口；管理端无第二次腾讯登录。
+
+管理员在 `http://10.242.180.54:8289/kb/admin/ops/` 输入候选专用令牌，进入湾事通运营页；“知识库与文件”“模型设置”“处理任务”进入同一管理会话下的原生后台。令牌存放在 60 主机的候选 Secret 目录，可在 60 上执行 `docker exec wst_weknora_candidate_20260925-gateway-1 cat /run/wst-secrets/gateway_admin_bootstrap_token` 读取。不要把令牌写入仓库或前端构建文件。
 
 ## 构建包装层镜像
 
@@ -67,7 +71,7 @@ docker compose --env-file .env -f compose.engine.yaml \
 
 ## 离线镜像与数据备份
 
-现场离线镜像包位于候选根目录的 `backup/images/wst-candidate-20260926.tar.gz`，只包含候选运行所用的七个镜像：WeKnora app、Docreader、ParadeDB、Redis、Python rerank adapter 基础镜像、湾事通 gateway 和 edge。核对随包 SHA-256 后运行 `gzip -dc ... | docker load`；再用 `docker image inspect` 核对七个 Image ID。`docker save/load` 不保证保留 RepoDigest，离线恢复时把核验后的 `sha256:<Image ID>` 写入 `.env` 的 `WST_*_IMAGE_ID`，并在原两份 Compose 文件之后叠加 `compose.offline-images.yaml`。网关、edge 继续用 `.env` 中已核验的不可变 Image ID。只在候选项目和候选卷执行，不接旧数据库。
+现场离线基础镜像包位于候选根目录的 `backup/images/wst-candidate-20260926.tar.gz`，包含 r6 时的七个镜像：WeKnora app、Docreader、ParadeDB、Redis、Python rerank adapter 基础镜像、湾事通 gateway 和 edge。当前 r7/r8 包装层另存于 `backup/images/wst-wrapper-r7-r8-20260926.tar.gz`；恢复当前候选须按顺序加载两个包。核对随包 SHA-256 后运行 `gzip -dc ... | docker load`；再用 `docker image inspect` 核对当前七个 Image ID。`docker save/load` 不保证保留 RepoDigest，离线恢复时把核验后的 `sha256:<Image ID>` 写入 `.env` 的对应镜像变量，并在原两份 Compose 文件之后叠加 `compose.offline-images.yaml`。只在候选项目和候选卷执行，不接旧数据库。
 
 候选备份目录与镜像包分开保存 PostgreSQL 自定义格式 dump、原生文件卷快照、网关 SQLite 快照和 Secret 文件归档。数据库和 `system_aes_key` 必须同批保存；Secret 归档只在 60 的受限目录，不进 Git 或镜像包。恢复时先隔离停掉候选入口，再恢复配套的镜像、原生 DB、文件卷、网关 SQLite 与 Secret。旧 WeKnora 镜像不能直接连接自动迁移后的新 DB。新候选期间新增的会话或资料需先导出；回退到旧 8289 不自动反写这些数据。
 

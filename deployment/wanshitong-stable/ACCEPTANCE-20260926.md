@@ -15,9 +15,11 @@
 
 - 分支：`wanshitong-stable`，起点 `dca24a80823b4e5d24dbbdd725e10c97167ad7a5`。上游源码为 `Tencent/WeKnora` v0.8.2，提交 `3e8b0bfc80b845b2d4b2ed683994748741450a97`；`vendor/weknora/frontend` 有白标和管理认证适配，原生 Go 与 Docreader 镜像未改。
 - Compose 项目：`wst_weknora_candidate_20260925`，原生 app/docreader/postgres/redis/rerank、gateway/edge 使用独立卷和网络。原生 API 无宿主公开端口。候选 edge 只绑定 60 的 `127.0.0.1:8289`。
-- 运行镜像 Image ID：app `sha256:bc8a534799fcb54045100daf4bc5db86270b38ae45c5f761c410c50b4dcd6cdc`；docreader `sha256:3c36e7e738ba515315523876d8041f9bb02809145a4e3b331e2550e4bff98b7a`；ParadeDB `sha256:58bf87d2a6f1e72f56590b0f0ae1467e82c3f99ca203dde646672c8ac13148b2`；Redis `sha256:c9d92d840fd011c908f040592857c724ae6d877f2aba5c40ad963276507386b2`；Python rerank adapter 基础镜像 `sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b`；gateway r6 `sha256:539954ecb771efdbbf4d9de1873837ee7b43126f8df2273ec16fcd1ad8b24825`；edge r6 `sha256:78546bf9d2227f9944e65287451ca876a7051f1af666aa8fb29fb928aa7d6598`。
+- 当前运行镜像 Image ID：app `sha256:bc8a534799fcb54045100daf4bc5db86270b38ae45c5f761c410c50b4dcd6cdc`；docreader `sha256:3c36e7e738ba515315523876d8041f9bb02809145a4e3b331e2550e4bff98b7a`；ParadeDB `sha256:58bf87d2a6f1e72f56590b0f0ae1467e82c3f99ca203dde646672c8ac13148b2`；Redis `sha256:c9d92d840fd011c908f040592857c724ae6d877f2aba5c40ad963276507386b2`；Python rerank adapter 基础镜像 `sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b`；gateway r7 `sha256:945165dffa3217ad26b76ac0d39dec140746151e6dad128644db4a8eef4b48ed`；edge r8 `sha256:2a0ed3f534949c73f8b163d4af166ece5e9f10a266e672aabf3b08f8c618a02e`。上一版 gateway r6 `sha256:539954ecb771efdbbf4d9de1873837ee7b43126f8df2273ec16fcd1ad8b24825`、edge r6 `sha256:78546bf9d2227f9944e65287451ca876a7051f1af666aa8fb29fb928aa7d6598` 及 r7 edge 均保留。
 - 60 的候选目录：`/data/tyf/wanshitong-weknora-stable-candidate-20260925`。离线镜像包 `backup/images/wst-candidate-20260926.tar.gz`，约 3.0 GiB，SHA-256 `18b4f3469e2d616d86b89840d03b70bfb4fae851d4b18f29f9fc1bb67ef0b218`。
+- 当前 wrapper 的增量离线镜像包 `backup/images/wst-wrapper-r7-r8-20260926.tar.gz`（419 MiB，SHA-256 `15bf51b10757b5ce53b701788b2a5ed2e6577e46cecefa0e30e60273d25776fa`）包含 gateway r7、edge r7 和 edge r8；恢复时先加载上面的七镜像基础包，再加载此包并按当前 `.env` 的 Image ID 启动。
 - 同目录 `backup/native-candidate-final.dump`（`f13875954bf44d1667687245628d56b697091a66049e3f305cb631120a04c887`，`pg_restore -l` 可读）、`backup/native-files-final.tar.gz`（`4acc77c20b7c964770a9e1153ea9c5153c63ced3e4e5ac08954de3cb729b9ef8`）、`backup/gateway-final.sqlite3`（`a781b6989a5db4fb8213b56bb391f0b4f6625d65455742ee2722945b51e76363`，`integrity_check=ok`）。Secret 单独存于仅有管理员可读的 `backup/secrets/secret-files-final.tar.gz`，不进 Git/镜像包。切换前旧 8289 SQLite 只读快照位于 `backup/legacy-8289-precutover.sqlite3`，`integrity_check=ok`。
+- r8 复核后的新快照：`backup/gateway-r8.sqlite3`（4,849,664 字节，SHA-256 `cf0f982731200d4d93f53961d93433089a217ba6935af08260ce165d38326fdf`，`integrity_check=ok`）、`backup/native-candidate-r8.dump`（`2ea2e5c6aa0fdbcb1a25b581362cd2470c8496bd5607695c8f32dc4e77a2a2a3`，`pg_restore -l` 可读）、`backup/native-files-r8.tar.gz`（`b47a23521b2e8f1ee8fc8b5fbc8695b774bf6c59f07e744c8d3d7f7bafc5c5a0`，归档目录可读）。`backup/gateway-pre-r7.sqlite3` 与 `.env.pre-r8` 保留供回退。
 - 原 8289 容器 `14c0f9a42c14` 已停止但未删除；原镜像 `sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06` 保留。原测试转发、生产容器/镜像/卷均未作为清理对象。
 - 60 上 `wst-weknora-sso-relay.service` 已启用并运行。受限 SSH 公钥只准 60 转发到 54 可达的 RDMS 验证地址；候选 gateway 经该中继使用真实 Ticket。服务重连与 HTTP 验证接口已检查，未做整机重启演练。
 
@@ -25,11 +27,19 @@
 
 | 范围 | 结果 |
 |---|---|
-| Python 新网关 | `ruff check src/wanshitong_gateway tests/wanshitong_gateway`、`mypy --strict src/wanshitong_gateway`、`pytest -q tests/wanshitong_gateway`：38 passed。 |
-| React | 变更范围 ESLint、`npm run typecheck`、`npm test -- --run`：236 passed；`npm run build` 通过。 |
+| Python 新网关 | `ruff check src/wanshitong_gateway tests/wanshitong_gateway`、`mypy --strict src/wanshitong_gateway`、`pytest -q tests/wanshitong_gateway`：40 passed。 |
+| React | 变更范围 ESLint、`npm run typecheck`、`npm test -- --run`：238 passed；`npm run build` 通过。r8 调整推荐区后又执行前台和运营相关 43 个测试、类型检查及生产构建，均通过。 |
 | 白标 Vue | `npm run type-check`、14 个身份/路由/文件请求测试、`npm run build` 通过。 |
 | 现场 | 七个候选服务运行，app/docreader/postgres/redis/rerank/gateway 健康；真实 8289 浏览器问答、管理端和下载已执行。七镜像离线包已在 60 上 `docker load`，加载后的镜像标签和 Image ID 与清单一致。 |
 | 上游 Go | 未改 Go 代码，未运行 Go 测试。 |
+
+## r7/r8 前台与运营复核
+
+- 54:8289 真实 RDMS 登录后提问“开发中心是干嘛的？”，浏览器观察到正文增量增长、检索进度、完成态、2 篇文档与 3 段引用。展开引用后可见《开发中心三种工作模式.docx》和《产品开发协同实施方案V1.0.docx》。公共页面不再渲染原生事件明细，网关仍完整保留原生事件供管理员 Trace 使用。这里仅验呈现与引用通路，不对这道题的业务正确性作新结论。
+- 对长答案检查时发现底部推荐问题区遮住正文，r8 已将其放回文档流，底部只固定输入框；重新加载 54:8289 后检查答案末尾、引用、反馈、推荐题与输入框的排列，已无推荐区遮挡。
+- 运营管理页 `/kb/admin/ops/` 使用独立管理员令牌进入；浏览器实见 RDMS 提问者、12 条问答、按原问题文本统计的高频榜、Trace 原生会话/消息/请求 ID 与实际事件数。由真实高频问题创建了 1 条 `DRAFT` 推荐题；未审核发布，普通问答不展示该草稿。运营页同时提供反馈复核、脱敏/完整 Trace 导出和系统状态入口；导出及复核写入未做本轮现场操作。
+- 原生管理后台由同一管理会话进入，模型设置页可见 LLM、Embedding 和 Rerank 配置。另建不在公共检索范围内的“湾事通接入验收（不发布）”知识库，上传 144 字节 TXT 文件，上传任务显示完成且可检索 1，文档详情实际显示 1 个原生分块。此项证明测试环境的 TXT 上传、解析、分块闭环；其他格式和新文档前台问答仍未覆盖。
+- 8289 候选七容器复查运行，五个有健康检查的服务均为 healthy；60 本机 `/kb/` 和 `/kb/admin/ops/` 返回 200。18288 服务未替换。只删除 8 个无标签的早期候选构建中间镜像；原始 8289、r6、r7、r8 版本及其可恢复材料保留。发行门禁仍由 P0-CONTENT-OPC 阻塞。
 
 ## 真实业务样本与 P0
 
@@ -79,7 +89,7 @@ P0-CONTENT-OPC 的恢复条件：补齐权威 OPC 定义或在原生 WeKnora 提
 | U02 | PASS | 真实多轮追问、新问题和刷新历史。 |
 | U03 | PASS | `/kb/admin/` 深链、静态资源与 API 浏览器验证。 |
 | U04 | PASS | 管理页面/Logo 湾事通白标，许可证文件保留。 |
-| U05 | BLOCKED | 迁移文档的原生上传/任务/chunks/前台问答已串通；管理浏览器新上传的完整闭环未跑。 |
+| U05 | BLOCKED | 迁移文档的原生上传/任务/chunks/前台问答已串通；本轮另在私有测试 KB 完成 TXT 上传、任务和分块浏览器验证。其他格式及新文档前台问答未跑。 |
 | U06 | BLOCKED | 原生管理 UI 可设模型，私有归档 KB 的模型设置已保存；公开 KB 改后前台同步生效未专门测试。 |
 | U07 | BLOCKED | 未启用的扩展功能未逐项验 UI 状态。 |
 | D01 | PASS | 46 个当前源条目按 hash 归并为 45 个原生文档，13 个历史版本进私有归档；清单可追溯。 |
@@ -97,9 +107,9 @@ P0-CONTENT-OPC 的恢复条件：补齐权威 OPC 定义或在原生 WeKnora 提
 | P01 | NOT_RUN | 共享模型同时服务内部生产，未做 1/2/4 并发负载。 |
 | P02 | NOT_RUN | 未量测标题/摘要等后台模型调用与生产共享容量。 |
 | P03 | NOT_RUN | 停止、用户断线只做代码检查，未测真实模型取消。 |
-| O01 | BLOCKED | 七镜像离线包已生成、校验 checksum 并在 60 上 `docker load`；尚未在另一隔离主机做冷启动。 |
-| O02 | BLOCKED | DB/文件/网关/Secret 分开备份并做格式/完整性检查；隔离恢复演练未执行。 |
-| O03 | PASS | 旧 8289 版本/镜像保留，生产 18288/18290 容器仍运行、54 对应两个路径返回 HTTP 200；仅删除 11 个不再使用的早期候选 gateway/edge 镜像标签，8289 测试替换在本次授权内。 |
+| O01 | BLOCKED | 七镜像基础离线包曾在 60 上 `docker load`；r7/r8 wrapper 增量包已生成并通过 `gzip -t`。尚未在另一隔离主机做冷启动。 |
+| O02 | BLOCKED | r8 后 DB/文件/网关再次分开备份并做格式/完整性检查，Secret 延用独立备份；隔离恢复演练未执行。 |
+| O03 | PASS | 旧 8289 版本/镜像及 r6/r7/r8 回退版本保留，生产 18288/18290 未切换；清理只针对无标签的早期候选构建中间镜像，8289 测试替换在本次授权内。 |
 
 ## 发布与回退边界
 
