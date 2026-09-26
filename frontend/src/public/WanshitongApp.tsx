@@ -2,7 +2,6 @@ import { LogIn, LogOut, Moon, RotateCcw, Sun } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { consumeLoginDraft } from "./authNavigation";
-import { LegacyHistory } from "./LegacyHistory";
 import type { PublicPopularQuestion } from "./publicApi";
 import type { SuggestedQuestion } from "./suggestedQuestions";
 import { WanshitongChat } from "./WanshitongChat";
@@ -152,7 +151,6 @@ export function WanshitongApp() {
         跳到主要内容
       </a>
       <div className="wst-toolbar">
-        {chat.pageSettings.show_history && <LegacyHistory />}
         {chat.pageSettings.show_history && chat.historySessions.length > 0 && (
           <details className="wst-history-menu">
             <summary>历史会话</summary>

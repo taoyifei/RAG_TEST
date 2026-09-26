@@ -138,47 +138,6 @@ export interface PublicNaturalSession {
   updated_at: string;
 }
 
-export interface LegacyHistoryItem {
-  engine: "legacy";
-  read_only: true;
-  trace_id: string;
-  created_at: string;
-  status: string;
-  duration_ms: number | null;
-  body_available: boolean;
-  body_unavailable_reason: string | null;
-}
-
-export interface LegacyHistoryDetail extends LegacyHistoryItem {
-  question: string | null;
-  answer: string | null;
-  events: { occurred_at: string; event_name: string }[];
-}
-
-export async function getLegacyHistory(): Promise<LegacyHistoryItem[]> {
-  const session = await createPublicSession();
-  const response = await fetch(withAppBase("/api/public/legacy/history"), {
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": session.csrfToken },
-  });
-  const result = await requireJson<{ items: LegacyHistoryItem[] }>(response);
-  return result.items;
-}
-
-export async function getLegacyHistoryDetail(
-  traceId: string,
-): Promise<LegacyHistoryDetail> {
-  const session = await createPublicSession();
-  const response = await fetch(
-    withAppBase(`/api/public/legacy/history/${encodeURIComponent(traceId)}`),
-    {
-      credentials: "same-origin",
-      headers: { "X-CSRF-Token": session.csrfToken },
-    },
-  );
-  return requireJson<LegacyHistoryDetail>(response);
-}
-
 async function readError(response: Response): Promise<PublicApiError> {
   let body: PublicErrorBody = {};
   try {
