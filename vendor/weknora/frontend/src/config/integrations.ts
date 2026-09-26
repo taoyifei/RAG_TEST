@@ -21,6 +21,10 @@ export const INTEGRATION_TAB_CAPABILITY: Partial<Record<IntegrationTab, Deployme
   embed: 'integrations.embed',
   api: 'integrations.api',
   mcpserver: 'integrations.mcpserver',
+  // 候选边缘未发布 CLI、浏览器扩展或外部工具的回调入口。
+  cli: 'integrations.external',
+  chrome: 'integrations.external',
+  claw: 'integrations.external',
 }
 
 export type IntegrationPreviewIcon =

@@ -145,7 +145,7 @@ const router = createRouter({
           path: "toolbox/:section?",
           name: "toolbox",
           component: () => import("../views/toolbox/Toolbox.vue"),
-          meta: { requiresInit: true, requiresAuth: true }
+          meta: { requiresInit: true, requiresAuth: true, requiredCapability: 'toolbox' }
         },
         {
           path: "agents",
