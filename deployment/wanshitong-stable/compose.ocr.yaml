@@ -1,0 +1,78 @@
+# 仅叠加到 8289 候选项目；镜像在 60 上预先 docker load，并以 digest 固定。
+# 使用方式：docker compose -f compose.engine.yaml -f compose.wrapper.yaml -f compose.ocr.yaml ...
+services:
+  app:
+    environment:
+      SSRF_WHITELIST_EXTRA: docreader,rerank-adapter,paddleocr-vl,paddleocr-vlm-server
+
+  paddleocr-vl:
+    image: ${WST_PADDLEOCR_VL_IMAGE:?必须填写已加载的 PaddleOCR-VL 固定镜像}
+    pull_policy: never
+    command: ["paddlex", "--serve", "--pipeline", "/home/paddleocr/pipeline_config_vllm.yaml", "--device", "gpu:0", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLM_BACKEND: vllm
+    depends_on:
+      paddleocr-vlm-server:
+        condition: service_healthy
+    networks:
+      - engine
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${WST_PADDLEOCR_PIPELINE_GPU:-2}"]
+              capabilities: [gpu]
+    shm_size: 8g
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 5m
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  paddleocr-vlm-server:
+    image: ${WST_PADDLEOCR_VLM_IMAGE:?必须填写已加载的 PaddleOCR-VL 推理固定镜像}
+    pull_policy: never
+    command:
+      - paddleocr
+      - genai_server
+      - --model_name
+      - PaddleOCR-VL-1.6-0.9B
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --backend
+      - vllm
+      - --backend_config
+      - /opt/wst/paddleocr-vlm-vllm.yaml
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - ./config/paddleocr-vlm-vllm.yaml:/opt/wst/paddleocr-vlm-vllm.yaml:ro
+    networks:
+      - engine
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${WST_PADDLEOCR_VLM_GPU:-3}"]
+              capabilities: [gpu]
+    shm_size: 8g
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 5m
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true

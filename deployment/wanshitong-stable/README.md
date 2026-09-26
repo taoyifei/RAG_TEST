@@ -33,6 +33,23 @@ Compose 对所有运行镜像使用 `pull_policy: never`，没有 `build:`，不
 
 原生模型、embedding、reranker、OCR 的连接信息由 WeKnora 管理配置负责。`WST_ALLOWED_MODEL_HOSTS` 填经现场核实的内网主机白名单。`model-egress` 网络只给原生 app 访问内网模型；Docker 网络本身不保证禁止公网，60 主机须用出站策略限制它。Docreader 只在内部网络；默认不启用 ODL hybrid、沙箱、联网、MCP、图谱或 Langfuse。现场 Qwen3-8B-AWQ 物理上下文为 8192；原生候选配置将 `max_completion_tokens/max_output_tokens` 设为 2048、`rerank_top_k` 设为 3 后，原先触发 400 的真实问题可完成。这个额度只配置 WeKnora 原生模型请求，湾事通网关和前端不裁剪问题或答案；内容质量仍须逐题核查。`CONCURRENCY_POOL_SIZE=4` 不是共享模型全局四并发保证，仍须测原生额外模型调用和旧服务共享负载。
 
+### 候选图片与扫描件解析
+
+`compose.ocr.yaml` 只用于 8289 候选项目。它在 `engine` 内网启动官方 PaddleOCR-VL 版面解析 API 和配套视觉推理服务，不发布宿主端口；默认分别限定到 60 的第 2、3 张 GPU。镜像须先离线加载，并把核验后的不可变 `sha256:<Image ID>` 写入候选 `.env` 的 `WST_PADDLEOCR_VL_IMAGE`、`WST_PADDLEOCR_VLM_IMAGE`。可用 `WST_PADDLEOCR_PIPELINE_GPU`、`WST_PADDLEOCR_VLM_GPU` 调整设备。视觉推理服务的显存占用参数见 `config/paddleocr-vlm-vllm.yaml`。此覆盖文件只增加服务和原生 app 的内网地址白名单；原有 Compose 文件和生产入口不变。
+
+```sh
+docker compose --env-file .env -f compose.engine.yaml -f compose.wrapper.yaml \
+  -f compose.ocr.yaml config --quiet
+docker compose --env-file .env -f compose.engine.yaml -f compose.wrapper.yaml \
+  -f compose.ocr.yaml up -d --no-deps paddleocr-vlm-server
+docker compose --env-file .env -f compose.engine.yaml -f compose.wrapper.yaml \
+  -f compose.ocr.yaml up -d --no-deps paddleocr-vl
+```
+
+服务健康后，才在候选原生管理 API 中设置空间级 `paddleocr_vl_endpoint=http://paddleocr-vl:8080`，登记指向 `http://paddleocr-vlm-server:8080/v1` 的 VLLM 模型，并给知识库开启 `multimodal.enabled` 与 `vlm_config.enabled/model_id`。知识库的 `parserEngineRules` 可按文件类型选择 `paddleocr_vl`；图片、扫描 PDF、含图 DOCX 应先在私有测试知识库分别验证解析状态和分块，再启用公开库。PaddleOCR-VL 版面解析引擎只直接处理 PDF 与常见图片；DOCX 内嵌图片经原生 DOCX 解析及异步 VLM 路径处理，不能把文件整体交给 PaddleOCR-VL 的 `/layout-parsing`。已有文件不会因开关变化自动重解析，需按实际需要逐份重新解析。回退时先恢复知识库及空间级原配置，再用原两份 Compose 文件重建候选 `app`，最后停止 OCR 两项服务；保留候选卷、数据库快照和离线镜像包，不执行 `down -v`。
+
+2026-09-26 候选镜像 ID 分别为 API `sha256:6c735bdf9e758ffdd58ccc067db0c2d84e37e5e6a2cbd47156069d4d7ea5d709`、VLM `sha256:d0d32c04a2119613d25a0a4c292e165ccc107954b74580613cf59e378037f8f5`。60 上离线归档保存在候选根目录 `backup/images/ocr/`，文件名分别为 `paddleocr-vl-api-6c735bdf.tar`（SHA-256 `743cf07c6b40231403f4a8531e8d0a45aeca0e1f9cd5f5fa544d21b29bb6ab4f`）与 `paddleocr-vlm-d0d32c04.tar`（SHA-256 `824ba5ac9e00e3b53f3a7422b371a9583e8baa1738f08d13ea40fc17f7a0f7f8`）。原版 B 试用项目 `wklive-b-20260925` 与 8289 的网络、数据卷和运行容器互不相连；暂停后若需恢复，在 60 上执行 `docker start wklive-b-postgres wklive-b-redis wklive-b-docreader wklive-b-rerank-adapter wklive-b-app wklive-b-frontend`，等待健康检查，再检查 54:18391。不要删除 B 的容器、镜像和卷。
+
 统一公共应用选用候选内网重排服务时，候选原生 app 的 `SSRF_WHITELIST_EXTRA` 还须包含 `rerank-adapter`；Compose 已与 `docreader` 一起列入。漏配会在检索后报 `get_rerank_model_failed`，不能靠湾事通网关重试或裁剪回答掩盖。
 
 原生应用的 `AUTO_MIGRATE=true` 仅作用于候选新卷。升级前备份该卷；旧镜像不可直接连接升级后的数据库。`DISABLE_REGISTRATION=true`，原生候选管理员已在不对外暴露原生 API 的条件下建立。白标管理端通过网关受控代理使用原生知识库、文档、任务、分块和模型接口；管理端无第二次腾讯登录。
