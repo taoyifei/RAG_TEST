@@ -42,7 +42,9 @@ it("管理员口令进入运营页后可看用户问题、高频榜、原生入�
     if (path === "/api/admin/ops/recommendations") {
       if (init?.method === "POST") {
         recommendation = {
-          ...(JSON.parse(String(init.body)) as Record<string, unknown>),
+          ...(JSON.parse(
+            typeof init.body === "string" ? init.body : "{}",
+          ) as Record<string, unknown>),
           recommendation_id: "pq_" + "b".repeat(32),
           version: 1,
           updated_at: trace.created_at,
