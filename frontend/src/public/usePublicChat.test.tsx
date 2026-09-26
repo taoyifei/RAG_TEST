@@ -366,6 +366,52 @@ describe("WeKnora 问答流", () => {
     expect(fetchMock.mock.calls.filter(([input]) => pathOf(input).endsWith("/continue"))).toHaveLength(1);
   });
 
+  it("原流收尾占用会话时等待落库并恢复同一回答", async () => {
+    const traceId = `trace_${"e".repeat(32)}`;
+    let historyCalls = 0;
+    const fetchMock = installGatewayFetch(
+      () => streamResponse(
+        weknoraEvent("meta", 0, { trace_id: traceId }) +
+          weknoraEvent("answer_delta", 1, {
+            trace_id: traceId,
+            text: "片段",
+            native_message_id: "m-1",
+          }) +
+          weknoraEvent("error", 2, { trace_id: traceId, code: "UPSTREAM_EOF" }),
+      ),
+      {
+        history: () => {
+          historyCalls += 1;
+          if (historyCalls === 1) return [];
+          return [{
+            turn_id: traceId,
+            trace_id: traceId,
+            question: "问题",
+            status: historyCalls < 3 ? "disconnected" : "completed",
+            answer: historyCalls < 3 ? "片段" : "原回答",
+            citations: [],
+            native_message_id: "m-1",
+            created_at: "2026-09-26T00:00:00Z",
+          }];
+        },
+        continued: () => new Response(null, { status: 409 }),
+      },
+    );
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.submit("问题"));
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("failed"));
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    const original = result.current.turns[0];
+    act(() => result.current.recover(original.id, original.question, original.conversationId));
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("completed"), {
+      timeout: 3_000,
+    });
+    expect(result.current.turns[0]?.answer).toBe("原回答");
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(input) === "/api/public/chat")).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(input).endsWith("/continue"))).toHaveLength(1);
+  });
+
   it("原生续流立即报错时保留旧部分正文和引用", async () => {
     const traceId = `trace_${"c".repeat(32)}`;
     let historyCalls = 0;

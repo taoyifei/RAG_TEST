@@ -58,6 +58,35 @@ def test_conversation_and_turns_are_user_scoped(tmp_path: Path) -> None:
     assert store.get_turn(trace_id="trace-u1", owner_id="rdms:candidate:u1")
 
 
+def test_confirmed_stop_does_not_become_failed_on_native_eof(
+    tmp_path: Path,
+) -> None:
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    store.start_turn(
+        trace_id="trace-stopped",
+        deployment_id="candidate",
+        owner_id="owner",
+        conversation_id="conversation",
+        native_session_id="native",
+        question="问题",
+    )
+    store.request_stop(trace_id="trace-stopped", owner_id="owner")
+    store.finish_turn(
+        trace_id="trace-stopped",
+        status="failed",
+        answer="",
+        references=(),
+        native_message_id="message-1",
+        native_request_id="request-1",
+        truncated=False,
+        finish_reason=None,
+    )
+    turn = store.get_turn(trace_id="trace-stopped", owner_id="owner")
+    assert turn is not None
+    assert turn["status"] == "cancelled"
+    assert turn["stop_acknowledged"] == 1
+
+
 def test_reference_requires_trace_mapping(tmp_path: Path) -> None:
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     store.bind_session(

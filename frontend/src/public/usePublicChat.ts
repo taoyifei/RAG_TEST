@@ -54,6 +54,9 @@ const DEFAULT_PAGE_SETTINGS: PublicPageSettings = {
   allow_source_download: true,
 };
 
+const RECOVERY_BUSY_RETRY_MS = 1_000;
+const RECOVERY_BUSY_TIMEOUT_MS = 180_000;
+
 function normalizePageSettings(
   value: Partial<PublicPageSettings> | undefined,
   feedbackAvailable: boolean,
@@ -565,31 +568,50 @@ export function usePublicChat() {
         }
         let response: Response;
         if (recoverTraceId) {
-          const history = await getPublicNaturalHistory({
-            conversationId: turnConversationId,
-            csrfToken,
-            signal: controller.signal,
-          });
-          const original = history.find(
-            (item) => item.trace_id === recoverTraceId,
-          );
-          if (!original) throw new Error("原回答状态无法确认，请联系管理员。");
-          if (original.status === "completed") {
-            updateTurn(turnId, () =>
-              restoreNaturalTurn(turnConversationId, original, true),
+          const deadline = Date.now() + RECOVERY_BUSY_TIMEOUT_MS;
+          while (true) {
+            const history = await getPublicNaturalHistory({
+              conversationId: turnConversationId,
+              csrfToken,
+              signal: controller.signal,
+            });
+            const original = history.find(
+              (item) => item.trace_id === recoverTraceId,
             );
-            setPhase("completed");
-            return;
+            if (!original) throw new Error("原回答状态无法确认，请联系管理员。");
+            if (original.status === "completed") {
+              updateTurn(turnId, () =>
+                restoreNaturalTurn(turnConversationId, original, true),
+              );
+              setPhase("completed");
+              return;
+            }
+            if (!original.native_message_id) {
+              throw new Error("原生消息尚未建立，无法续接这次回答。");
+            }
+            try {
+              response = await continuePublicNaturalChat({
+                conversationId: turnConversationId,
+                csrfToken,
+                traceId: recoverTraceId,
+                signal: controller.signal,
+              });
+              break;
+            } catch (error) {
+              if (
+                !(error instanceof PublicApiError) ||
+                error.status !== 409 ||
+                Date.now() >= deadline
+              ) {
+                throw error;
+              }
+              // 原流断开后可能仍在收尾；等它落库后再续接同一消息。
+              await new Promise<void>((resolve) =>
+                setTimeout(resolve, RECOVERY_BUSY_RETRY_MS),
+              );
+              if (controller.signal.aborted) return;
+            }
           }
-          if (!original.native_message_id) {
-            throw new Error("原生消息尚未建立，无法续接这次回答。");
-          }
-          response = await continuePublicNaturalChat({
-            conversationId: turnConversationId,
-            csrfToken,
-            traceId: recoverTraceId,
-            signal: controller.signal,
-          });
         } else {
           response = await openPublicChat({
             conversationId: turnConversationId,

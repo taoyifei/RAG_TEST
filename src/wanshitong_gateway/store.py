@@ -534,6 +534,13 @@ class GatewayStore:
     ) -> None:
         """只按真实终态封存本轮回答和原生 ID。"""
         with self._connect() as connection:
+            stopped = connection.execute(
+                "SELECT stop_acknowledged FROM gateway_turns WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()
+            if stopped and stopped[0] and status in {"failed", "disconnected"}:
+                # 原生停止可能以流 EOF 结束，不能将已确认取消误记为失败。
+                status = "cancelled"
             connection.execute(
                 "UPDATE gateway_turns SET status=?,answer=?,"
                 "references_json=?,native_message_id=?,native_request_id=?,"
