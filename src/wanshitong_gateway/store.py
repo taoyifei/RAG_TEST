@@ -124,6 +124,17 @@ CREATE TABLE IF NOT EXISTS gateway_recommendations (
 CREATE INDEX IF NOT EXISTS idx_gateway_recommendations_scope
 ON gateway_recommendations (deployment_id, state, updated_at);
 """
+_PUBLIC_APP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_public_app (
+    deployment_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    native_agent_id TEXT NOT NULL,
+    native_config_digest TEXT NOT NULL,
+    kb_ids_json TEXT NOT NULL,
+    page_settings_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
 
 
 def _now() -> str:
@@ -153,6 +164,7 @@ class GatewayStore:
                 + _ADMIN_AUDIT_SCHEMA
                 + _FEEDBACK_REVIEW_SCHEMA
                 + _RECOMMENDATION_SCHEMA
+                + _PUBLIC_APP_SCHEMA
             )
             columns = {
                 row["name"]
@@ -223,6 +235,80 @@ class GatewayStore:
                 (deployment_id, owner_id, conversation_id),
             ).fetchone()
         return str(row["native_session_id"]) if row else None
+
+    def public_app(self, *, deployment_id: str) -> dict[str, Any] | None:
+        """读取当前部署唯一生效绑定；没有记录表示仍在迁移前。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT revision,native_agent_id,native_config_digest,"
+                "kb_ids_json,page_settings_json,updated_at "
+                "FROM gateway_public_app WHERE deployment_id=?",
+                (deployment_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "revision": int(row["revision"]),
+            "native_agent_id": str(row["native_agent_id"]),
+            "native_config_digest": str(row["native_config_digest"]),
+            "knowledge_base_ids": tuple(json.loads(row["kb_ids_json"])),
+            "page_settings": json.loads(row["page_settings_json"]),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def save_public_app(  # noqa: PLR0913 - CAS 需显式提交所有生效字段。
+        self,
+        *,
+        deployment_id: str,
+        expected_revision: int,
+        native_agent_id: str,
+        native_config_digest: str,
+        knowledge_base_ids: tuple[str, ...],
+        page_settings: dict[str, Any],
+    ) -> dict[str, Any]:
+        """用 SQLite CAS 切换生效绑定；竞争失败不覆盖已发布配置。"""
+        now = _now()
+        with self._connect() as connection:
+            if expected_revision == 0:
+                try:
+                    connection.execute(
+                        "INSERT INTO gateway_public_app "
+                        "(deployment_id,revision,native_agent_id,"
+                        "native_config_digest,kb_ids_json,page_settings_json,"
+                        "updated_at) VALUES (?,1,?,?,?,?,?)",
+                        (
+                            deployment_id,
+                            native_agent_id,
+                            native_config_digest,
+                            json.dumps(knowledge_base_ids),
+                            json.dumps(page_settings, ensure_ascii=False),
+                            now,
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    raise ValueError("public app revision conflict") from error
+            else:
+                cursor = connection.execute(
+                    "UPDATE gateway_public_app SET revision=revision+1,"
+                    "native_agent_id=?,native_config_digest=?,kb_ids_json=?,"
+                    "page_settings_json=?,updated_at=? "
+                    "WHERE deployment_id=? AND revision=?",
+                    (
+                        native_agent_id,
+                        native_config_digest,
+                        json.dumps(knowledge_base_ids),
+                        json.dumps(page_settings, ensure_ascii=False),
+                        now,
+                        deployment_id,
+                        expected_revision,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError("public app revision conflict")
+        saved = self.public_app(deployment_id=deployment_id)
+        if saved is None:
+            raise RuntimeError("public app was not saved")
+        return saved
 
     def bind_session(
         self,

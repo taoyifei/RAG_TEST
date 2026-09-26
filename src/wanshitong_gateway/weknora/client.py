@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -71,6 +72,24 @@ class WeKnoraClient:
             "X-External-User-Token": self._signer.sign(user_id),
         }
 
+    def api_key_fingerprint(self) -> bytes:
+        """供服务端与原生 Key 元数据比对，不返回 Key 自身。"""
+        return hashlib.sha256(self._api_key.encode("utf-8")).digest()
+
+    async def public_agent(self, agent_id: str) -> dict[str, Any]:
+        """用公共 Key 回读 Agent，避免仅管理员可访问的对象被发布。"""
+        try:
+            response = await self._http.get(
+                f"/api/v1/agents/{agent_id}",
+                headers=self._headers("wanshitong-public-binding"),
+            )
+        except httpx.RequestError as error:
+            raise NativeHttpError(502, "公共应用读取失败。") from error
+        data = _require_success(response).get("data")
+        if not isinstance(data, dict) or data.get("id") != agent_id:
+            raise NativeHttpError(502, "公共 Key 无法读取已绑定应用。")
+        return data
+
     async def create_session(self, user_id: str) -> str:
         """为已认证用户创建原生会话。"""
         response = await self._http.post(
@@ -92,6 +111,7 @@ class WeKnoraClient:
         session_id: str,
         question: str,
         knowledge_base_ids: tuple[str, ...],
+        agent_id: str | None = None,
     ) -> AsyncIterator[bytes]:
         """逐字节转发一次原生自然问答，绝不重试生成 POST。"""
         if not knowledge_base_ids:
@@ -102,6 +122,7 @@ class WeKnoraClient:
             json={
                 "query": question,
                 "knowledge_base_ids": list(knowledge_base_ids),
+                **({"agent_id": agent_id} if agent_id else {}),
             },
             headers={
                 **self._headers(user_id),

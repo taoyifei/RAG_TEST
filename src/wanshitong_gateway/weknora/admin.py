@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -64,6 +68,13 @@ class NativeAdminResponse:
     content: bytes
     headers: dict[str, str]
     stream: NativeAdminStream | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NativePublicKeyScope:
+    """仅保留验证公共发布所需的非秘密 Key 授权字段。"""
+
+    knowledge_base_ids: frozenset[str]
 
 
 class NativeAdminStream:
@@ -179,7 +190,7 @@ class NativeAdminClient:
             }
         raise NativeHttpError(502, "原生管理员身份不可用。")
 
-    async def proxy(
+    async def proxy(  # noqa: PLR0913 - 浏览器代理边界需显式传递请求字段。
         self,
         *,
         method: str,
@@ -187,9 +198,14 @@ class NativeAdminClient:
         query: str,
         content: bytes,
         browser_headers: Mapping[str, str],
+        allow_public_agent_create: bool = False,
     ) -> NativeAdminResponse:
         """只把指定 API 路径转交原生服务；浏览器不见令牌。"""
-        if not _allowed_admin_path(method, path):
+        if not _allowed_admin_path(
+            method,
+            path,
+            allow_public_agent_create=allow_public_agent_create,
+        ):
             raise NativeHttpError(403, "管理操作不在候选白名单内。")
         for attempt in range(_MAX_RELOGIN + 1):
             token = await self._access_token()
@@ -258,6 +274,115 @@ class NativeAdminClient:
                     await asyncio.shield(response.aclose())
         raise NativeHttpError(502, "原生管理员会话不可用。")
 
+    async def json_request(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """服务端配置路径使用与管理代理相同的身份和白名单。"""
+        response = await self.proxy(
+            method=method,
+            path=path,
+            query="",
+            content=(
+                json.dumps(body).encode("utf-8")
+                if body is not None
+                else b""
+            ),
+            browser_headers={"Content-Type": "application/json"},
+            allow_public_agent_create=(
+                method == "POST" and path == "api/v1/agents"
+            ),
+        )
+        if response.stream is not None:
+            await response.stream.aclose()
+            raise NativeHttpError(502, "原生配置响应不能是流。")
+        try:
+            payload = json.loads(response.content)
+        except ValueError as error:
+            raise NativeHttpError(502, "原生配置响应不是 JSON。") from error
+        if (
+            response.status_code >= _HTTP_BAD_REQUEST
+            or not isinstance(payload, dict)
+            or payload.get("success") is not True
+        ):
+            raise NativeHttpError(response.status_code, "原生配置请求失败。")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise NativeHttpError(502, "原生配置缺少对象。")
+        return data
+
+    async def public_key_scope(  # noqa: PLR0912 - 授权校验逐项失败即拒绝。
+        self, configured_fingerprint: bytes
+    ) -> NativePublicKeyScope:
+        """只在服务端核对当前公共 Key，绝不把原生 Key 列表转给浏览器。"""
+        for attempt in range(_MAX_RELOGIN + 1):
+            token = await self._access_token()
+            try:
+                response = await self._http.get(
+                    f"/api/v1/tenants/{self._tenant_id}/api-keys",
+                    headers=self._headers(token),
+                )
+            except httpx.RequestError as error:
+                raise NativeHttpError(502, "公共 Key 授权读取失败。") from error
+            if (
+                response.status_code == _HTTP_UNAUTHORIZED
+                and attempt < _MAX_RELOGIN
+            ):
+                await self._invalidate(token)
+                continue
+            rows = self._json_success(response).get("data")
+            if not isinstance(rows, list):
+                raise NativeHttpError(502, "公共 Key 授权响应无效。")
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise NativeHttpError(502, "公共 Key 授权响应无效。")
+                candidate = row.get("api_key")
+                if not isinstance(candidate, str):
+                    continue
+                candidate_fingerprint = hashlib.sha256(
+                    candidate.encode("utf-8")
+                ).digest()
+                if not hmac.compare_digest(
+                    candidate_fingerprint, configured_fingerprint
+                ):
+                    continue
+                if row.get("scope_type") != "tenant":
+                    raise NativeHttpError(403, "公共 Key 工作空间不匹配。")
+                expiry = row.get("expires_at")
+                if expiry:
+                    try:
+                        expires_at = datetime.fromisoformat(
+                            str(expiry).replace("Z", "+00:00")
+                        )
+                    except ValueError as error:
+                        raise NativeHttpError(
+                            502, "公共 Key 过期时间无效。"
+                        ) from error
+                    if expires_at.tzinfo is None or expires_at <= datetime.now(
+                        UTC
+                    ):
+                        raise NativeHttpError(403, "公共 Key 已过期。")
+                full_access = row.get("full_access") is True
+                if full_access:
+                    raise NativeHttpError(
+                        403, "公共 Key 必须使用限定资料范围。"
+                    )
+                capabilities = row.get("capabilities")
+                kb_ids = row.get("knowledge_base_ids")
+                if (
+                    not isinstance(capabilities, list)
+                    or "chat" not in capabilities
+                ):
+                    raise NativeHttpError(403, "公共 Key 无问答权限。")
+                if not isinstance(kb_ids, list) or any(
+                    not isinstance(item, str) for item in kb_ids
+                ):
+                    raise NativeHttpError(502, "公共 Key 范围无效。")
+                return NativePublicKeyScope(
+                    knowledge_base_ids=frozenset(kb_ids),
+                )
+            raise NativeHttpError(403, "当前公共 Key 不在候选租户。")
+        raise NativeHttpError(502, "公共 Key 授权不可用。")
+
     async def _access_token(self) -> str:
         if self._token is not None:
             return self._token
@@ -307,7 +432,9 @@ class NativeAdminClient:
         return payload
 
 
-def _allowed_admin_path(method: str, path: str) -> bool:  # noqa: PLR0911
+def _allowed_admin_path(  # noqa: PLR0911, PLR0912 - 权限矩阵逐项拒绝。
+    method: str, path: str, *, allow_public_agent_create: bool = False
+) -> bool:
     """允许原生管理 UI 的配置和知识功能，拒绝账号与跨租户操作。"""
     if method not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
         return False
@@ -321,6 +448,21 @@ def _allowed_admin_path(method: str, path: str) -> bool:  # noqa: PLR0911
     if segments[:2] != ["api", "v1"] or len(segments) < _MIN_API_SEGMENTS:
         return False
     category = segments[2]
+    if category == "tenants" and segments[4:5] == ["api-keys"]:
+        return False
+    if category == "agents" and method not in {"GET", "HEAD"}:
+        return allow_public_agent_create and segments == [
+            "api", "v1", "agents"
+        ] and method == "POST"
+    # 管理壳只读查看记录，不能借原生代理新建或继续一条生成。
+    if category in {"knowledge-chat", "agent-chat"}:
+        return False
+    if category == "sessions":
+        if segments[3:4] == ["continue-stream"]:
+            return False
+        return method in {"GET", "HEAD"}
+    if category == "messages":
+        return method in {"GET", "HEAD"}
     if category == "auth":
         return method == "GET" and segments[3:] == ["config"]
     if category not in _ADMIN_CATEGORIES:

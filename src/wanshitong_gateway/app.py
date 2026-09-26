@@ -32,6 +32,16 @@ from wanshitong_gateway.engine_settings import (
 )
 from wanshitong_gateway.legacy import LegacyHistoryReader
 from wanshitong_gateway.models import GatewayChatRequest
+from wanshitong_gateway.public_app import (
+    APPLICATION_ID,
+    APPLICATION_NAME,
+    PageSettings,
+    SavePublicAppRequest,
+    answer_from_config,
+    config_digest,
+    uses_public_scope,
+    validate_binding,
+)
 from wanshitong_gateway.settings import GatewayAuthSettings
 from wanshitong_gateway.store import GatewayStore
 from wanshitong_gateway.weknora.admin import NativeAdminClient
@@ -189,6 +199,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         if legacy_db:
             legacy = LegacyHistoryReader(Path(legacy_db), Path(legacy_key))
     locks: dict[tuple[str, str], asyncio.Lock] = {}
+    public_app_save_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -200,6 +211,236 @@ def create_app(  # noqa: PLR0913, PLR0915
 
     app = FastAPI(root_path=auth.settings.root_path, lifespan=lifespan)
     register_auth_routes(app, auth)
+
+    def page_settings() -> PageSettings:
+        binding = store.public_app(deployment_id=auth.settings.deployment_id)
+        return PageSettings.model_validate(
+            binding["page_settings"] if binding else {}
+        )
+
+    @app.get("/api/admin/public-app")
+    async def admin_public_app(request: Request) -> dict[str, Any]:
+        """返回单一应用的当前绑定与原生回读值，不暴露凭据。"""
+        auth.require_admin(request)
+        binding = store.public_app(deployment_id=auth.settings.deployment_id)
+        if binding is None:
+            return {
+                "application_id": APPLICATION_ID,
+                "status": "MIGRATION_REQUIRED",
+                "revision": 0,
+                "native_agent_id": None,
+                "knowledge_base_ids": [],
+                "legacy_kb_ids": list(engine.public_kb_ids),
+                "model_id": None,
+                "answer_settings": None,
+                "page_settings": PageSettings().model_dump(),
+            }
+        try:
+            _, _, config = await validate_binding(
+                native, admin_native, binding
+            )
+            answer = answer_from_config(config).model_dump()
+            status = "ACTIVE"
+        except NativeHttpError as error:
+            answer = None
+            status = (
+                "UNAVAILABLE"
+                if error.status_code in {500, 502, 504}
+                else "DRIFTED"
+            )
+        except ValueError:
+            answer = None
+            status = "DRIFTED"
+        return {
+            "application_id": APPLICATION_ID,
+            "status": status,
+            "revision": binding["revision"],
+            "native_agent_id": binding["native_agent_id"],
+            "knowledge_base_ids": list(binding["knowledge_base_ids"]),
+            "legacy_kb_ids": list(engine.public_kb_ids),
+            "model_id": answer["model_id"] if answer else None,
+            "answer_settings": answer,
+            "page_settings": binding["page_settings"],
+            "updated_at": binding["updated_at"],
+        }
+
+    @app.put("/api/admin/public-app")
+    async def save_admin_public_app(  # noqa: PLR0912, PLR0915 - 原生发布校验保持同一事务边界。
+        body: SavePublicAppRequest, request: Request
+    ) -> dict[str, Any]:
+        """校验后写新原生 Agent，回读成功才原子切换唯一公共绑定。"""
+        principal = auth.require_admin(request)
+        try:
+            kb_ids = body.kb_ids()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        async with public_app_save_lock:
+            current = store.public_app(
+                deployment_id=auth.settings.deployment_id
+            )
+            revision = current["revision"] if current else 0
+            if revision != body.expected_revision:
+                raise HTTPException(status_code=409, detail="revision conflict")
+            if current is None and not body.migration_confirmed:
+                raise HTTPException(
+                    status_code=422, detail="verified migration values required"
+                )
+            try:
+                if current is not None:
+                    try:
+                        _, _, old_config = await validate_binding(
+                            native, admin_native, current
+                        )
+                        old_answer = answer_from_config(old_config)
+                    except NativeHttpError as error:
+                        if error.status_code not in {403, 404, 503}:
+                            raise
+                        if not body.migration_confirmed:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=(
+                                    "drifted public app requires verified "
+                                    "replacement"
+                                ),
+                            ) from None
+                        old_answer = None
+                else:
+                    old_answer = None
+                key_scope = await admin_native.public_key_scope(
+                    native.api_key_fingerprint()
+                )
+                if not set(kb_ids).issubset(
+                    key_scope.knowledge_base_ids
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="public API key cannot access selected KBs",
+                    )
+                for kb_id in kb_ids:
+                    kb = await admin_native.json_request(
+                        "GET", f"api/v1/knowledge-bases/{kb_id}"
+                    )
+                    if (
+                        kb.get("id") != kb_id
+                        or kb.get("tenant_id") != engine.tenant_id
+                        or kb.get("is_temporary") is True
+                    ):
+                        raise HTTPException(
+                            status_code=422,
+                            detail="selected KB is unavailable or temporary",
+                        )
+                model_ids = [(body.answer_settings.model_id, "KnowledgeQA")]
+                if body.answer_settings.rerank_model_id:
+                    model_ids.append(
+                        (body.answer_settings.rerank_model_id, "Rerank")
+                    )
+                for model_id, model_type in model_ids:
+                    model = await admin_native.json_request(
+                        "GET", f"api/v1/models/{model_id}"
+                    )
+                    if (
+                        model.get("id") != model_id
+                        or model.get("tenant_id")
+                        not in {0, engine.tenant_id}
+                        or model.get("type") != model_type
+                        or model.get("status") != "active"
+                    ):
+                        raise HTTPException(
+                            status_code=422,
+                            detail="selected model is unavailable",
+                        )
+                if (
+                    current is not None
+                    and old_answer == body.answer_settings
+                    and current["knowledge_base_ids"] == kb_ids
+                ):
+                    agent_id = current["native_agent_id"]
+                    digest = current["native_config_digest"]
+                else:
+                    created = await admin_native.json_request(
+                        "POST",
+                        "api/v1/agents",
+                        {
+                            "name": (
+                                f"{APPLICATION_NAME} r{revision + 1} "
+                                f"{secrets.token_hex(4)}"
+                            ),
+                            "description": "湾事通公共问答应用的已发布配置",
+                            "config": body.answer_settings.native_config(
+                                kb_ids
+                            ),
+                        },
+                    )
+                    try:
+                        agent_id = str(UUID(str(created.get("id"))))
+                    except ValueError as error:
+                        raise NativeHttpError(
+                            502, "原生应用 ID 无效。"
+                        ) from error
+                    readback = await admin_native.json_request(
+                        "GET", f"api/v1/agents/{agent_id}"
+                    )
+                    config = readback.get("config")
+                    if (
+                        readback.get("id") != agent_id
+                        or readback.get("tenant_id") != engine.tenant_id
+                        or not isinstance(config, dict)
+                        or answer_from_config(config) != body.answer_settings
+                        or not uses_public_scope(config, kb_ids)
+                    ):
+                        raise NativeHttpError(
+                            502, "原生应用回读与保存值不一致。"
+                        )
+                    digest = config_digest(config)
+                    public_agent = await native.public_agent(agent_id)
+                    if public_agent.get("config") != config:
+                        raise NativeHttpError(502, "公共 Key 无法回读新应用。")
+                saved = store.save_public_app(
+                    deployment_id=auth.settings.deployment_id,
+                    expected_revision=revision,
+                    native_agent_id=agent_id,
+                    native_config_digest=digest,
+                    knowledge_base_ids=kb_ids,
+                    page_settings=body.page_settings.model_dump(),
+                )
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=409, detail=str(error)
+                ) from None
+            except NativeHttpError as error:
+                if error.status_code in {400, 403, 404}:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "native resource or public API key scope "
+                            "is unavailable"
+                        ),
+                    ) from None
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "native configuration unavailable "
+                        f"({error.status_code})"
+                    ),
+                ) from None
+            store.record_admin_action(
+                actor=principal.audit_actor,
+                method="PUT",
+                path="public-app",
+                status_code=200,
+            )
+            return {
+                "application_id": APPLICATION_ID,
+                "status": "ACTIVE",
+                "revision": saved["revision"],
+                "native_agent_id": agent_id,
+                "knowledge_base_ids": list(kb_ids),
+                "legacy_kb_ids": list(engine.public_kb_ids),
+                "model_id": body.answer_settings.model_id,
+                "answer_settings": body.answer_settings.model_dump(),
+                "page_settings": saved["page_settings"],
+                "updated_at": saved["updated_at"],
+            }
 
     @app.get("/api/engine-admin/bootstrap")
     async def engine_admin_bootstrap(request: Request) -> dict[str, Any]:
@@ -232,6 +473,15 @@ def create_app(  # noqa: PLR0913, PLR0915
     async def engine_admin_proxy(path: str, request: Request) -> Response:
         """对管理员放行有限原生路由，令牌始终留在网关内存。"""
         principal = auth.require_admin(request)
+        binding = store.public_app(deployment_id=auth.settings.deployment_id)
+        if (
+            binding is not None
+            and request.method not in {"GET", "HEAD"}
+            and path == f"api/v1/agents/{binding['native_agent_id']}"
+        ):
+            raise HTTPException(
+                status_code=403, detail="published agent must use public-app"
+            )
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:
@@ -566,8 +816,9 @@ def create_app(  # noqa: PLR0913, PLR0915
             "stream_protocol": PROTOCOL,
             "natural_stream_protocol": PROTOCOL,
             "document_visibility": "all_internal",
-            "feedback": True,
-            "feedback_details": True,
+            "feedback": page_settings().allow_feedback,
+            "feedback_details": page_settings().allow_feedback,
+            "page_settings": page_settings().model_dump(),
             "request_usage_context": True,
             "shortcuts": [
                 {
@@ -584,6 +835,13 @@ def create_app(  # noqa: PLR0913, PLR0915
     def popular_questions(request: Request) -> dict[str, Any]:
         """只发布人工审核过的运营题面，热度来自新引擎真实提问。"""
         auth.require_public(request)
+        if not page_settings().show_recommendations:
+            return {
+                "mode": "EMPTY",
+                "generated_at": None,
+                "window_days": 7,
+                "items": [],
+            }
         approved = store.list_recommendations(
             deployment_id=auth.settings.deployment_id, approved_only=True
         )
@@ -622,12 +880,27 @@ def create_app(  # noqa: PLR0913, PLR0915
     async def chat(  # noqa: PLR0915
         body: GatewayChatRequest, request: Request
     ) -> StreamingResponse:
-        """以原文向固定 KB 发起一次原生问答并逐帧转换。"""
+        """以原文向当前有效公共应用范围发起原生流式问答。"""
         principal = auth.require_public(request)
         user_id = principal.user_id
         conversation_id = body.conversation_id
         if user_id is None:
             raise HTTPException(status_code=401, detail="RDMS login required")
+        binding = store.public_app(deployment_id=auth.settings.deployment_id)
+        if binding is None:
+            # 首次迁移前沿用已验收环境范围，不自动创建默认 Agent。
+            agent_id = None
+            kb_ids = engine.public_kb_ids
+        else:
+            try:
+                agent_id, kb_ids, _ = await validate_binding(
+                    native, admin_native, binding
+                )
+            except NativeHttpError as error:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"public app unavailable ({error.status_code})",
+                ) from None
         owner_id = _owner_id(auth, user_id)
         client_context = _usage_context(body.client_context)
         retry_of = client_context.get("retry_of_trace_id")
@@ -671,7 +944,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                     or getattr(principal, "username", None)
                 ),
                 client_context=client_context,
-                kb_scope=engine.public_kb_ids,
+                kb_scope=kb_ids,
             )
         except NativeHttpError as error:
             lock.release()
@@ -699,7 +972,8 @@ def create_app(  # noqa: PLR0913, PLR0915
                     user_id=user_id,
                     session_id=native_session_id,
                     question=body.query,
-                    knowledge_base_ids=engine.public_kb_ids,
+                    knowledge_base_ids=kb_ids,
+                    agent_id=agent_id,
                 ):
                     for event in decoder.feed(chunk):
                         for frame in bridge.accept(event):
@@ -1213,6 +1487,10 @@ def create_app(  # noqa: PLR0913, PLR0915
     ) -> Response:
         """只允许下载本人实际答案引用过的原生原件。"""
         principal = auth.require_public(request, csrf=True)
+        if not page_settings().allow_source_download:
+            raise HTTPException(
+                status_code=403, detail="source download disabled"
+            )
         turn = store.get_turn(
             trace_id=trace_id,
             owner_id=_owner_id(auth, _required_user(principal.user_id)),
@@ -1305,6 +1583,8 @@ def create_app(  # noqa: PLR0913, PLR0915
     ) -> dict[str, Any]:
         """反馈仅关联本用户的真实新引擎 Trace。"""
         principal = auth.require_public(request)
+        if not page_settings().allow_feedback:
+            raise HTTPException(status_code=403, detail="feedback disabled")
         user_id = _required_user(principal.user_id)
         owner_id = _owner_id(auth, user_id)
         turn = store.get_turn(trace_id=body.trace_id, owner_id=owner_id)

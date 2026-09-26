@@ -61,7 +61,7 @@ async def test_native_admin_sse_is_forwarded_before_upstream_finishes() -> None:
         result = await asyncio.wait_for(
             client.proxy(
                 method="POST",
-                path="api/v1/knowledge-chat/session-1",
+                path="api/v1/knowledge-search",
                 query="",
                 content=b'{"query":"hello"}',
                 browser_headers={"Accept": "text/event-stream"},
@@ -122,7 +122,7 @@ async def test_native_admin_sse_error_closes_upstream() -> None:
     try:
         result = await client.proxy(
             method="POST",
-            path="api/v1/agent-chat/session-1",
+            path="api/v1/knowledge-search",
             query="",
             content=b"{}",
             browser_headers={"Accept": "text/event-stream"},
@@ -161,7 +161,7 @@ async def test_native_admin_sse_cancellation_closes_upstream() -> None:
     try:
         result = await client.proxy(
             method="POST",
-            path="api/v1/knowledge-chat/session-1",
+            path="api/v1/knowledge-search",
             query="",
             content=b"{}",
             browser_headers={"Accept": "text/event-stream"},
@@ -213,7 +213,7 @@ async def test_native_admin_relogin_closes_unauthorized_response() -> None:
     try:
         result = await client.proxy(
             method="POST",
-            path="api/v1/knowledge-chat/session-1",
+            path="api/v1/knowledge-search",
             query="",
             content=b"{}",
             browser_headers={"Accept": "text/event-stream"},
@@ -247,7 +247,7 @@ async def test_native_admin_request_timeout_has_bounded_error() -> None:
         with pytest.raises(NativeHttpError) as error:
             await client.proxy(
                 method="POST",
-                path="api/v1/agent-chat/session-1",
+                path="api/v1/knowledge-search",
                 query="",
                 content=b"{}",
                 browser_headers={"Accept": "text/event-stream"},
@@ -290,3 +290,26 @@ def test_native_admin_proxy_keeps_account_and_host_boundaries(
     path: str,
 ) -> None:
     assert not _allowed_admin_path("POST", path)
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "api/v1/knowledge-chat/session-1"),
+        ("POST", "api/v1/agent-chat/session-1"),
+        ("POST", "api/v1/sessions"),
+        ("POST", "api/v1/sessions/session-1/steer"),
+        ("POST", "api/v1/sessions/session-1/stop"),
+        ("GET", "api/v1/sessions/continue-stream/session-1"),
+        ("DELETE", "api/v1/messages/session-1/message-1"),
+        ("POST", "api/v1/agents"),
+        ("PUT", "api/v1/agents/agent-1"),
+        ("GET", "api/v1/tenants/8/api-keys"),
+    ],
+)
+def test_admin_proxy_denies_chat_generation_and_mutation(
+    method: str, path: str
+) -> None:
+    assert not _allowed_admin_path(method, path)
+    assert _allowed_admin_path("GET", "api/v1/messages/session-1/load")
+    assert _allowed_admin_path("GET", "api/v1/sessions/session-1")
