@@ -1,5 +1,7 @@
 # 湾事通 × WeKnora 隔离候选部署
 
+2026-09-26 正式入口试用预检结论为 **`BLOCKED_BY_INTEGRATION_OR_DEPLOYMENT`**；本轮仅更新 8289。当前证据与未通过门禁见[发布门禁](PILOT-RELEASE-GATE.md)，拟定试用范围见[试用范围](PILOT-SCOPE.md)，正式入口的准备与回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。用户端未新增试用说明文字。
+
 此目录定义并部署测试候选栈，不执行生产入口切换。`compose.engine.yaml` 是 WeKnora 原生服务；叠加 `compose.wrapper.yaml` 后，由湾事通网关和同源静态入口提供 React 用户页、白标 Vue 管理页。湾事通只处理已有身份、会话映射、权限、SSE 传输和引用访问，问答、解析、分块、检索、重排、生成与模型配置使用同一套 WeKnora。原生 `app`、Docreader、PostgreSQL、Redis 均不发布宿主端口，浏览器无法直连原生 `/api/v1`。
 
 2026-09-26 的现场测试入口是 `http://10.242.180.54:8289/kb/`，由 54 的原测试转发进入 60 上独立候选栈。原 8289 应用容器已停止但保留（`14c0f9a42c14`），原镜像 `sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06`、数据及切换前 SQLite 快照均保留。生产 `54:18288`、`60:18288`、`60:18290` 及其镜像不在本目录的操作范围内。具体结果和未完成项见 [验收记录](ACCEPTANCE-20260926.md)。
