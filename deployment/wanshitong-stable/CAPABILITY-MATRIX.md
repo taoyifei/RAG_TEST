@@ -1,19 +1,19 @@
 # 湾事通 8289 候选管理能力矩阵
 
-基线：`wanshitong-stable` 的固定 WeKnora v0.8.2（上游 `3e8b0bfc80b845b2d4b2ed683994748741450a97`）。本表对照原生路由、湾事通 `NativeAdminClient._allowed_admin_path`、候选 Compose/边缘路由及 [8289 验收记录](ACCEPTANCE-20260926.md)。此轮只做源码核对与 Vue 入口约束；表中的现场证据引自既有验收记录，未把源码存在或 HTTP 200 当作完整功能验收。
+基线：`wanshitong-stable` 的固定 WeKnora v0.8.2（上游 `3e8b0bfc80b845b2d4b2ed683994748741450a97`）。本表对照原生路由、湾事通 `NativeAdminClient._allowed_admin_path`、候选 Compose/边缘路由及 [8289 验收记录](ACCEPTANCE-20260926.md)。已有行保留当时的源码与现场边界；统一后台和公共应用的新现场结果见下表及验收记录末节。
 
 状态含义：**支持**表示指定范围已有候选现场证据；**主动关闭**表示当前网关或边缘明确不发布；**缺依赖**表示虽有原生实现但候选未提供运行依赖；**未验证**表示入口或路由可达，仍缺实际功能闭环。一个功能的配置页能打开，并不证明外部回调、模型效果或后台任务生效。普通用户入口始终通过湾事通网关，不持有原生管理员 JWT。
 
 | 功能 | 前端入口 | 候选网关路由 | 固定版原生 API | 当前依赖 | 验证证据 | 状态 |
 |---|---|---|---|---|---|---|
 | 普通问答与引用 | `/kb/` 湾事通 | `/api/public/chat`、历史、引用资源 | `/knowledge-chat`、`/sessions`、`/messages`、`/knowledge` | RDMS、固定公开 KB、LLM/Embedding/Rerank | 8289 真实登录、增量正文、引用及多轮见验收记录 | **支持**；业务正确性另有 P0 |
-| 运营统计、反馈、单条 Trace | `/kb/admin/ops/` | `/api/admin/ops/*` | 反馈与消息原生 ID 的映射 | 网关 SQLite | 真实提问者、问题榜、单条 Trace 可见 | **支持**；批量导出和复核写入仍未验证 |
+| 运营统计、反馈、单条 Trace | `/kb/admin/records`、`/kb/admin/diagnostics` | `/api/admin/ops/*` | 反馈与消息原生 ID 的映射 | 网关 SQLite | 统一 Vue 管理站实见 RDMS 提问者、问题榜、单条 Trace 与诊断入口 | **支持**；批量导出和复核写入仍未验证 |
 | 知识库、文档、解析任务、分块 | `/kb/admin/platform/knowledge-bases` | `/api/engine-admin/api/v1/knowledge-bases`、`knowledge`、`chunks` | 同名前缀，另有 `/files` | Docreader、ParadeDB、Redis、本地文件卷 | 迁移 45 份当前原件与 13 份历史原件；私有 TXT 上传及分块现场通过 | **支持**（所述样本）；新 PDF/DOCX 完整闭环未验证 |
 | FAQ、Wiki、文件夹、标签、删除/重解析 | 知识库详情 | `faq`、`knowledgebase`、`knowledge`、`chunks` 前缀允许 | `/knowledge-bases/:id/faq`、`/knowledgebase/:kb_id/wiki`、`/knowledge/*` | 原生文档服务 | 固定版路由及代理白名单可确认；未逐项现场操作 | **未验证** |
 | 知识库数据源同步 | 知识库数据源设置 | `datasource` 前缀允许 | 原生数据源路由 | 外部源地址、凭据、同步任务 | 路由允许；未建立外部数据源与回调 | **未验证** |
-| 模型列表及原生配置 | 设置→模型 | `models` 前缀允许 | `/models` | 候选共享模型端点 | 原生管理页实见 LLM/Embedding/Rerank | **支持**（列表/配置可见）；变更公开 KB 后生效未验证 |
+| 模型列表及原生配置 | `/kb/admin/platform/settings?section=models` | `models` 前缀允许 | `/models` | 候选共享模型端点 | 统一 Vue 实见 LLM/Embedding/Rerank，当前公共 Agent 选中的模型有标识；任意切换模型仍未验证 | **支持**（列表与当前选中值） |
 | 向量存储、文件存储配置 | 设置→向量存储/存储 | `vector-stores`、`storage-backends`、`system` 前缀允许 | 同名前缀 | 当前 ParadeDB、本地文件卷 | 运行栈存在；切换提供者和重建索引未实测 | **未验证**；外部存储未配置 |
-| 管理后台原生聊天/Agent 流 | 原生管理聊天 | `knowledge-chat`、`agent-chat` 前缀允许 | `/knowledge-chat`、`/agent-chat` | 同一模型与会话服务 | 普通问答流通过；管理代理流式为本批次另行修复 | **未验证**（管理流） |
+| 管理后台聊天 | 无管理聊天入口 | 浏览器代理拒绝 `knowledge-chat`、`agent-chat` 的生成操作 | 原生服务仍支持，由普通用户网关调用 | 同一候选模型与会话服务 | 8289 管理站六项导航及深链守卫检查，无聊天链接；普通用户真实流式问答完成 | **主动关闭**（管理端） |
 | 智能体配置页 | 原生侧栏 Agent | `agents` 前缀允许；编辑器还预取被拒绝的 `mcp-services`、`sandbox-configs` | `/agents` 及 MCP/沙箱子依赖 | 当前未开放 MCP/沙箱 | 仅静态调用链证据；候选 Vue 暂隐藏 Agent 入口 | **主动关闭**（候选管理入口） |
 | 对外 API/嵌入/IM 渠道 | 设置→集成 | 部分 `embed-channels`、`im-channels`、`tenants` 前缀允许 | `/embed/*`、`/im/callback/*` 等 | 对外入口、回调网络、独立鉴权方案 | 边缘只把 `/api/` 交给湾事通网关，未开放原生回调；候选 Vue 隐藏入口 | **主动关闭**（发布运行）；配置路由存在 |
 | MCP 服务与 MCP Endpoint | 工具箱、集成 | `/mcp-services`、`/mcp-endpoints` 不在白名单 | 固定版 `routes_infra.go`、`routes_mcp_endpoint.go` 已注册 | 外部服务/令牌及受控出站 | 原生路由有；候选代理拒绝，Vue 隐藏入口 | **主动关闭** |
@@ -32,3 +32,12 @@
 `GET /api/v1/system/capabilities` 仅报告原生注册路由，不能反映湾事通代理、边缘回调和运行依赖。本轮在 `VITE_WANSHITONG_GATEWAY_AUTH=true` 的构建中增加候选能力遮罩：MCP、沙箱、技能、浏览器、记忆、系统管理、外部渠道、Ollama、Web 搜索、组织和依赖被拒绝子路由的 Agent 管理入口均关闭；模型、知识库、FAQ/Wiki、解析与本地存储入口保留。原生模式仍使用原有能力探测行为，网关仍执行服务器白名单。直接访问工具箱路由也会被能力守卫退回知识库。
 
 此遮罩是当前固定候选配置的前端说明，不能作为安全控制。若日后放行某一能力，应先核对原生 API、网关白名单、边缘路由、依赖与权限，再更新前端能力表并做实际闭环验证。较稳妥的后续改进是由网关提供服务端计算的有效能力接口，避免前端静态表与白名单漂移；本批次不为此扩大管理代理范围。
+
+## 统一后台与用户端配置的新闭环
+
+| 能力 | 8289 实际结果 | 边界 |
+|---|---|---|
+| 唯一管理站 | 六项主导航、知识库列表、模型页、记录和诊断页经管理员口令真实浏览器访问通过；旧运营书签转到统一站 | FAQ/Wiki、复杂解析与存储迁移未逐项写入验证 |
+| 唯一公共应用 | `wanshitong-public` 绑定原生 quick-answer Agent 和 1 个公开 KB；原生回读、受限 Key 范围和新问答调用已通过 | 新 KB 默认不发布；embedding 模型变更和索引重建未实测 |
+| 页面设置 | 欢迎语与历史入口现场修改、普通用户 RDMS 登录观察生效、恢复；最终状态 `ACTIVE` 修订号 3 | 推荐题只取审核发布列表；反馈、原件开关有本地测试，未逐项现场点验 |
+| 普通问答 | 固定资产问题原生流完成、1 段引用；原生引用标签在展示层变成引用序号 | 内容质量 P0 和上下文预算 P0 仍阻塞正式发布 |
