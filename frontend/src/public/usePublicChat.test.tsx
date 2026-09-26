@@ -142,7 +142,13 @@ afterEach(() => {
 });
 
 describe("WeKnora 问答流", () => {
-  function installGatewayFetch(chat: () => Response) {
+  function installGatewayFetch(
+    chat: () => Response,
+    options?: {
+      history?: () => Array<Record<string, unknown>>;
+      continued?: () => Response;
+    },
+  ) {
     return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const path = pathOf(input);
       if (path === "/api/public/session") {
@@ -165,16 +171,20 @@ describe("WeKnora 问答流", () => {
             natural_stream_protocol: "wanshitong-weknora-sse-v1",
             document_visibility: "all_internal",
             feedback: true,
+            request_usage_context: true,
             shortcuts: [],
           }),
         );
       }
       if (path === "/api/public/chat") return Promise.resolve(chat());
+      if (path.endsWith("/continue") && options?.continued) {
+        return Promise.resolve(options.continued());
+      }
       if (path === "/api/public/conversations") {
         return Promise.resolve(Response.json({ items: [] }));
       }
       if (path.startsWith("/api/public/conversations/")) {
-        return Promise.resolve(Response.json({ turns: [] }));
+        return Promise.resolve(Response.json({ turns: options?.history?.() ?? [] }));
       }
       return Promise.resolve(new Response(null, { status: 404 }));
     });
@@ -276,6 +286,169 @@ describe("WeKnora 问答流", () => {
     expect(result.current.turns[0]?.provisionalAnswer).toBe("未完成正文");
     expect(result.current.turns[0]?.partial).toBe(true);
   });
+
+  it("刷新历史保留失败、停止、待确认、截断和部分正文", async () => {
+    const statuses = ["completed", "failed", "stop_requested", "disconnected", "pending_confirmation"];
+    installGatewayFetch(() => streamResponse(""), {
+      history: () => statuses.map((status, index) => ({
+        turn_id: `trace_${String(index).padStart(32, "0")}`,
+        trace_id: `trace_${String(index).padStart(32, "0")}`,
+        question: `问题 ${index}`,
+        status,
+        answer: `已收到正文 ${index}`,
+        citations: [],
+        partial: status !== "completed",
+        truncated: index === 0,
+        finish_reason: index === 0 ? "length" : null,
+        created_at: "2026-09-26T00:00:00Z",
+      })),
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.turns).toHaveLength(5));
+    expect(result.current.turns.map((turn) => turn.status)).toEqual([
+      "completed", "failed", "stop_requested", "failed", "pending_confirmation",
+    ]);
+    expect(result.current.turns[0]).toMatchObject({
+      answer: "已收到正文 0", truncated: true, finishReason: "length",
+    });
+    expect(result.current.turns[1]).toMatchObject({
+      answer: "已收到正文 1", partial: true,
+    });
+  });
+
+  it("断流恢复只续接已有原生消息，不新增问答 POST", async () => {
+    const traceId = `trace_${"a".repeat(32)}`;
+    let historyCalls = 0;
+    const fetchMock = installGatewayFetch(
+      () => streamResponse(
+        weknoraEvent("meta", 0, { trace_id: traceId }) +
+          weknoraEvent("answer_delta", 1, {
+            trace_id: traceId,
+            text: "片段",
+            native_message_id: "m-1",
+          }) +
+          weknoraEvent("error", 2, { trace_id: traceId, code: "UPSTREAM_EOF" }),
+      ),
+      {
+        history: () => {
+          historyCalls += 1;
+          return historyCalls === 1 ? [] : [{
+            turn_id: traceId,
+            trace_id: traceId,
+            question: "问题",
+            status: "disconnected",
+            answer: "片段",
+            citations: [],
+            native_message_id: "m-1",
+            created_at: "2026-09-26T00:00:00Z",
+          }];
+        },
+        continued: () => streamResponse(
+          weknoraEvent("meta", 0, { trace_id: traceId }) +
+            weknoraEvent("answer_delta", 1, { trace_id: traceId, text: "完整答案" }) +
+            weknoraEvent("final", 2, {
+              trace_id: traceId, answer: "完整答案", citations: [],
+              native_message_id: "m-1", truncated: false,
+            }),
+        ),
+      },
+    );
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.submit("问题"));
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("failed"));
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    const original = result.current.turns[0];
+    act(() => result.current.recover(original.id, original.question, original.conversationId));
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("completed"));
+    expect(result.current.turns[0]?.answer).toBe("完整答案");
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(input) === "/api/public/chat")).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(input).endsWith("/continue"))).toHaveLength(1);
+  });
+
+  it("原生续流立即报错时保留旧部分正文和引用", async () => {
+    const traceId = `trace_${"c".repeat(32)}`;
+    let historyCalls = 0;
+    const fetchMock = installGatewayFetch(
+      () => streamResponse(
+        weknoraEvent("meta", 0, { trace_id: traceId }) +
+          weknoraEvent("answer_delta", 1, {
+            trace_id: traceId,
+            text: "已有片段",
+            native_message_id: "m-1",
+          }) +
+          weknoraEvent("references", 2, {
+            trace_id: traceId,
+            items: [{ reference_id: `ref_${"d".repeat(32)}`, document_name: "依据.docx" }],
+          }) +
+          weknoraEvent("error", 3, { trace_id: traceId, code: "UPSTREAM_EOF" }),
+      ),
+      {
+        history: () => {
+          historyCalls += 1;
+          return historyCalls === 1 ? [] : [{
+            turn_id: traceId,
+            trace_id: traceId,
+            question: "问题",
+            status: "failed",
+            answer: "已有片段",
+            citations: [{ reference_id: `ref_${"d".repeat(32)}`, document_name: "依据.docx" }],
+            native_message_id: "m-1",
+            created_at: "2026-09-26T00:00:00Z",
+          }];
+        },
+        continued: () => streamResponse(
+          weknoraEvent("meta", 0, { trace_id: traceId }) +
+            weknoraEvent("error", 1, { trace_id: traceId, code: "UPSTREAM_EOF" }),
+        ),
+      },
+    );
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.submit("问题"));
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("failed"));
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    const original = result.current.turns[0];
+    act(() => result.current.recover(original.id, original.question, original.conversationId));
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("failed"));
+    expect(result.current.turns[0]?.provisionalAnswer).toBe("已有片段");
+    expect(result.current.turns[0]?.citations).toHaveLength(1);
+    expect(result.current.turns[0]?.partial).toBe(true);
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(input).endsWith("/continue"))).toHaveLength(1);
+  });
+
+  it("明确重新生成保留原失败轮次并新增一次 POST", async () => {
+    const traceId = `trace_${"b".repeat(32)}`;
+    let count = 0;
+    const fetchMock = installGatewayFetch(() => {
+      count += 1;
+      return streamResponse(
+        count === 1
+          ? weknoraEvent("meta", 0, { trace_id: traceId }) +
+              weknoraEvent("error", 1, { trace_id: traceId, code: "UPSTREAM_EOF" })
+          : weknoraEvent("final", 0, { answer: "新回答", citations: [], truncated: false }),
+      );
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.submit("原问题"));
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("failed"));
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    const original = result.current.turns[0];
+    act(() => result.current.retry(original.id, original.question, original.conversationId));
+    await waitFor(() => expect(result.current.turns[1]?.status).toBe("completed"));
+    expect(result.current.turns[0]?.status).toBe("failed");
+    expect(result.current.turns).toHaveLength(2);
+    const chatCalls = fetchMock.mock.calls.filter(([input]) => pathOf(input) === "/api/public/chat");
+    expect(chatCalls).toHaveLength(2);
+    const retryBody = chatCalls[1]?.[1]?.body;
+    const second = JSON.parse(
+      typeof retryBody === "string" ? retryBody : "{}",
+    ) as { client_context?: Record<string, string> };
+    expect(second.client_context).toEqual({
+      entrypoint: "retry", retry_of_trace_id: traceId,
+    });
+  });
 });
 
 describe("公共问答新话题生命周期", () => {
@@ -372,7 +545,7 @@ describe("公共问答新话题生命周期", () => {
     expect(result.current.turns[0]?.provisionalAnswer).toBeUndefined();
   });
 
-  it("自然流停止时向服务端发送带会话身份的取消请求", async () => {
+  it.each([true, false])("自然流停止回执 cancelled=%s 时显示真实状态", async (cancelled) => {
     const traceId = `trace_${"a".repeat(32)}`;
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -424,7 +597,7 @@ describe("公共问答新话题生命周期", () => {
           );
         }
         if (path === `/api/public/chat/${traceId}/stop`) {
-          return Promise.resolve(Response.json({ cancelled: true }));
+          return Promise.resolve(Response.json({ cancelled }));
         }
         return Promise.resolve(new Response(null, { status: 404 }));
       });
@@ -452,7 +625,11 @@ describe("公共问答新话题生命周期", () => {
     expect(JSON.parse(typeof stopBody === "string" ? stopBody : "{}")).toEqual({
       conversation_id: conversationId,
     });
-    expect(result.current.turns[0]?.status).toBe("cancelled");
+    await waitFor(() =>
+      expect(result.current.turns[0]?.status).toBe(
+        cancelled ? "stop_requested" : "pending_confirmation",
+      ),
+    );
   });
 
   it("新话题仅清本页上下文，追问沿新会话且不删除 History 或重建登录", async () => {

@@ -119,6 +119,7 @@ export function PublicAnswer({
   onFeedbackLogin,
   onDownloadReference,
   onRetry,
+  onRecover,
   turn,
 }: {
   feedbackDetailsEnabled?: boolean;
@@ -130,6 +131,7 @@ export function PublicAnswer({
     original?: boolean,
   ) => Promise<void>;
   onRetry: () => void;
+  onRecover?: () => void;
   turn: PublicTurn;
 }) {
   const active = turn.status === "submitting" || turn.status === "streaming";
@@ -248,11 +250,19 @@ export function PublicAnswer({
             className={`wst-answer-notice ${turn.partial ? "is-partial" : ""}`}
           >
             <p>{turn.errorMessage}</p>
-            {turn.status === "failed" && (
-              <button onClick={onRetry} type="button">
-                <RotateCcw aria-hidden="true" size={15} />
-                重新尝试
-              </button>
+            {(turn.status === "failed" || turn.status === "pending_confirmation" || turn.status === "stop_requested") && (
+              <div className="wst-answer-actions">
+                {turn.nativeProtocol && turn.nativeMessageId && onRecover && (
+                  <button onClick={onRecover} type="button">
+                    <RotateCcw aria-hidden="true" size={15} />
+                    恢复原回答
+                  </button>
+                )}
+                <button onClick={onRetry} type="button">
+                  <RotateCcw aria-hidden="true" size={15} />
+                  {turn.nativeProtocol ? "重新生成（新请求）" : "重新尝试"}
+                </button>
+              </div>
             )}
           </div>
         )}

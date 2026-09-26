@@ -23,6 +23,7 @@ export function WanshitongChat({
   onPopularQuestionSubmit,
   onRefresh,
   onRetry,
+  onRecover,
   onStop,
   onSubmit,
   onSuggestedQuestionSubmit,
@@ -51,6 +52,7 @@ export function WanshitongChat({
   onPopularQuestionSubmit: (question: PublicPopularQuestion) => void;
   onRefresh: () => void;
   onRetry: (turnId: string, question: string, conversationId: string) => void;
+  onRecover?: (turnId: string, question: string, conversationId: string) => void;
   onStop: () => void;
   onSubmit: (question: string) => void;
   onSuggestedQuestionSubmit: (question: SuggestedQuestion) => void;
@@ -100,6 +102,11 @@ export function WanshitongChat({
                 }
                 onRetry={() =>
                   onRetry(turn.id, turn.question, turn.conversationId)
+                }
+                onRecover={
+                  onRecover
+                    ? () => onRecover(turn.id, turn.question, turn.conversationId)
+                    : undefined
                 }
                 turn={turn}
               />

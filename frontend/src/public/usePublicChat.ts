@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  continuePublicNaturalChat,
   createPublicSession,
   getPublicNaturalHistory,
   getPublicNaturalSessions,
@@ -59,7 +60,7 @@ export interface PublicTurn {
   id: string;
   conversationId: string;
   question: string;
-  status: "submitting" | "streaming" | "completed" | "failed" | "cancelled";
+  status: "submitting" | "streaming" | "completed" | "failed" | "cancelled" | "stop_requested" | "pending_confirmation";
   stageMessage?: string;
   stageHistory: string[];
   startedAt: number;
@@ -78,6 +79,7 @@ export interface PublicTurn {
   finishReason?: string | null;
   nativeMessageId?: string | null;
   nativeRequestId?: string | null;
+  retryOfTraceId?: string;
   feedback: "idle" | "submitting" | "sent" | "failed";
   feedbackUseful?: boolean;
   feedbackError?: string;
@@ -172,24 +174,48 @@ function restoreNaturalTurn(
   nativeProtocol: boolean,
 ): PublicTurn {
   const startedAt = Date.parse(item.created_at) || Date.now();
+  const status: PublicTurn["status"] =
+    item.status === "completed"
+      ? "completed"
+      : item.status === "cancelled"
+        ? "cancelled"
+        : item.status === "stop_requested"
+          ? "stop_requested"
+        : item.status === "pending_confirmation" ||
+            item.status === "streaming"
+          ? "pending_confirmation"
+          : "failed";
+  const errorMessage =
+    item.status === "SOURCE_UNAVAILABLE"
+      ? "原生消息已不存在，这条历史回答暂不可展示。"
+      : status === "pending_confirmation"
+        ? "原回答状态待确认；可恢复原回答，重新生成会另起一次请求。"
+        : status === "cancelled"
+          ? "已停止回答。"
+          : status === "stop_requested"
+            ? "停止请求已接收；最终状态待确认。"
+          : status === "failed"
+            ? "回答未完成，以下内容不能作为最终结论。"
+            : undefined;
   return {
     id: item.turn_id,
     conversationId,
     question: item.question,
-    status: "completed",
+    status,
     stageHistory: [],
     startedAt,
     stageStartedAt: startedAt,
     lastSignalAt: startedAt,
     claims: [],
     nativeProtocol,
-    answer:
-      item.answer ??
-      (item.status === "SOURCE_UNAVAILABLE"
-        ? "原引用资料已变化，这条历史回答暂不可展示。"
-        : "暂未找到可以回答该问题的资料。"),
+    answer: item.answer ?? undefined,
     citations: item.citations,
-    partial: false,
+    partial: item.partial === true,
+    truncated: item.truncated,
+    finishReason: item.finish_reason,
+    nativeMessageId: item.native_message_id,
+    nativeRequestId: item.native_request_id,
+    errorMessage,
     traceId: item.trace_id,
     feedback: "idle",
   };
@@ -212,6 +238,7 @@ export function usePublicChat() {
   const [historySessions, setHistorySessions] = useState<
     PublicNaturalSession[]
   >([]);
+  const [historyMoreCount, setHistoryMoreCount] = useState(0);
   const [conversationId, setConversationId] = useState(() => randomId("wst"));
   const csrfRef = useRef<string | undefined>(undefined);
   const conversationRef = useRef(conversationId);
@@ -250,6 +277,7 @@ export function usePublicChat() {
     feedbackAttemptsRef.current.clear();
     setTurns([]);
     setHistorySessions([]);
+    setHistoryMoreCount(0);
     setSessionReady(false);
     setSessionError(undefined);
     setLogoutError(undefined);
@@ -348,12 +376,12 @@ export function usePublicChat() {
             ),
           ),
         );
-        setHistorySessions(
-          await getPublicNaturalSessions({
-            csrfToken: session.csrfToken,
-            signal,
-          }),
-        );
+        const sessions = await getPublicNaturalSessions({
+          csrfToken: session.csrfToken,
+          signal,
+        });
+        setHistorySessions(sessions.items);
+        setHistoryMoreCount(sessions.has_more ? sessions.total - sessions.items.length : 0);
       } catch {
         // 历史恢复失败时保留当前页面会话，后续请求仍由服务端鉴权。
       }
@@ -429,11 +457,13 @@ export function usePublicChat() {
       turnConversationId: string,
       retry: boolean,
       clientContext: PublicUsageContext,
+      recoverTraceId?: string,
+      recoverOriginal?: PublicTurn,
     ) => {
       if (busyRef.current || !sessionReady) return;
       busyRef.current = true;
       activeTurnRef.current = turnId;
-      activeTraceIdRef.current = undefined;
+      activeTraceIdRef.current = recoverTraceId;
       const requestId = ++requestIdRef.current;
       const controller = new AbortController();
       streamControllerRef.current = controller;
@@ -445,7 +475,16 @@ export function usePublicChat() {
         terminal: false,
       };
       if (retry) {
-        updateTurn(turnId, resetTurn);
+        updateTurn(turnId, (turn) =>
+          recoverTraceId
+            ? {
+                ...turn,
+                status: "submitting",
+                stageMessage: "正在恢复原回答",
+                errorMessage: undefined,
+              }
+            : resetTurn(turn),
+        );
       } else {
         setTurns((current) => [
           ...current,
@@ -477,14 +516,41 @@ export function usePublicChat() {
           authNavigation.redirectToSso(question);
           return;
         }
-        const response = await openPublicChat({
-          conversationId: turnConversationId,
-          csrfToken,
-          question,
-          signal: controller.signal,
-          clientContext: usageContextEnabled ? clientContext : undefined,
-          naturalProtocol,
-        });
+        let response: Response;
+        if (recoverTraceId) {
+          const history = await getPublicNaturalHistory({
+            conversationId: turnConversationId,
+            csrfToken,
+            signal: controller.signal,
+          });
+          const original = history.find((item) => item.trace_id === recoverTraceId);
+          if (!original) throw new Error("原回答状态无法确认，请联系管理员。");
+          if (original.status === "completed") {
+            updateTurn(turnId, () =>
+              restoreNaturalTurn(turnConversationId, original, true),
+            );
+            setPhase("completed");
+            return;
+          }
+          if (!original.native_message_id) {
+            throw new Error("原生消息尚未建立，无法续接这次回答。");
+          }
+          response = await continuePublicNaturalChat({
+            conversationId: turnConversationId,
+            csrfToken,
+            traceId: recoverTraceId,
+            signal: controller.signal,
+          });
+        } else {
+          response = await openPublicChat({
+            conversationId: turnConversationId,
+            csrfToken,
+            question,
+            signal: controller.signal,
+            clientContext: usageContextEnabled ? clientContext : undefined,
+            naturalProtocol,
+          });
+        }
         if (!response.body) {
           throw new TypeError("public stream body missing");
         }
@@ -513,6 +579,16 @@ export function usePublicChat() {
           const traceId =
             typeof event.trace_id === "string" ? event.trace_id : undefined;
           if (event.type === "meta") {
+            if (recoverTraceId) {
+              updateTurn(turnId, (turn) => ({
+                ...turn,
+                answer: undefined,
+                provisionalAnswer: undefined,
+                citations: [],
+                claims: [],
+                partial: false,
+              }));
+            }
             if (traceId) {
               activeTraceIdRef.current = traceId;
               updateTurn(turnId, (turn) => ({ ...turn, traceId }));
@@ -617,11 +693,22 @@ export function usePublicChat() {
             const partial =
               tracker.claimCount > 0 ||
               tracker.deltaCount > 0 ||
-              event.partial === true;
+              event.partial === true ||
+              Boolean(recoverOriginal?.answer) ||
+              Boolean(recoverOriginal?.provisionalAnswer);
             updateTurn(turnId, (turn) => ({
               ...turn,
               status: "failed",
               stageMessage: undefined,
+              answer: tracker.deltaCount === 0
+                ? (turn.answer ?? recoverOriginal?.answer)
+                : turn.answer,
+              provisionalAnswer: tracker.deltaCount === 0
+                ? (turn.provisionalAnswer ?? recoverOriginal?.provisionalAnswer)
+                : turn.provisionalAnswer,
+              citations: turn.citations.length > 0
+                ? turn.citations
+                : (recoverOriginal?.citations ?? []),
               errorMessage: partial
                 ? "回答未完成，以下内容不能作为最终结论"
                 : streamErrorMessage(event),
@@ -662,7 +749,10 @@ export function usePublicChat() {
         }
         if (naturalProtocol && isCurrent()) {
           void getPublicNaturalSessions({ csrfToken })
-            .then(setHistorySessions)
+            .then((sessions) => {
+              setHistorySessions(sessions.items);
+              setHistoryMoreCount(sessions.has_more ? sessions.total - sessions.items.length : 0);
+            })
             .catch(() => undefined);
         }
       } catch (error) {
@@ -675,11 +765,20 @@ export function usePublicChat() {
         tracker.terminal = true;
         updateTurn(turnId, (turn) => {
           const partial =
-            turn.claims.length > 0 || Boolean(turn.provisionalAnswer);
+            turn.claims.length > 0 ||
+            Boolean(turn.provisionalAnswer) ||
+            Boolean(recoverOriginal?.provisionalAnswer) ||
+            Boolean(recoverOriginal?.answer);
           return {
             ...turn,
             status: "failed",
             stageMessage: undefined,
+            answer: turn.answer ?? recoverOriginal?.answer,
+            provisionalAnswer:
+              turn.provisionalAnswer ?? recoverOriginal?.provisionalAnswer,
+            citations: turn.citations.length > 0
+              ? turn.citations
+              : (recoverOriginal?.citations ?? []),
             errorMessage: partial
               ? "回答未完成，以下内容不能作为最终结论"
               : publicErrorMessage(error),
@@ -774,11 +873,32 @@ export function usePublicChat() {
     (turnId: string, question: string, turnConversationId: string) => {
       if (busyRef.current || conversationRef.current !== turnConversationId)
         return;
+      if (naturalProtocol) {
+        const previous = turns.find((item) => item.id === turnId);
+        void runTurn(randomId("turn"), question, turnConversationId, false, {
+          entrypoint: "retry",
+          ...(previous?.traceId ? { retry_of_trace_id: previous.traceId } : {}),
+        });
+      } else {
+        void runTurn(turnId, question, turnConversationId, true, {
+          entrypoint: "retry",
+        });
+      }
+    },
+    [naturalProtocol, runTurn, turns],
+  );
+
+  const recover = useCallback(
+    (turnId: string, question: string, turnConversationId: string) => {
+      if (busyRef.current || conversationRef.current !== turnConversationId)
+        return;
+      const original = turns.find((item) => item.id === turnId);
+      if (!original?.traceId || !original.nativeMessageId) return;
       void runTurn(turnId, question, turnConversationId, true, {
         entrypoint: "retry",
-      });
+      }, original.traceId, original);
     },
-    [runTurn],
+    [runTurn, turns],
   );
 
   const stop = useCallback(() => {
@@ -787,18 +907,6 @@ export function usePublicChat() {
     const traceId = activeTraceIdRef.current;
     const csrfToken = csrfRef.current;
     const turnConversationId = conversationRef.current;
-    if (naturalProtocol && traceId && csrfToken) {
-      void stopPublicNaturalChat({
-        conversationId: turnConversationId,
-        csrfToken,
-        traceId,
-      }).catch(() => {
-        updateTurn(turnId, (turn) => ({
-          ...turn,
-          errorMessage: "已停止显示；服务端取消未确认。",
-        }));
-      });
-    }
     requestIdRef.current += 1;
     streamControllerRef.current?.abort();
     busyRef.current = false;
@@ -807,12 +915,29 @@ export function usePublicChat() {
     activeTraceIdRef.current = undefined;
     updateTurn(turnId, (turn) => ({
       ...turn,
-      status: "cancelled",
+      status: naturalProtocol ? "pending_confirmation" : "cancelled",
       stageMessage: undefined,
-      errorMessage: "已停止回答",
+      errorMessage: naturalProtocol
+        ? "已停止显示；服务端取消未确认。"
+        : "已停止回答",
       partial: turn.claims.length > 0 || Boolean(turn.provisionalAnswer),
     }));
     setPhase("cancelled");
+    if (naturalProtocol && traceId && csrfToken) {
+      void stopPublicNaturalChat({
+        conversationId: turnConversationId,
+        csrfToken,
+        traceId,
+      }).then((cancelled) => {
+        if (cancelled) {
+          updateTurn(turnId, (turn) => ({
+            ...turn,
+            status: "stop_requested",
+            errorMessage: "停止请求已接收；最终状态待确认。",
+          }));
+        }
+      }).catch(() => undefined);
+    }
   }, [naturalProtocol, updateTurn]);
 
   const submitFeedback = useCallback(
@@ -923,11 +1048,13 @@ export function usePublicChat() {
     downloadReference,
     feedbackDetailsEnabled,
     historySessions,
+    historyMoreCount,
     loggedOut,
     login: () => authNavigation.redirectToSso(),
     logout,
     logoutError,
     openHistory,
+    recover,
     phase,
     retry,
     retrySession: startSession,

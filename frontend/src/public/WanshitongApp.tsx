@@ -153,6 +153,9 @@ export function WanshitongApp() {
                   {item.title}
                 </button>
               ))}
+              {chat.historyMoreCount > 0 && (
+                <p>当前仅显示最近 50 个会话，另有 {chat.historyMoreCount} 个较早会话。</p>
+              )}
             </div>
           </details>
         )}
@@ -206,6 +209,7 @@ export function WanshitongApp() {
           onPopularQuestionSubmit={submitPopularQuestion}
           onRefresh={suggestions.refresh}
           onRetry={chat.retry}
+          onRecover={chat.recover}
           onStop={chat.stop}
           onSubmit={submitCurrentQuestion}
           onSuggestedQuestionSubmit={submitSuggestedQuestion}

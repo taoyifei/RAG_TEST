@@ -17,7 +17,9 @@ _PROXY_HEADERS = frozenset(
 )
 _MAX_RELOGIN = 1
 _HTTP_UNAUTHORIZED = 401
+_HTTP_OK = 200
 _HTTP_BAD_REQUEST = 400
+_HTTP_SUCCESS_END = 300
 _MIN_API_SEGMENTS = 3
 _ADMIN_CATEGORIES = frozenset(
     {
@@ -56,11 +58,40 @@ _ADMIN_CATEGORIES = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class NativeAdminResponse:
-    """仅保留允许返回浏览器的响应字段。"""
+    """仅保留允许返回浏览器的响应字段，流由消费方持续转发。"""
 
     status_code: int
     content: bytes
     headers: dict[str, str]
+    stream: NativeAdminStream | None = None
+
+
+class NativeAdminStream:
+    """持有上游 SSE 连接，并在结束、超时或取消时释放它。"""
+
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+        self._chunks = response.aiter_bytes()
+        self._closed = False
+
+    def __aiter__(self) -> NativeAdminStream:
+        """逐块转发原生事件。"""
+        return self
+
+    async def __anext__(self) -> bytes:
+        """取下一块，并在流结束或失败时关闭原生连接。"""
+        try:
+            return await anext(self._chunks)
+        except BaseException:
+            await self.aclose()
+            raise
+
+    async def aclose(self) -> None:
+        """供取消或未开始发送的下游响应显式关闭上游。"""
+        if self._closed:
+            return
+        self._closed = True
+        await asyncio.shield(self._response.aclose())
 
 
 class NativeAdminClient:
@@ -125,8 +156,7 @@ class NativeAdminClient:
                 or not any(
                     isinstance(item, dict)
                     and item.get("tenant_id") == self._tenant_id
-                    and str(item.get("role", "")).lower()
-                    in {"owner", "admin"}
+                    and str(item.get("role", "")).lower() in {"owner", "admin"}
                     for item in memberships
                 )
             ):
@@ -172,37 +202,60 @@ class NativeAdminClient:
                 }
             )
             target = "/" + path + ("?" + query if query else "")
-            response = await self._http.request(
-                method,
-                target,
-                content=content,
-                headers=headers,
+            request = self._http.build_request(
+                method, target, content=content, headers=headers
             )
-            if (
-                response.status_code == _HTTP_UNAUTHORIZED
-                and attempt < _MAX_RELOGIN
-            ):
-                await self._invalidate(token)
-                continue
-            response_headers = {
-                key: value
-                for key, value in response.headers.items()
-                if key.lower()
-                in {
-                    "content-type",
-                    "content-disposition",
-                    "etag",
-                    "last-modified",
-                    "accept-ranges",
-                    "content-range",
+            response: httpx.Response | None = None
+            transferred = False
+            try:
+                response = await self._http.send(request, stream=True)
+                if (
+                    response.status_code == _HTTP_UNAUTHORIZED
+                    and attempt < _MAX_RELOGIN
+                ):
+                    await self._invalidate(token)
+                    continue
+                response_headers = {
+                    key: value
+                    for key, value in response.headers.items()
+                    if key.lower()
+                    in {
+                        "content-type",
+                        "content-disposition",
+                        "etag",
+                        "last-modified",
+                        "accept-ranges",
+                        "content-range",
+                    }
                 }
-            }
-            response_headers["Cache-Control"] = "private, no-store"
-            return NativeAdminResponse(
-                status_code=response.status_code,
-                content=response.content,
-                headers=response_headers,
-            )
+                response_headers["Cache-Control"] = "private, no-store"
+                media_type = response.headers.get("content-type", "").split(
+                    ";", 1
+                )[0]
+                if (
+                    _HTTP_OK <= response.status_code < _HTTP_SUCCESS_END
+                    and media_type.strip().lower() == "text/event-stream"
+                ):
+                    response_headers["X-Accel-Buffering"] = "no"
+                    transferred = True
+                    return NativeAdminResponse(
+                        status_code=response.status_code,
+                        content=b"",
+                        headers=response_headers,
+                        stream=NativeAdminStream(response),
+                    )
+                return NativeAdminResponse(
+                    status_code=response.status_code,
+                    content=await response.aread(),
+                    headers=response_headers,
+                )
+            except httpx.RequestError as error:
+                raise NativeHttpError(
+                    502, "原生管理员请求超时或连接失败。"
+                ) from error
+            finally:
+                if response is not None and not transferred:
+                    await asyncio.shield(response.aclose())
         raise NativeHttpError(502, "原生管理员会话不可用。")
 
     async def _access_token(self) -> str:
@@ -211,10 +264,15 @@ class NativeAdminClient:
         async with self._login_lock:
             if self._token is not None:
                 return self._token
-            response = await self._http.post(
-                "/api/v1/auth/login",
-                json={"email": self._email, "password": self._password},
-            )
+            try:
+                response = await self._http.post(
+                    "/api/v1/auth/login",
+                    json={"email": self._email, "password": self._password},
+                )
+            except httpx.RequestError as error:
+                raise NativeHttpError(
+                    502, "原生管理员登录超时或连接失败。"
+                ) from error
             payload = self._json_success(response)
             token = payload.get("token")
             if not isinstance(token, str) or not token:
@@ -271,6 +329,4 @@ def _allowed_admin_path(method: str, path: str) -> bool:  # noqa: PLR0911
         return False
     if path.startswith("api/v1/system/host-project-dir"):
         return False
-    return not path.startswith(
-        "api/v1/initialization/ollama/models/download"
-    )
+    return not path.startswith("api/v1/initialization/ollama/models/download")

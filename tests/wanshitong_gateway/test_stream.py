@@ -140,3 +140,37 @@ def test_unmapped_native_event_keeps_complete_payload() -> None:
     event_type, data = _decode_bridge(frame)
     assert event_type == "native_event"
     assert data["native"] == payload
+
+
+def test_model_context_error_is_classified_without_exposing_raw_json() -> None:
+    bridge = BridgeStream(
+        trace_id="trace_55555555555555555555555555555555",
+        session_id="session-e",
+        reference_mapper=lambda item: item,
+    )
+    raw_error = (
+        "create chat completion stream: This model's maximum context length "
+        "is 8192 tokens; secret=/private/model-key"
+    )
+    frame = bridge.accept(_native("error", content=raw_error))[0]
+    event_type, payload = _decode_bridge(frame)
+    assert event_type == "error"
+    assert payload["code"] == "MODEL_CONTEXT_EXCEEDED"
+    assert "secret" not in frame.decode()
+    assert "maximum context length" not in frame.decode()
+
+
+def test_native_stop_event_is_not_presented_as_normal_completion() -> None:
+    bridge = BridgeStream(
+        trace_id="trace_66666666666666666666666666666666",
+        session_id="session-f",
+        reference_mapper=lambda item: item,
+    )
+    bridge.accept(_native("answer", content="已生成部分"))
+    bridge.accept(_native("stop", done=True))
+    event_type, payload = _decode_bridge(
+        bridge.accept(_native("complete", done=True))[0]
+    )
+    assert event_type == "cancelled"
+    assert payload["finish_reason"] == "user_requested"
+    assert bridge.terminal_type == "stopped"

@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS gateway_turns (
     status TEXT NOT NULL,
     truncated INTEGER NOT NULL DEFAULT 0,
     finish_reason TEXT,
+    error_category TEXT,
+    error_phase TEXT,
+    upstream_status INTEGER,
+    stop_acknowledged INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     completed_at TEXT
 );
@@ -170,6 +174,18 @@ class GatewayStore:
                 connection.execute(
                     "ALTER TABLE gateway_turns ADD COLUMN asker_name TEXT"
                 )
+            diagnostic_columns = {
+                "error_category": "TEXT",
+                "error_phase": "TEXT",
+                "upstream_status": "INTEGER",
+                "stop_acknowledged": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, definition in diagnostic_columns.items():
+                if name not in columns:
+                    connection.execute(
+                        "ALTER TABLE gateway_turns ADD COLUMN "
+                        f"{name} {definition}"
+                    )
             review_columns = {
                 row["name"]
                 for row in connection.execute(
@@ -319,6 +335,31 @@ class GatewayStore:
                 ),
             )
 
+    def append_recovery_event(
+        self, *, trace_id: str, event_type: str, payload: Mapping[str, Any]
+    ) -> None:
+        """在原 Trace 后追加续流事件，标记其来自重放而非新生成。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(sequence), -1) AS last_sequence "
+                "FROM gateway_events WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()
+            sequence = int(row["last_sequence"]) + 1
+            connection.execute(
+                "INSERT INTO gateway_events "
+                "(trace_id,sequence,event_type,native_request_id,"
+                "payload_json,created_at) VALUES (?,?,?,?,?,?)",
+                (
+                    trace_id,
+                    sequence,
+                    f"recovery_{event_type}",
+                    payload.get("native_request_id"),
+                    json.dumps(payload, ensure_ascii=False),
+                    _now(),
+                ),
+            )
+
     def set_native_message(
         self,
         *,
@@ -338,9 +379,35 @@ class GatewayStore:
         """记录已发往原生停止接口的用户动作。"""
         with self._connect() as connection:
             connection.execute(
-                "UPDATE gateway_turns SET status='stop_requested' "
+                "UPDATE gateway_turns SET status='stop_requested',"
+                "stop_acknowledged=1 "
                 "WHERE trace_id=? AND owner_id=? AND status='streaming'",
                 (trace_id, owner_id),
+            )
+
+    def mark_recovering(self, *, trace_id: str, owner_id: str) -> None:
+        """原生续流开始后保持同一 Trace 与消息映射。"""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE gateway_turns SET status='streaming' "
+                "WHERE trace_id=? AND owner_id=?",
+                (trace_id, owner_id),
+            )
+
+    def record_diagnostic(
+        self,
+        *,
+        trace_id: str,
+        category: str,
+        phase: str,
+        upstream_status: int | None = None,
+    ) -> None:
+        """只保存受控错误类别和状态，不保存上游原始报错或密钥。"""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE gateway_turns SET error_category=?,error_phase=?,"
+                "upstream_status=? WHERE trace_id=?",
+                (category, phase, upstream_status, trace_id),
             )
 
     def add_reference(
@@ -508,7 +575,8 @@ class GatewayStore:
                 "SELECT t.trace_id,t.created_at,t.completed_at,t.status,"
                 "t.owner_id,t.asker_name,t.question,"
                 "t.native_session_id,t.native_message_id,t.native_request_id,"
-                "t.truncated,t.finish_reason,"
+                "t.truncated,t.finish_reason,t.error_category,"
+                "t.error_phase,t.upstream_status,t.stop_acknowledged,"
                 "LENGTH(t.question) AS question_chars,"
                 "LENGTH(t.answer) AS answer_chars,"
                 "f.useful AS feedback_useful,"
@@ -836,6 +904,13 @@ class GatewayStore:
             "status": turn["status"],
             "truncated": bool(turn["truncated"]),
             "finish_reason": turn["finish_reason"],
+            "stop_acknowledged": bool(turn["stop_acknowledged"]),
+            "diagnostic": {
+                "category": turn["error_category"],
+                "phase": turn["error_phase"],
+                "upstream_status": turn["upstream_status"],
+                "native_request_id": turn["native_request_id"],
+            },
             "created_at": turn["created_at"],
             "completed_at": turn["completed_at"],
             "client_context": json.loads(turn["client_context_json"]),

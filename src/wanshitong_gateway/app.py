@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
 import sqlite3
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -13,9 +14,11 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.background import BackgroundTask
 
 from rag_app.wanshitong.public_models import (
     PublicChatStopRequest,
@@ -115,8 +118,12 @@ def _recommendation_fields(body: _RecommendationRequest) -> dict[str, Any]:
     topic = body.topic_key.strip()
     note = body.review_note.strip()
     sources = [item.strip() for item in body.source_knowledge_ids]
-    if not question or not topic or any(
-        not item or len(item) > _MAX_SOURCE_ID_LENGTH for item in sources
+    if (
+        not question
+        or not topic
+        or any(
+            not item or len(item) > _MAX_SOURCE_ID_LENGTH for item in sources
+        )
     ):
         raise HTTPException(
             status_code=422, detail="invalid recommendation fields"
@@ -250,8 +257,17 @@ def create_app(  # noqa: PLR0913, PLR0915
             )
             status_code = upstream.status_code
             if _HTTP_REDIRECT_START <= status_code < _HTTP_REDIRECT_END:
+                if upstream.stream is not None:
+                    await upstream.stream.aclose()
                 raise HTTPException(
                     status_code=502, detail="native redirect denied"
+                )
+            if upstream.stream is not None:
+                return StreamingResponse(
+                    upstream.stream,
+                    status_code=status_code,
+                    headers=upstream.headers,
+                    background=BackgroundTask(upstream.stream.aclose),
                 )
             return Response(
                 content=upstream.content,
@@ -613,6 +629,17 @@ def create_app(  # noqa: PLR0913, PLR0915
         if user_id is None:
             raise HTTPException(status_code=401, detail="RDMS login required")
         owner_id = _owner_id(auth, user_id)
+        client_context = _usage_context(body.client_context)
+        retry_of = client_context.get("retry_of_trace_id")
+        if retry_of is not None:
+            original = store.get_turn(trace_id=retry_of, owner_id=owner_id)
+            if (
+                original is None
+                or original["conversation_id"] != conversation_id
+            ):
+                raise HTTPException(
+                    status_code=404, detail="original turn not found"
+                )
         lock = locks.setdefault((owner_id, conversation_id), asyncio.Lock())
         if lock.locked():
             raise HTTPException(status_code=409, detail="conversation busy")
@@ -643,7 +670,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                     getattr(principal, "nick_name", None)
                     or getattr(principal, "username", None)
                 ),
-                client_context=_usage_context(body.client_context),
+                client_context=client_context,
                 kb_scope=engine.public_kb_ids,
             )
         except NativeHttpError as error:
@@ -661,7 +688,7 @@ def create_app(  # noqa: PLR0913, PLR0915
             reference_mapper=_reference_mapper(store, trace_id),
         )
 
-        async def generate() -> AsyncIterator[bytes]:  # noqa: PLR0912
+        async def generate() -> AsyncIterator[bytes]:  # noqa: PLR0912, PLR0915 - 单次流的终态统一落库。
             status = "streaming"
             try:
                 meta = bridge.meta()
@@ -701,14 +728,66 @@ def create_app(  # noqa: PLR0913, PLR0915
                 status = (
                     "completed"
                     if bridge.terminal_type == "complete"
+                    else "cancelled"
+                    if bridge.terminal_type == "stopped"
                     else "failed"
                 )
+                if bridge.error_category:
+                    store.record_diagnostic(
+                        trace_id=trace_id,
+                        category=bridge.error_category,
+                        phase="native_stream",
+                    )
             except asyncio.CancelledError:
                 status = "disconnected"
+                store.record_diagnostic(
+                    trace_id=trace_id,
+                    category="CLIENT_DISCONNECTED",
+                    phase="downstream_stream",
+                )
                 raise
-            except (NativeHttpError, ValueError, UnicodeError):
+            except NativeHttpError as error:
                 status = "failed"
-                error_frame = bridge.disconnected(code="NATIVE_STREAM_ERROR")
+                store.record_diagnostic(
+                    trace_id=trace_id,
+                    category=error.category,
+                    phase=error.phase,
+                    upstream_status=error.status_code,
+                )
+                error_frame = bridge.disconnected(code=error.category)
+                if error_frame is not None:
+                    _record_frame(store, trace_id, error_frame)
+                    yield error_frame
+            except (
+                httpx.TimeoutException,
+                httpx.TransportError,
+                ValueError,
+                UnicodeError,
+            ) as error:
+                status = "failed"
+                if isinstance(error, httpx.TimeoutException):
+                    category = "UPSTREAM_TIMEOUT"
+                elif isinstance(error, httpx.RemoteProtocolError):
+                    category = "UPSTREAM_PROTOCOL_ERROR"
+                elif isinstance(error, httpx.TransportError):
+                    category = "UPSTREAM_CONNECTION_ERROR"
+                else:
+                    category = "INVALID_NATIVE_STREAM"
+                store.record_diagnostic(
+                    trace_id=trace_id, category=category, phase="native_stream"
+                )
+                error_frame = bridge.disconnected(code=category)
+                if error_frame is not None:
+                    _record_frame(store, trace_id, error_frame)
+                    yield error_frame
+            except Exception:
+                status = "failed"
+                store.record_diagnostic(
+                    trace_id=trace_id,
+                    category="GATEWAY_STREAM_ERROR",
+                    phase="gateway_stream",
+                )
+                error_frame = bridge.disconnected(code="GATEWAY_STREAM_ERROR")
                 if error_frame is not None:
                     _record_frame(store, trace_id, error_frame)
                     yield error_frame
@@ -729,6 +808,140 @@ def create_app(  # noqa: PLR0913, PLR0915
 
         return StreamingResponse(
             generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-store",
+                "X-Accel-Buffering": "no",
+                "X-Trace-Id": trace_id,
+            },
+        )
+
+    @app.post("/api/public/chat/{trace_id}/continue")
+    async def continue_chat(  # noqa: PLR0915 - 续流认证、映射和关闭保持同一事务边界。
+        trace_id: str, body: PublicChatStopRequest, request: Request
+    ) -> StreamingResponse:
+        """只重放并续接同一原生消息；不产生第二次知识问答 POST。"""
+        principal = auth.require_public(request)
+        user_id = _required_user(principal.user_id)
+        owner_id = _owner_id(auth, user_id)
+        turn = store.get_turn(trace_id=trace_id, owner_id=owner_id)
+        if turn is None or turn["conversation_id"] != body.conversation_id:
+            raise HTTPException(status_code=404, detail="turn not found")
+        message_id = turn["native_message_id"]
+        if not isinstance(message_id, str) or not message_id:
+            raise HTTPException(
+                status_code=409,
+                detail="native message not available for recovery",
+            )
+        lock = locks.setdefault(
+            (owner_id, body.conversation_id), asyncio.Lock()
+        )
+        if lock.locked():
+            raise HTTPException(status_code=409, detail="conversation busy")
+        await lock.acquire()
+        try:
+            store.mark_recovering(trace_id=trace_id, owner_id=owner_id)
+        except Exception:
+            lock.release()
+            raise
+        bridge = BridgeStream(
+            trace_id=trace_id,
+            session_id=str(turn["native_session_id"]),
+            reference_mapper=_reference_mapper(store, trace_id),
+        )
+
+        async def generate_recovery() -> AsyncIterator[bytes]:  # noqa: PLR0912 - 按原生终态封存同一轮。
+            status = "disconnected"
+            try:
+                meta = bridge.meta()
+                _record_recovery_frame(store, trace_id, meta)
+                yield meta
+                decoder = NativeSseDecoder()
+                async for chunk in native.continue_stream(
+                    user_id=user_id,
+                    session_id=str(turn["native_session_id"]),
+                    message_id=message_id,
+                ):
+                    for event in decoder.feed(chunk):
+                        for frame in bridge.accept(event):
+                            _record_recovery_frame(store, trace_id, frame)
+                            yield frame
+                        if bridge.terminal:
+                            break
+                    if bridge.terminal:
+                        break
+                if not bridge.terminal:
+                    for event in decoder.finish():
+                        for frame in bridge.accept(event):
+                            _record_recovery_frame(store, trace_id, frame)
+                            yield frame
+                if not bridge.terminal:
+                    disconnect_frame = bridge.disconnected()
+                    if disconnect_frame is not None:
+                        _record_recovery_frame(
+                            store, trace_id, disconnect_frame
+                        )
+                        yield disconnect_frame
+                status = (
+                    "completed"
+                    if bridge.terminal_type == "complete"
+                    else "cancelled"
+                    if bridge.terminal_type == "stopped"
+                    else "failed"
+                )
+                if bridge.error_category:
+                    store.record_diagnostic(
+                        trace_id=trace_id,
+                        category=bridge.error_category,
+                        phase="native_continue_stream",
+                    )
+            except asyncio.CancelledError:
+                status = "disconnected"
+                raise
+            except (
+                NativeHttpError,
+                httpx.TransportError,
+                ValueError,
+                UnicodeError,
+            ) as error:
+                status = "failed"
+                category = (
+                    error.category
+                    if isinstance(error, NativeHttpError)
+                    else "RECOVERY_STREAM_ERROR"
+                )
+                store.record_diagnostic(
+                    trace_id=trace_id,
+                    category=category,
+                    phase="native_continue_stream",
+                    upstream_status=error.status_code
+                    if isinstance(error, NativeHttpError)
+                    else None,
+                )
+                error_frame = bridge.disconnected(code=category)
+                if error_frame is not None:
+                    _record_recovery_frame(store, trace_id, error_frame)
+                    yield error_frame
+            finally:
+                try:
+                    store.finish_turn(
+                        trace_id=trace_id,
+                        status=status,
+                        answer=bridge.answer or str(turn["answer"] or ""),
+                        references=bridge.references
+                        or tuple(json.loads(turn["references_json"])),
+                        native_message_id=bridge.message_id or message_id,
+                        native_request_id=bridge.request_id
+                        or turn["native_request_id"],
+                        truncated=bridge.truncated or bool(turn["truncated"]),
+                        finish_reason=bridge.finish_reason
+                        or turn["finish_reason"],
+                    )
+                finally:
+                    lock.release()
+
+        return StreamingResponse(
+            generate_recovery(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-store",
@@ -791,7 +1004,12 @@ def create_app(  # noqa: PLR0913, PLR0915
                     "updated_at": row["updated_at"],
                 }
             )
-        return {"items": items}
+        return {
+            "items": items,
+            "total": len(rows),
+            "limit": _MAX_HISTORY_SESSIONS,
+            "has_more": len(rows) > _MAX_HISTORY_SESSIONS,
+        }
 
     @app.get("/api/public/legacy/history")
     def legacy_history(request: Request) -> dict[str, Any]:
@@ -858,21 +1076,68 @@ def create_app(  # noqa: PLR0913, PLR0915
             conversation_id=conversation_id,
         ):
             native_message = native_by_id.get(turn["native_message_id"])
-            answer = (
+            native_answer = (
                 native_message.get("content")
                 if isinstance(native_message, dict)
                 else None
             )
+            status = str(turn["status"])
+            source_status = (
+                "available" if native_message is not None else "missing"
+            )
+            if native_message is None and not turn["native_message_id"]:
+                source_status = "not_created"
+            if (
+                native_message is None
+                and turn["native_message_id"]
+                and status == "completed"
+            ):
+                status = "SOURCE_UNAVAILABLE"
+            elif native_message is not None:
+                is_completed = native_message.get("is_completed")
+                if is_completed is True and status in {
+                    "streaming",
+                    "disconnected",
+                    "stop_requested",
+                }:
+                    # 原生 completed 只说明消息已终止，不能证明生成成功。
+                    status = "pending_confirmation"
+                elif is_completed is False and status == "completed":
+                    status = "pending_confirmation"
+            if status == "streaming" and native_message is None:
+                status = "pending_confirmation"
+            answer = (
+                native_answer
+                if isinstance(native_answer, str)
+                else turn["answer"]
+            )
+            if status == "SOURCE_UNAVAILABLE":
+                answer = None
             turns.append(
                 {
                     "turn_id": turn["trace_id"],
                     "trace_id": turn["trace_id"],
                     "question": turn["question"],
-                    "status": turn["status"]
+                    "status": status,
+                    "source_status": source_status,
+                    "native_is_completed": native_message.get("is_completed")
                     if native_message is not None
-                    else "SOURCE_UNAVAILABLE",
+                    else None,
                     "answer": answer if isinstance(answer, str) else None,
                     "citations": json.loads(turn["references_json"]),
+                    "partial": status
+                    in {
+                        "failed",
+                        "disconnected",
+                        "stop_requested",
+                        "pending_confirmation",
+                    }
+                    and bool(answer),
+                    "truncated": bool(turn["truncated"]),
+                    "finish_reason": turn["finish_reason"],
+                    "native_message_id": turn["native_message_id"],
+                    "native_request_id": turn["native_request_id"],
+                    "stop_acknowledged": bool(turn["stop_acknowledged"]),
                     "created_at": turn["created_at"],
                 }
             )
@@ -1089,6 +1354,16 @@ def _usage_context(value: object | None) -> dict[str, str]:
         and len(recommendation_id) <= _MAX_RECOMMENDATION_ID_LENGTH
     ):
         result["recommendation_id"] = recommendation_id
+    retry_of = value.get("retry_of_trace_id")
+    if retry_of is not None:
+        if (
+            not isinstance(retry_of, str)
+            or re.fullmatch(r"trace_[0-9a-f]{32}", retry_of) is None
+        ):
+            raise HTTPException(
+                status_code=422, detail="invalid original trace"
+            )
+        result["retry_of_trace_id"] = retry_of
     return result
 
 
@@ -1125,4 +1400,15 @@ def _record_frame(store: GatewayStore, trace_id: str, frame: bytes) -> None:
         sequence=payload["sequence"],
         event_type=event_type,
         payload=payload,
+    )
+
+
+def _record_recovery_frame(
+    store: GatewayStore, trace_id: str, frame: bytes
+) -> None:
+    event_line, data_line, *_rest = frame.decode().splitlines()
+    event_type = event_line.removeprefix("event: ")
+    payload = json.loads(data_line.removeprefix("data: "))
+    store.append_recovery_event(
+        trace_id=trace_id, event_type=event_type, payload=payload
     )

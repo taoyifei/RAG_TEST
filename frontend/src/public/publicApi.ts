@@ -39,6 +39,7 @@ export interface PublicCapabilities {
 export interface PublicUsageContext {
   entrypoint: "manual" | "suggestion" | "popular" | "retry";
   recommendation_id?: string;
+  retry_of_trace_id?: string;
 }
 
 export interface PublicPopularQuestion {
@@ -112,6 +113,13 @@ export interface PublicNaturalHistoryTurn {
   answer: string | null;
   citations: PublicCitation[];
   created_at: string;
+  source_status?: "available" | "missing" | "not_created";
+  native_is_completed?: boolean | null;
+  partial?: boolean;
+  truncated?: boolean;
+  finish_reason?: string | null;
+  native_message_id?: string | null;
+  native_request_id?: string | null;
 }
 
 export interface PublicNaturalSession {
@@ -276,6 +284,31 @@ export async function openPublicChat(options: {
   return response;
 }
 
+export async function continuePublicNaturalChat(options: {
+  conversationId: string;
+  csrfToken: string;
+  traceId: string;
+  signal: AbortSignal;
+}): Promise<Response> {
+  const path = `/api/public/chat/${encodeURIComponent(options.traceId)}/continue`;
+  const response = await fetch(withAppBase(path), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+      "X-CSRF-Token": options.csrfToken,
+    },
+    body: JSON.stringify({ conversation_id: options.conversationId }),
+    signal: options.signal,
+  });
+  if (!response.ok) throw await readError(response);
+  if (!response.body) {
+    throw new PublicApiError("原回答无法恢复。", { status: response.status });
+  }
+  return response;
+}
+
 export async function stopPublicNaturalChat(options: {
   conversationId: string;
   csrfToken: string;
@@ -318,7 +351,7 @@ export async function getPublicNaturalHistory(options: {
 export async function getPublicNaturalSessions(options: {
   csrfToken: string;
   signal?: AbortSignal;
-}): Promise<PublicNaturalSession[]> {
+}): Promise<{ items: PublicNaturalSession[]; has_more: boolean; total: number }> {
   const response = await fetch(withAppBase("/api/public/conversations"), {
     credentials: "same-origin",
     headers: {
@@ -327,8 +360,16 @@ export async function getPublicNaturalSessions(options: {
     },
     signal: options.signal,
   });
-  const body = await requireJson<{ items: PublicNaturalSession[] }>(response);
-  return body.items;
+  const body = await requireJson<{
+    items: PublicNaturalSession[];
+    has_more?: boolean;
+    total?: number;
+  }>(response);
+  return {
+    items: body.items,
+    has_more: body.has_more === true,
+    total: body.total ?? body.items.length,
+  };
 }
 
 export async function getPublicNaturalSource(options: {

@@ -13,14 +13,26 @@ _TIMEOUT = httpx.Timeout(connect=5.0, read=180.0, write=30.0, pool=10.0)
 _HTTP_OK = 200
 _HTTP_BAD_REQUEST = 400
 _HTTP_BAD_GATEWAY = 502
+_HTTP_TOO_MANY_REQUESTS = 429
+_MESSAGE_PAGE_SIZE = 100
+_MAX_MESSAGE_PAGE_SIZE = 10_000
 
 
 class NativeHttpError(Exception):
     """原生 API 的有界错误，不携带认证请求头。"""
 
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        *,
+        category: str = "NATIVE_HTTP_ERROR",
+        phase: str = "upstream_response",
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.category = category
+        self.phase = phase
 
 
 class WeKnoraClient:
@@ -114,27 +126,78 @@ class WeKnoraClient:
             headers=self._headers(user_id),
         )
         payload = _require_success(response)
-        return payload.get("success") is True
+        # 固定版原生接口对“早已完成”也返回 success=true。
+        return (
+            payload.get("success") is True
+            and payload.get("message") != "Message already completed"
+        )
+
+    async def continue_stream(
+        self, *, user_id: str, session_id: str, message_id: str
+    ) -> AsyncIterator[bytes]:
+        """只读取原生已存在的回答流，不发起新的生成 POST。"""
+        async with self._http.stream(
+            "GET",
+            f"/api/v1/sessions/continue-stream/{session_id}",
+            params={"message_id": message_id},
+            headers={**self._headers(user_id), "Accept": "text/event-stream"},
+        ) as response:
+            if response.status_code != _HTTP_OK:
+                _require_success(await response.aread(), response.status_code)
+                raise NativeHttpError(
+                    response.status_code, "原生回答无法恢复。"
+                )
+            async for chunk in response.aiter_bytes():
+                yield chunk
 
     async def messages(
         self, *, user_id: str, session_id: str
     ) -> list[dict[str, Any]]:
-        """读取属于外部主体的原生历史。"""
-        response = await self._http.get(
-            f"/api/v1/messages/{session_id}/load",
-            headers=self._headers(user_id),
-        )
-        payload = _require_success(response)
-        data = payload.get("data")
-        if not isinstance(data, list) or any(
-            not isinstance(item, dict) for item in data
-        ):
-            raise NativeHttpError(502, "原生历史响应格式无效。")
-        return data
+        """沿原生时间游标读全历史；同时间戳边界先扩页再推进。"""
+        before_time: str | None = None
+        items: dict[str, dict[str, Any]] = {}
+        while True:
+            limit = _MESSAGE_PAGE_SIZE + 1
+            while True:
+                params: dict[str, str | int] = {"limit": limit}
+                if before_time is not None:
+                    params["before_time"] = before_time
+                response = await self._http.get(
+                    f"/api/v1/messages/{session_id}/load",
+                    params=params,
+                    headers=self._headers(user_id),
+                )
+                data = _require_success(response).get("data")
+                if not isinstance(data, list) or any(
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("id"), str)
+                    or not isinstance(item.get("created_at"), str)
+                    for item in data
+                ):
+                    raise NativeHttpError(502, "原生历史响应格式无效。")
+                if len(data) < limit:
+                    selected = data
+                    next_cursor = None
+                    break
+                # 原生按时间倒序取 limit 后升序返回；首条是探针。
+                if data[0]["created_at"] != data[1]["created_at"]:
+                    selected = data[1:]
+                    next_cursor = selected[0]["created_at"]
+                    break
+                limit *= 2
+                if limit > _MAX_MESSAGE_PAGE_SIZE:
+                    raise NativeHttpError(
+                        502, "原生历史同时间戳消息过多，无法安全分页。"
+                    )
+            for item in selected:
+                items[item["id"]] = item
+            if next_cursor is None:
+                return list(items.values())
+            if next_cursor == before_time:
+                raise NativeHttpError(502, "原生历史分页没有前进。")
+            before_time = next_cursor
 
-    async def session(
-        self, *, user_id: str, session_id: str
-    ) -> dict[str, Any]:
+    async def session(self, *, user_id: str, session_id: str) -> dict[str, Any]:
         """读取原生会话标题及所属身份。"""
         response = await self._http.get(
             f"/api/v1/sessions/{session_id}",
@@ -162,9 +225,7 @@ class WeKnoraClient:
         )
         if response.status_code != _HTTP_OK:
             _require_success(response)
-            raise NativeHttpError(
-                response.status_code, "原生引用资源不可用。"
-            )
+            raise NativeHttpError(response.status_code, "原生引用资源不可用。")
         return response
 
 
@@ -181,7 +242,9 @@ def _require_success(
     try:
         payload = httpx.Response(status_code, content=body).json()
     except ValueError as error:
-        raise NativeHttpError(status_code, "原生 API 返回非 JSON。") from error
+        raise NativeHttpError(
+            status_code, "原生 API 返回非 JSON。", category="NATIVE_NON_JSON"
+        ) from error
     if not isinstance(payload, dict):
         raise NativeHttpError(status_code, "原生 API 响应格式无效。")
     if status_code >= _HTTP_BAD_REQUEST or payload.get("success") is False:
@@ -191,8 +254,30 @@ def _require_success(
             if status_code >= _HTTP_BAD_REQUEST
             else _HTTP_BAD_GATEWAY
         )
+        native_error = payload.get("error")
+        raw_message = (
+            native_error.get("message")
+            if isinstance(native_error, dict)
+            else payload.get("message")
+        )
+        category = classify_native_error(raw_message, status_code)
         raise NativeHttpError(
-            error_status,
-            "原生 API 请求失败。",
+            error_status, "原生 API 请求失败。", category=category
         )
     return payload
+
+
+def classify_native_error(
+    message: object, status_code: int | None = None
+) -> str:
+    """只识别可运维的错误类别，不传播原生错误正文。"""
+    lowered = message.lower() if isinstance(message, str) else ""
+    if "maximum context length" in lowered or "context_window" in lowered:
+        return "MODEL_CONTEXT_EXCEEDED"
+    if status_code == _HTTP_TOO_MANY_REQUESTS:
+        return "NATIVE_RATE_LIMITED"
+    if status_code in {401, 403}:
+        return "NATIVE_AUTH_ERROR"
+    if status_code is not None:
+        return f"NATIVE_HTTP_{status_code}"
+    return "NATIVE_GENERATION_ERROR"

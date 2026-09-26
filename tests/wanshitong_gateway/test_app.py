@@ -96,7 +96,14 @@ def test_public_native_round_trip_preserves_answer_and_isolation(  # noqa: PLR09
                 200,
                 json={
                     "success": True,
-                    "data": [{"id": "answer-1", "content": "第一段第二段"}],
+                        "data": [
+                            {
+                                "id": "answer-1",
+                                "content": "第一段第二段",
+                                "created_at": "2026-09-26T00:00:00Z",
+                                "is_completed": True,
+                            }
+                        ],
                 },
             )
         if path == "/api/v1/sessions/session-1":

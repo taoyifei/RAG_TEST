@@ -9,6 +9,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from wanshitong_gateway.weknora.client import classify_native_error
+
 PROTOCOL = "wanshitong-weknora-sse-v1"
 _FRAME_END = re.compile(r"\r\n\r\n|\n\n|\r\r")
 
@@ -97,8 +99,10 @@ class BridgeStream:
         self._usage: Mapping[str, Any] | None = None
         self._finish_reason: str | None = None
         self._truncated = False
+        self._stopped = False
         self.terminal = False
         self.terminal_type: str | None = None
+        self.error_category: str | None = None
 
     @property
     def answer(self) -> str:
@@ -137,7 +141,7 @@ class BridgeStream:
             {"native_session_id": self.session_id, "engine": "weknora"},
         )
 
-    def accept(self, native: NativeEvent) -> list[bytes]:  # noqa: PLR0911
+    def accept(self, native: NativeEvent) -> list[bytes]:  # noqa: PLR0911, PLR0912 - 原生事件逐类保留独立终态。
         """处理一帧原生事件，不把局部 done 误判为整轮结束。"""
         if self.terminal:
             return []
@@ -184,13 +188,22 @@ class BridgeStream:
                 mapped.append(dict(self._reference_mapper(raw)))
             self._references = mapped
             return [
-                self._emit(
-                    "references", {"items": mapped, "native": payload}
-                )
+                self._emit("references", {"items": mapped, "native": payload})
             ]
         if response_type == "complete":
             self.terminal = True
-            self.terminal_type = "complete"
+            self.terminal_type = "stopped" if self._stopped else "complete"
+            if self._stopped:
+                return [
+                    self._emit(
+                        "cancelled",
+                        {
+                            "native_message_id": self._message_id,
+                            "native_request_id": self._native_request_id,
+                            "finish_reason": self._finish_reason,
+                        },
+                    )
+                ]
             return [
                 self._emit(
                     "final",
@@ -211,17 +224,28 @@ class BridgeStream:
         if response_type == "error":
             self.terminal = True
             self.terminal_type = "error"
+            self.error_category = classify_native_error(payload.get("content"))
             return [
                 self._emit(
                     "error",
                     {
-                        "code": "NATIVE_ERROR",
-                        "message": str(
-                            payload.get("content") or "原生问答失败。"
-                        ),
+                        "code": self.error_category,
+                        "message": "原生回答失败，请联系管理员查看诊断。",
                         "partial": bool(self._answer),
                         "native_request_id": self._native_request_id,
                         "native_message_id": self._message_id,
+                    },
+                )
+            ]
+        if response_type == "stop":
+            self._stopped = True
+            self._finish_reason = "user_requested"
+            return [
+                self._emit(
+                    "native_event",
+                    {
+                        "response_type": response_type,
+                        "native_request_id": self._native_request_id,
                         "native": payload,
                     },
                 )
@@ -244,6 +268,7 @@ class BridgeStream:
             return None
         self.terminal = True
         self.terminal_type = "disconnected"
+        self.error_category = code
         return self._emit(
             "error",
             {
