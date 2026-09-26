@@ -10,12 +10,12 @@ import sqlite3
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from rag_app.wanshitong.public_models import (
     PublicChatStopRequest,
@@ -47,7 +47,10 @@ from wanshitong_gateway.weknora.stream import (
 
 _MAX_HISTORY_SESSIONS = 50
 _MAX_OPS_LIST_LIMIT = 1000
+_MAX_OPS_OFFSET = 1_000_000
+_MAX_OPS_QUERY_CHARS = 200
 _MAX_RECOMMENDATION_ID_LENGTH = 128
+_MAX_SOURCE_ID_LENGTH = 128
 _MAX_RESOURCE_BYTES = 50 * 1024 * 1024
 _MAX_ADMIN_BODY_BYTES = 50 * 1024 * 1024
 _HTTP_REDIRECT_START = 300
@@ -74,6 +77,71 @@ class _TraceExportRequest(BaseModel):
 
     include_content: bool = False
     confirm_id: str | None = None
+
+
+class _FeedbackReviewRequest(BaseModel):
+    """管理员人工复核，不修改原生问答结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["open", "in_review", "resolved"]
+    note: str = Field(default="", max_length=2000)
+    root_cause: str = Field(default="", max_length=100)
+    fix_reference: str = Field(default="", max_length=500)
+    verification_references: list[str] = Field(
+        default_factory=list, max_length=20
+    )
+    evaluation_candidate: bool = False
+
+
+class _RecommendationRequest(BaseModel):
+    """人工编辑公开问题；来源 ID 是运营核对记录，不影响检索范围。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int | None = Field(default=None, ge=1)
+    question: str = Field(min_length=1, max_length=500)
+    topic_key: str = Field(min_length=1, max_length=100)
+    source_knowledge_ids: list[str] = Field(default_factory=list, max_length=20)
+    review_note: str = Field(default="", max_length=1000)
+    state: Literal["DRAFT", "APPROVED", "DISABLED"] = "DRAFT"
+    review_confirmed: bool = False
+    disabled_reason: str | None = Field(default=None, max_length=500)
+
+
+def _recommendation_fields(body: _RecommendationRequest) -> dict[str, Any]:
+    """审核通过前需要明确的资料核对记录；不进行旧检索或答案预判。"""
+    question = body.question.strip()
+    topic = body.topic_key.strip()
+    note = body.review_note.strip()
+    sources = [item.strip() for item in body.source_knowledge_ids]
+    if not question or not topic or any(
+        not item or len(item) > _MAX_SOURCE_ID_LENGTH for item in sources
+    ):
+        raise HTTPException(
+            status_code=422, detail="invalid recommendation fields"
+        )
+    if len(sources) != len(set(sources)):
+        raise HTTPException(
+            status_code=422, detail="duplicate knowledge source"
+        )
+    if body.state == "APPROVED" and (
+        not body.review_confirmed or not sources or not note
+    ):
+        raise HTTPException(
+            status_code=422, detail="review confirmation required"
+        )
+    reason = body.disabled_reason.strip() if body.disabled_reason else None
+    if body.state == "DISABLED" and not reason:
+        raise HTTPException(status_code=422, detail="disabled reason required")
+    return {
+        "question": question,
+        "topic_key": topic,
+        "source_knowledge_ids": sources,
+        "review_note": note,
+        "state": body.state,
+        "disabled_reason": reason if body.state == "DISABLED" else None,
+    }
 
 
 def create_app(  # noqa: PLR0913, PLR0915
@@ -212,17 +280,118 @@ def create_app(  # noqa: PLR0913, PLR0915
         return {"status": "alive", "engine": "weknora"}
 
     @app.get("/api/admin/ops/traces")
-    def admin_traces(request: Request, limit: int = 100) -> dict[str, Any]:
+    def admin_traces(
+        request: Request,
+        limit: int = 100,
+        offset: int = 0,
+        query: str = "",
+        feedback_only: bool = False,
+    ) -> dict[str, Any]:
         """按本候选部署列出真实网关 Trace，不混入旧引擎。"""
         auth.require_admin(request)
-        if not 1 <= limit <= _MAX_OPS_LIST_LIMIT:
-            raise HTTPException(status_code=422, detail="invalid limit")
+        if (
+            not 1 <= limit <= _MAX_OPS_LIST_LIMIT
+            or not 0 <= offset <= _MAX_OPS_OFFSET
+            or len(query) > _MAX_OPS_QUERY_CHARS
+        ):
+            raise HTTPException(status_code=422, detail="invalid trace filters")
+        query = query.strip()
         return {
             "engine": "weknora",
             "items": store.list_traces(
-                deployment_id=auth.settings.deployment_id, limit=limit
+                deployment_id=auth.settings.deployment_id,
+                limit=limit,
+                offset=offset,
+                query=query,
+                feedback_only=feedback_only,
+            ),
+            "total": store.count_traces(
+                deployment_id=auth.settings.deployment_id,
+                query=query,
+                feedback_only=feedback_only,
             ),
         }
+
+    @app.get("/api/admin/ops/summary")
+    def admin_summary(request: Request) -> dict[str, Any]:
+        """只汇总本候选实际产生的新引擎问答。"""
+        auth.require_admin(request)
+        return {
+            "engine": "weknora",
+            **store.ops_summary(deployment_id=auth.settings.deployment_id),
+        }
+
+    @app.get("/api/admin/ops/questions")
+    def admin_questions(request: Request) -> dict[str, Any]:
+        """给运营页提供近七天原问题精确重复统计。"""
+        auth.require_admin(request)
+        return {
+            "engine": "weknora",
+            "window_days": 7,
+            "grouping": "exact_trimmed_question",
+            "items": store.frequent_questions(
+                deployment_id=auth.settings.deployment_id
+            ),
+        }
+
+    @app.get("/api/admin/ops/recommendations")
+    def admin_recommendations(request: Request) -> dict[str, Any]:
+        """列出候选环境的人工推荐题及其审核状态。"""
+        auth.require_admin(request)
+        return {
+            "items": store.list_recommendations(
+                deployment_id=auth.settings.deployment_id
+            )
+        }
+
+    @app.post("/api/admin/ops/recommendations")
+    def create_recommendation(
+        body: _RecommendationRequest, request: Request
+    ) -> dict[str, Any]:
+        """从原问题新建草稿，或经人工核对后发布题面。"""
+        principal = auth.require_admin(request)
+        if body.expected_version is not None:
+            raise HTTPException(
+                status_code=422, detail="new recommendation has no version"
+            )
+        item = store.save_recommendation(
+            deployment_id=auth.settings.deployment_id,
+            recommendation_id=None,
+            expected_version=None,
+            **_recommendation_fields(body),
+        )
+        store.record_admin_action(
+            actor=principal.audit_actor,
+            method="POST",
+            path="recommendation-create",
+            status_code=200,
+        )
+        return item
+
+    @app.put("/api/admin/ops/recommendations/{recommendation_id}")
+    def update_recommendation(
+        recommendation_id: str, body: _RecommendationRequest, request: Request
+    ) -> dict[str, Any]:
+        """乐观锁保护运营编辑与下架。"""
+        principal = auth.require_admin(request)
+        if body.expected_version is None:
+            raise HTTPException(status_code=422, detail="version required")
+        try:
+            item = store.save_recommendation(
+                deployment_id=auth.settings.deployment_id,
+                recommendation_id=recommendation_id,
+                expected_version=body.expected_version,
+                **_recommendation_fields(body),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        store.record_admin_action(
+            actor=principal.audit_actor,
+            method="PUT",
+            path="recommendation-update",
+            status_code=200,
+        )
+        return item
 
     @app.post("/api/admin/ops/traces/export")
     def admin_traces_export(
@@ -265,15 +434,51 @@ def create_app(  # noqa: PLR0913, PLR0915
 
     @app.get("/api/admin/ops/traces/{trace_id}")
     def admin_trace(trace_id: str, request: Request) -> dict[str, Any]:
-        """默认脱敏显示单轮的原生 ID、引用映射和时序。"""
+        """管理员查看提问人和问答；原生事件正文仍需确认导出。"""
         auth.require_admin(request)
-        record = store.trace_export(trace_id=trace_id, include_content=False)
-        if (
-            record is None
-            or record["deployment_id"] != auth.settings.deployment_id
-        ):
+        record = store.trace_overview(
+            trace_id=trace_id, deployment_id=auth.settings.deployment_id
+        )
+        if record is None:
             raise HTTPException(status_code=404, detail="trace not found")
         return record
+
+    @app.post("/api/admin/ops/traces/{trace_id}/review")
+    def admin_feedback_review(
+        trace_id: str, body: _FeedbackReviewRequest, request: Request
+    ) -> dict[str, Any]:
+        """复核本候选的真实用户反馈，留存人工状态与备注。"""
+        principal = auth.require_admin(request)
+        record = store.trace_overview(
+            trace_id=trace_id, deployment_id=auth.settings.deployment_id
+        )
+        if record is None or record["feedback"] is None:
+            raise HTTPException(status_code=404, detail="feedback not found")
+        store.save_feedback_review(
+            trace_id=trace_id,
+            status=body.status,
+            note=body.note.strip(),
+            root_cause=body.root_cause.strip(),
+            fix_reference=body.fix_reference.strip(),
+            verification_references=[
+                item.strip()
+                for item in body.verification_references
+                if item.strip()
+            ],
+            evaluation_candidate=body.evaluation_candidate,
+        )
+        store.record_admin_action(
+            actor=principal.audit_actor,
+            method="POST",
+            path="feedback-review",
+            status_code=200,
+        )
+        updated = store.trace_overview(
+            trace_id=trace_id, deployment_id=auth.settings.deployment_id
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="feedback not found")
+        return {"review": updated["review"]}
 
     @app.post("/api/admin/ops/traces/{trace_id}/export")
     def admin_trace_export(
@@ -309,13 +514,13 @@ def create_app(  # noqa: PLR0913, PLR0915
         """以真实新引擎 Trace 汇总反馈，正文由单条确认导出。"""
         auth.require_admin(request)
         traces = store.list_traces(
-            deployment_id=auth.settings.deployment_id, limit=1000
+            deployment_id=auth.settings.deployment_id,
+            limit=1000,
+            feedback_only=True,
         )
         return {
             "engine": "weknora",
-            "items": [
-                item for item in traces if item["feedback_useful"] is not None
-            ],
+            "items": traces,
         }
 
     @app.get("/api/admin/ops/migration")
@@ -361,13 +566,40 @@ def create_app(  # noqa: PLR0913, PLR0915
 
     @app.get("/api/public/popular-questions")
     def popular_questions(request: Request) -> dict[str, Any]:
-        """未积累新引擎统计前只呈现已有静态推荐入口。"""
+        """只发布人工审核过的运营题面，热度来自新引擎真实提问。"""
         auth.require_public(request)
+        approved = store.list_recommendations(
+            deployment_id=auth.settings.deployment_id, approved_only=True
+        )
+        frequency = {
+            item["question"]: item["count"]
+            for item in store.frequent_questions(
+                deployment_id=auth.settings.deployment_id, limit=200
+            )
+        }
+        approved.sort(
+            key=lambda item: (
+                frequency.get(item["question"], 0),
+                item["updated_at"],
+            ),
+            reverse=True,
+        )
         return {
-            "mode": "EMPTY",
-            "generated_at": None,
+            "mode": "POPULAR" if approved else "EMPTY",
+            "generated_at": (
+                max(item["updated_at"] for item in approved)
+                if approved
+                else None
+            ),
             "window_days": 7,
-            "items": [],
+            "items": [
+                {
+                    "id": item["recommendation_id"],
+                    "question": item["question"],
+                    "topic_key": item["topic_key"],
+                }
+                for item in approved[:20]
+            ],
         }
 
     @app.post("/api/public/chat")
@@ -407,6 +639,10 @@ def create_app(  # noqa: PLR0913, PLR0915
                 conversation_id=conversation_id,
                 native_session_id=native_session_id,
                 question=body.query,
+                asker_name=(
+                    getattr(principal, "nick_name", None)
+                    or getattr(principal, "username", None)
+                ),
                 client_context=_usage_context(body.client_context),
                 kb_scope=engine.public_kb_ids,
             )

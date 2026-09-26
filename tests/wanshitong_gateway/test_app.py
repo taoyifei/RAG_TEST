@@ -259,3 +259,88 @@ def test_public_native_round_trip_preserves_answer_and_isolation(  # noqa: PLR09
         if request.url.path == "/api/v1/knowledge-chat/session-1"
     )
     assert json.loads(native_chat.content)["query"] == question
+
+
+def test_recommendations_require_review_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """草稿不公开；人工核对后公开，下架立即停止展示。"""
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    auth = _FakeAuth(tmp_path / "gateway.sqlite3")
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda _app, _auth: None
+    )
+
+    async def close() -> None:
+        return None
+
+    engine = EngineSettings(
+        base_url="http://native.test:8080",
+        tenant_id=_ADMIN_TENANT,
+        public_kb_ids=("kb-public",),
+        api_key_file=tmp_path / "unused-key",
+        external_signing_key_file=tmp_path / "unused-signing",
+        admin_email="candidate@example.test",
+        admin_password_file=tmp_path / "unused-password",
+    )
+    app = gateway_app.create_app(
+        auth=cast(GatewayAuth, auth),
+        store=store,
+        engine=engine,
+        native=cast(WeKnoraClient, SimpleNamespace(close=close)),
+        admin_native=cast(NativeAdminClient, SimpleNamespace(close=close)),
+    )
+    base = "/kb/api/admin/ops/recommendations"
+    question = "开发中心负责哪些工作？"
+    with TestClient(app, base_url="http://candidate.test") as browser:
+        draft = browser.post(
+            base,
+            json={"question": question, "topic_key": "研发", "state": "DRAFT"},
+        )
+        assert draft.status_code == 200
+        item = draft.json()
+        assert item["state"] == "DRAFT"
+        assert browser.get(base).json()["items"][0]["question"] == question
+        assert browser.get("/kb/api/public/popular-questions").json()[
+            "mode"
+        ] == "EMPTY"
+
+        url = f"{base}/{item['recommendation_id']}"
+        body = {
+            "expected_version": item["version"],
+            "question": question,
+            "topic_key": "研发",
+            "source_knowledge_ids": [_KNOWLEDGE_ID],
+            "review_note": "已在候选知识库核对原件和题面",
+            "state": "APPROVED",
+        }
+        assert browser.put(url, json=body).status_code == 422
+        approved = browser.put(
+            url, json={**body, "review_confirmed": True}
+        )
+        assert approved.status_code == 200
+        public = browser.get("/kb/api/public/popular-questions").json()
+        assert public["mode"] == "POPULAR"
+        assert public["items"] == [
+            {
+                "id": item["recommendation_id"],
+                "question": question,
+                "topic_key": "研发",
+            }
+        ]
+        assert browser.put(
+            url, json={**body, "review_confirmed": True}
+        ).status_code == 409
+        disabled = browser.put(
+            url,
+            json={
+                **body,
+                "expected_version": approved.json()["version"],
+                "state": "DISABLED",
+                "disabled_reason": "资料需更新",
+            },
+        )
+        assert disabled.status_code == 200
+        assert browser.get("/kb/api/public/popular-questions").json()[
+            "items"
+        ] == []

@@ -6,9 +6,10 @@ import json
 import os
 import sqlite3
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 _CONVERSATION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS gateway_conversations (
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS gateway_turns (
     trace_id TEXT PRIMARY KEY,
     deployment_id TEXT NOT NULL,
     owner_id TEXT NOT NULL,
+    asker_name TEXT,
     conversation_id TEXT NOT NULL,
     native_session_id TEXT NOT NULL,
     native_message_id TEXT,
@@ -88,6 +90,36 @@ CREATE TABLE IF NOT EXISTS gateway_admin_audit (
     created_at TEXT NOT NULL
 );
 """
+_FEEDBACK_REVIEW_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_feedback_reviews (
+    trace_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK(status IN ('open', 'in_review', 'resolved')),
+    note TEXT NOT NULL DEFAULT '',
+    root_cause TEXT NOT NULL DEFAULT '',
+    fix_reference TEXT NOT NULL DEFAULT '',
+    verification_references_json TEXT NOT NULL DEFAULT '[]',
+    evaluation_candidate INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (trace_id) REFERENCES gateway_turns(trace_id)
+);
+"""
+_RECOMMENDATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_recommendations (
+    recommendation_id TEXT PRIMARY KEY,
+    deployment_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    topic_key TEXT NOT NULL,
+    source_knowledge_ids_json TEXT NOT NULL DEFAULT '[]',
+    review_note TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL CHECK(state IN ('DRAFT', 'APPROVED', 'DISABLED')),
+    disabled_reason TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_recommendations_scope
+ON gateway_recommendations (deployment_id, state, updated_at);
+"""
 
 
 def _now() -> str:
@@ -115,6 +147,8 @@ class GatewayStore:
                 + _FEEDBACK_SCHEMA
                 + _EVENT_SCHEMA
                 + _ADMIN_AUDIT_SCHEMA
+                + _FEEDBACK_REVIEW_SCHEMA
+                + _RECOMMENDATION_SCHEMA
             )
             columns = {
                 row["name"]
@@ -132,6 +166,28 @@ class GatewayStore:
                     "ALTER TABLE gateway_turns ADD COLUMN "
                     "kb_scope_json TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "asker_name" not in columns:
+                connection.execute(
+                    "ALTER TABLE gateway_turns ADD COLUMN asker_name TEXT"
+                )
+            review_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(gateway_feedback_reviews)"
+                )
+            }
+            review_additions = {
+                "root_cause": "TEXT NOT NULL DEFAULT ''",
+                "fix_reference": "TEXT NOT NULL DEFAULT ''",
+                "verification_references_json": "TEXT NOT NULL DEFAULT '[]'",
+                "evaluation_candidate": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, definition in review_additions.items():
+                if name not in review_columns:
+                    connection.execute(
+                        f"ALTER TABLE gateway_feedback_reviews ADD COLUMN "
+                        f"{name} {definition}"
+                    )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path, timeout=10.0)
@@ -207,6 +263,7 @@ class GatewayStore:
         conversation_id: str,
         native_session_id: str,
         question: str,
+        asker_name: str | None = None,
         client_context: Mapping[str, Any] | None = None,
         kb_scope: tuple[str, ...] = (),
     ) -> None:
@@ -214,14 +271,15 @@ class GatewayStore:
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO gateway_turns "
-                "(trace_id,deployment_id,owner_id,conversation_id,"
+                "(trace_id,deployment_id,owner_id,asker_name,conversation_id,"
                 "native_session_id,question,client_context_json,"
                 "kb_scope_json,status,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     trace_id,
                     deployment_id,
                     owner_id,
+                    asker_name,
                     conversation_id,
                     native_session_id,
                     question,
@@ -426,23 +484,320 @@ class GatewayStore:
             )
 
     def list_traces(
-        self, *, deployment_id: str, limit: int = 100
+        self,
+        *,
+        deployment_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        query: str = "",
+        feedback_only: bool = False,
     ) -> list[dict[str, Any]]:
-        """运营列表只返回时序、状态和可验证的原生 ID。"""
+        """管理员列表返回本候选的提问者、问题和原生 ID。"""
+        arguments = (
+            deployment_id,
+            query,
+            query,
+            query,
+            f"rdms:{deployment_id}:{query}",
+            int(feedback_only),
+            limit,
+            offset,
+        )
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT t.trace_id,t.created_at,t.completed_at,t.status,"
+                "t.owner_id,t.asker_name,t.question,"
                 "t.native_session_id,t.native_message_id,t.native_request_id,"
                 "t.truncated,t.finish_reason,"
                 "LENGTH(t.question) AS question_chars,"
                 "LENGTH(t.answer) AS answer_chars,"
-                "f.useful AS feedback_useful "
+                "f.useful AS feedback_useful,"
+                "r.status AS review_status "
                 "FROM gateway_turns AS t LEFT JOIN gateway_feedback AS f "
-                "ON f.trace_id=t.trace_id WHERE t.deployment_id=? "
-                "ORDER BY t.created_at DESC LIMIT ?",
-                (deployment_id, limit),
+                "ON f.trace_id=t.trace_id "
+                "LEFT JOIN gateway_feedback_reviews AS r "
+                "ON r.trace_id=t.trace_id WHERE t.deployment_id=? "
+                "AND (?='' OR instr(t.question,?)>0 OR "
+                "instr(COALESCE(t.asker_name,''),?)>0 OR t.owner_id=?) "
+                "AND (?=0 OR f.trace_id IS NOT NULL) "
+                "ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
+                arguments,
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "asker_id": str(row["owner_id"]).rsplit(":", maxsplit=1)[-1],
+            }
+            for row in rows
+        ]
+
+    def count_traces(
+        self,
+        *,
+        deployment_id: str,
+        query: str = "",
+        feedback_only: bool = False,
+    ) -> int:
+        """给管理页分页提供与列表相同的筛选总数。"""
+        arguments = (
+            deployment_id,
+            query,
+            query,
+            query,
+            f"rdms:{deployment_id}:{query}",
+            int(feedback_only),
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total FROM gateway_turns AS t "
+                "LEFT JOIN gateway_feedback AS f ON f.trace_id=t.trace_id "
+                "WHERE t.deployment_id=? "
+                "AND (?='' OR instr(t.question,?)>0 OR "
+                "instr(COALESCE(t.asker_name,''),?)>0 OR t.owner_id=?) "
+                "AND (?=0 OR f.trace_id IS NOT NULL)",
+                arguments,
+            ).fetchone()
+        return int(row["total"])
+
+    def ops_summary(self, *, deployment_id: str) -> dict[str, int]:
+        """统计当前候选部署内的新引擎记录与反馈。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS turns,COUNT(DISTINCT t.owner_id) AS users,"
+                "SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END) "
+                "AS completed,"
+                "SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) "
+                "AS failed,"
+                "SUM(CASE WHEN f.useful=0 THEN 1 ELSE 0 END) "
+                "AS negative_feedback,"
+                "SUM(CASE WHEN f.trace_id IS NOT NULL THEN 1 ELSE 0 END) "
+                "AS feedback_count,"
+                "SUM(CASE WHEN f.useful=1 THEN 1 ELSE 0 END) "
+                "AS helpful_feedback,"
+                "SUM(CASE WHEN f.trace_id IS NOT NULL AND "
+                "COALESCE(r.status,'open')!='resolved' THEN 1 ELSE 0 END) "
+                "AS pending_feedback "
+                "FROM gateway_turns AS t LEFT JOIN gateway_feedback AS f "
+                "ON f.trace_id=t.trace_id "
+                "LEFT JOIN gateway_feedback_reviews AS r "
+                "ON r.trace_id=t.trace_id WHERE t.deployment_id=?",
+                (deployment_id,),
+            ).fetchone()
+        return {
+            key: int(row[key] or 0)
+            for key in (
+                "turns",
+                "users",
+                "completed",
+                "failed",
+                "negative_feedback",
+                "feedback_count",
+                "helpful_feedback",
+                "pending_feedback",
+            )
+        }
+
+    def frequent_questions(
+        self, *, deployment_id: str, days: int = 7, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """按原问题精确归组，不把不同业务表述擅自合并。"""
+        since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT TRIM(t.question) AS question,COUNT(*) AS count,"
+                "COUNT(DISTINCT t.owner_id) AS user_count,"
+                "SUM(CASE WHEN f.useful=0 THEN 1 ELSE 0 END) "
+                "AS negative_feedback,MAX(t.created_at) AS last_asked_at "
+                "FROM gateway_turns AS t LEFT JOIN gateway_feedback AS f "
+                "ON f.trace_id=t.trace_id "
+                "WHERE t.deployment_id=? AND t.created_at>=? "
+                "GROUP BY TRIM(t.question) "
+                "ORDER BY count DESC,last_asked_at DESC LIMIT ?",
+                (deployment_id, since, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_recommendations(
+        self, *, deployment_id: str, approved_only: bool = False
+    ) -> list[dict[str, Any]]:
+        """运营题目独立于旧题库；公开端只读取人工审核通过的题面。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT recommendation_id,question,topic_key,"
+                "source_knowledge_ids_json,review_note,state,disabled_reason,"
+                "version,created_at,updated_at FROM gateway_recommendations "
+                "WHERE deployment_id=? AND (?=0 OR state='APPROVED') "
+                "ORDER BY updated_at DESC LIMIT 200",
+                (deployment_id, int(approved_only)),
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "source_knowledge_ids": json.loads(
+                    row["source_knowledge_ids_json"]
+                ),
+            }
+            for row in rows
+        ]
+
+    def save_recommendation(  # noqa: PLR0913 - 草稿版本与审核字段逐项入库。
+        self,
+        *,
+        deployment_id: str,
+        recommendation_id: str | None,
+        expected_version: int | None,
+        question: str,
+        topic_key: str,
+        source_knowledge_ids: list[str],
+        review_note: str,
+        state: str,
+        disabled_reason: str | None,
+    ) -> dict[str, Any]:
+        """草稿、发布和下架在网关留版本；不改原生知识或答案。"""
+        if state not in {"DRAFT", "APPROVED", "DISABLED"}:
+            raise ValueError("invalid recommendation state")
+        now = _now()
+        identifier = recommendation_id or f"pq_{uuid4().hex}"
+        with self._connect() as connection:
+            if recommendation_id is None:
+                connection.execute(
+                    "INSERT INTO gateway_recommendations "
+                    "(recommendation_id,deployment_id,question,topic_key,"
+                    "source_knowledge_ids_json,review_note,state,"
+                    "disabled_reason,version,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,1,?,?)",
+                    (
+                        identifier,
+                        deployment_id,
+                        question,
+                        topic_key,
+                        json.dumps(source_knowledge_ids, ensure_ascii=False),
+                        review_note,
+                        state,
+                        disabled_reason,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                cursor = connection.execute(
+                    "UPDATE gateway_recommendations SET question=?,topic_key=?,"
+                    "source_knowledge_ids_json=?,review_note=?,state=?,"
+                    "disabled_reason=?,version=version+1,updated_at=? "
+                    "WHERE recommendation_id=? AND deployment_id=? "
+                    "AND version=?",
+                    (
+                        question,
+                        topic_key,
+                        json.dumps(source_knowledge_ids, ensure_ascii=False),
+                        review_note,
+                        state,
+                        disabled_reason,
+                        now,
+                        identifier,
+                        deployment_id,
+                        expected_version,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError("recommendation version conflict")
+            row = connection.execute(
+                "SELECT recommendation_id,question,topic_key,"
+                "source_knowledge_ids_json,review_note,state,disabled_reason,"
+                "version,created_at,updated_at FROM gateway_recommendations "
+                "WHERE recommendation_id=? AND deployment_id=?",
+                (identifier, deployment_id),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("recommendation not saved")
+        return {
+            **dict(row),
+            "source_knowledge_ids": json.loads(
+                row["source_knowledge_ids_json"]
+            ),
+        }
+
+    def trace_overview(
+        self, *, trace_id: str, deployment_id: str
+    ) -> dict[str, Any] | None:
+        """管理员在页面查看原问答，技术事件仍只返回时序。"""
+        record = self.trace_export(trace_id=trace_id, include_content=False)
+        turn = self.get_turn(trace_id=trace_id)
+        if (
+            record is None
+            or turn is None
+            or turn["deployment_id"] != deployment_id
+        ):
+            return None
+        with self._connect() as connection:
+            review = connection.execute(
+                "SELECT status,note,root_cause,fix_reference,"
+                "verification_references_json,evaluation_candidate,updated_at "
+                "FROM gateway_feedback_reviews "
+                "WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()
+        return {
+            **record,
+            "asker_id": str(turn["owner_id"]).rsplit(":", maxsplit=1)[-1],
+            "asker_name": turn["asker_name"],
+            "question": turn["question"],
+            "answer": turn["answer"],
+            "review": (
+                {
+                    **dict(review),
+                    "verification_references": json.loads(
+                        review["verification_references_json"]
+                    ),
+                    "evaluation_candidate": bool(
+                        review["evaluation_candidate"]
+                    ),
+                }
+                if review
+                else None
+            ),
+        }
+
+    def save_feedback_review(  # noqa: PLR0913 - 保留运营复核字段。
+        self,
+        *,
+        trace_id: str,
+        status: str,
+        note: str,
+        root_cause: str = "",
+        fix_reference: str = "",
+        verification_references: list[str] | None = None,
+        evaluation_candidate: bool = False,
+    ) -> None:
+        """记录人工复核状态；不改变原生回答或模型配置。"""
+        if status not in {"open", "in_review", "resolved"}:
+            raise ValueError("invalid review status")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO gateway_feedback_reviews "
+                "(trace_id,status,note,root_cause,fix_reference,"
+                "verification_references_json,evaluation_candidate,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(trace_id) DO UPDATE SET "
+                "status=excluded.status,note=excluded.note,"
+                "root_cause=excluded.root_cause,"
+                "fix_reference=excluded.fix_reference,"
+                "verification_references_json=excluded.verification_references_json,"
+                "evaluation_candidate=excluded.evaluation_candidate,"
+                "updated_at=excluded.updated_at",
+                (
+                    trace_id,
+                    status,
+                    note,
+                    root_cause,
+                    fix_reference,
+                    json.dumps(
+                        verification_references or [], ensure_ascii=False
+                    ),
+                    int(evaluation_candidate),
+                    _now(),
+                ),
+            )
 
     def trace_export(
         self, *, trace_id: str, include_content: bool

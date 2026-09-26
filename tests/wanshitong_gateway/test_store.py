@@ -135,3 +135,95 @@ def test_trace_export_keeps_native_events_and_redacts_by_default(
     assert full["events"][0]["payload"]["text"] == "原生回答"
     assert full["client_context"] == {"entrypoint": "retry"}
     assert full["kb_scope"] == ["kb-1"]
+
+
+def test_ops_uses_native_turns_for_asker_history_feedback_and_frequency(
+    tmp_path: Path,
+) -> None:
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    for user_id in ("u1", "u2"):
+        store.bind_session(
+            deployment_id="candidate",
+            owner_id=f"rdms:candidate:{user_id}",
+            conversation_id=f"conversation-{user_id}",
+            native_session_id=f"native-{user_id}",
+        )
+        store.start_turn(
+            trace_id=f"trace-{user_id}",
+            deployment_id="candidate",
+            owner_id=f"rdms:candidate:{user_id}",
+            asker_name="张三" if user_id == "u1" else "李四",
+            conversation_id=f"conversation-{user_id}",
+            native_session_id=f"native-{user_id}",
+            question="开发中心是干嘛的？",
+        )
+    store.finish_turn(
+        trace_id="trace-u1",
+        status="completed",
+        answer="原生回答",
+        references=(),
+        native_message_id="message-1",
+        native_request_id="request-1",
+        truncated=False,
+        finish_reason="stop",
+    )
+    store.save_feedback(
+        trace_id="trace-u1",
+        owner_id="rdms:candidate:u1",
+        useful=False,
+        reason_code=None,
+        reason_detail="内容不准确",
+        comment=None,
+    )
+    store.save_feedback_review(
+        trace_id="trace-u1",
+        status="in_review",
+        note="等待核对原文",
+        root_cause="来源错误",
+        fix_reference="原生重解析任务 123",
+        verification_references=["测试问答 456"],
+        evaluation_candidate=True,
+    )
+
+    summary = store.ops_summary(deployment_id="candidate")
+    assert summary == {
+        "turns": 2,
+        "users": 2,
+        "completed": 1,
+        "failed": 0,
+        "negative_feedback": 1,
+        "feedback_count": 1,
+        "helpful_feedback": 0,
+        "pending_feedback": 1,
+    }
+    frequent = store.frequent_questions(deployment_id="candidate")
+    assert len(frequent) == 1
+    assert frequent[0]["count"] == 2
+    assert frequent[0]["user_count"] == 2
+    assert frequent[0]["negative_feedback"] == 1
+    assert store.count_traces(deployment_id="candidate") == 2
+    assert (
+        store.count_traces(deployment_id="candidate", feedback_only=True) == 1
+    )
+    assert store.count_traces(deployment_id="candidate", query="李四") == 1
+    assert store.list_traces(deployment_id="candidate", query="u1")[0][
+        "question"
+    ] == "开发中心是干嘛的？"
+    assert store.list_traces(deployment_id="candidate", limit=1, offset=1)
+
+    overview = store.trace_overview(
+        trace_id="trace-u1", deployment_id="candidate"
+    )
+    assert overview is not None
+    assert overview["asker_id"] == "u1"
+    assert overview["asker_name"] == "张三"
+    assert overview["question"] == "开发中心是干嘛的？"
+    assert overview["answer"] == "原生回答"
+    assert overview["review"]["note"] == "等待核对原文"
+    assert overview["review"]["root_cause"] == "来源错误"
+    assert overview["review"]["evaluation_candidate"] is True
+    assert overview["review"]["verification_references"] == ["测试问答 456"]
+    assert (
+        store.trace_overview(trace_id="trace-u1", deployment_id="other")
+        is None
+    )
