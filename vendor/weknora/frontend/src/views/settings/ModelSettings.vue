@@ -7,7 +7,7 @@
           <p class="section-description">{{ $t('modelSettings.description') }}</p>
         </div>
         <t-button
-          v-if="authStore.hasRole('admin')"
+          v-if="authStore.hasRole('admin') && !WANSHITONG_GATEWAY_AUTH"
           type="button"
           theme="primary"
           variant="text"
@@ -66,6 +66,7 @@
           <div class="model-card__body">
             <div class="model-card__header">
               <h3 class="model-card__title">{{ modelDisplayName(model) }}</h3>
+              <t-tag v-if="WANSHITONG_GATEWAY_AUTH && model.id === activePublicModelId" size="small" theme="primary" variant="light">当前用户端使用</t-tag>
               <span v-if="model.isBuiltin" class="model-card__lock" :title="$t('modelSettings.builtinTag')"
                 :aria-label="$t('modelSettings.builtinTag')">
                 <t-icon :name="authStore.isSystemAdmin ? 'edit-1' : 'lock-on'" />
@@ -264,7 +265,7 @@
     <!-- 模型编辑器抽屉 -->
     <ModelEditorDialog v-model:visible="showDialog" :model-type="currentModelType" :model-data="editingModel"
       :save-model="handleModelSave" />
-    <ModelDebugDrawer v-model:visible="showDebugDrawer" :models="allModels" />
+    <ModelDebugDrawer v-if="!WANSHITONG_GATEWAY_AUTH" v-model:visible="showDebugDrawer" :models="allModels" />
 
   </div>
 </template>
@@ -295,6 +296,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { useUIStore } from '@/stores/ui'
 import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
+import { getPublicAppConfig } from '@/api/wanshitongPublicApp'
 import { focusKbEditorSection } from '@/config/contextualGuides'
 import { useChatResourcesStore } from '@/stores/chatResources'
 import { useModelProvidersStore } from '@/stores/modelProviders'
@@ -321,7 +323,16 @@ const usageConflictModelName = ref('')
 const currentModelType = ref<ModelType>('chat')
 const editingModel = ref<any>(null)
 const loading = ref(true)
+const activePublicModelId = ref('')
 const activeTypeFilter = ref<FilterType>('all')
+
+if (WANSHITONG_GATEWAY_AUTH) {
+  void getPublicAppConfig().then(config => {
+    activePublicModelId.value = config.status === 'ACTIVE' ? config.model_id ?? '' : ''
+  }).catch(() => {
+    activePublicModelId.value = ''
+  })
+}
 
 const MODEL_TAB_TYPES: FilterType[] = ['chat', 'embedding', 'rerank', 'vllm', 'asr']
 const KNOWLEDGE_BASE_EDITOR_HOST_ROUTES = new Set([

@@ -2,9 +2,51 @@
 export const WANSHITONG_GATEWAY_AUTH = import.meta.env?.VITE_WANSHITONG_GATEWAY_AUTH === 'true'
 
 export const WANSHITONG_ADMIN_BASE = '/kb/admin/'
-export const WANSHITONG_ADMIN_LOGIN = '/kb/admin/ops/'
+export const WANSHITONG_ADMIN_LOGIN = '/kb/admin/login'
 export const WANSHITONG_ENGINE_API = '/kb/api/engine-admin'
 let adminCsrfToken = ''
+
+/** 只允许登录后返回本管理站已经注册的页面。 */
+export function safeWanshitongReturnTo(value: unknown): string {
+  if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) return '/overview'
+  const path = value.split(/[?#]/, 1)[0]
+  if (
+    path === '/overview' ||
+    path === '/public-settings' ||
+    path === '/records' ||
+    path === '/diagnostics' ||
+    path === '/platform/knowledge-bases' ||
+    /^\/platform\/knowledge-bases\/[^/]+$/.test(path) ||
+    path === '/platform/settings'
+  ) return value
+  return '/overview'
+}
+
+/** 口令仅发送给既有 Console Session；原生 JWT 不进浏览器。 */
+export async function loginWanshitongAdmin(bootstrapToken: string): Promise<void> {
+  const response = await fetch('/kb/api/v1/console/session', {
+    method: 'POST',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bootstrap_token: bootstrapToken }),
+  })
+  if (!response.ok) throw new Error(`登录失败（${response.status}）`)
+  const payload = await response.json() as { csrf_token?: string }
+  if (!payload.csrf_token) throw new Error('登录响应缺少会话校验信息')
+  adminCsrfToken = payload.csrf_token
+}
+
+export async function logoutWanshitongAdmin(): Promise<void> {
+  const response = await fetch('/kb/api/v1/console/session', {
+    method: 'DELETE',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: gatewayCsrfHeaders('DELETE'),
+  })
+  if (!response.ok) throw new Error(`退出失败（${response.status}）`)
+  adminCsrfToken = ''
+}
 
 /** 恢复现有 Console Session，CSRF 只保存在当前页面内存。 */
 export async function resumeWanshitongAdminSession(): Promise<boolean> {
@@ -52,6 +94,11 @@ export function engineResourceUrl(path: string): string {
 export function redirectToWanshitongAdminLogin(): void {
   if (typeof window !== 'undefined' && WANSHITONG_GATEWAY_AUTH) {
     adminCsrfToken = ''
-    window.location.replace(WANSHITONG_ADMIN_LOGIN)
+    if (window.location.pathname === WANSHITONG_ADMIN_LOGIN) return
+    const localPath = window.location.pathname.startsWith(WANSHITONG_ADMIN_BASE)
+      ? window.location.pathname.slice(WANSHITONG_ADMIN_BASE.length - 1) + window.location.search
+      : '/overview'
+    const returnTo = safeWanshitongReturnTo(localPath)
+    window.location.replace(`${WANSHITONG_ADMIN_LOGIN}?returnTo=${encodeURIComponent(returnTo)}`)
   }
 }

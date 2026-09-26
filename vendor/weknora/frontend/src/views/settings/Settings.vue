@@ -247,7 +247,8 @@ const authStore = useAuthStore()
 const deploymentCapabilities = useDeploymentCapabilitiesStore()
 const { t } = useI18n()
 
-const currentSection = ref<string>('general')
+const WANSHITONG_SETTINGS_SECTIONS = new Set(['models', 'parser', 'vectorstore', 'storage', 'system'])
+const currentSection = ref<string>(WANSHITONG_GATEWAY_AUTH ? 'models' : 'general')
 const currentSubSection = ref<string>('')
 const expandedMenus = ref<string[]>([])
 
@@ -316,6 +317,7 @@ const isSectionSupported = (key: string): boolean => {
 }
 
 const canSeeSection = (key: string): boolean => {
+  if (WANSHITONG_GATEWAY_AUTH && !WANSHITONG_SETTINGS_SECTIONS.has(key)) return false
   if (!isSectionSupported(key)) return false
   if (isIntegrationSection(key)) {
     const min = INTEGRATION_TAB_MIN_ROLE[integrationTabFromSection(key)]
@@ -373,12 +375,20 @@ const navItems = computed(() => {
   if (!authStore.currentTenantRole && !authStore.canAccessAllTenants) {
     return [] as NavItem[]
   }
-  return all.filter((it) => canSeeSection(it.key) && isSectionSupported(it.key))
+  return all.filter((it) =>
+    (!WANSHITONG_GATEWAY_AUTH || WANSHITONG_SETTINGS_SECTIONS.has(it.key))
+    && canSeeSection(it.key) && isSectionSupported(it.key))
 })
 
 const navGroups = computed<NavGroup[]>(() => {
   const itemMap = new Map(navItems.value.map((item) => [item.key, item]))
   const pickItems = (keys: string[]) => keys.map((key) => itemMap.get(key)).filter(Boolean) as NavItem[]
+  if (WANSHITONG_GATEWAY_AUTH) {
+    return [
+      { key: 'models_runtime', label: '模型与解析', items: pickItems(['models', 'parser']) },
+      { key: 'storage', label: '高级资源', items: pickItems(['vectorstore', 'storage', 'system']) },
+    ].filter((group) => group.items.length > 0)
+  }
   // 分组：账户 → 空间 → 模型 → 发布集成 → 数据与扩展 → 系统管理 → 平台
   // 关键调整：把个人偏好(general)和用户信息收进「账户」；
   // 把空间内功能开关(chathistory)从「平台」挪到「空间」；
@@ -477,6 +487,10 @@ const handleClose = () => {
   uiStore.closeSettings()
   // 如果当前路由是设置页，返回上一页
   if (route.path === '/platform/settings') {
+    if (WANSHITONG_GATEWAY_AUTH) {
+      router.push('/overview')
+      return
+    }
     const sec = route.query.section
     if (sec === 'system-global' || sec === 'runtime-queues' || sec === 'platform-api-keys' || sec === 'system-audit-log') {
       router.push('/platform/knowledge-bases')
@@ -499,6 +513,11 @@ const redirectToToolbox = (section: string, subSection?: string | null) => {
 watch(() => uiStore.settingsInitialSection, (section) => {
   if (section && visible.value) {
     const normalizedSection = normalizeSettingsSection(section)
+    if (WANSHITONG_GATEWAY_AUTH && !WANSHITONG_SETTINGS_SECTIONS.has(normalizedSection)) {
+      currentSection.value = 'models'
+      syncSettingsRoute('models')
+      return
+    }
     if (redirectToToolbox(normalizedSection, uiStore.settingsInitialSubSection)) return
     if (deploymentCapabilities.loaded && !isSectionSupported(normalizedSection)) {
       MessagePlugin.warning(t('settings.capabilityUnavailable'))

@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import type { RouteLocationNormalized } from 'vue-router'
+import type { RouteLocationGeneric, RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useDeploymentCapabilitiesStore } from '@/stores/deploymentCapabilities'
 import { autoSetup, getCurrentUser, userInfoFromApi } from '@/api/auth'
@@ -8,7 +8,19 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import i18n from '@/i18n'
 import { normalizeSettingsSection } from '@/config/settingsRoute'
 import { isToolboxSection, toolboxLocation } from '@/config/toolbox'
-import { WANSHITONG_GATEWAY_AUTH, redirectToWanshitongAdminLogin, resumeWanshitongAdminSession } from '@/config/wanshitongGateway'
+import { WANSHITONG_GATEWAY_AUTH, resumeWanshitongAdminSession, safeWanshitongReturnTo } from '@/config/wanshitongGateway'
+
+function isWanshitongAdminRoute(path: string): boolean {
+  return (
+    path === '/overview' ||
+    path === '/public-settings' ||
+    path === '/records' ||
+    path === '/diagnostics' ||
+    path === '/platform/knowledge-bases' ||
+    /^\/platform\/knowledge-bases\/[^/]+$/.test(path) ||
+    path === '/platform/settings'
+  )
+}
 
 /** Lite /桌面 WebView 硬刷新时可能只打开 `/`，用 session 记住上次页面以便恢复 */
 const LITE_LAST_PATH_KEY = 'weknora_lite_last_path'
@@ -50,14 +62,38 @@ const router = createRouter({
   routes: [
     {
       path: "/",
-      redirect: "/platform/knowledge-bases",
+      redirect: WANSHITONG_GATEWAY_AUTH ? "/overview" : "/platform/knowledge-bases",
     },
     {
       path: "/login",
       name: "login",
-      component: () => import("../views/auth/Login.vue"),
+      component: WANSHITONG_GATEWAY_AUTH
+        ? () => import("../views/wanshitong/WanshitongAdminLogin.vue")
+        : () => import("../views/auth/Login.vue"),
       meta: { requiresAuth: false, requiresInit: false }
     },
+    ...(WANSHITONG_GATEWAY_AUTH ? [
+      {
+        path: '/overview',
+        component: () => import('../views/platform/index.vue'),
+        children: [{ path: '', name: 'wanshitongOverview', component: () => import('../views/wanshitong/WanshitongOpsView.vue') }],
+      },
+      {
+        path: '/records',
+        component: () => import('../views/platform/index.vue'),
+        children: [{ path: '', name: 'wanshitongRecords', component: () => import('../views/wanshitong/WanshitongOpsView.vue') }],
+      },
+      {
+        path: '/diagnostics',
+        component: () => import('../views/platform/index.vue'),
+        children: [{ path: '', name: 'wanshitongDiagnostics', component: () => import('../views/wanshitong/WanshitongOpsView.vue') }],
+      },
+      {
+        path: '/public-settings',
+        component: () => import('../views/platform/index.vue'),
+        children: [{ path: '', name: 'wanshitongPublicSettings', component: () => import('../views/wanshitong/WanshitongPublicSettings.vue') }],
+      },
+    ] : []),
     // Embed chat is a separate entry (embed.html + embed-main.ts), not this SPA.
     {
       path: "/register",
@@ -98,7 +134,7 @@ const router = createRouter({
     {
       path: "/platform",
       name: "Platform",
-      redirect: "/platform/knowledge-bases",
+      redirect: WANSHITONG_GATEWAY_AUTH ? "/overview" : "/platform/knowledge-bases",
       component: () => import("../views/platform/index.vue"),
       meta: { requiresInit: true, requiresAuth: true },
       children: [
@@ -124,17 +160,17 @@ const router = createRouter({
           component: () => import("../views/knowledge/KnowledgeBase.vue"),
           meta: { requiresInit: true, requiresAuth: true }
         },
-        {
+        ...(!WANSHITONG_GATEWAY_AUTH ? [{
           path: "knowledge-search",
           // 旧路径保留为重定向，打开全局命令面板（⌘K），带上可选的 q 参数
-          redirect: (to) => {
+          redirect: (to: RouteLocationGeneric) => {
             const q = to.query.q
             return {
               path: '/platform/knowledge-bases',
               query: typeof q === 'string' ? { cmdk: q } : { cmdk: '' },
             }
           },
-        },
+        }] : []),
         {
           path: "artifacts",
           name: "artifactLibrary",
@@ -170,7 +206,7 @@ const router = createRouter({
           },
           meta: { requiresInit: true, requiresAuth: true }
         },
-        {
+        ...(!WANSHITONG_GATEWAY_AUTH ? [{
           path: "creatChat",
           name: "globalCreatChat",
           component: () => import("../views/creatChat/creatChat.vue"),
@@ -187,7 +223,7 @@ const router = createRouter({
           name: "chat",
           component: () => import("../views/chat/index.vue"),
           meta: { requiresInit: true, requiresAuth: true }
-        },
+        }] : []),
         {
           path: "organizations",
           name: "organizationList",
@@ -230,6 +266,7 @@ const router = createRouter({
       component: () => import('../views/dev/MarkdownTestPage.vue'),
       meta: { requiresAuth: false, requiresInit: false }
     }] : []),
+    ...(WANSHITONG_GATEWAY_AUTH ? [{ path: '/:pathMatch(.*)*', redirect: '/overview' }] : []),
   ],
 });
 
@@ -324,30 +361,43 @@ router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
 
   if (WANSHITONG_GATEWAY_AUTH) {
-    // 不读取原生 JWT、不进入 Lite/OIDC/auto-setup；后台只接受网关确认的管理员会话。
-    if (!await resumeWanshitongAdminSession() || !await authStore.refreshFromAuthMe()) {
-      redirectToWanshitongAdminLogin()
-      next(false)
+    // 登录页面必须在未建立管理员会话时仍可挂载。
+    if (to.path === '/login') {
+      if (await resumeWanshitongAdminSession()
+        && await authStore.refreshFromAuthMe()
+        && authStore.hasValidTenant) {
+        next(safeWanshitongReturnTo(to.query.returnTo))
+      } else {
+        next()
+      }
       return
     }
-    if (!authStore.hasValidTenant) {
-      redirectToWanshitongAdminLogin()
-      next(false)
+    if (!isWanshitongAdminRoute(to.path)) {
+      next('/overview')
       return
     }
-    if (to.path === '/login' || to.path === '/register' || to.path.startsWith('/onboarding/')) {
-      next('/platform/knowledge-bases')
+    if (!await resumeWanshitongAdminSession()
+      || !await authStore.refreshFromAuthMe()
+      || !authStore.hasValidTenant) {
+      next({ path: '/login', query: { returnTo: to.fullPath } })
       return
+    }
+    if (to.path === '/platform/settings') {
+      const allowedSections = new Set(['models', 'parser', 'vectorstore', 'storage', 'system'])
+      if (!allowedSections.has(String(to.query.section ?? ''))) {
+        next({ path: '/platform/settings', query: { section: 'models' } })
+        return
+      }
     }
     if (to.meta.requiresSystemAdmin === true && !authStore.isSystemAdmin) {
-      next('/platform/knowledge-bases')
+      next('/overview')
       return
     }
     const deploymentCapabilities = useDeploymentCapabilitiesStore()
     await deploymentCapabilities.ensureLoaded()
     const requiredCapability = to.meta.requiredCapability as DeploymentCapabilityKey | undefined
     if (requiredCapability && !deploymentCapabilities.isSupported(requiredCapability)) {
-      next('/platform/knowledge-bases')
+      next('/overview')
       return
     }
     next()

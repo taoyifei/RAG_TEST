@@ -21,13 +21,14 @@ const compiled = ts.transpileModule(grouping.getText(ast), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText
 
-function integrationMenu(visibleKeys: string[]): string[] {
+function integrationMenu(visibleKeys: string[], gatewayMode = false): string[] {
   const groups = runInNewContext(`${compiled}\nnavGroups.value`, {
     computed,
     navItems: { value: visibleKeys.map((key) => ({ key })) },
     t: (key: string) => key,
     integrationSectionKey,
     INTEGRATION_PREVIEW_ITEMS,
+    WANSHITONG_GATEWAY_AUTH: gatewayMode,
   }) as Array<{ key: string; items: Array<{ key: string }> }>
   const integrationGroup = groups.find((group) => group.key === 'integrations')
   return Array.from(integrationGroup?.items ?? [], (item) => item.key)
@@ -43,4 +44,8 @@ test('settings sidebar preserves visibility filtering without hiding CLI', () =>
   const visible = integrationKeys.filter((key) => key !== 'integration-api' && key !== 'integration-im')
   assert.deepEqual(integrationMenu(visible), visible)
   assert.deepEqual(integrationMenu(['general']), [])
+})
+
+test('湾事通管理模式不显示原生集成导航', () => {
+  assert.deepEqual(integrationMenu(['models', 'parser', ...integrationKeys], true), [])
 })

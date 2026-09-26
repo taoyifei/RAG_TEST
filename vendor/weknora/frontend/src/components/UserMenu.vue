@@ -101,7 +101,7 @@
         </div>
         <div v-if="WANSHITONG_GATEWAY_AUTH" class="menu-item" @click="openWanshitongOps">
           <t-icon name="chart" class="menu-icon" />
-          <span>湾事通运营管理</span>
+          <span>运行概览</span>
         </div>
         <!--
           System administration entry — visible only to users with the
@@ -139,7 +139,7 @@
           <div class="menu-divider"></div>
           <div class="menu-item danger" @click="handleLogout">
             <t-icon name="logout" class="menu-icon" />
-            <span>{{ WANSHITONG_GATEWAY_AUTH ? '返回湾事通' : $t('auth.logout') }}</span>
+            <span>{{ WANSHITONG_GATEWAY_AUTH ? '退出管理' : $t('auth.logout') }}</span>
           </div>
         </template>
       </div>
@@ -208,7 +208,7 @@ import { useRouter } from 'vue-router'
 import { useUIStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { useDeploymentCapabilitiesStore } from '@/stores/deploymentCapabilities'
-import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
+import { WANSHITONG_GATEWAY_AUTH, logoutWanshitongAdmin } from '@/config/wanshitongGateway'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { getCurrentUser, logout as logoutApi, userInfoFromApi } from '@/api/auth'
 import { useI18n } from 'vue-i18n'
@@ -514,7 +514,7 @@ const openGithub = () => {
 
 const openWanshitongOps = () => {
   menuVisible.value = false
-  window.location.assign('/kb/admin/ops/')
+  router.push('/overview')
 }
 
 // 注销
@@ -522,7 +522,13 @@ const handleLogout = async () => {
   menuVisible.value = false
 
   if (WANSHITONG_GATEWAY_AUTH) {
-    window.location.assign('/kb/')
+    try {
+      await logoutWanshitongAdmin()
+      authStore.logout()
+      router.push('/login')
+    } catch (error) {
+      MessagePlugin.error(error instanceof Error ? error.message : '退出失败')
+    }
     return
   }
 

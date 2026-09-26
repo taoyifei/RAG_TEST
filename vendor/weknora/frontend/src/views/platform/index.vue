@@ -1,6 +1,7 @@
 <template>
-    <div class="main" ref="dropzone" :style="{ '--sidebar-width': `${uiStore.sidebarDisplayWidth}px` }">
-        <Menu></Menu>
+    <div class="main" :class="{ 'main-wst': WANSHITONG_GATEWAY_AUTH }" ref="dropzone" :style="{ '--sidebar-width': `${uiStore.sidebarDisplayWidth}px` }">
+        <WanshitongAdminSidebar v-if="WANSHITONG_GATEWAY_AUTH" />
+        <Menu v-else />
         <div v-if="isRouterAlive" class="platform-route-outlet">
             <RouterView />
         </div>
@@ -8,20 +9,22 @@
             <UploadMask></UploadMask>
         </div>
         <!-- 全局设置模态框，供所有 platform 子路由使用 -->
-        <Settings />
+        <Settings v-if="!WANSHITONG_GATEWAY_AUTH || route.path !== '/platform/settings'" />
         <!-- 全局命令面板 (⌘K)，随 platform 路由存活 -->
-        <GlobalCommandPalette />
+        <GlobalCommandPalette v-if="!WANSHITONG_GATEWAY_AUTH" />
         <!-- 全局右上角"待处理邀请"铃铛。固定定位，z-index 低于抽屉，业务页面
              右侧抽屉弹出时会自然覆盖；仅在有待处理邀请时渲染。 -->
-        <GlobalInvitationBell />
+        <GlobalInvitationBell v-if="!WANSHITONG_GATEWAY_AUTH" />
         <!-- 知识库文件上传进度浮层：上传队列放在 store 里，切换页面不中断 -->
         <UploadTasksPanel />
         <!-- 带遮罩层的新手引导：首次进入自动开启，可从用户菜单顶部昵称旁帮助按钮重新打开 -->
-        <NewUserGuide />
+        <NewUserGuide v-if="!WANSHITONG_GATEWAY_AUTH" />
     </div>
 </template>
 <script setup lang="ts">
 import Menu from '@/components/menu.vue'
+import WanshitongAdminSidebar from '@/views/wanshitong/WanshitongAdminSidebar.vue'
+import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
 import { ref, onMounted, onUnmounted, nextTick, provide, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router'
 import UploadMask from '@/components/upload-mask.vue'
@@ -211,7 +214,7 @@ onMounted(() => {
     // /platform/knowledge-search?q=foo 重定向后携带 ?cmdk=foo
     maybeOpenCmdkFromRoute()
     // 后台预取对话输入栏资源，进入 creatChat / chat 时复用缓存
-    void useChatResourcesStore().prefetchChatInput()
+    if (!WANSHITONG_GATEWAY_AUTH) void useChatResourcesStore().prefetchChatInput()
 });
 
 // 监听路由变化，兼容 SPA 内部跳转时的 ?cmdk= 参数
@@ -220,6 +223,7 @@ watch(() => route.query.cmdk, () => {
 })
 
 function maybeOpenCmdkFromRoute() {
+    if (WANSHITONG_GATEWAY_AUTH) return
     if (!('cmdk' in route.query)) return
     const q = String(route.query.cmdk ?? '')
     commandPaletteStore.openPalette(q)
@@ -257,6 +261,7 @@ onUnmounted(() => {
     /* 统一整页背景，让左侧菜单与右侧内容区视觉连贯 */
     background: var(--td-bg-color-container);
 }
+.main.main-wst { min-width: 0; }
 
 /* 右侧路由区：占满剩余宽度与整列高度，并把 min-height:0 传给子页面以便内部 flex 滚动 */
 .platform-route-outlet {

@@ -422,7 +422,7 @@
                                 })
                                 }}</span>
                               </div>
-                              <t-button v-if="props.canEdit" size="small" theme="primary" variant="base"
+                              <t-button v-if="props.canEdit && !WANSHITONG_GATEWAY_AUTH" size="small" theme="primary" variant="base"
                                 @click="triggerAutoFix">
                                 <template #icon><t-icon name="tools" /></template>
                                 {{ $t('knowledgeEditor.wikiBrowser.issueFixBtn') }}
@@ -457,7 +457,7 @@
                                         }) }}
                                     </span>
                                     <div v-if="props.canEdit" class="wiki-issue-popup-actions">
-                                      <span class="wiki-issue-popup-action" @click="triggerFixIssue(issue)"
+                                      <span v-if="!WANSHITONG_GATEWAY_AUTH" class="wiki-issue-popup-action" @click="triggerFixIssue(issue)"
                                         style="margin-right: 12px; font-weight: 500;">
                                         <t-icon name="tools" style="margin-right: 4px;" />{{
                                           $t('knowledgeEditor.wikiBrowser.issueFixSingle') }}
@@ -719,7 +719,7 @@
     </t-drawer>
 
     <!-- Fix Chat Drawer -->
-    <t-drawer v-model:visible="showFixDrawer" :header="$t('knowledgeEditor.wikiBrowser.fixAssistantTitle')" size="700px"
+    <t-drawer v-if="!WANSHITONG_GATEWAY_AUTH" v-model:visible="showFixDrawer" :header="$t('knowledgeEditor.wikiBrowser.fixAssistantTitle')" size="700px"
       :footer="false" class="wiki-fix-drawer">
       <ChatView v-if="showFixDrawer" :session_id="currentFixSessionId" agentId="builtin-wiki-fixer"
         :kbIds="[props.knowledgeBaseId]" :embeddedMode="true" />
@@ -811,6 +811,7 @@ import {
 import { getKnowledgeDetails } from '@/api/knowledge-base'
 import { createSessions } from '@/api/chat'
 import ChatView from '@/views/chat/index.vue'
+import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
 import {
   listWikiPages,
   listWikiFolders,
@@ -3603,6 +3604,7 @@ async function handleIssueIgnore(issueId: string) {
 }
 
 async function startFixSession(prompt: string) {
+  if (WANSHITONG_GATEWAY_AUTH) return
   try {
     const res = await createSessions({})
     if (res && (res as any).data && (res as any).data.id) {
@@ -5565,7 +5567,7 @@ onUnmounted(() => {
 
 .wiki-reader-title {
   margin: 0;
-  font-size: 26px;
+  font-size: var(--app-text-4xl);
   font-weight: 600;
   line-height: 1.3;
   color: var(--td-text-color-primary);
@@ -5612,7 +5614,7 @@ onUnmounted(() => {
   width: 100%;
 
   :deep(.t-input__inner) {
-    font-size: 22px;
+    font-size: var(--app-text-4xl);
     font-weight: 600;
     line-height: 1.35;
     padding: 10px 12px;

@@ -111,6 +111,7 @@ test('live output renders before tool completion and ignores a previous run', as
     watch() {}, onUnmounted() {}, clearInterval() {},
     getApiBaseUrl: () => '', configSkillTranscriptUrl: () => '/transcript',
     localStorage: { getItem: () => null }, AbortController,
+    WANSHITONG_GATEWAY_AUTH: false,
     controller: null, openRun: 1, i18n: { global: {} }, generateRandomString: () => 'request',
     fetchEventSource: async (_url, options) => { handlers = options; await options.onopen({ ok: true }) },
     applyPrompt() {}, processStreamChunk: frame => modelChunks.push(frame),

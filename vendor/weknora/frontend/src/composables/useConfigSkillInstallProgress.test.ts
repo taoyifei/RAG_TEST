@@ -32,6 +32,7 @@ function fixture() {
       if (name === '@/i18n') return { __esModule: true, default: { global: { locale: { value: 'en-US' } } } }
       if (name === '@/utils') return { generateRandomString: () => 'request-id' }
       if (name === '@/utils/api-base') return { getApiBaseUrl: () => '/prefix' }
+      if (name === '@/config/wanshitongGateway') return { WANSHITONG_GATEWAY_AUTH: false, redirectToWanshitongAdminLogin: () => {} }
       if (name === '@/api/system') return { configSkillInstallEventsUrl: (config: string, skill: string) => `/configs/${config}/skills/${skill}/events` }
       if (name === '@microsoft/fetch-event-source') return {
         fetchEventSource: (url: string, options: any) => {

@@ -126,7 +126,9 @@ export default defineConfig({
       transformIndexHtml(html) {
         if (!WANSHITONG_GATEWAY_AUTH) return html
         return html
+          .replace('<html lang="en">', '<html lang="zh-CN">')
           .replace('<title>WeKnora</title>', '<title>湾事通 · 管理后台</title>')
+          .replace(/<meta name="keywords" content="[^"]*"\/>/, '<meta name="keywords" content="湾事通、知识库管理、内部知识问答"/>')
           .replace('WeKnora是一款基于大语言模型的文档理解与语义检索框架，专为结构复杂、内容异构的文档场景而打造。', '湾事通知识库管理后台。')
           .replaceAll('/kb/admin/favicon.ico', '/kb/admin/wanshitong.svg')
       },

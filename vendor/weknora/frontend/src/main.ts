@@ -19,7 +19,7 @@ import { initFont } from "@/composables/useFont";
 import { installTDesignIconOfflineGuard } from "@/utils/tdesign-icon-offline";
 import { installAutofillGuard } from "@/utils/disable-autofill";
 import { useAuthStore } from "@/stores/auth";
-import { WANSHITONG_GATEWAY_AUTH, redirectToWanshitongAdminLogin, resumeWanshitongAdminSession } from "@/config/wanshitongGateway";
+import { WANSHITONG_GATEWAY_AUTH } from "@/config/wanshitongGateway";
 import "@/assets/theme/wanshitong.css";
 
 if (WANSHITONG_GATEWAY_AUTH) {
@@ -48,15 +48,7 @@ async function bootstrap() {
   // Capabilities (can_create_tenant, auto_accept_invitation) are not cached
   // in localStorage — reconcile once before first paint when a session exists.
   const authStore = useAuthStore();
-  if (WANSHITONG_GATEWAY_AUTH) {
-    // 等真实管理员身份确认后才装载路由；失败时不能回落原生登录。
-    if (!await resumeWanshitongAdminSession()
-      || !await authStore.refreshFromAuthMe()
-      || !authStore.hasValidTenant) {
-      redirectToWanshitongAdminLogin();
-      return;
-    }
-  } else if (localStorage.getItem("weknora_token")) {
+  if (!WANSHITONG_GATEWAY_AUTH && localStorage.getItem("weknora_token")) {
     try {
       await authStore.refreshFromAuthMe();
     } catch {
