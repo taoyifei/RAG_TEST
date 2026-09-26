@@ -10,6 +10,9 @@ export function WanshitongHome({
   busy,
   conversationId,
   initialQuestion,
+  placeholder,
+  welcomeText,
+  showRecommendations,
   onRefresh,
   onPopularQuestionSubmit,
   onSuggestedQuestionSubmit,
@@ -21,6 +24,9 @@ export function WanshitongHome({
   busy: boolean;
   conversationId: string;
   initialQuestion?: string;
+  placeholder: string;
+  welcomeText: string;
+  showRecommendations: boolean;
   onRefresh: () => void;
   onPopularQuestionSubmit: (question: PublicPopularQuestion) => void;
   onSuggestedQuestionSubmit: (question: SuggestedQuestion) => void;
@@ -34,23 +40,26 @@ export function WanshitongHome({
       <div className="wst-home-content">
         <div className="wst-hero-copy">
           <span className="wst-wordmark">湾事通</span>
-          <h1>你的内部知识助手</h1>
+          <h1>{welcomeText}</h1>
         </div>
         <PublicChatComposer
           busy={busy}
           initialQuestion={initialQuestion}
+          placeholder={placeholder}
           key={conversationId}
           onStop={onStop}
           onSubmit={onSubmit}
         />
-        <PublicQuestionTabs
-          busy={busy}
-          onPopularSubmit={onPopularQuestionSubmit}
-          onRefresh={onRefresh}
-          onSuggestedSubmit={onSuggestedQuestionSubmit}
-          popular={popular}
-          suggestions={questions}
-        />
+        {showRecommendations && (
+          <PublicQuestionTabs
+            busy={busy}
+            onPopularSubmit={onPopularQuestionSubmit}
+            onRefresh={onRefresh}
+            onSuggestedSubmit={onSuggestedQuestionSubmit}
+            popular={popular}
+            suggestions={questions}
+          />
+        )}
       </div>
     </main>
   );

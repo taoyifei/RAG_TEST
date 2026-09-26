@@ -1,18 +1,18 @@
 import { ArrowUp, Square } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 
-const PLACEHOLDER = "今天想了解什么？";
-
 export function PublicChatComposer({
   busy,
   compact = false,
   initialQuestion = "",
+  placeholder = "今天想了解什么？",
   onStop,
   onSubmit,
 }: {
   busy: boolean;
   compact?: boolean;
   initialQuestion?: string;
+  placeholder?: string;
   onStop: () => void;
   onSubmit: (question: string) => void;
 }) {
@@ -48,7 +48,7 @@ export function PublicChatComposer({
         disabled={busy}
         onChange={(event) => setQuestion(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={PLACEHOLDER}
+        placeholder={placeholder}
         rows={compact ? 2 : 3}
         value={question}
       />

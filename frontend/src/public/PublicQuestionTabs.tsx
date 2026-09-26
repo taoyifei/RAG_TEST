@@ -26,7 +26,14 @@ export function PublicQuestionTabs({
 }) {
   const [tab, setTab] = useState<"suggested" | "popular">("suggested");
   const hasPopular = popular.mode === "POPULAR" && popular.items.length > 0;
-  const activeTab = hasPopular ? tab : "suggested";
+  const hasSuggestions = suggestions.length > 0;
+  const activeTab = hasSuggestions
+    ? hasPopular
+      ? tab
+      : "suggested"
+    : "popular";
+
+  if (!hasPopular && !hasSuggestions) return null;
 
   return (
     <section className="wst-question-tabs" aria-label={heading ?? "推荐问题"}>
@@ -34,6 +41,7 @@ export function PublicQuestionTabs({
       <div className="wst-question-tab-buttons" role="tablist">
         <button
           aria-selected={activeTab === "suggested"}
+          disabled={!hasSuggestions}
           onClick={() => setTab("suggested")}
           role="tab"
           type="button"
@@ -50,11 +58,6 @@ export function PublicQuestionTabs({
           大家常问
         </button>
       </div>
-      {!hasPopular && (
-        <p className="wst-question-note">
-          当前展示示例问题，暂无符合条件的真实热榜。
-        </p>
-      )}
       {activeTab === "suggested" ? (
         <SuggestedQuestionCarousel
           busy={busy}
@@ -66,7 +69,8 @@ export function PublicQuestionTabs({
       ) : (
         <div className="wst-popular-list" role="tabpanel">
           <p className="wst-question-note">
-            运营审核通过的题目，优先按最近 {popular.window_days} 天真实提问排序 · 最近审核于{" "}
+            运营审核通过的题目，优先按最近 {popular.window_days} 天真实提问排序
+            · 最近审核于{" "}
             {popular.generated_at
               ? new Date(popular.generated_at).toLocaleString("zh-CN")
               : "未知"}

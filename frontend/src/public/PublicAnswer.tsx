@@ -7,6 +7,7 @@ import { withAppBase } from "../app/basePath";
 import { PublicCitations } from "./PublicCitations";
 import { PublicFeedback } from "./PublicFeedback";
 import { PublicProcess } from "./PublicProcess";
+import { nativeCitationDisplay } from "./nativeCitationDisplay";
 import { PUBLIC_STAGE_LABELS } from "./publicSse";
 import type { PublicFeedbackSubmission } from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
@@ -107,13 +108,15 @@ function MarkdownAnswer({
           },
         }}
       >
-        {content}
+        {nativeCitationDisplay(content, turn.citations)}
       </ReactMarkdown>
     </div>
   );
 }
 
 export function PublicAnswer({
+  allowFeedback = true,
+  allowSourceDownload = true,
   feedbackDetailsEnabled = true,
   onFeedback,
   onFeedbackLogin,
@@ -122,6 +125,8 @@ export function PublicAnswer({
   onRecover,
   turn,
 }: {
+  allowFeedback?: boolean;
+  allowSourceDownload?: boolean;
   feedbackDetailsEnabled?: boolean;
   onFeedback: (feedback: PublicFeedbackSubmission) => void;
   onFeedbackLogin?: () => void;
@@ -219,7 +224,9 @@ export function PublicAnswer({
           <MarkdownAnswer content={turn.answer} turn={turn} />
         ) : turn.provisionalAnswer ? (
           <div
-            className={nativeProcess && active ? "wst-streaming-answer" : "wst-claims"}
+            className={
+              nativeProcess && active ? "wst-streaming-answer" : "wst-claims"
+            }
           >
             {!nativeProcess && (
               <p>
@@ -250,7 +257,9 @@ export function PublicAnswer({
             className={`wst-answer-notice ${turn.partial ? "is-partial" : ""}`}
           >
             <p>{turn.errorMessage}</p>
-            {(turn.status === "failed" || turn.status === "pending_confirmation" || turn.status === "stop_requested") && (
+            {(turn.status === "failed" ||
+              turn.status === "pending_confirmation" ||
+              turn.status === "stop_requested") && (
               <div className="wst-answer-actions">
                 {turn.nativeProtocol && turn.nativeMessageId && onRecover && (
                   <button onClick={onRecover} type="button">
@@ -269,13 +278,15 @@ export function PublicAnswer({
         {turn.citations.length > 0 && (
           <>
             <PublicCitations
+              allowSourceDownload={allowSourceDownload}
               citations={turn.citations}
               onDownloadReference={onDownloadReference}
             />
           </>
         )}
-        {(turn.status === "completed" ||
-          (turn.status === "failed" && !turn.partial)) &&
+        {allowFeedback &&
+          (turn.status === "completed" ||
+            (turn.status === "failed" && !turn.partial)) &&
           turn.traceId && (
             <PublicFeedback
               detailsEnabled={feedbackDetailsEnabled}

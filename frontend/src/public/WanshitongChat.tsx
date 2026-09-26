@@ -15,6 +15,10 @@ export function WanshitongChat({
   busy,
   conversationId,
   feedbackDetailsEnabled,
+  allowFeedback,
+  allowSourceDownload,
+  placeholder,
+  showRecommendations,
   initialQuestion,
   onFeedback,
   onFeedbackLogin,
@@ -34,6 +38,10 @@ export function WanshitongChat({
   busy: boolean;
   conversationId: string;
   feedbackDetailsEnabled: boolean;
+  allowFeedback: boolean;
+  allowSourceDownload: boolean;
+  placeholder: string;
+  showRecommendations: boolean;
   initialQuestion?: string;
   onFeedback: (
     turnId: string,
@@ -52,7 +60,11 @@ export function WanshitongChat({
   onPopularQuestionSubmit: (question: PublicPopularQuestion) => void;
   onRefresh: () => void;
   onRetry: (turnId: string, question: string, conversationId: string) => void;
-  onRecover?: (turnId: string, question: string, conversationId: string) => void;
+  onRecover?: (
+    turnId: string,
+    question: string,
+    conversationId: string,
+  ) => void;
   onStop: () => void;
   onSubmit: (question: string) => void;
   onSuggestedQuestionSubmit: (question: SuggestedQuestion) => void;
@@ -83,6 +95,8 @@ export function WanshitongChat({
                 {turn.question}
               </div>
               <PublicAnswer
+                allowFeedback={allowFeedback}
+                allowSourceDownload={allowSourceDownload}
                 feedbackDetailsEnabled={feedbackDetailsEnabled}
                 onFeedback={(feedback) => {
                   if (turn.traceId) onFeedback(turn.id, turn.traceId, feedback);
@@ -105,7 +119,8 @@ export function WanshitongChat({
                 }
                 onRecover={
                   onRecover
-                    ? () => onRecover(turn.id, turn.question, turn.conversationId)
+                    ? () =>
+                        onRecover(turn.id, turn.question, turn.conversationId)
                     : undefined
                 }
                 turn={turn}
@@ -113,7 +128,8 @@ export function WanshitongChat({
             </article>
           ))}
         </div>
-        {!busy &&
+        {showRecommendations &&
+          !busy &&
           turns.at(-1)?.status !== "submitting" &&
           turns.at(-1)?.status !== "streaming" && (
             <div className="wst-chat-suggestions">
@@ -133,6 +149,7 @@ export function WanshitongChat({
             busy={busy}
             compact
             initialQuestion={initialQuestion}
+            placeholder={placeholder}
             key={conversationId}
             onStop={onStop}
             onSubmit={onSubmit}

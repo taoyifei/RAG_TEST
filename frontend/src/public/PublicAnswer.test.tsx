@@ -196,3 +196,38 @@ it("原生消息资源图片在完成后走同源会话鉴权地址", () => {
   );
   expect(image).toHaveAttribute("referrerpolicy", "no-referrer");
 });
+
+it("把原生知识库引用标记显示为序号，保留原始引用和代码示例", () => {
+  const now = Date.now();
+  const tag = '<kb doc="制度.docx" chunk_id="chunk-1" kb_id="kb-1" />';
+  const turn: PublicTurn = {
+    id: "turn-citation-marker",
+    conversationId: "wst-test",
+    question: "何时折旧",
+    status: "completed",
+    stageHistory: [],
+    startedAt: now,
+    stageStartedAt: now,
+    lastSignalAt: now,
+    claims: [],
+    answer: `次月开始折旧。${tag}\n\n\`\`\`xml\n${tag}\n\`\`\``,
+    citations: [
+      {
+        document_name: "制度.docx",
+        native_chunk_id: "chunk-1",
+        quote: "次月起计提",
+      },
+    ],
+    partial: false,
+    feedback: "idle",
+  };
+  const { container } = render(
+    <PublicAnswer onFeedback={vi.fn()} onRetry={vi.fn()} turn={turn} />,
+  );
+  expect(screen.getByText(/次月开始折旧。〔1〕/)).toBeInTheDocument();
+  expect(screen.getByText("引用依据（1段）")).toBeInTheDocument();
+  expect(container.querySelector("code")?.textContent).toContain(tag);
+  expect(container.querySelector(".wst-final-answer")?.textContent).not.toContain(
+    `${tag}${tag}`,
+  );
+});

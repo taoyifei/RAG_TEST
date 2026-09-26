@@ -34,6 +34,16 @@ export interface PublicCapabilities {
   feedback_details?: boolean;
   request_usage_context?: boolean;
   shortcuts: PublicShortcut[];
+  page_settings?: Partial<PublicPageSettings>;
+}
+
+export interface PublicPageSettings {
+  welcome_text: string;
+  input_placeholder: string;
+  show_recommendations: boolean;
+  show_history: boolean;
+  allow_feedback: boolean;
+  allow_source_download: boolean;
 }
 
 export interface PublicUsageContext {
@@ -351,7 +361,11 @@ export async function getPublicNaturalHistory(options: {
 export async function getPublicNaturalSessions(options: {
   csrfToken: string;
   signal?: AbortSignal;
-}): Promise<{ items: PublicNaturalSession[]; has_more: boolean; total: number }> {
+}): Promise<{
+  items: PublicNaturalSession[];
+  has_more: boolean;
+  total: number;
+}> {
   const response = await fetch(withAppBase("/api/public/conversations"), {
     credentials: "same-origin",
     headers: {

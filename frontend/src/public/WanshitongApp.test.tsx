@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WanshitongApp } from "./WanshitongApp";
 import * as authNavigation from "./authNavigation";
-import type { PublicPopularQuestions } from "./publicApi";
+import type { PublicPageSettings, PublicPopularQuestions } from "./publicApi";
 
 const encoder = new TextEncoder();
 
@@ -66,6 +66,27 @@ const capabilitiesBody = {
   shortcuts: [],
 };
 
+const emptyRecommendations: PublicPopularQuestions = {
+  mode: "EMPTY",
+  generated_at: null,
+  window_days: 7,
+  items: [],
+};
+
+const reviewedRecommendations: PublicPopularQuestions = {
+  mode: "POPULAR",
+  generated_at: "2026-09-25T00:00:00Z",
+  window_days: 7,
+  items: Array.from({ length: 20 }, (_, index) => ({
+    id: `pq_${String(index).padStart(32, "0")}`,
+    question:
+      index === 8
+        ? "哪些认证不适用外部认证管理办法？"
+        : `审核通过的制度问题 ${index + 1}？`,
+    topic_key: `制度-${index + 1}`,
+  })),
+};
+
 function pathOf(input: RequestInfo | URL): string {
   const value =
     typeof input === "string"
@@ -78,14 +99,10 @@ function pathOf(input: RequestInfo | URL): string {
 
 function installFetch(
   chatResponse: Response | (() => Response),
-  popular: PublicPopularQuestions = {
-    mode: "EMPTY",
-    generated_at: null,
-    window_days: 7,
-    items: [],
-  },
+  popular: PublicPopularQuestions = reviewedRecommendations,
   capabilities: typeof capabilitiesBody & {
     request_usage_context?: boolean;
+    page_settings?: Partial<PublicPageSettings>;
   } = capabilitiesBody,
 ) {
   return vi
@@ -171,6 +188,7 @@ describe("湾事通公共应用", () => {
   it("初始化匿名 Session 后渲染无登录首屏", async () => {
     const fetchMock = installFetch(
       streamResponse([event("error", 0, { message: "未就绪" })]),
+      emptyRecommendations,
     );
     await openHome();
 
@@ -178,11 +196,7 @@ describe("湾事通公共应用", () => {
     expect(
       screen.queryByText("从已核验的内部资料中寻找答案，并把来源交代清楚。"),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByPlaceholderText(
-        "今天想了解什么？",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("今天想了解什么？")).toBeInTheDocument();
     await waitFor(() =>
       expect(fetchMock.mock.calls.map(([input]) => pathOf(input))).toEqual([
         "/api/public/session",
@@ -191,8 +205,76 @@ describe("湾事通公共应用", () => {
       ]),
     );
     expect(screen.queryByText("管理员登录")).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "大家常问" })).toBeDisabled();
-    expect(screen.getByText(/当前展示示例问题/)).toBeVisible();
+    expect(
+      screen.queryByRole("tab", { name: "大家常问" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "你可能想问" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/示例问题/)).not.toBeInTheDocument();
+  });
+
+  it("后台页面开关控制欢迎语、输入提示、推荐、历史与反馈，引用仍保留", async () => {
+    const fetchMock = installFetch(
+      streamResponse([
+        event("final", 0, {
+          answer: "已按原生知识库回答。",
+          citations: [
+            {
+              document_name: "办事指南.docx",
+              source_kind: "weknora",
+              reference_id: `ref_${"a".repeat(32)}`,
+              source_available: true,
+              original_available: true,
+              quote: "本段引用依据。",
+            },
+          ],
+        }),
+      ]),
+      reviewedRecommendations,
+      {
+        ...capabilitiesBody,
+        page_settings: {
+          welcome_text: "向湾事通知识库提问",
+          input_placeholder: "请输入具体问题",
+          show_recommendations: false,
+          show_history: false,
+          allow_feedback: false,
+          allow_source_download: false,
+        },
+      },
+    );
+    render(<WanshitongApp />);
+    expect(
+      await screen.findByRole("heading", { name: "向湾事通知识库提问" }),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("请输入具体问题")).toBeInTheDocument();
+    expect(screen.queryByText("旧版记录")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "你可能想问" }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) => pathOf(input) === "/api/public/popular-questions",
+      ),
+    ).toBe(false);
+
+    await ask("文档依据是什么？");
+    await screen.findByText("已按原生知识库回答。");
+    const user = userEvent.setup();
+    await user.click(screen.getByText("引用依据（1段）"));
+    await user.click(screen.getByText("办事指南.docx"));
+    expect(screen.getByText("本段引用依据。")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "查看引用片段" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "下载原件" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("回答反馈")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "换个话题" }),
+    ).not.toBeInTheDocument();
   });
 
   it("大家常问只提交审核后的可见题面和 popular 入口", async () => {
@@ -264,7 +346,9 @@ describe("湾事通公共应用", () => {
     );
 
     expect(screen.getByText("此前提问")).toBeInTheDocument();
-    expect(screen.getByText(question)).toBeInTheDocument();
+    expect(
+      screen.getByText(question, { selector: ".wst-question" }),
+    ).toBeInTheDocument();
     const bodies = fetchMock.mock.calls
       .filter(([input]) => pathOf(input) === "/api/public/chat")
       .map(
@@ -405,6 +489,7 @@ describe("湾事通公共应用", () => {
       ]),
     );
     await openHome();
+    await screen.findByRole("region", { name: "你可能想问" });
     const suggestions = screen.getByRole("region", { name: "你可能想问" });
     const cards = within(suggestions)
       .getAllByRole("button")
@@ -447,6 +532,9 @@ describe("湾事通公共应用", () => {
         if (path === "/api/public/capabilities") {
           return Promise.resolve(Response.json(capabilitiesBody));
         }
+        if (path === "/api/public/popular-questions") {
+          return Promise.resolve(Response.json(reviewedRecommendations));
+        }
         if (path === "/api/public/chat") {
           chatCount += 1;
           return Promise.resolve(
@@ -462,6 +550,7 @@ describe("湾事通公共应用", () => {
       });
     const user = userEvent.setup();
     await openHome();
+    await screen.findByRole("region", { name: "你可能想问" });
     const suggestions = screen.getByRole("region", { name: "你可能想问" });
     const card = within(suggestions)
       .getAllByRole("button")
@@ -501,6 +590,7 @@ describe("湾事通公共应用", () => {
     const fetchMock = installFetch(pending.response);
     const user = userEvent.setup();
     await openHome();
+    await screen.findByRole("region", { name: "你可能想问" });
     const suggestions = screen.getByRole("region", { name: "你可能想问" });
     const card = within(suggestions)
       .getAllByRole("button")
@@ -528,6 +618,7 @@ describe("湾事通公共应用", () => {
     const user = userEvent.setup();
     const question = "哪些认证不适用外部认证管理办法？";
     await openHome();
+    await screen.findByRole("region", { name: "你可能想问" });
 
     let card = screen.queryByRole("button", { name: question });
     for (let index = 0; !card && index < 2; index += 1) {
@@ -602,6 +693,9 @@ describe("湾事通公共应用", () => {
         if (path === "/api/public/capabilities") {
           return Promise.resolve(Response.json(capabilitiesBody));
         }
+        if (path === "/api/public/popular-questions") {
+          return Promise.resolve(Response.json(reviewedRecommendations));
+        }
         if (path === "/api/public/chat") {
           chatCalls += 1;
           return Promise.resolve(
@@ -618,6 +712,7 @@ describe("湾事通公共应用", () => {
     );
     const user = userEvent.setup();
     await openHome();
+    await screen.findByRole("region", { name: "你可能想问" });
     const visibleQuestions = () =>
       within(
         screen.queryByRole("region", { name: "换个话题" }) ??
@@ -881,6 +976,7 @@ describe("湾事通公共应用", () => {
     );
     const user = userEvent.setup();
     await openHome();
+    await screen.findByRole("region", { name: "你可能想问" });
     expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toHaveValue(
       "登录前草稿",
     );
@@ -932,6 +1028,9 @@ describe("湾事通公共应用", () => {
             Response.json({ ...capabilitiesBody, request_usage_context: true }),
           );
         }
+        if (path === "/api/public/popular-questions") {
+          return Promise.resolve(Response.json(reviewedRecommendations));
+        }
         if (path === "/api/public/chat") {
           chatCount += 1;
           return Promise.resolve(
@@ -982,7 +1081,7 @@ describe("湾事通公共应用", () => {
     ]);
     expect(bodies[0].client_context).toEqual({ entrypoint: "manual" });
     expect(bodies[1].client_context.entrypoint).toBe("suggestion");
-    expect(bodies[1].client_context.recommendation_id).toMatch(/^sq-/);
+    expect(bodies[1].client_context.recommendation_id).toMatch(/^pq_/);
   });
 
   it("忙碌时禁用新问题，停止后才允许换话题", async () => {

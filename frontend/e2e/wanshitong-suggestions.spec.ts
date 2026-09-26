@@ -1,9 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-import { SUGGESTED_QUESTIONS } from "../src/public/suggestedQuestions";
-
-test("推荐首屏保持三短一标准一复合且双击只提交原题一次", async ({ page }) => {
+test("推荐首屏只展示审核题目，双击只提交原题一次", async ({ page }) => {
   const chatBodies: Record<string, unknown>[] = [];
+  const reviewed = Array.from({ length: 8 }, (_, index) => ({
+    id: `pq_${String(index).padStart(32, "0")}`,
+    question: `审核通过的问题 ${index + 1}？`,
+    topic_key: "制度",
+  }));
   await page.route("**/api/public/session", async (route) => {
     await route.fulfill({
       json: {
@@ -23,6 +26,16 @@ test("推荐首屏保持三短一标准一复合且双击只提交原题一次",
         feedback: true,
         feedback_details: true,
         shortcuts: [],
+      },
+    });
+  });
+  await page.route("**/api/public/popular-questions", async (route) => {
+    await route.fulfill({
+      json: {
+        mode: "POPULAR",
+        generated_at: "2026-09-25T00:00:00Z",
+        window_days: 7,
+        items: reviewed,
       },
     });
   });
@@ -47,13 +60,12 @@ test("推荐首屏保持三短一标准一复合且双击只提交原题一次",
   const cards = suggestions.locator("button.wst-suggestion");
   await expect(cards).toHaveCount(5);
   const texts = await cards.allTextContents();
-  const items = texts.map((question) =>
-    SUGGESTED_QUESTIONS.find((item) => item.question === question),
-  );
-  expect(items.every((item) => item !== undefined)).toBe(true);
-  expect(items.filter((item) => item?.style === "SHORT")).toHaveLength(3);
-  expect(items.filter((item) => item?.style === "STANDARD")).toHaveLength(1);
-  expect(items.filter((item) => item?.style === "COMPOUND")).toHaveLength(1);
+  expect(
+    texts.every((question) =>
+      reviewed.some((item) => item.question === question),
+    ),
+  ).toBe(true);
+  await expect(page.getByText("未审核的问题？")).toHaveCount(0);
 
   const question = texts[0];
   await cards.first().evaluate((button: HTMLButtonElement) => {
@@ -70,4 +82,40 @@ test("推荐首屏保持三短一标准一复合且双击只提交原题一次",
     "query",
   ]);
   expect(chatBodies[0].query).toBe(question);
+});
+
+test("没有审核题目时保持推荐区为空", async ({ page }) => {
+  await page.route("**/api/public/session", async (route) => {
+    await route.fulfill({
+      json: {
+        session_id: "wstsid_11111111111111111111111111111111",
+        csrf_token: "a".repeat(64),
+        expires_in: 3600,
+      },
+    });
+  });
+  await page.route("**/api/public/capabilities", async (route) => {
+    await route.fulfill({
+      json: {
+        mode: "wanshitong",
+        stream: true,
+        stream_protocol: "wanshitong-public-sse-v1",
+        document_visibility: "all_internal",
+        feedback: true,
+        shortcuts: [],
+      },
+    });
+  });
+  await page.route("**/api/public/popular-questions", async (route) => {
+    await route.fulfill({
+      json: { mode: "EMPTY", generated_at: null, window_days: 7, items: [] },
+    });
+  });
+
+  await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: "你的内部知识助手" }),
+  ).toBeVisible();
+  await expect(page.getByRole("region", { name: "你可能想问" })).toHaveCount(0);
+  await expect(page.getByText("当前展示示例问题")).toHaveCount(0);
 });

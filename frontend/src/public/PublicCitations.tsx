@@ -32,8 +32,7 @@ function groupCitations(citations: PublicCitation[]): CitationGroup[] {
           department ?? "",
           category ?? "",
         ])}`
-      : citation.source_kind === "weknora" &&
-          citation.native_knowledge_id
+      : citation.source_kind === "weknora" && citation.native_knowledge_id
         ? `native:${citation.native_knowledge_id}`
         : `unpathed:${index}`;
     const existing = groups.get(key);
@@ -54,9 +53,11 @@ function groupCitations(citations: PublicCitation[]): CitationGroup[] {
 }
 
 export function PublicCitations({
+  allowSourceDownload = true,
   citations,
   onDownloadReference,
 }: {
+  allowSourceDownload?: boolean;
   citations: PublicCitation[];
   onDownloadReference?: (
     referenceId: string,
@@ -123,8 +124,9 @@ export function PublicCitations({
                       )}
                       {citation.reference_id &&
                         onDownloadReference &&
-                        (citation.source_kind !== "weknora" ||
-                          citation.source_available) && (
+                        (citation.source_kind === "weknora"
+                          ? citation.source_available
+                          : allowSourceDownload) && (
                           <button
                             onClick={() => {
                               setDownloadError(undefined);
@@ -147,6 +149,7 @@ export function PublicCitations({
                       {citation.reference_id &&
                         citation.source_kind === "weknora" &&
                         citation.original_available &&
+                        allowSourceDownload &&
                         onDownloadReference && (
                           <button
                             onClick={() => {

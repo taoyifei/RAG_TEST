@@ -18,6 +18,7 @@ import {
   type PublicUsageContext,
   type PublicNaturalHistoryTurn,
   type PublicNaturalSession,
+  type PublicPageSettings,
 } from "./publicApi";
 import * as authNavigation from "./authNavigation";
 import {
@@ -44,6 +45,32 @@ export type PublicChatPhase =
   | "failed"
   | "cancelled";
 
+const DEFAULT_PAGE_SETTINGS: PublicPageSettings = {
+  welcome_text: "你的内部知识助手",
+  input_placeholder: "今天想了解什么？",
+  show_recommendations: true,
+  show_history: true,
+  allow_feedback: true,
+  allow_source_download: true,
+};
+
+function normalizePageSettings(
+  value: Partial<PublicPageSettings> | undefined,
+  feedbackAvailable: boolean,
+): PublicPageSettings {
+  return {
+    welcome_text:
+      value?.welcome_text?.trim() || DEFAULT_PAGE_SETTINGS.welcome_text,
+    input_placeholder:
+      value?.input_placeholder?.trim() ||
+      DEFAULT_PAGE_SETTINGS.input_placeholder,
+    show_recommendations: value?.show_recommendations !== false,
+    show_history: value?.show_history !== false,
+    allow_feedback: feedbackAvailable && value?.allow_feedback !== false,
+    allow_source_download: value?.allow_source_download !== false,
+  };
+}
+
 export interface PublicClaim {
   claimIndex: number;
   sequence: number;
@@ -60,7 +87,14 @@ export interface PublicTurn {
   id: string;
   conversationId: string;
   question: string;
-  status: "submitting" | "streaming" | "completed" | "failed" | "cancelled" | "stop_requested" | "pending_confirmation";
+  status:
+    | "submitting"
+    | "streaming"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "stop_requested"
+    | "pending_confirmation";
   stageMessage?: string;
   stageHistory: string[];
   startedAt: number;
@@ -181,10 +215,10 @@ function restoreNaturalTurn(
         ? "cancelled"
         : item.status === "stop_requested"
           ? "stop_requested"
-        : item.status === "pending_confirmation" ||
-            item.status === "streaming"
-          ? "pending_confirmation"
-          : "failed";
+          : item.status === "pending_confirmation" ||
+              item.status === "streaming"
+            ? "pending_confirmation"
+            : "failed";
   const errorMessage =
     item.status === "SOURCE_UNAVAILABLE"
       ? "原生消息已不存在，这条历史回答暂不可展示。"
@@ -194,9 +228,9 @@ function restoreNaturalTurn(
           ? "已停止回答。"
           : status === "stop_requested"
             ? "停止请求已接收；最终状态待确认。"
-          : status === "failed"
-            ? "回答未完成，以下内容不能作为最终结论。"
-            : undefined;
+            : status === "failed"
+              ? "回答未完成，以下内容不能作为最终结论。"
+              : undefined;
   return {
     id: item.turn_id,
     conversationId,
@@ -230,6 +264,9 @@ export function usePublicChat() {
   const [user, setUser] = useState<PublicSessionUser>();
   const [deploymentId, setDeploymentId] = useState<string>();
   const [feedbackDetailsEnabled, setFeedbackDetailsEnabled] = useState(false);
+  const [pageSettings, setPageSettings] = useState<PublicPageSettings>(
+    DEFAULT_PAGE_SETTINGS,
+  );
   const [usageContextEnabled, setUsageContextEnabled] = useState(false);
   const [naturalProtocol, setNaturalProtocol] = useState<
     "wanshitong-natural-sse-v1" | typeof WEKNORA_STREAM_PROTOCOL | undefined
@@ -283,6 +320,7 @@ export function usePublicChat() {
     setLogoutError(undefined);
     setUser(undefined);
     setFeedbackDetailsEnabled(false);
+    setPageSettings(DEFAULT_PAGE_SETTINGS);
     setUsageContextEnabled(false);
     setNaturalProtocol(undefined);
     setLoggedOut(showLoggedOut);
@@ -331,6 +369,11 @@ export function usePublicChat() {
     setUser(session.user);
     setDeploymentId(session.deploymentId);
     setFeedbackDetailsEnabled(capabilities.feedback_details === true);
+    const effectivePageSettings = normalizePageSettings(
+      capabilities.page_settings,
+      capabilities.feedback,
+    );
+    setPageSettings(effectivePageSettings);
     setUsageContextEnabled(capabilities.request_usage_context === true);
     setNaturalProtocol(
       capabilities.natural_stream_protocol ??
@@ -376,12 +419,16 @@ export function usePublicChat() {
             ),
           ),
         );
-        const sessions = await getPublicNaturalSessions({
-          csrfToken: session.csrfToken,
-          signal,
-        });
-        setHistorySessions(sessions.items);
-        setHistoryMoreCount(sessions.has_more ? sessions.total - sessions.items.length : 0);
+        if (effectivePageSettings.show_history) {
+          const sessions = await getPublicNaturalSessions({
+            csrfToken: session.csrfToken,
+            signal,
+          });
+          setHistorySessions(sessions.items);
+          setHistoryMoreCount(
+            sessions.has_more ? sessions.total - sessions.items.length : 0,
+          );
+        }
       } catch {
         // 历史恢复失败时保留当前页面会话，后续请求仍由服务端鉴权。
       }
@@ -523,7 +570,9 @@ export function usePublicChat() {
             csrfToken,
             signal: controller.signal,
           });
-          const original = history.find((item) => item.trace_id === recoverTraceId);
+          const original = history.find(
+            (item) => item.trace_id === recoverTraceId,
+          );
           if (!original) throw new Error("原回答状态无法确认，请联系管理员。");
           if (original.status === "completed") {
             updateTurn(turnId, () =>
@@ -700,15 +749,19 @@ export function usePublicChat() {
               ...turn,
               status: "failed",
               stageMessage: undefined,
-              answer: tracker.deltaCount === 0
-                ? (turn.answer ?? recoverOriginal?.answer)
-                : turn.answer,
-              provisionalAnswer: tracker.deltaCount === 0
-                ? (turn.provisionalAnswer ?? recoverOriginal?.provisionalAnswer)
-                : turn.provisionalAnswer,
-              citations: turn.citations.length > 0
-                ? turn.citations
-                : (recoverOriginal?.citations ?? []),
+              answer:
+                tracker.deltaCount === 0
+                  ? (turn.answer ?? recoverOriginal?.answer)
+                  : turn.answer,
+              provisionalAnswer:
+                tracker.deltaCount === 0
+                  ? (turn.provisionalAnswer ??
+                    recoverOriginal?.provisionalAnswer)
+                  : turn.provisionalAnswer,
+              citations:
+                turn.citations.length > 0
+                  ? turn.citations
+                  : (recoverOriginal?.citations ?? []),
               errorMessage: partial
                 ? "回答未完成，以下内容不能作为最终结论"
                 : streamErrorMessage(event),
@@ -747,11 +800,13 @@ export function usePublicChat() {
         if (!tracker.terminal && isCurrent()) {
           throw new TypeError("public stream disconnected before terminal");
         }
-        if (naturalProtocol && isCurrent()) {
+        if (naturalProtocol && pageSettings.show_history && isCurrent()) {
           void getPublicNaturalSessions({ csrfToken })
             .then((sessions) => {
               setHistorySessions(sessions.items);
-              setHistoryMoreCount(sessions.has_more ? sessions.total - sessions.items.length : 0);
+              setHistoryMoreCount(
+                sessions.has_more ? sessions.total - sessions.items.length : 0,
+              );
             })
             .catch(() => undefined);
         }
@@ -776,9 +831,10 @@ export function usePublicChat() {
             answer: turn.answer ?? recoverOriginal?.answer,
             provisionalAnswer:
               turn.provisionalAnswer ?? recoverOriginal?.provisionalAnswer,
-            citations: turn.citations.length > 0
-              ? turn.citations
-              : (recoverOriginal?.citations ?? []),
+            citations:
+              turn.citations.length > 0
+                ? turn.citations
+                : (recoverOriginal?.citations ?? []),
             errorMessage: partial
               ? "回答未完成，以下内容不能作为最终结论"
               : publicErrorMessage(error),
@@ -798,6 +854,7 @@ export function usePublicChat() {
     [
       clearLocalSession,
       naturalProtocol,
+      pageSettings.show_history,
       sessionReady,
       updateTurn,
       usageContextEnabled,
@@ -820,7 +877,13 @@ export function usePublicChat() {
 
   const openHistory = useCallback(
     async (selectedConversationId: string) => {
-      if (busyRef.current || !sessionReady || !naturalProtocol) return;
+      if (
+        busyRef.current ||
+        !sessionReady ||
+        !naturalProtocol ||
+        !pageSettings.show_history
+      )
+        return;
       const csrfToken = csrfRef.current;
       if (!csrfToken) return;
       const history = await getPublicNaturalHistory({
@@ -851,7 +914,7 @@ export function usePublicChat() {
       }
       setPhase("ready");
     },
-    [naturalProtocol, sessionReady],
+    [naturalProtocol, pageSettings.show_history, sessionReady],
   );
 
   const submitRecommendation = useCallback(
@@ -860,13 +923,18 @@ export function usePublicChat() {
       recommendationId?: string,
       entrypoint: "suggestion" | "popular" = "suggestion",
     ) => {
-      if (!question.trim() || busyRef.current) return;
+      if (
+        !pageSettings.show_recommendations ||
+        !question.trim() ||
+        busyRef.current
+      )
+        return;
       void runTurn(randomId("turn"), question, conversationRef.current, false, {
         entrypoint: recommendationId ? entrypoint : "manual",
         ...(recommendationId ? { recommendation_id: recommendationId } : {}),
       });
     },
-    [runTurn],
+    [pageSettings.show_recommendations, runTurn],
   );
 
   const retry = useCallback(
@@ -894,9 +962,17 @@ export function usePublicChat() {
         return;
       const original = turns.find((item) => item.id === turnId);
       if (!original?.traceId || !original.nativeMessageId) return;
-      void runTurn(turnId, question, turnConversationId, true, {
-        entrypoint: "retry",
-      }, original.traceId, original);
+      void runTurn(
+        turnId,
+        question,
+        turnConversationId,
+        true,
+        {
+          entrypoint: "retry",
+        },
+        original.traceId,
+        original,
+      );
     },
     [runTurn, turns],
   );
@@ -928,20 +1004,23 @@ export function usePublicChat() {
         conversationId: turnConversationId,
         csrfToken,
         traceId,
-      }).then((cancelled) => {
-        if (cancelled) {
-          updateTurn(turnId, (turn) => ({
-            ...turn,
-            status: "stop_requested",
-            errorMessage: "停止请求已接收；最终状态待确认。",
-          }));
-        }
-      }).catch(() => undefined);
+      })
+        .then((cancelled) => {
+          if (cancelled) {
+            updateTurn(turnId, (turn) => ({
+              ...turn,
+              status: "stop_requested",
+              errorMessage: "停止请求已接收；最终状态待确认。",
+            }));
+          }
+        })
+        .catch(() => undefined);
     }
   }, [naturalProtocol, updateTurn]);
 
   const submitFeedback = useCallback(
     (turnId: string, traceId: string, feedback: PublicFeedbackSubmission) => {
+      if (!pageSettings.allow_feedback) return;
       const csrfToken = csrfRef.current;
       if (!csrfToken || feedbackAttemptsRef.current.has(turnId)) return;
       feedbackAttemptsRef.current.add(turnId);
@@ -974,7 +1053,7 @@ export function usePublicChat() {
           }));
         });
     },
-    [updateTurn],
+    [pageSettings.allow_feedback, updateTurn],
   );
 
   const downloadReference = useCallback(
@@ -985,6 +1064,9 @@ export function usePublicChat() {
       documentName: string,
       original = false,
     ) => {
+      if (original && !pageSettings.allow_source_download) {
+        throw new Error("原件下载当前未开放。");
+      }
       const csrfToken = csrfRef.current;
       if (!csrfToken) throw new Error("公共会话已失效。请重新登录。");
       const blob = await getPublicNaturalSource({
@@ -1008,7 +1090,7 @@ export function usePublicChat() {
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     },
-    [],
+    [pageSettings.allow_source_download],
   );
 
   const logout = useCallback(() => {
@@ -1047,6 +1129,7 @@ export function usePublicChat() {
     deploymentId,
     downloadReference,
     feedbackDetailsEnabled,
+    pageSettings,
     historySessions,
     historyMoreCount,
     loggedOut,

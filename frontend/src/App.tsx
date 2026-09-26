@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 
 import AppShell from "./app/AppShell";
-import { applicationPath } from "./app/basePath";
+import { applicationPath, withAppBase } from "./app/basePath";
 import { detectProductMode, type ProductMode } from "./app/product-mode";
 import { isWanshitongAdminPath } from "./app/router";
 import { ErrorPanel } from "./components/ui";
 import { WanshitongApp } from "./public/WanshitongApp";
 import { ConsoleProvider } from "./state/console-context";
-import { WanshitongAdminShell } from "./wanshitong/admin/WanshitongAdminShell";
-import { WanshitongOpsApp } from "./wanshitong/ops/WanshitongOpsApp";
 
 type ModeState =
   | { state: "loading" }
@@ -63,14 +61,11 @@ export default function App() {
   if (modeState.mode === "wanshitong" && !isWanshitongAdminPath(location)) {
     return <WanshitongApp />;
   }
-  if (modeState.mode === "wanshitong" && location.startsWith("/admin/ops")) {
-    return <WanshitongOpsApp />;
-  }
   if (modeState.mode === "wanshitong") {
     return (
-      <ConsoleProvider productMode="wanshitong">
-        <WanshitongAdminShell />
-      </ConsoleProvider>
+      <main className="mode-screen" id="main-content">
+        <a href={withAppBase("/admin/overview")}>进入湾事通管理后台</a>
+      </main>
     );
   }
   return (

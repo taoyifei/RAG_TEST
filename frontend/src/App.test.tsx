@@ -44,7 +44,7 @@ describe("产品壳隔离", () => {
     expect(document.title).toBe("Universal RAG 控制台");
   });
 
-  it("湾事通管理员路径使用独立收敛壳和同一登录页", async () => {
+  it("湾事通管理员路径只提供统一管理后台入口", async () => {
     window.history.replaceState({}, "", "/admin");
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const path = requestPath(input);
@@ -59,24 +59,17 @@ describe("产品壳隔离", () => {
           }),
         );
       }
-      if (path === "/api/v1/console/session") {
-        return Promise.resolve(
-          response({ error: { code: "AUTHENTICATION_REQUIRED" } }, 401),
-        );
-      }
       throw new Error(`unexpected fetch: ${path}`);
     });
     render(<App />);
 
-    expect(await screen.findByText("管理员控制台")).toBeVisible();
-    expect(
-      await screen.findByRole("dialog", { name: "连接管理控制台" }),
-    ).toBeVisible();
+    expect(await screen.findByRole("link", { name: "进入湾事通管理后台" })).toHaveAttribute("href", "/admin/overview");
     expect(screen.queryByText("企业知识助手")).not.toBeInTheDocument();
+    expect(screen.queryByText("管理员控制台")).not.toBeInTheDocument();
     expect(document.title).toBe("湾事通");
   });
 
-  it("kb 前缀下管理员仍使用原令牌登录且不跳 RDMS SSO", async () => {
+  it("kb 前缀下旧 React 管理路径指向唯一 Vue 后台且不跳 RDMS SSO", async () => {
     window.history.replaceState({}, "", "/kb/admin");
     const ssoRedirect = vi.spyOn(authNavigation, "redirectToSso");
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
@@ -86,20 +79,12 @@ describe("产品壳隔离", () => {
           response({ error: { code: "AUTHENTICATION_REQUIRED" } }, 401),
         );
       }
-      if (path === "/kb/api/v1/console/session") {
-        return Promise.resolve(
-          response({ error: { code: "AUTHENTICATION_REQUIRED" } }, 401),
-        );
-      }
       throw new Error(`unexpected fetch: ${path}`);
     });
 
     render(<App />);
 
-    expect(await screen.findByText("管理员控制台")).toBeVisible();
-    expect(
-      await screen.findByRole("dialog", { name: "连接管理控制台" }),
-    ).toBeVisible();
+    expect(await screen.findByRole("link", { name: "进入湾事通管理后台" })).toHaveAttribute("href", "/kb/admin/overview");
     expect(ssoRedirect).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe("/kb/admin");
   });

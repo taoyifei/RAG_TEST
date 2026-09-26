@@ -1,217 +1,120 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import {
-  SUGGESTED_QUESTIONS,
-  SUGGESTED_QUESTIONS_REVISION,
-  type SuggestedQuestion,
-  type SuggestedQuestionStyle,
-} from "./suggestedQuestions";
+import type { SuggestedQuestion } from "./suggestedQuestions";
 import {
   pickSuggestedQuestions,
   useSuggestedQuestions,
 } from "./useSuggestedQuestions";
 
-function catalogItem(
-  id: string,
-  style: SuggestedQuestionStyle,
-  overrides: Partial<SuggestedQuestion> = {},
-): SuggestedQuestion {
-  return {
-    id,
-    question: `${id}的问题？`,
-    documentId: `DOC-${id}`,
-    style,
-    topicKey: `topic-${id}`,
+const reviewed: SuggestedQuestion[] = Array.from(
+  { length: 12 },
+  (_, index) => ({
+    id: `pq-${index}`,
+    question: `审核通过的问题 ${index}？`,
+    documentId: `kb-${index}`,
+    style: index < 9 ? "SHORT" : index < 11 ? "STANDARD" : "COMPOUND",
+    topicKey: `topic-${index}`,
     enabled: true,
-    ...overrides,
-  };
-}
+  }),
+);
 
-function styleCounts(items: readonly SuggestedQuestion[]) {
-  return Object.fromEntries(
-    (["SHORT", "STANDARD", "COMPOUND"] as const).map((style) => [
-      style,
-      items.filter((item) => item.style === style).length,
-    ]),
-  );
-}
-
-describe("湾事通推荐问题", () => {
-  it("首批题库使用稳定身份和明确的三类配额", () => {
-    const enabled = SUGGESTED_QUESTIONS.filter((item) => item.enabled);
-    expect(SUGGESTED_QUESTIONS_REVISION).toBe("2026-09-23-f01-r2");
-    expect(enabled.length).toBeGreaterThanOrEqual(12);
-    expect(enabled.length).toBeLessThanOrEqual(18);
-    expect(new Set(enabled.map((item) => item.id)).size).toBe(enabled.length);
-    expect(new Set(enabled.map((item) => item.question)).size).toBe(
-      enabled.length,
-    );
-    expect(new Set(enabled.map((item) => item.documentId)).size).toBe(
-      enabled.length,
-    );
-    expect(new Set(enabled.map((item) => item.topicKey)).size).toBe(
-      enabled.length,
-    );
-    expect(styleCounts(enabled)).toEqual({
-      SHORT: 9,
-      STANDARD: 2,
-      COMPOUND: 1,
-    });
-    expect(
-      enabled.every(
-        (item) =>
-          item.id.startsWith("sq-") &&
-          !item.id.includes(item.documentId.toLocaleLowerCase()),
-      ),
-    ).toBe(true);
-    expect(enabled.map((item) => item.question)).toEqual(
-      expect.arrayContaining([
-        "上线安全评估要提前多久申请？",
-        "固定资产从什么时候开始折旧？",
-        "研发工时怎么填、怎么留痕？",
-        "标前公示时间不少于几日？",
-        "公司公章怎么申请？",
-        "研发外协费用需要先有预算吗？",
-      ]),
-    );
-    expect(enabled.some((item) => item.question.includes("不适用"))).toBe(true);
-    expect(
-      SUGGESTED_QUESTIONS.filter((item) => !item.enabled).map(
-        (item) => item.id,
-      ),
-    ).toEqual([
-      "sq-design-document-confirmation-01",
-      "sq-ip-records-filing-01",
-      "sq-rd-project-name-rules-01",
-      "sq-prebid-publicity-deadline-01",
-    ]);
-    expect(
-      SUGGESTED_QUESTIONS.some(
-        (item) =>
-          item.question.includes("必须") &&
-          item.question.includes("不能") &&
-          !item.enabled,
-      ),
-    ).toBe(true);
-    expect(
-      SUGGESTED_QUESTIONS.some(
-        (item) => item.question.includes("工作日") && !item.enabled,
-      ),
-    ).toBe(true);
+describe("公共推荐仅使用审核题库", () => {
+  it("没有审核题目时不显示任何前端内置题", () => {
+    const { result } = renderHook(() => useSuggestedQuestions([], "user-a"));
+    expect(result.current.questions).toEqual([]);
+    expect(pickSuggestedQuestions([], [], new Set(), () => 0)).toEqual([]);
   });
 
-  it("每组优先未展示题，并按三短一标准一复合选择", () => {
+  it("按已审核目录展示并换组，不推荐已问题", () => {
     const random = () => 0.25;
-    const first = pickSuggestedQuestions([], [], new Set(), random);
-    const seen = new Set(first.map((item) => item.id));
-    const asked = `  ${first[0].question.replace(/？$/u, "?")}  `;
-    const second = pickSuggestedQuestions([asked], first, seen, random);
-
+    const first = pickSuggestedQuestions([], [], new Set(), random, reviewed);
+    const second = pickSuggestedQuestions(
+      [first[0].question],
+      first,
+      new Set(first.map((item) => item.id)),
+      random,
+      reviewed,
+    );
     expect(first).toHaveLength(5);
-    expect(styleCounts(first)).toEqual({
-      SHORT: 3,
-      STANDARD: 1,
-      COMPOUND: 1,
-    });
-    expect(new Set(first.map((item) => item.documentId)).size).toBe(5);
-    expect(new Set(first.map((item) => item.topicKey)).size).toBe(5);
+    expect(first.filter((item) => item.style === "SHORT")).toHaveLength(3);
+    expect(first.filter((item) => item.style === "STANDARD")).toHaveLength(1);
+    expect(first.filter((item) => item.style === "COMPOUND")).toHaveLength(1);
     expect(second).toHaveLength(5);
-    expect(second.map((item) => item.id)).not.toContain(first[0].id);
-    expect(second.every((item) => !seen.has(item.id))).toBe(true);
+    expect(second.map((item) => item.question)).not.toContain(
+      first[0].question,
+    );
+    expect(second.every((item) => reviewed.includes(item))).toBe(true);
   });
 
-  it("连续换一换耗尽新题后才回用，且不回用上一批", () => {
-    const random = () => 0.37;
-    const seen = new Set<string>();
-    let previous: SuggestedQuestion[] = [];
-    const batches: SuggestedQuestion[][] = [];
-
-    for (let index = 0; index < 4; index += 1) {
-      const next = pickSuggestedQuestions([], previous, seen, random);
-      expect(next).toHaveLength(5);
-      expect(
-        next.every((item) => !previous.some((old) => old.id === item.id)),
-      ).toBe(true);
-      batches.push(next);
-      next.forEach((item) => seen.add(item.id));
-      previous = next;
-    }
-
-    const firstTwoIds = new Set(
-      batches
-        .slice(0, 2)
-        .flat()
-        .map((item) => item.id),
-    );
-    expect(firstTwoIds.size).toBe(10);
-    expect(batches[2].filter((item) => !firstTwoIds.has(item.id))).toHaveLength(
-      2,
-    );
-    expect(batches[3].some((item) => batches[0].includes(item))).toBe(true);
-  });
-
-  it("依次排除停用题、模板题、已问题和上一批", () => {
-    const active = catalogItem("active", "SHORT");
-    const disabled = catalogItem("disabled", "SHORT", { enabled: false });
-    const template = catalogItem("template", "SHORT", {
-      documentId: "DOCX-028",
-    });
-    const asked = catalogItem("asked", "SHORT");
-    const previous = catalogItem("previous", "STANDARD");
-    const remaining = catalogItem("remaining", "COMPOUND");
-    const selected = pickSuggestedQuestions(
-      [asked.question],
-      [previous],
+  it("目录只有少量审核题时换一换也不会凭空补题或清空", () => {
+    const smallCatalog = reviewed.slice(0, 2);
+    const first = pickSuggestedQuestions(
+      [],
+      [],
       new Set(),
       () => 0,
-      [active, disabled, template, asked, previous, remaining],
+      smallCatalog,
     );
-
-    expect(selected.map((item) => item.id).sort()).toEqual([
-      "active",
-      "remaining",
-    ]);
-  });
-
-  it("配额不足时不重复凑数，并按ID和规范化题面双重去重", () => {
-    const first = catalogItem("first", "SHORT", { question: "同一道题？" });
-    const duplicateId = catalogItem("first", "STANDARD");
-    const duplicateQuestion = catalogItem("duplicate-question", "COMPOUND", {
-      question: " 同 一 道 题? ",
-    });
-    const standard = catalogItem("standard", "STANDARD");
-    const selected = pickSuggestedQuestions([], [], new Set(), () => 0, [
+    const second = pickSuggestedQuestions(
+      [],
       first,
-      duplicateId,
-      duplicateQuestion,
-      standard,
-    ]);
-
-    expect(selected.map((item) => item.id).sort()).toEqual([
-      "first",
-      "standard",
-    ]);
+      new Set(first.map((item) => item.id)),
+      () => 0,
+      smallCatalog,
+    );
+    expect(second.map((item) => item.id).sort()).toEqual(
+      first.map((item) => item.id).sort(),
+    );
   });
 
-  it("账号改变时清空已见记录，同账号刷新不清空", () => {
+  it("只排除停用、已问和重复题面，不拦截管理员审核的模板题", () => {
+    const catalog: SuggestedQuestion[] = [
+      reviewed[0],
+      { ...reviewed[1], enabled: false },
+      { ...reviewed[2], documentId: "DOCX-028" },
+      { ...reviewed[3], question: reviewed[0].question },
+      reviewed[4],
+    ];
+    expect(
+      pickSuggestedQuestions([], [], new Set(), () => 0, catalog)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual([reviewed[0].id, reviewed[2].id, reviewed[4].id].sort());
+    expect(
+      pickSuggestedQuestions(
+        [reviewed[0].question],
+        [],
+        new Set(),
+        () => 0,
+        catalog,
+      ).map((item) => item.id).sort(),
+    ).toEqual([reviewed[2].id, reviewed[4].id]);
+  });
+
+  it("题库加载和身份切换会重置轮播范围", async () => {
     const random = () => 0.25;
     const { result, rerender } = renderHook(
-      ({ identityKey }) => useSuggestedQuestions([], identityKey, random),
-      { initialProps: { identityKey: "candidate:user-a" } },
+      ({ identityKey, catalog }) =>
+        useSuggestedQuestions([], identityKey, catalog, random),
+      {
+        initialProps: {
+          identityKey: "candidate:user-a",
+          catalog: [] as SuggestedQuestion[],
+        },
+      },
     );
-    const initialIds = result.current.questions.map((item) => item.id);
+    expect(result.current.questions).toEqual([]);
 
+    rerender({ identityKey: "candidate:user-a", catalog: reviewed });
+    await waitFor(() => expect(result.current.questions).toHaveLength(5));
+    const firstIds = result.current.questions.map((item) => item.id);
+    expect(firstIds).toHaveLength(5);
     act(() => result.current.refresh());
-    const refreshedIds = result.current.questions.map((item) => item.id);
-    expect(refreshedIds.every((id) => !initialIds.includes(id))).toBe(true);
+    const secondIds = result.current.questions.map((item) => item.id);
+    expect(secondIds).not.toEqual(firstIds);
 
-    rerender({ identityKey: "candidate:user-a" });
-    expect(result.current.questions.map((item) => item.id)).toEqual(
-      refreshedIds,
-    );
-
-    rerender({ identityKey: "candidate:user-b" });
-    expect(result.current.questions.map((item) => item.id)).toEqual(initialIds);
+    rerender({ identityKey: "candidate:user-b", catalog: reviewed });
+    expect(result.current.questions.map((item) => item.id)).toEqual(firstIds);
   });
 });

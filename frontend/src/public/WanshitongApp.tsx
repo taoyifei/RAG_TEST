@@ -1,5 +1,5 @@
 import { LogIn, LogOut, Moon, RotateCcw, Sun } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { consumeLoginDraft } from "./authNavigation";
 import { LegacyHistory } from "./LegacyHistory";
@@ -33,11 +33,27 @@ export function WanshitongApp() {
     chat.deploymentId && chat.user
       ? `${chat.deploymentId}:${chat.user.userId}`
       : undefined;
-  const suggestions = useSuggestedQuestions(chat.turns, suggestionIdentityKey);
   const popular = usePopularQuestions(
-    chat.sessionReady,
+    chat.sessionReady && chat.pageSettings.show_recommendations,
     suggestionIdentityKey,
     chat.retrySession,
+  );
+  const approvedSuggestions = useMemo<readonly SuggestedQuestion[]>(
+    () =>
+      popular.items.map((item) => ({
+        id: item.id,
+        question: item.question,
+        documentId: item.id,
+        style: "SHORT",
+        topicKey: item.topic_key,
+        enabled: true,
+      })),
+    [popular.items],
+  );
+  const suggestions = useSuggestedQuestions(
+    chat.turns,
+    suggestionIdentityKey,
+    approvedSuggestions,
   );
   const submitSuggestedQuestion = (question: SuggestedQuestion) => {
     setRestoredDraft("");
@@ -136,8 +152,8 @@ export function WanshitongApp() {
         跳到主要内容
       </a>
       <div className="wst-toolbar">
-        <LegacyHistory />
-        {chat.historySessions.length > 0 && (
+        {chat.pageSettings.show_history && <LegacyHistory />}
+        {chat.pageSettings.show_history && chat.historySessions.length > 0 && (
           <details className="wst-history-menu">
             <summary>历史会话</summary>
             <div className="wst-history-list">
@@ -154,7 +170,10 @@ export function WanshitongApp() {
                 </button>
               ))}
               {chat.historyMoreCount > 0 && (
-                <p>当前仅显示最近 50 个会话，另有 {chat.historyMoreCount} 个较早会话。</p>
+                <p>
+                  当前仅显示最近 50 个会话，另有 {chat.historyMoreCount}{" "}
+                  个较早会话。
+                </p>
               )}
             </div>
           </details>
@@ -188,6 +207,9 @@ export function WanshitongApp() {
           busy={chat.busy}
           conversationId={chat.conversationId}
           initialQuestion={restoredDraft}
+          placeholder={chat.pageSettings.input_placeholder}
+          welcomeText={chat.pageSettings.welcome_text}
+          showRecommendations={chat.pageSettings.show_recommendations}
           onRefresh={suggestions.refresh}
           onPopularQuestionSubmit={submitPopularQuestion}
           onSuggestedQuestionSubmit={submitSuggestedQuestion}
@@ -201,6 +223,10 @@ export function WanshitongApp() {
           busy={chat.busy}
           conversationId={chat.conversationId}
           feedbackDetailsEnabled={chat.feedbackDetailsEnabled}
+          allowFeedback={chat.pageSettings.allow_feedback}
+          allowSourceDownload={chat.pageSettings.allow_source_download}
+          placeholder={chat.pageSettings.input_placeholder}
+          showRecommendations={chat.pageSettings.show_recommendations}
           initialQuestion={restoredDraft}
           onFeedback={chat.submitFeedback}
           onFeedbackLogin={chat.login}

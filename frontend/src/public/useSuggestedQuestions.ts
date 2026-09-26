@@ -1,36 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  SUGGESTED_QUESTIONS,
-  type SuggestedQuestion,
-  type SuggestedQuestionStyle,
+import type {
+  SuggestedQuestion,
+  SuggestedQuestionStyle,
 } from "./suggestedQuestions";
 import type { PublicTurn } from "./usePublicChat";
 
 const VISIBLE_COUNT = 5;
+const EMPTY_CATALOG: readonly SuggestedQuestion[] = [];
 const STYLE_QUOTAS: readonly [SuggestedQuestionStyle, number][] = [
   ["SHORT", 3],
   ["STANDARD", 1],
   ["COMPOUND", 1],
 ];
-
-// 暂不主动推荐模板问题；题池保留时仍允许用户自行提问。
-const TEMPLATE_DOCUMENT_IDS = new Set([
-  "DOCX-028",
-  "DOCX-029",
-  "DOCX-030",
-  "DOCX-031",
-  "DOCX-032",
-  "DOCX-033",
-  "DOCX-034",
-  "DOCX-035",
-  "DOCX-036",
-  "DOCX-037",
-  "DOCX-038",
-  "DOCX-039",
-  "DOCX-040",
-  "LEGACY-TEMPLATE",
-]);
 
 function questionKey(question: string): string {
   return question
@@ -125,23 +107,22 @@ export function pickSuggestedQuestions(
   previous: readonly SuggestedQuestion[],
   seenQuestionIds: ReadonlySet<string>,
   random: () => number = Math.random,
-  catalog: readonly SuggestedQuestion[] = SUGGESTED_QUESTIONS,
+  catalog: readonly SuggestedQuestion[] = EMPTY_CATALOG,
 ): SuggestedQuestion[] {
   const asked = new Set(askedQuestions.map(questionKey));
   const previousIds = new Set(previous.map((item) => item.id));
   const previousQuestions = new Set(
     previous.map((item) => questionKey(item.question)),
   );
-  const available = deduplicateQuestions(
+  const eligible = deduplicateQuestions(
     catalog
       .filter((item) => item.enabled)
-      .filter((item) => !TEMPLATE_DOCUMENT_IDS.has(item.documentId))
-      .filter((item) => !asked.has(questionKey(item.question)))
-      .filter(
-        (item) =>
-          !previousIds.has(item.id) &&
-          !previousQuestions.has(questionKey(item.question)),
-      ),
+      .filter((item) => !asked.has(questionKey(item.question))),
+  );
+  const available = eligible.filter(
+    (item) =>
+      !previousIds.has(item.id) &&
+      !previousQuestions.has(questionKey(item.question)),
   );
   const fresh = available.filter((item) => !seenQuestionIds.has(item.id));
   const selected: SuggestedQuestion[] = [];
@@ -150,16 +131,20 @@ export function pickSuggestedQuestions(
   if (selected.length < VISIBLE_COUNT) {
     addQuestionsFromPool(available, selected, random);
   }
+  if (selected.length < VISIBLE_COUNT) {
+    addQuestionsFromPool(eligible, selected, random);
+  }
   return selected;
 }
 
 export function useSuggestedQuestions(
   turns: readonly PublicTurn[],
   identityKey?: string,
+  catalog: readonly SuggestedQuestion[] = EMPTY_CATALOG,
   random: () => number = Math.random,
 ) {
   const [questions, setQuestions] = useState<readonly SuggestedQuestion[]>(() =>
-    pickSuggestedQuestions([], [], new Set(), random),
+    pickSuggestedQuestions([], [], new Set(), random, catalog),
   );
   const previousRef = useRef(questions);
   const seenQuestionIdsRef = useRef(new Set(questions.map((item) => item.id)));
@@ -168,13 +153,13 @@ export function useSuggestedQuestions(
   const identityKeyRef = useRef(identityKey);
 
   const reset = useCallback(() => {
-    const next = pickSuggestedQuestions([], [], new Set(), random);
+    const next = pickSuggestedQuestions([], [], new Set(), random, catalog);
     previousRef.current = next;
     seenQuestionIdsRef.current = new Set(next.map((item) => item.id));
     askedQuestionsRef.current.clear();
     rotatedTurnRef.current = "";
     setQuestions(next);
-  }, [random]);
+  }, [catalog, random]);
 
   const rotate = useCallback(
     (askedQuestions: readonly string[]) => {
@@ -183,13 +168,24 @@ export function useSuggestedQuestions(
         previousRef.current,
         seenQuestionIdsRef.current,
         random,
+        catalog,
       );
       previousRef.current = next;
       for (const item of next) seenQuestionIdsRef.current.add(item.id);
       setQuestions(next);
     },
-    [random],
+    [catalog, random],
   );
+
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => {
+      if (active) reset();
+    });
+    return () => {
+      active = false;
+    };
+  }, [reset]);
 
   useEffect(() => {
     if (!identityKey) {

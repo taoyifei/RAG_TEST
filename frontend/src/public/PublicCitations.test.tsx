@@ -188,3 +188,34 @@ it("原生引用的片段与原件分别使用明确入口", async () => {
     true,
   );
 });
+
+it("关闭原件下载时保留原生引用片段和依据，隐藏新旧原件入口", async () => {
+  const user = userEvent.setup();
+  render(
+    <PublicCitations
+      allowSourceDownload={false}
+      citations={[
+        citation(1, {
+          source_kind: "weknora",
+          reference_id: `ref_${"a".repeat(32)}`,
+          source_available: true,
+          original_available: true,
+        }),
+        citation(2, {
+          source_kind: "legacy",
+          reference_id: `ref_${"b".repeat(32)}`,
+        }),
+      ]}
+      onDownloadReference={() => Promise.resolve()}
+    />,
+  );
+  await user.click(screen.getByText("引用依据（2段）"));
+  for (const group of screen.getAllByRole("article")) {
+    const summary = group.querySelector(".wst-citation-heading");
+    if (summary) await user.click(summary);
+  }
+  expect(screen.getByRole("button", { name: "查看引用片段" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "下载原件" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "下载本次引用的原件" })).not.toBeInTheDocument();
+  expect(screen.getByText("合成证据片段 1")).toBeInTheDocument();
+});
