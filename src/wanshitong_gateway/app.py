@@ -25,6 +25,13 @@ from rag_app.wanshitong.public_models import (
     PublicFeedbackRequest,
 )
 from rag_app.wanshitong.shortcuts import SHORTCUT_CATALOG
+from wanshitong_gateway.admission import (
+    BoundedQaQueue,
+    QaSlot,
+    QueueClientDisconnectedError,
+    QueueFullError,
+    QueueWaitTimeoutError,
+)
 from wanshitong_gateway.auth import GatewayAuth, register_auth_routes
 from wanshitong_gateway.engine_settings import (
     EngineSettings,
@@ -161,6 +168,26 @@ def _recommendation_fields(body: _RecommendationRequest) -> dict[str, Any]:
     }
 
 
+async def _admit_qa(request: Request, queue: BoundedQaQueue) -> QaSlot:
+    """请求进入原生问答前取得容量，超额不创建会话或 Trace。"""
+    try:
+        return await queue.acquire(is_disconnected=request.is_disconnected)
+    except QueueFullError:
+        raise HTTPException(
+            status_code=429,
+            detail="公共问答等待队列已满，请稍后重试。",
+            headers={"Retry-After": "5"},
+        ) from None
+    except QueueWaitTimeoutError:
+        raise HTTPException(
+            status_code=429,
+            detail="公共问答排队超时，请稍后重试。",
+            headers={"Retry-After": "5"},
+        ) from None
+    except QueueClientDisconnectedError:
+        raise HTTPException(status_code=408, detail="请求已断开。") from None
+
+
 def create_app(  # noqa: PLR0913, PLR0915
     *,
     auth: GatewayAuth | None = None,
@@ -169,6 +196,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     native: WeKnoraClient | None = None,
     admin_native: NativeAdminClient | None = None,
     legacy: LegacyHistoryReader | None = None,
+    qa_queue: BoundedQaQueue | None = None,
 ) -> FastAPI:
     """构建不初始化旧 Parser、索引、检索或答案校验器的 ASGI 应用。"""
     auth = auth or GatewayAuth.from_settings(
@@ -199,6 +227,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         if legacy_db:
             legacy = LegacyHistoryReader(Path(legacy_db), Path(legacy_key))
     locks: dict[tuple[str, str], asyncio.Lock] = {}
+    qa_queue = qa_queue or BoundedQaQueue()
     public_app_save_lock = asyncio.Lock()
 
     @asynccontextmanager
@@ -584,6 +613,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         auth.require_admin(request)
         return {
             "engine": "weknora",
+            "qa_admission": qa_queue.snapshot(),
             **store.ops_summary(deployment_id=auth.settings.deployment_id),
         }
 
@@ -917,7 +947,9 @@ def create_app(  # noqa: PLR0913, PLR0915
         if lock.locked():
             raise HTTPException(status_code=409, detail="conversation busy")
         await lock.acquire()
+        slot: QaSlot | None = None
         try:
+            slot = await _admit_qa(request, qa_queue)
             native_session_id = store.native_session(
                 deployment_id=auth.settings.deployment_id,
                 owner_id=owner_id,
@@ -947,19 +979,34 @@ def create_app(  # noqa: PLR0913, PLR0915
                 kb_scope=kb_ids,
             )
         except NativeHttpError as error:
+            if slot is not None:
+                slot.release()
             lock.release()
             raise HTTPException(
                 status_code=502, detail=f"native status {error.status_code}"
             ) from None
-        except Exception:
+        except BaseException:
+            if slot is not None:
+                slot.release()
             lock.release()
             raise
+        assert slot is not None
 
         bridge = BridgeStream(
             trace_id=trace_id,
             session_id=native_session_id,
             reference_mapper=_reference_mapper(store, trace_id),
         )
+        released = False
+
+        def release_stream() -> None:
+            nonlocal released
+            if not released:
+                released = True
+                try:
+                    lock.release()
+                finally:
+                    slot.release()
 
         async def generate() -> AsyncIterator[bytes]:  # noqa: PLR0912, PLR0915 - 单次流的终态统一落库。
             status = "streaming"
@@ -1078,11 +1125,12 @@ def create_app(  # noqa: PLR0913, PLR0915
                         finish_reason=bridge.finish_reason,
                     )
                 finally:
-                    lock.release()
+                    release_stream()
 
         return StreamingResponse(
             generate(),
             media_type="text/event-stream",
+            background=BackgroundTask(release_stream),
             headers={
                 "Cache-Control": "no-cache, no-store",
                 "X-Accel-Buffering": "no",
@@ -1113,16 +1161,31 @@ def create_app(  # noqa: PLR0913, PLR0915
         if lock.locked():
             raise HTTPException(status_code=409, detail="conversation busy")
         await lock.acquire()
+        slot: QaSlot | None = None
         try:
+            slot = await _admit_qa(request, qa_queue)
             store.mark_recovering(trace_id=trace_id, owner_id=owner_id)
-        except Exception:
+        except BaseException:
+            if slot is not None:
+                slot.release()
             lock.release()
             raise
+        assert slot is not None
         bridge = BridgeStream(
             trace_id=trace_id,
             session_id=str(turn["native_session_id"]),
             reference_mapper=_reference_mapper(store, trace_id),
         )
+        released = False
+
+        def release_recovery_stream() -> None:
+            nonlocal released
+            if not released:
+                released = True
+                try:
+                    lock.release()
+                finally:
+                    slot.release()
 
         async def generate_recovery() -> AsyncIterator[bytes]:  # noqa: PLR0912 - 按原生终态封存同一轮。
             status = "disconnected"
@@ -1212,11 +1275,12 @@ def create_app(  # noqa: PLR0913, PLR0915
                         or turn["finish_reason"],
                     )
                 finally:
-                    lock.release()
+                    release_recovery_stream()
 
         return StreamingResponse(
             generate_recovery(),
             media_type="text/event-stream",
+            background=BackgroundTask(release_recovery_stream),
             headers={
                 "Cache-Control": "no-cache, no-store",
                 "X-Accel-Buffering": "no",

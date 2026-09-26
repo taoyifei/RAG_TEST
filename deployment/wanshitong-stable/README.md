@@ -33,7 +33,7 @@ Compose 对所有运行镜像使用 `pull_policy: never`，没有 `build:`，不
 
 `WST_SSO_ENTRIES` 来自现场登记的 8289 入口；候选 Origin、回调和 `RAG_TRUSTED_ORIGINS` 必须一致。现场用真实 RDMS Ticket 与验证码完成了公共用户登录，没有伪造 Ticket。60 不能直连 RDMS，故使用 60 上专用 `wst-weknora-sso-relay.service` 经 54 的受限 SSH 端口转发访问验证接口，服务已启用并可自动重连。专用私钥只留在 60 的候选 Secret 目录；54 的对应公钥仅允许来自 60 且只准转发 RDMS 指定端口。SSH 服务、Docker 候选网络或 RDMS 地址变更时，必须先检查中继状态和登录，再继续发布。workspace API Key、外部主体签名 Key 与原生管理账号均为候选独立配置；管理浏览器只持有湾事通管理 Cookie，不持有原生 JWT。
 
-原生模型、embedding、reranker、OCR 的连接信息由 WeKnora 管理配置负责。`WST_ALLOWED_MODEL_HOSTS` 填经现场核实的内网主机白名单。`model-egress` 网络只给原生 app 访问内网模型；Docker 网络本身不保证禁止公网，60 主机须用出站策略限制它。Docreader 只在内部网络；默认不启用 ODL hybrid、沙箱、联网、MCP、图谱或 Langfuse。现场 Qwen3-8B-AWQ 物理上下文为 8192；原生候选配置将 `max_completion_tokens/max_output_tokens` 设为 2048、`rerank_top_k` 设为 3 后，原先触发 400 的真实问题可完成。这个额度只配置 WeKnora 原生模型请求，湾事通网关和前端不裁剪问题或答案；内容质量仍须逐题核查。`CONCURRENCY_POOL_SIZE=4` 不是共享模型全局四并发保证，仍须测原生额外模型调用和旧服务共享负载。
+原生模型、embedding、reranker、OCR 的连接信息由 WeKnora 管理配置负责。`WST_ALLOWED_MODEL_HOSTS` 填经现场核实的内网主机白名单。`model-egress` 网络只给原生 app 访问内网模型；Docker 网络本身不保证禁止公网，60 主机须用出站策略限制它。Docreader 只在内部网络；默认不启用 ODL hybrid、沙箱、联网、MCP、图谱或 Langfuse。现场 Qwen3-8B-AWQ 物理上下文为 8192；原生候选配置将 `max_completion_tokens/max_output_tokens` 设为 2048、`rerank_top_k` 设为 3 后，原先触发 400 的真实问题可完成。这个额度只配置 WeKnora 原生模型请求，湾事通网关和前端不裁剪问题或答案；内容质量仍须逐题核查。当前单进程网关的公共问答流和续流按 4 运行、8 等待准入，第 13 条返回 429，等待超过 300 秒也返回 429。`CONCURRENCY_POOL_SIZE=4` 不是公共问答或共享模型的容量控制；网关队列也不限制原生后台任务和其他应用对共享模型的调用，仍须测额外模型调用和旧服务共享负载。
 
 ### 候选图片与扫描件解析
 
