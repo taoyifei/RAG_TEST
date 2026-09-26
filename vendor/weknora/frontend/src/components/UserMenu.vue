@@ -99,6 +99,10 @@
           <t-icon name="setting" class="menu-icon" />
           <span>{{ $t('general.allSettings') }}</span>
         </div>
+        <div v-if="WANSHITONG_GATEWAY_AUTH" class="menu-item" @click="openWanshitongOps">
+          <t-icon name="chart" class="menu-icon" />
+          <span>湾事通运营管理</span>
+        </div>
         <!--
           System administration entry — visible only to users with the
           platform-wide is_system_admin flag. Hidden for everyone else,
@@ -503,6 +507,11 @@ const openDocs = () => {
 const openGithub = () => {
   menuVisible.value = false
   window.open('https://github.com/Tencent/WeKnora', '_blank')
+}
+
+const openWanshitongOps = () => {
+  menuVisible.value = false
+  window.location.assign('/kb/admin/ops/')
 }
 
 // 注销
