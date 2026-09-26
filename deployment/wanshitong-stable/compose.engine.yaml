@@ -38,7 +38,7 @@ services:
       LANGFUSE_ENABLED: "false"
       SSRF_DNS_WHITELIST_ONLY: "true"
       SSRF_WHITELIST: ${WST_ALLOWED_MODEL_HOSTS:?必须填内网模型服务主机白名单}
-      SSRF_WHITELIST_EXTRA: docreader
+      SSRF_WHITELIST_EXTRA: docreader,rerank-adapter
       CONCURRENCY_POOL_SIZE: "4"
       WEKNORA_MODEL_MAX_CONCURRENCY: "1"
     secrets:
