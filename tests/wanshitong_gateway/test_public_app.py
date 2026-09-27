@@ -59,6 +59,7 @@ class _NativeState:
         self.full_access = False
         self.requests: list[httpx.Request] = []
         self.fail_create = False
+        self.missing_intent_template = False
         self.session_count = 0
 
     def respond(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911 - 测试替身逐条模拟固定接口。
@@ -67,6 +68,31 @@ class _NativeState:
         if path == "/api/v1/auth/login":
             return httpx.Response(
                 200, json={"success": True, "token": "test-admin-token"}
+            )
+        if path == "/api/v1/tenants/kv/prompt-templates":
+            intent_ids = (
+                "greeting", "chitchat", "follow_up", "image_only",
+                "summarize", "web_search", "doc_only",
+            )
+            if self.missing_intent_template:
+                intent_ids = intent_ids[:-1]
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": {
+                        "intent_prompts": [
+                            {
+                                "id": intent_id,
+                                "content": (
+                                    "You are WeKnora, developed by Tencent.\n"
+                                    f"Native instructions for {intent_id}."
+                                ),
+                            }
+                            for intent_id in intent_ids
+                        ]
+                    },
+                },
             )
         if path == "/api/v1/tenants/8/api-keys":
             return httpx.Response(
@@ -337,6 +363,16 @@ def test_publish_model_and_kb_changes_next_public_chat(
         ]
         assert state.agents[_AGENT_ID_A]["config"]["model_id"] == "model-a"
         assert state.agents[_AGENT_ID_B]["config"]["model_id"] == "model-b"
+        intent_prompts = state.agents[_AGENT_ID_A]["config"]["intent_prompts"]
+        assert set(intent_prompts) == {
+            "greeting", "chitchat", "follow_up", "image_only",
+            "summarize", "web_search", "doc_only",
+        }
+        assert intent_prompts["chitchat"] == (
+            "你是湾事通（Wanshitong），中国移动（广东）湾区研究院（GMCII）的知识库问答助手。\n"
+            "Native instructions for chitchat."
+        )
+        assert state.agents[_AGENT_ID_A]["config"]["system_prompt"] == "已核实系统提示"
         assert browser.get("/kb/api/admin/public-app").json()["revision"] == 2
     with TestClient(_app(tmp_path, state, store)) as restarted:
         assert (
@@ -430,6 +466,48 @@ def test_publish_requires_scoped_key_and_prompt_snapshot(
         ).status_code == 422
         assert store.public_app(deployment_id="candidate") is None
         assert not state.agents
+
+
+def test_publish_does_not_replace_agent_when_intent_templates_are_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda _app, _auth: None
+    )
+    state = _NativeState()
+    state.missing_intent_template = True
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    with TestClient(_app(tmp_path, state, store)) as browser:
+        response = browser.put(
+            "/kb/api/admin/public-app",
+            json=_save_body(revision=0, model_id="model-a", kb_ids=["kb-old"]),
+        )
+        assert response.status_code == 502
+        assert store.public_app(deployment_id="candidate") is None
+        assert not state.agents
+
+
+def test_loading_native_default_prompt_keeps_public_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda _app, _auth: None
+    )
+    state = _NativeState()
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    body = _save_body(revision=0, model_id="model-a", kb_ids=["kb-old"])
+    body["answer_settings"]["system_prompt"] = (
+        "You are WeKnora, a knowledge-base question-answering assistant "
+        "developed by Tencent.\n"
+        "Keep the native grounding guidance."
+    )
+    with TestClient(_app(tmp_path, state, store)) as browser:
+        response = browser.put("/kb/api/admin/public-app", json=body)
+        assert response.status_code == 200, response.text
+        assert state.agents[_AGENT_ID_A]["config"]["system_prompt"] == (
+            "你是湾事通（Wanshitong），中国移动（广东）湾区研究院（GMCII）的知识库问答助手。\n"
+            "Keep the native grounding guidance."
+        )
 
 
 def test_drift_requires_explicit_rebuild_without_reusing_old_agent(

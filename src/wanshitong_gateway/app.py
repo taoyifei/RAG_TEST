@@ -45,6 +45,8 @@ from wanshitong_gateway.public_app import (
     PageSettings,
     SavePublicAppRequest,
     answer_from_config,
+    branded_intent_prompts,
+    branded_system_prompt,
     config_digest,
     uses_public_scope,
     validate_binding,
@@ -378,9 +380,20 @@ def create_app(  # noqa: PLR0913, PLR0915
                             status_code=422,
                             detail="selected model is unavailable",
                         )
+                templates = await admin_native.json_request(
+                    "GET", "api/v1/tenants/kv/prompt-templates"
+                )
+                answer_settings = body.answer_settings.model_copy(
+                    update={
+                        "system_prompt": branded_system_prompt(
+                            body.answer_settings.system_prompt
+                        ),
+                        "intent_prompts": branded_intent_prompts(templates),
+                    }
+                )
                 if (
                     current is not None
-                    and old_answer == body.answer_settings
+                    and old_answer == answer_settings
                     and current["knowledge_base_ids"] == kb_ids
                 ):
                     agent_id = current["native_agent_id"]
@@ -395,7 +408,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                                 f"{secrets.token_hex(4)}"
                             ),
                             "description": "湾事通公共问答应用的已发布配置",
-                            "config": body.answer_settings.native_config(
+                            "config": answer_settings.native_config(
                                 kb_ids
                             ),
                         },
@@ -414,7 +427,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                         readback.get("id") != agent_id
                         or readback.get("tenant_id") != engine.tenant_id
                         or not isinstance(config, dict)
-                        or answer_from_config(config) != body.answer_settings
+                        or answer_from_config(config) != answer_settings
                         or not uses_public_scope(config, kb_ids)
                     ):
                         raise NativeHttpError(
@@ -465,8 +478,8 @@ def create_app(  # noqa: PLR0913, PLR0915
                 "native_agent_id": agent_id,
                 "knowledge_base_ids": list(kb_ids),
                 "legacy_kb_ids": list(engine.public_kb_ids),
-                "model_id": body.answer_settings.model_id,
-                "answer_settings": body.answer_settings.model_dump(),
+                "model_id": answer_settings.model_id,
+                "answer_settings": answer_settings.model_dump(),
                 "page_settings": saved["page_settings"],
                 "updated_at": saved["updated_at"],
             }

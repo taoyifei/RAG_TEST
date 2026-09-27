@@ -19,6 +19,20 @@ from wanshitong_gateway.weknora.client import NativeHttpError, WeKnoraClient
 
 APPLICATION_ID = "wanshitong-public"
 APPLICATION_NAME = "湾事通用户问答"
+PUBLIC_IDENTITY_LINE = (
+    "你是湾事通（Wanshitong），中国移动（广东）湾区研究院（GMCII）的知识库问答助手。"
+)
+_INTENT_IDS = frozenset(
+    {
+        "greeting",
+        "chitchat",
+        "follow_up",
+        "image_only",
+        "summarize",
+        "web_search",
+        "doc_only",
+    }
+)
 _MAX_KB_ID_LENGTH = 128
 
 
@@ -64,6 +78,7 @@ class AnswerSettings(BaseModel):
     fallback_strategy: Literal["fixed", "model"]
     fallback_response: str
     fallback_prompt: str
+    intent_prompts: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def require_prompt_snapshot(self) -> Self:
@@ -130,6 +145,35 @@ def config_digest(config: dict[str, Any]) -> str:
         config, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def branded_system_prompt(prompt: str) -> str:
+    """管理员载入原生默认模板时，避免保存后恢复原厂身份首句。"""
+    first_line, separator, remainder = prompt.partition("\n")
+    if first_line.startswith("You are WeKnora"):
+        return PUBLIC_IDENTITY_LINE + separator + remainder
+    return prompt
+
+
+def branded_intent_prompts(templates: dict[str, Any]) -> dict[str, str]:
+    """保留原生非检索意图的行为指令，仅替换其首行产品身份。"""
+    source = templates.get("intent_prompts")
+    if not isinstance(source, list):
+        raise NativeHttpError(502, "原生意图提示词模板不可用。")
+    result: dict[str, str] = {}
+    for item in source:
+        if not isinstance(item, dict) or item.get("id") not in _INTENT_IDS:
+            continue
+        content = item.get("content")
+        if not isinstance(content, str):
+            raise NativeHttpError(502, "原生意图提示词正文无效。")
+        first_line, separator, remainder = content.partition("\n")
+        if not separator or not first_line.startswith("You are WeKnora"):
+            raise NativeHttpError(502, "原生意图提示词身份格式已变化。")
+        result[item["id"]] = PUBLIC_IDENTITY_LINE + separator + remainder
+    if result.keys() != _INTENT_IDS:
+        raise NativeHttpError(502, "原生意图提示词不完整。")
+    return result
 
 
 def answer_from_config(config: dict[str, Any]) -> AnswerSettings:

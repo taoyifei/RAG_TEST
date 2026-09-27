@@ -84,6 +84,8 @@ docker build --network=none --pull=false -f Dockerfile.edge \
 
 2026-09-28 的生产管理页布局修复使用 `Dockerfile.edge-layout-hotfix`：以已验收的 edge 镜像 ID 为基础，在仅含该 Dockerfile、`nginx.conf` 和 `wst-admin-layout-20260928.css` 的最小上下文离线构建；新镜像只增加管理页 CSS，并保留原 JavaScript。其固定版源码的 Vue 类型检查通过，但完整构建因仓库缺少 `src/views/artifacts/ArtifactLibrary.vue` 失败，因此后续完整重构建前应先补齐该依赖，再核对管理入口脚本。生产现行镜像与回退入口见[发布门禁](PILOT-RELEASE-GATE.md)和[切流手册](PILOT-CUTOVER-ROLLBACK.md)。
 
+2026-09-28 的身份提示词修复使用 `Dockerfile.gateway-intent-hotfix`：以现行不可变网关镜像 ID 为基础，只叠加 `src/wanshitong_gateway/app.py` 与 `public_app.py`。在受控构建目录中将两份源码与该 Dockerfile 放在同一级，以 `WST_GATEWAY_BASE_IMAGE` 指定已验收网关的完整 Image ID，使用 `docker build --network=none --pull=false` 离线构建。部署时仅更新 `.env` 中的 `WST_GATEWAY_IMAGE` 为新完整 Image ID，先备份原 `.env` 和网关 SQLite，再用原项目、原三份 Compose 文件执行 `up -d --no-deps --force-recreate gateway`。发布公共应用后回读 `ACTIVE`、修订版和七类 `intent_prompts`，并从正式入口验证 RDMS 登录及实际问答。回退镜像时恢复原 `.env` 的镜像引用并只重建网关；原有数据库和卷不得直接删除。现场镜像、配置与问答结果见[发布门禁](PILOT-RELEASE-GATE.md)。
+
 ## 只读配置校验与启动边界
 
 在 60 主机先盘点 `docker ps`、镜像引用、卷、网络、端口、真实回调与模型容量。现场已在保留旧版后切换测试 8289；`WST_BIND_IP=127.0.0.1`，经 54 的既有测试转发对外可见，不改 18288 路由。

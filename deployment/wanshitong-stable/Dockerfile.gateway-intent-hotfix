@@ -1,0 +1,9 @@
+# 基于当前生产网关固定镜像，只替换公共应用发布与路由代码。
+ARG WST_GATEWAY_BASE_IMAGE
+FROM ${WST_GATEWAY_BASE_IMAGE}
+
+USER root
+COPY app.py public_app.py /opt/wst/src/wanshitong_gateway/
+RUN chmod 644 /opt/wst/src/wanshitong_gateway/app.py \
+    /opt/wst/src/wanshitong_gateway/public_app.py
+USER 10001:10001
