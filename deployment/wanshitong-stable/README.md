@@ -73,7 +73,7 @@ docker build --network=none --pull=false \
   -t wst-gateway-candidate:v1 .
 ```
 
-`Dockerfile.edge` 只复制预构建静态产物。React 的 `frontend/dist/` 应以现有 `base: "./"` 构建；Vue 使用当前分支白标源码并以 `/kb/admin/` 为 Vite base 构建。先在受控构建机完成 `npm ci`/构建所需离线依赖准备，再将两份 `dist` 放入本目录的 `build-context/react/` 与 `build-context/vue/`（此目录被忽略）。检查 `index.html` 的资源路径后，在本目录离线构建：
+`Dockerfile.edge` 只复制预构建静态产物。React 的 `frontend/dist/` 应以现有 `base: "./"` 构建；Vue 使用当前分支白标源码并以 `/kb/admin/` 为 Vite base 构建。先在受控构建机完成 `npm ci`/构建所需离线依赖准备，再将两份 `dist` 放入本目录的 `build-context/react/` 与 `build-context/vue/`（此目录被忽略）。检查 `index.html` 的资源路径后，在本目录离线构建。构建时会检查 `index.html` 实际引用的管理入口脚本是否含统一后台的登录与用户端设置路由，防止旧静态产物通过构建后让管理员跳回旧运营页：
 
 ```sh
 docker build --network=none --pull=false -f Dockerfile.edge \
