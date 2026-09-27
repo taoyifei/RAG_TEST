@@ -1,6 +1,6 @@
 # 湾事通 × WeKnora 部署
 
-**2026-09-27 当前状态：有限生产试用已接入 `http://10.242.180.54:18288/`。** 原 8289 候选的核心网关与 WeKnora 已提升为生产使用；54:8289 转发和 60 的测试入口已暂停。正式入口另用 60:18291 前端和 60:8288 根别名代理，旧生产服务及其镜像、数据保留。现场验收、剩余容量与恢复限制见[发布门禁](PILOT-RELEASE-GATE.md)，现行链路和回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。用户端未新增试用说明文字。
+**2026-09-28 当前状态：有限生产试用已接入 `http://10.242.180.54:18288/`。** 原 8289 候选的核心网关与 WeKnora 已提升为生产使用；54:8289 转发和 60 的测试入口已暂停。正式入口现用 60:18293 前端和 60:8288 根别名代理，旧 60:18291 前端、旧生产服务及其镜像、数据保留。现场验收、剩余容量与恢复限制见[发布门禁](PILOT-RELEASE-GATE.md)，现行链路和回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。用户端未新增试用说明文字。
 
 此目录原用于隔离候选部署，下面的构建和候选验收记录保留其形成过程。`compose.engine.yaml` 是 WeKnora 原生服务；叠加 `compose.wrapper.yaml` 后，由湾事通网关和同源静态入口提供 React 用户页、白标 Vue 管理页。湾事通只处理已有身份、会话映射、权限、SSE 传输和引用访问，问答、解析、分块、检索、重排、生成与模型配置使用同一套 WeKnora。原生 `app`、Docreader、PostgreSQL、Redis 均不发布宿主端口，浏览器无法直连原生 `/api/v1`。
 
@@ -81,6 +81,8 @@ docker build --network=none --pull=false -f Dockerfile.edge \
 ```
 
 `Dockerfile.edge` 的 Nginx 基础镜像 digest 与固定版上游 `frontend/Dockerfile` 一致。不得把原版 B 的未白标 UI 镜像直接作为候选界面。对两个新镜像记录最终 image ID/RepoDigest、构建输入 hash，并在 `.env` 填 `WST_GATEWAY_IMAGE`、`WST_EDGE_IMAGE` 的不可变引用；只有本地浮动 tag 时不得进入发布验收。
+
+2026-09-28 的生产管理页布局修复使用 `Dockerfile.edge-layout-hotfix`：以已验收的 edge 镜像 ID 为基础，在仅含该 Dockerfile、`nginx.conf` 和 `wst-admin-layout-20260928.css` 的最小上下文离线构建；新镜像只增加管理页 CSS，并保留原 JavaScript。其固定版源码的 Vue 类型检查通过，但完整构建因仓库缺少 `src/views/artifacts/ArtifactLibrary.vue` 失败，因此后续完整重构建前应先补齐该依赖，再核对管理入口脚本。生产现行镜像与回退入口见[发布门禁](PILOT-RELEASE-GATE.md)和[切流手册](PILOT-CUTOVER-ROLLBACK.md)。
 
 ## 只读配置校验与启动边界
 
