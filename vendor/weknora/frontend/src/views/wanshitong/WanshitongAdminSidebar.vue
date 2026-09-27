@@ -72,6 +72,7 @@ async function logout() {
 
 <style scoped>
 .wst-admin-sidebar {
+  box-sizing: border-box;
   width: 238px;
   min-width: 238px;
   display: flex;

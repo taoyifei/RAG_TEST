@@ -366,7 +366,7 @@ void loadBase()
 </script>
 
 <style scoped>
-.wst-ops-view { width: 100%; min-height: 0; overflow-y: auto; padding: 32px clamp(20px, 4vw, 52px) 56px; color: #274059; }
+.wst-ops-view { box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; overflow-y: auto; padding: 32px clamp(20px, 4vw, 52px) 56px; color: #274059; }
 .wst-page-head, .wst-panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
 .wst-page-head { margin-bottom: 24px; }
 .wst-eyebrow { margin: 0 0 5px; color: #477795; font-size: var(--app-text-sm); font-weight: 650; letter-spacing: .06em; }
@@ -380,7 +380,7 @@ h1 { margin: 0; font-size: var(--app-text-4xl); line-height: 1.3; } h2 { margin:
 .wst-metric strong { display: block; margin-top: 8px; color: #173e5e; font-size: var(--app-text-4xl); }
 .wst-metrics-small { margin-top: 18px; }
 .wst-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, 1fr); gap: 18px; }
-.wst-panel { padding: 23px; margin-bottom: 18px; }
+.wst-panel { min-width: 0; padding: 23px; margin-bottom: 18px; }
 .wst-panel-heading a, .wst-link-button { color: #12658f; }
 .wst-link-list { display: grid; gap: 8px; }
 .wst-link-list a { display: flex; justify-content: space-between; padding: 11px 13px; border-radius: var(--app-radius-md); background: #f2f7fb; color: #285976; text-decoration: none; }

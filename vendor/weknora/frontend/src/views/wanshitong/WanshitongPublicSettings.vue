@@ -348,7 +348,7 @@ void reload()
 </script>
 
 <style scoped>
-.wst-public-settings { width: 100%; min-height: 0; overflow-y: auto; padding: 32px clamp(20px, 4vw, 52px) 56px; color: #274059; }
+.wst-public-settings { box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; overflow-y: auto; padding: 32px clamp(20px, 4vw, 52px) 56px; color: #274059; }
 .wst-page-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .wst-eyebrow { margin: 0 0 5px; color: #477795; font-size: var(--app-text-sm); font-weight: 650; letter-spacing: .06em; }
 h1 { margin: 0; font-size: var(--app-text-4xl); } h2 { margin: 0 0 10px; font-size: var(--app-text-2xl); }
@@ -362,15 +362,15 @@ h1 { margin: 0; font-size: var(--app-text-4xl); } h2 { margin: 0 0 10px; font-si
 .wst-tabs { display: flex; gap: 3px; border-bottom: 1px solid #dce7ef; margin-bottom: 18px; }
 .wst-tabs button { padding: 11px 17px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #687f93; cursor: pointer; }
 .wst-tabs button.active { border-bottom-color: #176c9a; color: #155b83; font-weight: 650; }
-.wst-panel { padding: 24px; border: 1px solid #e0e8f0; border-radius: var(--app-radius-md); background: white; }
+.wst-panel { min-width: 0; padding: 24px; border: 1px solid #e0e8f0; border-radius: var(--app-radius-md); background: white; }
 .wst-kb-list { display: grid; gap: 8px; margin-top: 17px; }
 .wst-kb-row { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid #e2eaf1; border-radius: var(--app-radius-md); cursor: pointer; }
 .wst-kb-row:hover { background: #f7fbfd; }
 .wst-kb-row small { display: block; margin-top: 3px; color: #8294a3; }
 .wst-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 18px 0; }
-.wst-field-grid label, .wst-field { display: grid; gap: 6px; color: #526b80; font-size: var(--app-text-md); }
+.wst-field-grid label, .wst-field { display: grid; min-width: 0; gap: 6px; color: #526b80; font-size: var(--app-text-md); }
 .wst-field { margin: 15px 0; }
-input:not([type=checkbox]), select, textarea { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid #cad9e5; border-radius: var(--app-radius-md); font: inherit; color: #274059; }
+input:not([type=checkbox]), select, textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; border: 1px solid #cad9e5; border-radius: var(--app-radius-md); font: inherit; color: #274059; }
 textarea { resize: vertical; }
 .wst-switches { display: flex; flex-wrap: wrap; gap: 18px; margin: 15px 0; }
 .wst-switches label, .wst-verify { display: flex; align-items: center; gap: 8px; color: #465f75; }

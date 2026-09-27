@@ -1,0 +1,24 @@
+/* 固定版管理端静态资源的宽度修复；源码中的对应样式供下次完整构建使用。 */
+.wst-admin-sidebar {
+  box-sizing: border-box;
+}
+
+.wst-public-settings,
+.wst-ops-view {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.wst-public-settings .wst-panel,
+.wst-ops-view .wst-panel,
+.wst-public-settings .wst-field-grid label,
+.wst-public-settings .wst-field {
+  min-width: 0;
+}
+
+.wst-public-settings input:not([type=checkbox]),
+.wst-public-settings select,
+.wst-public-settings textarea {
+  box-sizing: border-box;
+  min-width: 0;
+}
