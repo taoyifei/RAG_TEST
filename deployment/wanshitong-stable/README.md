@@ -1,10 +1,10 @@
-# 湾事通 × WeKnora 隔离候选部署
+# 湾事通 × WeKnora 部署
 
-2026-09-26 正式入口试用预检结论为 **`BLOCKED_BY_INTEGRATION_OR_DEPLOYMENT`**；本轮仅更新 8289。当前证据与未通过门禁见[发布门禁](PILOT-RELEASE-GATE.md)，拟定试用范围见[试用范围](PILOT-SCOPE.md)，正式入口的准备与回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。用户端未新增试用说明文字。
+**2026-09-27 当前状态：有限生产试用已接入 `http://10.242.180.54:18288/`。** 原 8289 候选的核心网关与 WeKnora 已提升为生产使用；54:8289 转发和 60 的测试入口已暂停。正式入口另用 60:18291 前端和 60:8288 根别名代理，旧生产服务及其镜像、数据保留。现场验收、剩余容量与恢复限制见[发布门禁](PILOT-RELEASE-GATE.md)，现行链路和回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。用户端未新增试用说明文字。
 
-此目录定义并部署测试候选栈，不执行生产入口切换。`compose.engine.yaml` 是 WeKnora 原生服务；叠加 `compose.wrapper.yaml` 后，由湾事通网关和同源静态入口提供 React 用户页、白标 Vue 管理页。湾事通只处理已有身份、会话映射、权限、SSE 传输和引用访问，问答、解析、分块、检索、重排、生成与模型配置使用同一套 WeKnora。原生 `app`、Docreader、PostgreSQL、Redis 均不发布宿主端口，浏览器无法直连原生 `/api/v1`。
+此目录原用于隔离候选部署，下面的构建和候选验收记录保留其形成过程。`compose.engine.yaml` 是 WeKnora 原生服务；叠加 `compose.wrapper.yaml` 后，由湾事通网关和同源静态入口提供 React 用户页、白标 Vue 管理页。湾事通只处理已有身份、会话映射、权限、SSE 传输和引用访问，问答、解析、分块、检索、重排、生成与模型配置使用同一套 WeKnora。原生 `app`、Docreader、PostgreSQL、Redis 均不发布宿主端口，浏览器无法直连原生 `/api/v1`。
 
-2026-09-26 的现场测试入口是 `http://10.242.180.54:8289/kb/`，由 54 的原测试转发进入 60 上独立候选栈。原 8289 应用容器已停止但保留（`14c0f9a42c14`），原镜像 `sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06`、数据及切换前 SQLite 快照均保留。生产 `54:18288`、`60:18288`、`60:18290` 及其镜像不在本目录的操作范围内。具体结果和未完成项见 [验收记录](ACCEPTANCE-20260926.md)。
+2026-09-26 的现场测试入口是 `http://10.242.180.54:8289/kb/`，由 54 的原测试转发进入 60 上独立候选栈。原 8289 应用容器已停止但保留（`14c0f9a42c14`），原镜像 `sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06`、数据及切换前 SQLite 快照均保留。该段为候选阶段的历史记录；当前正式入口及暂停状态以[切流手册](PILOT-CUTOVER-ROLLBACK.md)为准。
 
 源码分支 `wanshitong-stable` 最终交付时在 `/home/jerry/work/RAG` 检出，VS Code 可直接在原目录查看。此前独立工作目录 `/home/jerry/work/RAG-wanshitong-stable` 保留为 detached HEAD 快照；Git 不允许同一分支同时在两个 worktree 中检出。
 
@@ -31,13 +31,13 @@ Compose 对所有运行镜像使用 `pull_policy: never`，没有 `build:`，不
 
 启用包装层时还需 `sso_client_secret`、`gateway_master_key`、`gateway_admin_bootstrap_token`、`workspace_api_key`、`external_signing_key`、`weknora_admin_password`、`legacy_master_key`。网关代码要求密钥文件为非 symlink、仅所有者可读；候选镜像以 UID 10001 运行，现场这些文件由 UID 10001 所有、权限 `0600`。Compose 使用逐文件只读 bind mount 且禁止自动创建缺失源路径。`WST_WEKNORA_TENANT_ID` 是原生真实正整数，`WST_PUBLIC_KB_IDS` 是已发布的非空原生 KB 列表；空范围拒绝启动。旧版记录只读访问独立的切换前 SQLite 快照和旧主密钥，不继续旧会话，也不调用旧算法。
 
-`WST_SSO_ENTRIES` 来自现场登记的 8289 入口；候选 Origin、回调和 `RAG_TRUSTED_ORIGINS` 必须一致。现场用真实 RDMS Ticket 与验证码完成了公共用户登录，没有伪造 Ticket。60 不能直连 RDMS，故使用 60 上专用 `wst-weknora-sso-relay.service` 经 54 的受限 SSH 端口转发访问验证接口，服务已启用并可自动重连。专用私钥只留在 60 的候选 Secret 目录；54 的对应公钥仅允许来自 60 且只准转发 RDMS 指定端口。SSH 服务、Docker 候选网络或 RDMS 地址变更时，必须先检查中继状态和登录，再继续发布。workspace API Key、外部主体签名 Key 与原生管理账号均为候选独立配置；管理浏览器只持有湾事通管理 Cookie，不持有原生 JWT。
+当前 `WST_SSO_ENTRIES`、Origin 与回调对齐 54:18288。验证地址使用已通过真实登录的中继 `192.168.48.1:42100`；旧生产验证地址 `172.24.7.172:21000` 从 60 连接超时。60 上专用 `wst-weknora-sso-relay.service` 经 54 的受限 SSH 端口转发访问验证接口；SSH 服务、Docker 网络或 RDMS 地址变更时，先检查中继状态和登录。专用私钥只留在受限 Secret 目录；管理浏览器只持有湾事通管理 Cookie，不持有原生 JWT。
 
 原生模型、embedding、reranker、OCR 的连接信息由 WeKnora 管理配置负责。`WST_ALLOWED_MODEL_HOSTS` 填经现场核实的内网主机白名单。`model-egress` 网络只给原生 app 访问内网模型；Docker 网络本身不保证禁止公网，60 主机须用出站策略限制它。Docreader 只在内部网络；默认不启用 ODL hybrid、沙箱、联网、MCP、图谱或 Langfuse。现场 Qwen3-8B-AWQ 物理上下文为 8192；原生候选配置将 `max_completion_tokens/max_output_tokens` 设为 2048、`rerank_top_k` 设为 3 后，原先触发 400 的真实问题可完成。这个额度只配置 WeKnora 原生模型请求，湾事通网关和前端不裁剪问题或答案；内容质量仍须逐题核查。当前单进程网关的公共问答流和续流按 4 运行、8 等待准入，第 13 条返回 429，等待超过 300 秒也返回 429。`CONCURRENCY_POOL_SIZE=4` 不是公共问答或共享模型的容量控制；网关队列也不限制原生后台任务和其他应用对共享模型的调用，仍须测额外模型调用和旧服务共享负载。
 
 ### 候选图片与扫描件解析
 
-`compose.ocr.yaml` 只用于 8289 候选项目。它在 `engine` 内网启动官方 PaddleOCR-VL 版面解析 API 和配套视觉推理服务，不发布宿主端口；默认分别限定到 60 的第 2、3 张 GPU。镜像须先离线加载，并把核验后的不可变 `sha256:<Image ID>` 写入候选 `.env` 的 `WST_PADDLEOCR_VL_IMAGE`、`WST_PADDLEOCR_VLM_IMAGE`。可用 `WST_PADDLEOCR_PIPELINE_GPU`、`WST_PADDLEOCR_VLM_GPU` 调整设备。视觉推理服务的显存占用参数见 `config/paddleocr-vlm-vllm.yaml`。此覆盖文件只增加服务和原生 app 的内网地址白名单；原有 Compose 文件和生产入口不变。
+`compose.ocr.yaml` 原用于 8289 候选项目，当前随提升后的核心栈供正式入口使用。它在 `engine` 内网启动官方 PaddleOCR-VL 版面解析 API 和配套视觉推理服务，不发布宿主端口；默认分别限定到 60 的第 2、3 张 GPU。镜像须先离线加载，并把核验后的不可变 `sha256:<Image ID>` 写入 `.env` 的 `WST_PADDLEOCR_VL_IMAGE`、`WST_PADDLEOCR_VLM_IMAGE`。可用 `WST_PADDLEOCR_PIPELINE_GPU`、`WST_PADDLEOCR_VLM_GPU` 调整设备。视觉推理服务的显存占用参数见 `config/paddleocr-vlm-vllm.yaml`。此覆盖文件只增加服务和原生 app 的内网地址白名单。
 
 ```sh
 docker compose --env-file .env -f compose.engine.yaml -f compose.wrapper.yaml \
@@ -56,7 +56,7 @@ docker compose --env-file .env -f compose.engine.yaml -f compose.wrapper.yaml \
 
 原生应用的 `AUTO_MIGRATE=true` 仅作用于候选新卷。升级前备份该卷；旧镜像不可直接连接升级后的数据库。`DISABLE_REGISTRATION=true`，原生候选管理员已在不对外暴露原生 API 的条件下建立。白标管理端通过网关受控代理使用原生知识库、文档、任务、分块和模型接口；管理端无第二次腾讯登录。
 
-管理员统一从 `http://10.242.180.54:8289/kb/admin/` 进入湾事通 Vue 后台；登录、运行概览、知识资料、用户端设置、模型与解析、使用记录、系统与诊断都在同一站内。旧 `/kb/admin/ops/` 书签重定向到 `/kb/admin/overview`，React 用户端不再挂运营页。管理端不提供发起问答的入口；使用记录和 Trace 只读复核用户问答。令牌存放在 60 主机的候选 Secret 目录，可在 60 上执行 `docker exec wst_weknora_candidate_20260925-gateway-1 cat /run/wst-secrets/gateway_admin_bootstrap_token` 读取。不要把令牌写入仓库、报告、截图或前端构建文件。
+管理员统一从 `http://10.242.180.54:18288/kb/admin/` 进入湾事通 Vue 后台；登录、运行概览、知识资料、用户端设置、模型与解析、使用记录、系统与诊断都在同一站内。旧 `/kb/admin/ops/` 书签重定向到 `/kb/admin/overview`，React 用户端不再挂运营页。管理端不提供发起问答的入口；使用记录和 Trace 只读复核用户问答。生产令牌已与旧 8289 测试令牌分离，可在 60 上执行 `docker exec wst_weknora_candidate_20260925-gateway-1 cat /run/wst-secrets/gateway_admin_bootstrap_token` 读取。不要把令牌写入仓库、报告、截图或前端构建文件。
 
 管理员自助上传 DOCX：进入 `/kb/admin/` 并完成湾事通管理登录，打开“知识资料”→“湾事通内部资料”→“添加文档”→“上传文档”，选择 `.docx`，确认上传及解析选项，等待任务显示完成，再查看分块。这个知识库是当前用户端已发布的唯一资料范围；若上传到其他知识库，还需在“用户端设置”中发布对应范围，才可能用于普通用户问答。候选浏览器和 edge 的默认文件上限为 50 MiB，54 转发层可能另有限制；加密、损坏、超限或复杂版式的文件不保证解析成功。2026-09-26 现场已确认该知识库现有 45 份 DOCX 均显示解析完成、DOCX 解析引擎可用；本轮没有手工上传新的任意 DOCX，故不能以此承诺每份新文件都能正确检索和回答。详见[外壳与原生等价性复核](WRAPPER-EQUIVALENCE-REVIEW.md)。
 
