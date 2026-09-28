@@ -84,7 +84,7 @@ docker build --network=none --pull=false -f Dockerfile.edge \
 
 2026-09-28 的生产管理页布局修复使用 `Dockerfile.edge-layout-hotfix`：以已验收的 edge 镜像 ID 为基础，在仅含该 Dockerfile、`nginx.conf` 和 `wst-admin-layout-20260928.css` 的最小上下文离线构建；新镜像只增加管理页 CSS，并保留原 JavaScript。其固定版源码的 Vue 类型检查通过，但完整构建因仓库缺少 `src/views/artifacts/ArtifactLibrary.vue` 失败，因此后续完整重构建前应先补齐该依赖，再核对管理入口脚本。生产现行镜像与回退入口见[发布门禁](PILOT-RELEASE-GATE.md)和[切流手册](PILOT-CUTOVER-ROLLBACK.md)。
 
-2026-09-28 的身份提示词修复使用 `Dockerfile.gateway-intent-hotfix`：以现行不可变网关镜像 ID 为基础，只叠加 `src/wanshitong_gateway/app.py` 与 `public_app.py`。在受控构建目录中将两份源码与该 Dockerfile 放在同一级，以 `WST_GATEWAY_BASE_IMAGE` 指定已验收网关的完整 Image ID，使用 `docker build --network=none --pull=false` 离线构建。部署时仅更新 `.env` 中的 `WST_GATEWAY_IMAGE` 为新完整 Image ID，先备份原 `.env` 和网关 SQLite，再用原项目、原三份 Compose 文件执行 `up -d --no-deps --force-recreate gateway`。发布公共应用后回读 `ACTIVE`、修订版和七类 `intent_prompts`，并从正式入口验证 RDMS 登录及实际问答。回退镜像时恢复原 `.env` 的镜像引用并只重建网关；原有数据库和卷不得直接删除。现场镜像、配置与问答结果见[发布门禁](PILOT-RELEASE-GATE.md)。
+2026-09-28 的身份提示词修复使用 `Dockerfile.gateway-intent-hotfix`：以现行不可变网关镜像 ID 为基础，只叠加 `src/wanshitong_gateway/app.py` 与 `public_app.py`。在受控构建目录中将两份源码与该 Dockerfile 放在同一级，以 `WST_GATEWAY_BASE_IMAGE` 指定已验收网关的完整 Image ID，使用 `docker build --network=none --pull=false` 离线构建。部署时仅更新 `.env` 中的 `WST_GATEWAY_IMAGE` 为新完整 Image ID，先备份原 `.env` 和网关 SQLite，再用原项目和现行 Compose 文件执行 `up -d --no-deps --force-recreate gateway`；生产存储迁移后须在原三份文件末尾叠加 `compose.storage-nvme.yaml`，否则会误接迁移前的旧卷。发布公共应用后回读 `ACTIVE`、修订版和七类 `intent_prompts`，并从正式入口验证 RDMS 登录及实际问答。回退镜像时恢复原 `.env` 的镜像引用并只重建网关；原有数据库和卷不得直接删除。现场镜像、配置与问答结果见[发布门禁](PILOT-RELEASE-GATE.md)。
 
 ## 只读配置校验与启动边界
 
@@ -107,3 +107,11 @@ docker compose --env-file .env -f compose.engine.yaml \
 候选备份目录与镜像包分开保存 PostgreSQL 自定义格式 dump、原生文件卷快照、网关 SQLite 快照和 Secret 文件归档。数据库和 `system_aes_key` 必须同批保存；Secret 归档只在 60 的受限目录，不进 Git 或镜像包。恢复时先隔离停掉候选入口，再恢复配套的镜像、原生 DB、文件卷、网关 SQLite 与 Secret。旧 WeKnora 镜像不能直接连接自动迁移后的新 DB。新候选期间新增的会话或资料需先导出；回退到旧 8289 不自动反写这些数据。
 
 测试入口回退顺序：先确认原容器 `14c0f9a42c14` 及原镜像存在；用候选 Compose 文件仅停止 `edge` 和 `gateway`，释放 60 的 `127.0.0.1:8289`；再启动原容器并通过 54:8289 检查旧版登录和历史。不要停止或修改 18288/18290。反向切回候选时先停止原容器，确认端口空闲，再启动候选 `gateway`、`edge` 并检查真实 SSO、问答和管理端。此处是运行手册；是否执行切换以实际测试/发布安排为准。
+
+## 2026-09-28 生产数据盘
+
+60 服务器将序列号尾号 `00100` 的 NVMe 单独分区并格式化为 ext4，文件系统 UUID 为 `28f90b0d-4ce4-4941-85b7-1d9a9058ff13`，通过 `/etc/fstab` 挂载在 `/srv/wanshitong-data`。另一块尾号 `00182` 的 NVMe 未改动。生产试用项目的网关 SQLite、WeKnora PostgreSQL、原生文件、Redis 和 Docreader 临时目录分别位于该挂载点的 `gateway/`、`postgres/`、`files/`、`redis/`、`docreader-tmp/`。迁移前的五个 Docker 命名卷完整保留；不得仅靠切回旧卷恢复服务，否则会漏掉迁移后的新增记录。
+
+此主机现行项目名为 `wst_weknora_candidate_20260925`。后续在 60 上执行生产 Compose 命令时，先用 `mountpoint -q /srv/wanshitong-data` 确认数据盘已挂载，并在 `compose.engine.yaml`、`compose.wrapper.yaml`、`compose.ocr.yaml` 后面**始终叠加** `compose.storage-nvme.yaml`。此覆盖文件使用不自动创建宿主路径的 bind mount；磁盘未挂载时不得启动生产数据服务。更新镜像、排障或回退镜像仍使用同一存储覆盖文件。若确需退回原 Docker 卷，先停写、备份新盘新增数据并将对应数据一致性同步回旧卷，核对 PostgreSQL、文件和网关 SQLite 后再去掉覆盖文件。
+
+当前自动清理仅覆盖 WeKnora 审计日志（现场配置为 90 天，每日扫描）和到期的临时会话附件；网关问答历史、反馈及正式知识库文件没有按时间自动删除。不得用全局 Docker prune 或定时删除卷来清理这些数据；若制定留存周期，应先明确业务保留期并验证备份与恢复。

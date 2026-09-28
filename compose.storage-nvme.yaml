@@ -1,0 +1,44 @@
+# 60 服务器生产试用专用。仅在已挂载 /srv/wanshitong-data 后叠加本文件。
+# 原 Docker 命名卷保留，供校验与回退使用。
+services:
+  gateway:
+    volumes:
+      - type: bind
+        source: /srv/wanshitong-data/gateway
+        target: /data
+        bind:
+          create_host_path: false
+  app:
+    volumes:
+      - type: bind
+        source: /srv/wanshitong-data/files
+        target: /data/files
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/wanshitong-data/docreader-tmp
+        target: /tmp/docreader
+        read_only: true
+        bind:
+          create_host_path: false
+  postgres:
+    volumes:
+      - type: bind
+        source: /srv/wanshitong-data/postgres
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+  redis:
+    volumes:
+      - type: bind
+        source: /srv/wanshitong-data/redis
+        target: /data
+        bind:
+          create_host_path: false
+  docreader:
+    volumes:
+      - type: bind
+        source: /srv/wanshitong-data/docreader-tmp
+        target: /tmp/docreader
+        bind:
+          create_host_path: false
