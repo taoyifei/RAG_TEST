@@ -1,0 +1,12 @@
+# 从当前已验收的布局修复镜像叠加公共引用按钮样式，保留其管理页和 Nginx 配置。
+ARG WST_EDGE_LAYOUT_IMAGE
+FROM ${WST_EDGE_LAYOUT_IMAGE}
+
+COPY wst-public-citations-20260928.css /usr/share/nginx/html/kb/assets/wst-public-citations-20260928.css
+RUN public_index=/usr/share/nginx/html/kb/index.html \
+    && test -f "$public_index" \
+    && grep -q 'href="./assets/index-' "$public_index" \
+    && ! grep -q 'wst-public-citations-20260928.css' "$public_index" \
+    && sed -i 's#</head>#    <link rel="stylesheet" href="/kb/assets/wst-public-citations-20260928.css"></head>#' "$public_index" \
+    && grep -q 'href="/kb/assets/wst-public-citations-20260928.css"' "$public_index" \
+    && chmod 644 /usr/share/nginx/html/kb/assets/wst-public-citations-20260928.css

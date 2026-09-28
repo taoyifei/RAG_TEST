@@ -2626,6 +2626,25 @@ label:has(input[type="checkbox"]) {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.wst-citation-segment > button {
+  min-height: 38px;
+  margin: 12px 8px 0 0;
+  padding: 0 12px;
+  border: 1px solid var(--wst-border);
+  border-radius: 9px;
+  color: #e5eeea;
+  background: #2b3330;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.wst-citation-segment > button:hover {
+  background: #35403c;
+}
+.wst-citation-segment > button:focus-visible {
+  outline: 2px solid var(--wst-accent);
+  outline-offset: 2px;
+}
 .wst-feedback-block {
   margin-top: 24px;
 }
@@ -2939,6 +2958,13 @@ label:has(input[type="checkbox"]) {
 .wst-root[data-theme="light"] .wst-citation-list blockquote {
   color: #3b4d41;
   background: #f4f7f3;
+}
+.wst-root[data-theme="light"] .wst-citation-segment > button {
+  color: #3c5145;
+  background: #fff;
+}
+.wst-root[data-theme="light"] .wst-citation-segment > button:hover {
+  background: #ecf4ee;
 }
 .wst-root[data-theme="light"] .wst-feedback button {
   color: #3c5145;
