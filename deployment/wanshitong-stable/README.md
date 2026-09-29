@@ -31,7 +31,9 @@ Compose 对所有运行镜像使用 `pull_policy: never`，没有 `build:`，不
 
 启用包装层时还需 `sso_client_secret`、`gateway_master_key`、`gateway_admin_bootstrap_token`、`workspace_api_key`、`external_signing_key`、`weknora_admin_password`、`legacy_master_key`。网关代码要求密钥文件为非 symlink、仅所有者可读；候选镜像以 UID 10001 运行，现场这些文件由 UID 10001 所有、权限 `0600`。Compose 使用逐文件只读 bind mount 且禁止自动创建缺失源路径。`WST_WEKNORA_TENANT_ID` 是原生真实正整数，`WST_PUBLIC_KB_IDS` 是已发布的非空原生 KB 列表；空范围拒绝启动。旧版记录只读访问独立的切换前 SQLite 快照和旧主密钥，不继续旧会话，也不调用旧算法。
 
-当前 `WST_SSO_ENTRIES`、Origin 与回调对齐 54:18288。验证地址使用已通过真实登录的中继 `192.168.48.1:42100`；旧生产验证地址 `172.24.7.172:21000` 从 60 连接超时。60 上专用 `wst-weknora-sso-relay.service` 经 54 的受限 SSH 端口转发访问验证接口；SSH 服务、Docker 网络或 RDMS 地址变更时，先检查中继状态和登录。专用私钥只留在受限 Secret 目录；管理浏览器只持有湾事通管理 Cookie，不持有原生 JWT。
+生产 `WST_SSO_ENTRIES` 同时登记 `http://10.242.180.54:18288` 和 `https://devmng.nat200.top`，`WST_PUBLIC_ORIGIN` 包含这两个 Origin。公网入口的 `authorize_url` 为 `https://devmng.nat200.top/prod-api/sso/authorize`，回调为 `https://devmng.nat200.top/kb/sso/callback`。NAT200 把 HTTPS 转成内网 HTTP，`nginx.conf` 仅对已登记的公网 Host 向网关转发 `https`，内网入口继续转发 `http`。网关只信任生产 edge 的精确容器 IP；重建 edge 后须核对该 IP 并同步 `WST_TRUSTED_PROXY_IPS`，否则公网回调和安全 Cookie 可能失效。2026-09-29 的最小镜像改动使用 `Dockerfile.edge-sso-hotfix`，以现行生产 edge 镜像为基础，只复制更新后的 `nginx.conf`；旧镜像和变更前的 `.env`、Nginx 配置应保留供回退。
+
+SSO 验证地址使用已通过真实登录的中继 `192.168.48.1:42100`；旧生产验证地址 `172.24.7.172:21000` 从 60 连接超时。60 上专用 `wst-weknora-sso-relay.service` 经 54 的受限 SSH 端口转发访问验证接口；SSH 服务、Docker 网络或 RDMS 地址变更时，先检查中继状态和登录。专用私钥只留在受限 Secret 目录；管理浏览器只持有湾事通管理 Cookie，不持有原生 JWT。
 
 原生模型、embedding、reranker、OCR 的连接信息由 WeKnora 管理配置负责。`WST_ALLOWED_MODEL_HOSTS` 填经现场核实的内网主机白名单。`model-egress` 网络只给原生 app 访问内网模型；Docker 网络本身不保证禁止公网，60 主机须用出站策略限制它。Docreader 只在内部网络；默认不启用 ODL hybrid、沙箱、联网、MCP、图谱或 Langfuse。现场 Qwen3-8B-AWQ 物理上下文为 8192；原生候选配置将 `max_completion_tokens/max_output_tokens` 设为 2048、`rerank_top_k` 设为 3 后，原先触发 400 的真实问题可完成。这个额度只配置 WeKnora 原生模型请求，湾事通网关和前端不裁剪问题或答案；内容质量仍须逐题核查。当前单进程网关的公共问答流和续流按 4 运行、8 等待准入，第 13 条返回 429，等待超过 300 秒也返回 429。`CONCURRENCY_POOL_SIZE=4` 不是公共问答或共享模型的容量控制；网关队列也不限制原生后台任务和其他应用对共享模型的调用，仍须测额外模型调用和旧服务共享负载。
 

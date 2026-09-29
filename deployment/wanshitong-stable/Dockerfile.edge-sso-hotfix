@@ -1,0 +1,6 @@
+# 在当前已验收的生产边缘镜像上仅更新 Nginx 配置，保留静态页面和布局修复。
+ARG WST_EDGE_BASE_IMAGE
+FROM ${WST_EDGE_BASE_IMAGE}
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
