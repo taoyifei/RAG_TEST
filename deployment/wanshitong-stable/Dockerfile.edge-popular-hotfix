@@ -1,0 +1,15 @@
+# 在当前生产边缘镜像上只替换 React 用户页，保留 Vue 管理页、代理及回退链路。
+ARG WST_EDGE_BASE_IMAGE
+FROM ${WST_EDGE_BASE_IMAGE}
+
+COPY build-context/react/ /usr/share/nginx/html/kb/
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+RUN public_index=/usr/share/nginx/html/kb/index.html \
+    && test -f /usr/share/nginx/html/kb/admin/index.html \
+    && test -f /usr/share/nginx/html/kb/assets/wst-public-citations-20260928.css \
+    && grep -q 'src="./assets/index-' "$public_index" \
+    && grep -q 'href="./assets/index-' "$public_index" \
+    && sed -i 's#</head>#  <link rel="stylesheet" href="/kb/assets/wst-public-citations-20260928.css"></head>#' "$public_index"
+
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
