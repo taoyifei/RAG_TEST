@@ -1,0 +1,16 @@
+# 仅更新管理端静态资源地址，避免旧脚本在浏览器缓存中沿用原文件名。
+ARG WST_EDGE_BASE_IMAGE
+FROM ${WST_EDGE_BASE_IMAGE}
+
+RUN set -eu; \
+    cd /usr/share/nginx/html/kb/admin; \
+    grep -q '湾小度' index.html; \
+    mkdir v20260930b; \
+    mv assets v20260930b/assets; \
+    ln -s v20260930b/assets assets; \
+    find v20260930b/assets -type f \
+      \( -name '*.js' -o -name '*.css' \) \
+      -exec sed -i 's#/kb/admin/assets/#/kb/admin/v20260930b/assets/#g' {} +; \
+    sed -i 's#/kb/admin/assets/#/kb/admin/v20260930b/assets/#g' index.html; \
+    grep -q '/kb/admin/v20260930b/assets/main-' index.html; \
+    grep -ql '湾小度' v20260930b/assets/main-*.js
