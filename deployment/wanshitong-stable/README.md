@@ -1,6 +1,6 @@
 # 湾事通 × WeKnora 部署
 
-**2026-09-30 当前状态：有限生产试用仍接入 `http://10.242.180.54:18288/` 的上一版。** 54:18288 转发到 60:8288 `wst_pilot_prefix_proxy_layout_20260928`，再到 60:18293 `wst_pilot_production_edge_citation_live_r2_20260928`；核心网关与 WeKnora 继续提供生产服务。“大家常问”新版在独立的 54:8289 测试入口，尚未切换到生产。旧 60:18291 前端、旧生产服务及其镜像、数据保留。现场验收、剩余容量与恢复限制见[发布门禁](PILOT-RELEASE-GATE.md)，现行链路和回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。用户端未新增试用说明文字。
+**2026-09-30 当前状态：有限生产试用已接入“湾小度”。** 正式内网入口为 `http://10.242.180.54:18288/kb/`，公网入口为 `https://devmng.nat200.top/kb/`。54:18288 转发到 60:8288 `wst_pilot_prefix_proxy_popular_20260930`，再到 60:18294 `wst_pilot_production_edge_brand_20260930`；生产网关运行新品牌镜像，原生 WeKnora 与生产数据沿用原服务。生产公共应用为 `ACTIVE` 修订版 6。54:8289 仍是独立测试环境，不连接生产引擎；上一版代理、edge、镜像与数据保留供回退。现场验收与剩余限制见[发布门禁](PILOT-RELEASE-GATE.md)，现行链路和回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。
 
 此目录原用于隔离候选部署，下面的构建和候选验收记录保留其形成过程。`compose.engine.yaml` 是 WeKnora 原生服务；叠加 `compose.wrapper.yaml` 后，由湾事通网关和同源静态入口提供 React 用户页、白标 Vue 管理页。湾事通只处理已有身份、会话映射、权限、SSE 传输和引用访问，问答、解析、分块、检索、重排、生成与模型配置使用同一套 WeKnora。原生 `app`、Docreader、PostgreSQL、Redis 均不发布宿主端口，浏览器无法直连原生 `/api/v1`。
 
@@ -58,9 +58,9 @@ docker compose --env-file .env -f compose.engine.yaml -f compose.wrapper.yaml \
 
 原生应用的 `AUTO_MIGRATE=true` 仅作用于候选新卷。升级前备份该卷；旧镜像不可直接连接升级后的数据库。`DISABLE_REGISTRATION=true`，原生候选管理员已在不对外暴露原生 API 的条件下建立。白标管理端通过网关受控代理使用原生知识库、文档、任务、分块和模型接口；管理端无第二次腾讯登录。
 
-管理员统一从 `http://10.242.180.54:18288/kb/admin/` 进入湾事通 Vue 后台；登录、运行概览、知识资料、用户端设置、模型与解析、使用记录、系统与诊断都在同一站内。旧 `/kb/admin/ops/` 书签重定向到 `/kb/admin/overview`，React 用户端不再挂运营页。管理端不提供发起问答的入口；使用记录和 Trace 只读复核用户问答。生产令牌已与旧 8289 测试令牌分离，可在 60 上执行 `docker exec wst_weknora_candidate_20260925-gateway-1 cat /run/wst-secrets/gateway_admin_bootstrap_token` 读取。不要把令牌写入仓库、报告、截图或前端构建文件。
+管理员统一从 `http://10.242.180.54:18288/kb/admin/` 进入湾小度 Vue 后台；登录、运行概览、知识资料、用户端设置、模型与解析、使用记录、系统与诊断都在同一站内。旧 `/kb/admin/ops/` 书签重定向到 `/kb/admin/overview`，React 用户端不再挂运营页。管理端不提供发起问答的入口；使用记录和 Trace 只读复核用户问答。生产令牌已与旧 8289 测试令牌分离，可在 60 上执行 `docker exec wst_weknora_candidate_20260925-gateway-1 cat /run/wst-secrets/gateway_admin_bootstrap_token` 读取。不要把令牌写入仓库、报告、截图或前端构建文件。
 
-管理员自助上传 DOCX：进入 `/kb/admin/` 并完成湾事通管理登录，打开“知识资料”→“湾事通内部资料”→“添加文档”→“上传文档”，选择 `.docx`，确认上传及解析选项，等待任务显示完成，再查看分块。这个知识库是当前用户端已发布的唯一资料范围；若上传到其他知识库，还需在“用户端设置”中发布对应范围，才可能用于普通用户问答。候选浏览器和 edge 的默认文件上限为 50 MiB，54 转发层可能另有限制；加密、损坏、超限或复杂版式的文件不保证解析成功。2026-09-26 现场已确认该知识库现有 45 份 DOCX 均显示解析完成、DOCX 解析引擎可用；本轮没有手工上传新的任意 DOCX，故不能以此承诺每份新文件都能正确检索和回答。详见[外壳与原生等价性复核](WRAPPER-EQUIVALENCE-REVIEW.md)。
+管理员自助上传 DOCX：进入 `/kb/admin/` 并完成湾小度管理登录，打开“知识资料”→“湾小度内部资料”→“添加文档”→“上传文档”，选择 `.docx`，确认上传及解析选项，等待任务显示完成，再查看分块。这个知识库是当前用户端已发布的唯一资料范围；若上传到其他知识库，还需在“用户端设置”中发布对应范围，才可能用于普通用户问答。候选浏览器和 edge 的默认文件上限为 50 MiB，54 转发层可能另有限制；加密、损坏、超限或复杂版式的文件不保证解析成功。2026-09-26 现场已确认该知识库现有 45 份 DOCX 均显示解析完成、DOCX 解析引擎可用；本轮没有手工上传新的任意 DOCX，故不能以此承诺每份新文件都能正确检索和回答。详见[外壳与原生等价性复核](WRAPPER-EQUIVALENCE-REVIEW.md)。
 
 `/kb/admin/public-settings` 管理唯一公共应用 `wanshitong-public`。知识库、模型、提示词、检索和多轮参数保存为原生 quick-answer Agent，网关只保存应用绑定、版本和页面设置；新问答必须同时使用这份 Agent 与已发布知识库范围。首次绑定前状态为 `MIGRATION_REQUIRED`，沿用已验收的候选配置，不能把默认值当成已生效。首次绑定须核实 8289 原生运行值并显式确认；保存后回读原生配置和公共 Key 范围，只有一致才切换绑定。若状态为 `DRIFTED`，需重新核实全量配置并显式重建；`UNAVAILABLE` 表示原生暂不可用，不允许写入。修改模型的上下文窗口或 embedding 模型所需的重建、内容质量与 P0 验收仍需独立处理。
 
@@ -88,7 +88,9 @@ docker build --network=none --pull=false -f Dockerfile.edge \
 
 2026-09-28 的身份提示词修复使用 `Dockerfile.gateway-intent-hotfix`：以现行不可变网关镜像 ID 为基础，只叠加 `src/wanshitong_gateway/app.py` 与 `public_app.py`。在受控构建目录中将两份源码与该 Dockerfile 放在同一级，以 `WST_GATEWAY_BASE_IMAGE` 指定已验收网关的完整 Image ID，使用 `docker build --network=none --pull=false` 离线构建。部署时仅更新 `.env` 中的 `WST_GATEWAY_IMAGE` 为新完整 Image ID，先备份原 `.env` 和网关 SQLite，再用原项目和现行 Compose 文件执行 `up -d --no-deps --force-recreate gateway`；生产存储迁移后须在原三份文件末尾叠加 `compose.storage-nvme.yaml`，否则会误接迁移前的旧卷。发布公共应用后回读 `ACTIVE`、修订版和七类 `intent_prompts`，并从正式入口验证 RDMS 登录及实际问答。回退镜像时恢复原 `.env` 的镜像引用并只重建网关；原有数据库和卷不得直接删除。现场镜像、配置与问答结果见[发布门禁](PILOT-RELEASE-GATE.md)。
 
-2026-09-30 的“大家常问”界面更新使用 `Dockerfile.edge-popular-hotfix`：以此前生产 edge 镜像 ID 为 `WST_EDGE_BASE_IMAGE`，在只含该 Dockerfile、现行 `nginx.conf` 和 `build-context/react/` 的临时上下文中离线构建；只更新 React 用户页，保留 Vue 管理页与引用样式。候选镜像 ID 为 `sha256:2b91fd6f70cb16594c332da0b293d6f31dc489c9ad1e3815435b506f4ff4658e1`。60:18294 上的候选 edge 保留但未接入生产 8288；54:8289 转发到独立网络上的同版 edge 和隔离网关。8289 已完成真实 RDMS 验证码登录和回调，隔离网关的公共会话接口返回 200。生产网关中 16 条已审核的题面经只读提取后复制到 8289 临时库；真实登录会话在桌面与 390px 窄屏核对了首页 5 条、展开 16 条和分类。点击与聊天页使用模拟问答 API 检查，没有调用真实问答引擎。隔离网关不连接生产 WeKnora，题面快照没有反写生产数据。生产变更仍须用户明确授权；授权后先修复候选 edge IP 未列入生产网关受信代理的问题，并重跑发布前检查。
+2026-09-30 的“大家常问”界面先使用 `Dockerfile.edge-popular-hotfix` 在 8289 隔离环境验收：以此前生产 edge 镜像 ID 为 `WST_EDGE_BASE_IMAGE`，在只含该 Dockerfile、现行 `nginx.conf` 和 `build-context/react/` 的临时上下文中离线构建；只更新 React 用户页，保留 Vue 管理页与引用样式。候选镜像 ID 为 `sha256:2b91fd6f70cb16594c332da0b293d6f31dc489c9ad1e3815435b506f4ff4658e1`。生产网关中 16 条已审核的题面经只读提取后复制到 8289 临时库；真实登录会话在桌面与 390px 窄屏核对了首页 5 条、展开 16 条和分类。8289 不连接生产 WeKnora；当时点击与聊天页使用模拟问答 API 检查。该镜像是切流前候选，现行生产 edge 已更新为下述“湾小度”镜像。
+
+2026-09-30 的“湾小度”改名先部署在 54:8289，随后经用户授权切入正式 8288。React 用户页由当前源码构建；Vue 管理端当前源码的类型检查通过，但完整构建仍因仓库缺少 `ArtifactLibrary.vue` 失败，因此 `Dockerfile.edge-brand-hotfix` 在已验收的管理产物上替换可见品牌文案，并叠加新 React 产物。生产与 8289 使用同一 edge 镜像 `sha256:9d04cb0d470f770f84d613f2e1ef2d8f85bf32cb23023499433b9baf4d7b10eb`；生产与 8289 的网关使用同一代码镜像 `sha256:0cdd8a439944f8a0ce2ec8c69277ac8fe152b6041dbd1b183e7309ffcf33cd91`，但各自的数据和 SSO 配置独立。生产网关受信代理同时包含旧 edge `192.168.48.5` 与新 edge `192.168.48.3`；两边的 HTTPS SSO 预检均通过。公共应用已重新发布为 `ACTIVE` 修订版 6，主提示词和七类意图提示词首句均为“湾小度”，其他原生回答配置未变。正式公网入口的真实 RDMS 登录，以及正式内网入口的模型身份问答、知识库问答与引用均已通过；详见[发布门禁](PILOT-RELEASE-GATE.md)。
 
 ## 只读配置校验与启动边界
 
