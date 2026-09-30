@@ -1,6 +1,6 @@
 # 湾事通 × WeKnora 部署
 
-**2026-09-28 当前状态：有限生产试用已接入 `http://10.242.180.54:18288/`。** 原 8289 候选的核心网关与 WeKnora 已提升为生产使用；54:8289 转发和 60 的测试入口已暂停。正式入口现用 60:18293 前端和 60:8288 根别名代理，旧 60:18291 前端、旧生产服务及其镜像、数据保留。现场验收、剩余容量与恢复限制见[发布门禁](PILOT-RELEASE-GATE.md)，现行链路和回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。用户端未新增试用说明文字。
+**2026-09-30 当前状态：有限生产试用仍接入 `http://10.242.180.54:18288/` 的上一版。** 54:18288 转发到 60:8288 `wst_pilot_prefix_proxy_layout_20260928`，再到 60:18293 `wst_pilot_production_edge_citation_live_r2_20260928`；核心网关与 WeKnora 继续提供生产服务。“大家常问”新版在独立的 54:8289 测试入口，尚未切换到生产。旧 60:18291 前端、旧生产服务及其镜像、数据保留。现场验收、剩余容量与恢复限制见[发布门禁](PILOT-RELEASE-GATE.md)，现行链路和回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。用户端未新增试用说明文字。
 
 此目录原用于隔离候选部署，下面的构建和候选验收记录保留其形成过程。`compose.engine.yaml` 是 WeKnora 原生服务；叠加 `compose.wrapper.yaml` 后，由湾事通网关和同源静态入口提供 React 用户页、白标 Vue 管理页。湾事通只处理已有身份、会话映射、权限、SSE 传输和引用访问，问答、解析、分块、检索、重排、生成与模型配置使用同一套 WeKnora。原生 `app`、Docreader、PostgreSQL、Redis 均不发布宿主端口，浏览器无法直连原生 `/api/v1`。
 
@@ -31,7 +31,7 @@ Compose 对所有运行镜像使用 `pull_policy: never`，没有 `build:`，不
 
 启用包装层时还需 `sso_client_secret`、`gateway_master_key`、`gateway_admin_bootstrap_token`、`workspace_api_key`、`external_signing_key`、`weknora_admin_password`、`legacy_master_key`。网关代码要求密钥文件为非 symlink、仅所有者可读；候选镜像以 UID 10001 运行，现场这些文件由 UID 10001 所有、权限 `0600`。Compose 使用逐文件只读 bind mount 且禁止自动创建缺失源路径。`WST_WEKNORA_TENANT_ID` 是原生真实正整数，`WST_PUBLIC_KB_IDS` 是已发布的非空原生 KB 列表；空范围拒绝启动。旧版记录只读访问独立的切换前 SQLite 快照和旧主密钥，不继续旧会话，也不调用旧算法。
 
-生产 `WST_SSO_ENTRIES` 同时登记 `http://10.242.180.54:18288` 和 `https://devmng.nat200.top`，`WST_PUBLIC_ORIGIN` 包含这两个 Origin。公网入口的 `authorize_url` 为 `https://devmng.nat200.top/prod-api/sso/authorize`，回调为 `https://devmng.nat200.top/kb/sso/callback`。NAT200 把 HTTPS 转成内网 HTTP，`nginx.conf` 仅对已登记的公网 Host 向网关转发 `https`，内网入口继续转发 `http`。网关只信任生产 edge 的精确容器 IP；重建 edge 后须核对该 IP 并同步 `WST_TRUSTED_PROXY_IPS`，否则公网回调和安全 Cookie 可能失效。2026-09-29 的最小镜像改动使用 `Dockerfile.edge-sso-hotfix`，以现行生产 edge 镜像为基础，只复制更新后的 `nginx.conf`；旧镜像和变更前的 `.env`、Nginx 配置应保留供回退。
+生产 `WST_SSO_ENTRIES` 同时登记 `http://10.242.180.54:18288` 和 `https://devmng.nat200.top`，`WST_PUBLIC_ORIGIN` 包含这两个 Origin。公网入口的 `authorize_url` 为 `https://devmng.nat200.top/prod-api/sso/authorize`，回调为 `https://devmng.nat200.top/kb/sso/callback`。NAT200 把 HTTPS 转成内网 HTTP，`nginx.conf` 仅对已登记的公网 Host 向网关转发 `https`，内网入口继续转发 `http`。网关只信任生产 edge 的精确容器 IP；重建 edge 后须核对该 IP 并同步 `WST_TRUSTED_PROXY_IPS`，否则公网回调和安全 Cookie 可能失效。切换前运行只读的 [`preflight-edge-sso.py`](preflight-edge-sso.py)，同时检查共享网络中的 edge IP 是否受信，以及从待切换 edge 取得的 SSO 首跳是否为 302、回调 Origin 是否正确；失败时不得切换。2026-09-29 的最小镜像改动使用 `Dockerfile.edge-sso-hotfix`，以现行生产 edge 镜像为基础，只复制更新后的 `nginx.conf`；旧镜像和变更前的 `.env`、Nginx 配置应保留供回退。
 
 SSO 验证地址使用已通过真实登录的中继 `192.168.48.1:42100`；旧生产验证地址 `172.24.7.172:21000` 从 60 连接超时。60 上专用 `wst-weknora-sso-relay.service` 经 54 的受限 SSH 端口转发访问验证接口；SSH 服务、Docker 网络或 RDMS 地址变更时，先检查中继状态和登录。专用私钥只留在受限 Secret 目录；管理浏览器只持有湾事通管理 Cookie，不持有原生 JWT。
 
@@ -88,7 +88,7 @@ docker build --network=none --pull=false -f Dockerfile.edge \
 
 2026-09-28 的身份提示词修复使用 `Dockerfile.gateway-intent-hotfix`：以现行不可变网关镜像 ID 为基础，只叠加 `src/wanshitong_gateway/app.py` 与 `public_app.py`。在受控构建目录中将两份源码与该 Dockerfile 放在同一级，以 `WST_GATEWAY_BASE_IMAGE` 指定已验收网关的完整 Image ID，使用 `docker build --network=none --pull=false` 离线构建。部署时仅更新 `.env` 中的 `WST_GATEWAY_IMAGE` 为新完整 Image ID，先备份原 `.env` 和网关 SQLite，再用原项目和现行 Compose 文件执行 `up -d --no-deps --force-recreate gateway`；生产存储迁移后须在原三份文件末尾叠加 `compose.storage-nvme.yaml`，否则会误接迁移前的旧卷。发布公共应用后回读 `ACTIVE`、修订版和七类 `intent_prompts`，并从正式入口验证 RDMS 登录及实际问答。回退镜像时恢复原 `.env` 的镜像引用并只重建网关；原有数据库和卷不得直接删除。现场镜像、配置与问答结果见[发布门禁](PILOT-RELEASE-GATE.md)。
 
-2026-09-30 的“大家常问”界面更新使用 `Dockerfile.edge-popular-hotfix`：以切流前生产 edge 镜像 ID 为 `WST_EDGE_BASE_IMAGE`，在只含该 Dockerfile、现行 `nginx.conf` 和 `build-context/react/` 的临时上下文中离线构建；只更新 React 用户页，保留 Vue 管理页与引用样式。上线镜像 ID 为 `sha256:2b91fd6f70cb16594c332da0b293d6f31dc489c9ad1e3815435b506f4ff4658e1`，当前运行于 60 的 `127.0.0.1:18294`，由 60:8288 根别名代理转发。备用端口的桌面、移动端和聊天页交互已用浏览器及模拟 API 检查；正式地址已核对页面、资源、未登录 401 与 RDMS 登录跳转，本次未重新完成真实账号登录或真实问答。当前入口及上一版回退容器见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。
+2026-09-30 的“大家常问”界面更新使用 `Dockerfile.edge-popular-hotfix`：以此前生产 edge 镜像 ID 为 `WST_EDGE_BASE_IMAGE`，在只含该 Dockerfile、现行 `nginx.conf` 和 `build-context/react/` 的临时上下文中离线构建；只更新 React 用户页，保留 Vue 管理页与引用样式。候选镜像 ID 为 `sha256:2b91fd6f70cb16594c332da0b293d6f31dc489c9ad1e3815435b506f4ff4658e1`。60:18294 上的候选 edge 保留但未接入生产 8288；54:8289 转发到独立网络上的同版 edge 和隔离网关。8289 已完成真实 RDMS 验证码登录和回调，隔离网关的公共会话接口返回 200。生产网关中 16 条已审核的题面经只读提取后复制到 8289 临时库；真实登录会话在桌面与 390px 窄屏核对了首页 5 条、展开 16 条和分类。点击与聊天页使用模拟问答 API 检查，没有调用真实问答引擎。隔离网关不连接生产 WeKnora，题面快照没有反写生产数据。生产变更仍须用户明确授权；授权后先修复候选 edge IP 未列入生产网关受信代理的问题，并重跑发布前检查。
 
 ## 只读配置校验与启动边界
 
