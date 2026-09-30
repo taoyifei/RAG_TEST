@@ -1,6 +1,13 @@
 # W02/W03 包装层。与 compose.engine.yaml 一起使用；W01 原生验证不加载本文件。
+x-wst-logging: &wst_logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   gateway:
+    logging: *wst_logging
     image: ${WST_GATEWAY_IMAGE:?必须填写本次构建后固定的网关镜像引用}
     pull_policy: never
     environment:
@@ -98,6 +105,7 @@ services:
       - no-new-privileges:true
 
   edge:
+    logging: *wst_logging
     image: ${WST_EDGE_IMAGE:?必须填写本次构建后固定的静态前端镜像引用}
     pull_policy: never
     ports:

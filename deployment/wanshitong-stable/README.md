@@ -116,4 +116,10 @@ docker compose --env-file .env -f compose.engine.yaml \
 
 此主机现行项目名为 `wst_weknora_candidate_20260925`。后续在 60 上执行生产 Compose 命令时，先用 `mountpoint -q /srv/wanshitong-data` 确认数据盘已挂载，并在 `compose.engine.yaml`、`compose.wrapper.yaml`、`compose.ocr.yaml` 后面**始终叠加** `compose.storage-nvme.yaml`。此覆盖文件使用不自动创建宿主路径的 bind mount；磁盘未挂载时不得启动生产数据服务。更新镜像、排障或回退镜像仍使用同一存储覆盖文件。若确需退回原 Docker 卷，先停写、备份新盘新增数据并将对应数据一致性同步回旧卷，核对 PostgreSQL、文件和网关 SQLite 后再去掉覆盖文件。
 
-当前自动清理仅覆盖 WeKnora 审计日志（现场配置为 90 天，每日扫描）和到期的临时会话附件；网关问答历史、反馈及正式知识库文件没有按时间自动删除。不得用全局 Docker prune 或定时删除卷来清理这些数据；若制定留存周期，应先明确业务保留期并验证备份与恢复。
+WeKnora 审计日志现场保留 90 天、每日扫描；临时会话附件到期后由原生服务清理。生产网关另安装了 `wst-history-retention.timer`，每天 03:20 按 UTC 当前时刻向前滚动 90 天：过期的会话通过原生接口软删除，活跃会话内过期的一问一答通过原生消息接口软删除；原生操作成功后才硬删除网关 SQLite 中对应的事件、引用、反馈和轮次。反馈有近期人工复核时延后清理到复核满 90 天。正式知识库文档、公共应用配置、推荐题库和管理员审计记录均不在此任务范围。原生软删除只使历史不可见，不立即回收 PostgreSQL 中的行空间；不要将其解释为物理擦除或数据库体积立刻下降。
+
+维护脚本为 `src/wanshitong_gateway/history_retention.py`，默认只预览，显式 `--execute` 才删除。60 服务器将其安装为 `/srv/wanshitong-data/ops/history_retention.py`，由 `/usr/local/sbin/wst-history-retention` 在现有网关容器中运行；系统单元见同目录的 `wst-history-retention.service` 和 `.timer`。检查执行结果用 `systemctl list-timers wst-history-retention.timer`、`systemctl show wst-history-retention.service -p Result -p ExecMainStatus` 及 `journalctl -u wst-history-retention.service`。清理前的一致 SQLite 快照保存在数据盘受限目录；首次运行必须先只读预览和验证备份。原生不可用时任务报错并保留网关记录，次日重试。不得用全局 Docker prune 或定时删除卷清理业务数据。
+
+三份 Compose 文件的湾事通服务已设置 `json-file` 日志轮转，每个容器最多约 `10m × 3`。Docker 只在容器创建时读取日志配置；现有生产容器仍沿用原配置，不为这点日志单独重启问答服务。下次受控重建时核对 `docker inspect <容器> --format '{{json .HostConfig.LogConfig}}'`。独立运行的生产边缘代理不受 Compose 文件控制，重建时也应显式设置同样的 `--log-opt max-size=10m --log-opt max-file=3`。不要直接截断 Docker 正在写入的 JSON 日志文件。
+
+2026-09-30 将两组离线镜像归档迁到 `/srv/wanshitong-data/archive/20260930/`，原 `backup/images/ocr` 与上级 `backup/images` 路径保留为符号链接。数据盘根目录仅允许特权账户访问，恢复镜像时从原路径读取需使用 `sudo`。这些归档不是运行中容器挂载，不随 Docker 镜像标签清理而删除。

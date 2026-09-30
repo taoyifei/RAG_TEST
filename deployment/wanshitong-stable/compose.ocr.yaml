@@ -1,11 +1,18 @@
 # 仅叠加到 8289 候选项目；镜像在 60 上预先 docker load，并以 digest 固定。
 # 使用方式：docker compose -f compose.engine.yaml -f compose.wrapper.yaml -f compose.ocr.yaml ...
+x-wst-logging: &wst_logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   app:
     environment:
       SSRF_WHITELIST_EXTRA: docreader,rerank-adapter,paddleocr-vl,paddleocr-vlm-server
 
   paddleocr-vl:
+    logging: *wst_logging
     image: ${WST_PADDLEOCR_VL_IMAGE:?必须填写已加载的 PaddleOCR-VL 固定镜像}
     pull_policy: never
     command: ["paddlex", "--serve", "--pipeline", "/home/paddleocr/pipeline_config_vllm.yaml", "--device", "gpu:0", "--host", "0.0.0.0", "--port", "8080"]
@@ -37,6 +44,7 @@ services:
       - no-new-privileges:true
 
   paddleocr-vlm-server:
+    logging: *wst_logging
     image: ${WST_PADDLEOCR_VLM_IMAGE:?必须填写已加载的 PaddleOCR-VL 推理固定镜像}
     pull_policy: never
     command:
