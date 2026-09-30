@@ -1,0 +1,13 @@
+[Unit]
+Description=WanShiTong rolling 90-day chat and feedback retention
+After=docker.service
+Wants=docker.service
+RequiresMountsFor=/srv/wanshitong-data
+ConditionPathIsMountPoint=/srv/wanshitong-data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wst-history-retention
+TimeoutStartSec=10min
+StandardOutput=journal
+StandardError=journal

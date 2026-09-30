@@ -1,0 +1,11 @@
+[Unit]
+Description=Run WanShiTong history retention every day
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+Persistent=true
+AccuracySec=1min
+Unit=wst-history-retention.service
+
+[Install]
+WantedBy=timers.target

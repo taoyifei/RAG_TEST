@@ -1,0 +1,14 @@
+#!/bin/sh
+# 每日只清理超过 90 天的湾事通问答与反馈；脚本在现有网关环境中运行。
+set -eu
+
+data_mount=/srv/wanshitong-data
+script="$data_mount/ops/history_retention.py"
+container=wst_weknora_candidate_20260925-gateway-1
+
+mountpoint -q "$data_mount"
+test -r "$script"
+test "$(docker inspect --format '{{.State.Running}}' "$container")" = true
+
+exec flock -n /run/wst-history-retention.lock \
+    docker exec -i "$container" python - --execute < "$script"
