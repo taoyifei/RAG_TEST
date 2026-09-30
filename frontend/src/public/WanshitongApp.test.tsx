@@ -318,6 +318,45 @@ describe("湾事通公共应用", () => {
     });
   });
 
+  it("大家常问首页先显示五题，展开后可按分类查看", async () => {
+    installFetch(streamResponse([]));
+    const user = userEvent.setup();
+    await openHome();
+    await user.click(await screen.findByRole("tab", { name: "大家常问" }));
+
+    const panel = screen.getByRole("tabpanel", { name: "大家常问" });
+    expect(within(panel).getAllByRole("button")).toHaveLength(5);
+    expect(screen.queryByText(/最近审核于/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "查看全部" }));
+    expect(within(panel).getAllByRole("button", { name: /审核通过|哪些认证/ }))
+      .toHaveLength(20);
+
+    await user.click(within(panel).getByRole("button", { name: "制度-9" }));
+    expect(within(panel).getByRole("button", {
+      name: "哪些认证不适用外部认证管理办法？",
+    })).toBeInTheDocument();
+    expect(within(panel).getAllByRole("button", { name: /审核通过|哪些认证/ }))
+      .toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "收起" }));
+    expect(within(panel).getAllByRole("button")).toHaveLength(5);
+  });
+
+  it("聊天页的大家常问默认只显示三题", async () => {
+    installFetch(streamResponse([
+      event("final", 0, { answer: "已回答。", citations: [] }),
+    ]));
+    const user = userEvent.setup();
+    await openHome();
+    await ask("先问一个问题");
+    await screen.findByText("已回答。");
+    await user.click(screen.getByRole("tab", { name: "大家常问" }));
+
+    const panel = screen.getByRole("tabpanel", { name: "大家常问" });
+    expect(within(panel).getAllByRole("button")).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "查看全部" })).toBeInTheDocument();
+  });
+
   it("聊天页大家常问保留已有问答并沿用会话", async () => {
     const question = "办理材料如何提交？";
     const recommendationId = `pq_${"a".repeat(32)}`;

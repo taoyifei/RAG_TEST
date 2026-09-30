@@ -135,6 +135,7 @@ export function WanshitongChat({
             <div className="wst-chat-suggestions">
               <PublicQuestionTabs
                 busy={busy}
+                compact
                 heading="换个话题"
                 onPopularSubmit={onPopularQuestionSubmit}
                 onRefresh={onRefresh}
