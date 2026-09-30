@@ -3,7 +3,7 @@
         <!-- 展开时：Logo + 搜索/折叠按钮同行 -->
         <div class="logo_row" v-if="!uiStore.sidebarCollapsed">
             <div class="logo_box" @click="router.push('/platform/knowledge-bases')" style="cursor: pointer;">
-                <span v-if="WANSHITONG_GATEWAY_AUTH" class="wanshitong-logo">湾事通 <small>知识库管理</small></span>
+                <span v-if="WANSHITONG_GATEWAY_AUTH" class="wanshitong-logo">湾小度 <small>知识库管理</small></span>
                 <img v-else class="logo" src="@/assets/img/weknora.png" alt="WeKnora">
                 <sup v-if="isLiteEdition" class="lite-badge">Lite</sup>
             </div>

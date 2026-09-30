@@ -369,7 +369,7 @@ def test_publish_model_and_kb_changes_next_public_chat(
             "summarize", "web_search", "doc_only",
         }
         assert intent_prompts["chitchat"] == (
-            "你是湾事通（Wanshitong），中国移动（广东）湾区研究院（GMCII）的知识库问答助手。\n"
+            "你是湾小度，中国移动（广东）湾区研究院（GMCII）的知识库问答助手。\n"
             "Native instructions for chitchat."
         )
         assert state.agents[_AGENT_ID_A]["config"]["system_prompt"] == "已核实系统提示"
@@ -487,8 +487,18 @@ def test_publish_does_not_replace_agent_when_intent_templates_are_incomplete(
         assert not state.agents
 
 
-def test_loading_native_default_prompt_keeps_public_identity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "first_line",
+    [
+        (
+            "You are WeKnora, a knowledge-base question-answering assistant "
+            "developed by Tencent."
+        ),
+        "你是湾事通（Wanshitong），中国移动（广东）湾区研究院（GMCII）的知识库问答助手。",
+    ],
+)
+def test_loading_existing_prompt_uses_new_public_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first_line: str
 ) -> None:
     monkeypatch.setattr(
         gateway_app, "register_auth_routes", lambda _app, _auth: None
@@ -497,15 +507,13 @@ def test_loading_native_default_prompt_keeps_public_identity(
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     body = _save_body(revision=0, model_id="model-a", kb_ids=["kb-old"])
     body["answer_settings"]["system_prompt"] = (
-        "You are WeKnora, a knowledge-base question-answering assistant "
-        "developed by Tencent.\n"
-        "Keep the native grounding guidance."
+        f"{first_line}\nKeep the native grounding guidance."
     )
     with TestClient(_app(tmp_path, state, store)) as browser:
         response = browser.put("/kb/api/admin/public-app", json=body)
         assert response.status_code == 200, response.text
         assert state.agents[_AGENT_ID_A]["config"]["system_prompt"] == (
-            "你是湾事通（Wanshitong），中国移动（广东）湾区研究院（GMCII）的知识库问答助手。\n"
+            "你是湾小度，中国移动（广东）湾区研究院（GMCII）的知识库问答助手。\n"
             "Keep the native grounding guidance."
         )
 

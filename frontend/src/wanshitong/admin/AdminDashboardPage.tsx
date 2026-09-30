@@ -67,7 +67,7 @@ export function AdminDashboardPage({ go }: { go: (path: string) => void }) {
       <div className="section-heading">
         <div>
           <h2>固定知识范围概览</h2>
-          <p>所有管理员操作都限定在湾事通隐藏 Project 与 Knowledge Base。</p>
+          <p>所有管理员操作都限定在湾小度隐藏 Project 与 Knowledge Base。</p>
         </div>
         <div className="row-actions">
           <button className="primary" onClick={() => go("/documents")}>

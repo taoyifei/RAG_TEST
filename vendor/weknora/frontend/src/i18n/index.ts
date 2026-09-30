@@ -24,11 +24,11 @@ function brandMessages<T extends Record<string, unknown>>(native: T): T {
   }
   for (const language of Object.keys(branded)) {
     const catalog = branded[language] as ProductCopy
-    catalog.createChat.title = catalog.createChat.title.replace('WeKnora', '湾事通')
+    catalog.createChat.title = catalog.createChat.title.replace('WeKnora', '湾小度')
     catalog.newUserGuide.steps.knowledge.desc =
-      catalog.newUserGuide.steps.knowledge.desc.replace('WeKnora', '湾事通')
+      catalog.newUserGuide.steps.knowledge.desc.replace('WeKnora', '湾小度')
     catalog.newUserGuide.steps.welcome.title =
-      catalog.newUserGuide.steps.welcome.title.replace('WeKnora', '湾事通')
+      catalog.newUserGuide.steps.welcome.title.replace('WeKnora', '湾小度')
   }
   return branded
 }

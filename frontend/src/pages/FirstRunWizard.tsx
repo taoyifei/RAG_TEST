@@ -87,7 +87,7 @@ export function FirstRunWizard({
         {productMode === "wanshitong" ? (
           <ol className="onboarding-steps">
             <li>输入部署人员提供的一次性管理口令。</li>
-            <li>登录后自动检查并绑定湾事通固定知识范围。</li>
+            <li>登录后自动检查并绑定湾小度固定知识范围。</li>
             <li>模型和检索配置在页面中只读展示。</li>
           </ol>
         ) : (

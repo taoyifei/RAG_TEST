@@ -207,7 +207,7 @@ export function HistoryPage({
         </div>
         {services.clearHistory && (
           <button className="secondary" onClick={() => setClearOpen(true)}>
-            {fixedScope ? "清理湾事通知识库历史" : "清理全部历史"}
+            {fixedScope ? "清理湾小度知识库历史" : "清理全部历史"}
           </button>
         )}
       </div>
@@ -520,12 +520,12 @@ export function HistoryPage({
       )}
       {clearOpen && services.clearHistory && (
         <Modal
-          title={fixedScope ? "清理湾事通知识库历史" : "清理全部问答历史"}
+          title={fixedScope ? "清理湾小度知识库历史" : "清理全部问答历史"}
           onClose={() => !clearing && setClearOpen(false)}
         >
           {fixedScope ? (
             <p>
-              只会删除固定湾事通知识库内的问答历史，无法撤销。其他知识库、
+              只会删除固定湾小度知识库内的问答历史，无法撤销。其他知识库、
               Operational Trace、源文档与索引均保留。
             </p>
           ) : (
@@ -543,7 +543,7 @@ export function HistoryPage({
             {clearing
               ? "清理中…"
               : fixedScope
-                ? "确认清理湾事通知识库历史"
+                ? "确认清理湾小度知识库历史"
                 : "确认清理全部历史"}
           </button>
           <button disabled={clearing} onClick={() => setClearOpen(false)}>

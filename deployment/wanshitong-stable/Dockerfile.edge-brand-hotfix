@@ -1,0 +1,13 @@
+# 在已验证的 8289 edge 镜像上叠加新版 React 和现有 Vue 产物的展示名称。
+# Vue 完整构建目前缺少 ArtifactLibrary.vue，暂按现行热修复方式保留已验收产物。
+ARG WST_EDGE_BASE_IMAGE
+FROM ${WST_EDGE_BASE_IMAGE}
+
+COPY build-context/react/ /usr/share/nginx/html/kb/
+RUN set -eu; \
+    find /usr/share/nginx/html/kb/admin -type f \
+      \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.svg' \) \
+      -exec sed -i 's/湾事通/湾小度/g' {} +; \
+    ! grep -rl '湾事通' /usr/share/nginx/html/kb/admin; \
+    grep -q '湾小度' /usr/share/nginx/html/kb/admin/index.html; \
+    grep -ql '湾小度' /usr/share/nginx/html/kb/assets/index-*.js

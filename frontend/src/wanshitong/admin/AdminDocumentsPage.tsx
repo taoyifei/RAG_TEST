@@ -21,7 +21,7 @@ import {
 } from "./adminApi";
 
 export const DOCX_ONLY_MESSAGE =
-  "当前湾事通 Demo 仅开放 DOCX 文档。PDF、旧 DOC、Excel 和 ZIP 将在后续版本接入。";
+  "当前湾小度 Demo 仅开放 DOCX 文档。PDF、旧 DOC、Excel 和 ZIP 将在后续版本接入。";
 
 type UploadState =
   | "rejected"

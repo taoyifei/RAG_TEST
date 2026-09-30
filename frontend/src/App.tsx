@@ -32,7 +32,7 @@ export default function App() {
   useEffect(() => {
     if (modeState.state !== "ready") return;
     document.title =
-      modeState.mode === "wanshitong" ? "湾事通" : "Universal RAG 控制台";
+      modeState.mode === "wanshitong" ? "湾小度" : "Universal RAG 控制台";
   }, [modeState]);
 
   if (modeState.state === "loading") {
@@ -64,7 +64,7 @@ export default function App() {
   if (modeState.mode === "wanshitong") {
     return (
       <main className="mode-screen" id="main-content">
-        <a href={withAppBase("/admin/overview")}>进入湾事通管理后台</a>
+        <a href={withAppBase("/admin/overview")}>进入湾小度管理后台</a>
       </main>
     );
   }

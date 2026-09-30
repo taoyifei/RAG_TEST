@@ -75,7 +75,7 @@ export function WanshitongChat({
   return (
     <div className="wst-chat-shell">
       <header className="wst-chat-header">
-        <strong>湾事通</strong>
+        <strong>湾小度</strong>
         <button
           className="wst-new-topic-button"
           disabled={busy}

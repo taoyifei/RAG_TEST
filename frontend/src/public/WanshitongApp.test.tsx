@@ -137,7 +137,7 @@ async function openHome() {
 
 async function ask(question = "材料多久完成核验？") {
   const user = userEvent.setup();
-  const textbox = screen.getByRole("textbox", { name: "向湾事通提问" });
+  const textbox = screen.getByRole("textbox", { name: "向湾小度提问" });
   await user.type(textbox, question);
   await user.click(screen.getByRole("button", { name: "发送问题" }));
   return user;
@@ -192,7 +192,7 @@ describe("湾事通公共应用", () => {
     );
     await openHome();
 
-    expect(screen.getByText("湾事通")).toBeInTheDocument();
+    expect(screen.getByText("湾小度")).toBeInTheDocument();
     expect(
       screen.queryByText("从已核验的内部资料中寻找答案，并把来源交代清楚。"),
     ).not.toBeInTheDocument();
@@ -415,7 +415,7 @@ describe("湾事通公共应用", () => {
     render(<WanshitongApp />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "暂时无法连接湾事通",
+      "暂时无法连接湾小度",
     );
     await user.click(screen.getByRole("button", { name: "重新连接" }));
     expect(
@@ -471,7 +471,7 @@ describe("湾事通公共应用", () => {
     expect(screen.getByText("测试用户")).toBeVisible();
     await userEvent
       .setup()
-      .click(screen.getByRole("button", { name: "退出湾事通" }));
+      .click(screen.getByRole("button", { name: "退出湾小度" }));
 
     expect(
       await screen.findByRole("heading", { name: "已退出" }),
@@ -599,7 +599,7 @@ describe("湾事通公共应用", () => {
 
     await user.click(card!);
     await screen.findByText("第 1 次回答");
-    const textbox = screen.getByRole("textbox", { name: "向湾事通提问" });
+    const textbox = screen.getByRole("textbox", { name: "向湾小度提问" });
     await user.type(textbox, question);
     await user.click(screen.getByRole("button", { name: "发送问题" }));
     await screen.findByText("第 2 次回答");
@@ -845,7 +845,7 @@ describe("湾事通公共应用", () => {
     const user = await ask();
 
     expect(
-      await within(screen.getByLabelText("湾事通回答")).findByText(
+      await within(screen.getByLabelText("湾小度回答")).findByText(
         "正在检索内部资料",
       ),
     ).toBeInTheDocument();
@@ -964,7 +964,7 @@ describe("湾事通公共应用", () => {
     await ask();
 
     expect(
-      await within(screen.getByLabelText("湾事通回答")).findByText(
+      await within(screen.getByLabelText("湾小度回答")).findByText(
         "回答未完成，以下内容不能作为最终结论",
       ),
     ).toBeInTheDocument();
@@ -977,17 +977,17 @@ describe("湾事通公共应用", () => {
     installFetch(pending.response);
     await openHome();
     const user = await ask();
-    await within(screen.getByLabelText("湾事通回答")).findByText(
+    await within(screen.getByLabelText("湾小度回答")).findByText(
       "正在组织回答",
     );
 
     await user.click(screen.getByRole("button", { name: "停止" }));
     expect(
-      await within(screen.getByLabelText("湾事通回答")).findByText(
+      await within(screen.getByLabelText("湾小度回答")).findByText(
         "已停止回答",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toBeEnabled();
     await waitFor(() => expect(pending.wasCancelled()).toBe(true));
   });
 
@@ -1003,7 +1003,7 @@ describe("湾事通公共应用", () => {
 
     expect(screen.getByText("第一轮问题")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "新问题" })).toBeEnabled();
-    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toBeEnabled();
   });
 
   it("新问题键盘操作回到空输入，登录恢复草稿不重现且不额外请求 Session", async () => {
@@ -1016,7 +1016,7 @@ describe("湾事通公共应用", () => {
     const user = userEvent.setup();
     await openHome();
     await screen.findByRole("region", { name: "你可能想问" });
-    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toHaveValue(
+    expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toHaveValue(
       "登录前草稿",
     );
     const card = within(screen.getByRole("region", { name: "你可能想问" }))
@@ -1026,7 +1026,7 @@ describe("湾事通公共应用", () => {
     const suggestedQuestion = card?.textContent ?? "";
     await user.click(card!);
     await screen.findByText("推荐题已回答");
-    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toHaveValue(
+    expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toHaveValue(
       "",
     );
 
@@ -1035,7 +1035,7 @@ describe("湾事通公共应用", () => {
     expect(
       await screen.findByRole("heading", { name: "你的内部知识助手" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toHaveValue(
+    expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toHaveValue(
       "",
     );
     const paths = fetchMock.mock.calls.map(([input]) => pathOf(input));
@@ -1354,7 +1354,7 @@ describe("湾事通公共应用", () => {
     await ask();
 
     expect(
-      await within(screen.getByLabelText("湾事通回答")).findByText(
+      await within(screen.getByLabelText("湾小度回答")).findByText(
         "当前使用人数较多，请稍后再试。",
       ),
     ).toBeInTheDocument();
@@ -1372,12 +1372,12 @@ describe("湾事通公共应用", () => {
     await ask();
 
     expect(
-      await within(screen.getByLabelText("湾事通回答")).findByText(
+      await within(screen.getByLabelText("湾小度回答")).findByText(
         "网络连接中断，请检查网络后重新尝试。",
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新尝试" })).toBeEnabled();
-    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toBeEnabled();
   });
 
   it("Session 过期时整页登录且不自动重发原问题", async () => {
@@ -1419,7 +1419,7 @@ describe("湾事通公共应用", () => {
     installFetch(pending.response);
     await openHome();
     await ask();
-    await within(screen.getByLabelText("湾事通回答")).findByText(
+    await within(screen.getByLabelText("湾小度回答")).findByText(
       "正在确认资料版本",
     );
 

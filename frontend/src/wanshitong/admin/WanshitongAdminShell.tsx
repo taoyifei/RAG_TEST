@@ -87,7 +87,7 @@ export function WanshitongAdminShell() {
         <div className="brand">
           <span className="brand-mark">湾</span>
           <div>
-            <strong>湾事通</strong>
+            <strong>湾小度</strong>
             <small>管理员控制台</small>
           </div>
         </div>

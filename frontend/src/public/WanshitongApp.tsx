@@ -103,9 +103,9 @@ export function WanshitongApp() {
       >
         <div className="wst-toolbar">{themeToggle}</div>
         <div className="wst-session-card">
-          <span className="wst-wordmark">湾事通</span>
+          <span className="wst-wordmark">湾小度</span>
           <h1>已退出</h1>
-          <p>本机的湾事通会话已清理，RDMS 登录状态未改变。</p>
+          <p>本机的湾小度会话已清理，RDMS 登录状态未改变。</p>
           <button onClick={chat.login} type="button">
             <LogIn aria-hidden="true" size={16} />
             重新登录
@@ -124,7 +124,7 @@ export function WanshitongApp() {
       >
         <div className="wst-toolbar">{themeToggle}</div>
         <div className="wst-session-card">
-          <span className="wst-wordmark">湾事通</span>
+          <span className="wst-wordmark">湾小度</span>
           {chat.sessionError ? (
             <>
               <h1>暂时无法打开公共问答</h1>
@@ -180,7 +180,7 @@ export function WanshitongApp() {
           <>
             <span className="wst-account-name">{chat.user.displayName}</span>
             <button
-              aria-label="退出湾事通"
+              aria-label="退出湾小度"
               className="wst-session-action"
               onClick={() => {
                 setRestoredDraft("");

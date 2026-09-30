@@ -2228,7 +2228,7 @@ const downloadExampleOptions = computed(() => [
 ])
 
 // 示例数据
-const exampleProductName = WANSHITONG_GATEWAY_AUTH ? '湾事通' : 'WeKnora'
+const exampleProductName = WANSHITONG_GATEWAY_AUTH ? '湾小度' : 'WeKnora'
 const exampleData: FAQEntryPayload[] = [
   {
     standard_question: `什么是 ${exampleProductName}？`,

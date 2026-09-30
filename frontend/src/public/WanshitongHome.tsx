@@ -39,7 +39,7 @@ export function WanshitongHome({
     <main className="wst-home" id="main-content">
       <div className="wst-home-content">
         <div className="wst-hero-copy">
-          <span className="wst-wordmark">湾事通</span>
+          <span className="wst-wordmark">湾小度</span>
           <h1>{welcomeText}</h1>
         </div>
         <PublicChatComposer

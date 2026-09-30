@@ -462,8 +462,8 @@ export function usePublicChat() {
         setPhase("failed");
         setSessionError(
           error instanceof TypeError
-            ? "暂时无法连接湾事通，请检查网络后重试。"
-            : "湾事通暂时无法初始化，请重试。",
+            ? "暂时无法连接湾小度，请检查网络后重试。"
+            : "湾小度暂时无法初始化，请重试。",
         );
       });
   }, [clearLocalSession, initializeSession]);
@@ -1142,7 +1142,7 @@ export function usePublicChat() {
   const announcement =
     turns.at(-1)?.stageMessage ??
     turns.at(-1)?.errorMessage ??
-    (phase === "creating_session" ? "正在连接湾事通" : "");
+    (phase === "creating_session" ? "正在连接湾小度" : "");
 
   return {
     announcement,

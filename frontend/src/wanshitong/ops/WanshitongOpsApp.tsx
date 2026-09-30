@@ -308,7 +308,7 @@ export function WanshitongOpsApp() {
   return (
     <main className="wst-ops" id="main-content">
       <header className="wst-ops-header">
-        <div><p className="wst-ops-eyebrow">湾事通 · 管理中心</p><h1>运营管理</h1></div>
+        <div><p className="wst-ops-eyebrow">湾小度 · 管理中心</p><h1>运营管理</h1></div>
         <nav aria-label="管理导航">
           <a href={withAppBase("/admin/platform/knowledge-bases")}>知识库与文件</a>
           <a href={withAppBase("/admin/platform/settings?section=models")}>模型设置</a>
@@ -319,7 +319,7 @@ export function WanshitongOpsApp() {
       {!csrfToken ? (
         <section className="wst-ops-login">
           <h2>管理员登录</h2>
-          <p>使用 8289 测试环境的湾事通管理员口令。此口令与普通 RDMS 登录密码不同。</p>
+          <p>使用 8289 测试环境的湾小度管理员口令。此口令与普通 RDMS 登录密码不同。</p>
           <form onSubmit={(event) => { event.preventDefault(); void login(); }}>
             <label htmlFor="wst-ops-token">管理员口令</label>
             <input autoComplete="off" id="wst-ops-token" onChange={(event) => setBootstrapToken(event.target.value)} type="password" value={bootstrapToken} />
@@ -469,7 +469,7 @@ export function WanshitongOpsApp() {
           {tab === "system" && (
             <section>
               <h2>系统状态与边界</h2>
-              <p>湾事通提供身份、问答界面、运营记录和引用访问；知识库引擎负责解析、检索与回答。</p>
+              <p>湾小度提供身份、问答界面、运营记录和引用访问；知识库引擎负责解析、检索与回答。</p>
               <p>已映射原件：{migrationCount ?? "读取中"}。新上传、解析分块、模型选择和任务队列使用原生管理页。</p>
               <div className="wst-ops-links">
                 <a href={withAppBase("/admin/platform/knowledge-bases")}>知识库与文件</a>

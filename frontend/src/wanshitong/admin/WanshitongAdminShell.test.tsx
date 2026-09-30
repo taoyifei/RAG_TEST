@@ -141,7 +141,7 @@ describe("湾事通管理员壳", () => {
       await screen.findByRole("dialog", { name: "连接管理控制台" }),
     ).toBeVisible();
     expect(screen.getByLabelText("管理口令")).toBeVisible();
-    expect(screen.getByText("登录后自动检查并绑定湾事通固定知识范围。")).toBeVisible();
+    expect(screen.getByText("登录后自动检查并绑定湾小度固定知识范围。")).toBeVisible();
   });
 
   it("固定 Scope 就绪后显示八项导航且没有空间选择器", async () => {
@@ -231,7 +231,7 @@ describe("湾事通管理员壳", () => {
     );
     expect(screen.queryByLabelText("知识库")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "清理湾事通知识库历史" }),
+      screen.getByRole("button", { name: "清理湾小度知识库历史" }),
     ).toBeVisible();
 
     await user.click(

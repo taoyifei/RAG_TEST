@@ -172,8 +172,8 @@ export function ConsoleProvider({
         });
         setFixedScope({
           state: "ready",
-          projectName: value.project_name || "湾事通",
-          knowledgeBaseName: value.knowledge_base_name || "湾事通知识库",
+          projectName: value.project_name || "湾小度",
+          knowledgeBaseName: value.knowledge_base_name || "湾小度知识库",
           reason: "",
         });
       })

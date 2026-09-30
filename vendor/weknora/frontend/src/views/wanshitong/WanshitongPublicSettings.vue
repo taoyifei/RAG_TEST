@@ -2,7 +2,7 @@
   <main class="wst-public-settings">
     <header class="wst-page-head">
       <div>
-        <p class="wst-eyebrow">湾事通 · 管理后台</p>
+        <p class="wst-eyebrow">湾小度 · 管理后台</p>
         <h1>用户端设置</h1>
         <p>这里保存的公开资料、回答配置和页面设置用于普通用户的新请求。</p>
       </div>
@@ -119,7 +119,7 @@
 
       <section v-else class="wst-panel">
         <h2>页面设置</h2>
-        <p class="wst-muted">这些字段只控制湾事通用户端展示和允许的操作；不开放任意 HTML 或样式。</p>
+        <p class="wst-muted">这些字段只控制湾小度用户端展示和允许的操作；不开放任意 HTML 或样式。</p>
         <label class="wst-field">欢迎文案<textarea v-model="page.welcome_text" rows="3" maxlength="500" /></label>
         <label class="wst-field">输入框提示<input v-model="page.input_placeholder" maxlength="200" /></label>
         <div class="wst-switches wst-page-switches">

@@ -11,7 +11,7 @@ describe("湾事通提问输入框", () => {
     render(
       <PublicChatComposer busy={false} onStop={vi.fn()} onSubmit={onSubmit} />,
     );
-    const textbox = screen.getByRole("textbox", { name: "向湾事通提问" });
+    const textbox = screen.getByRole("textbox", { name: "向湾小度提问" });
     expect(screen.queryByText("当前 Demo 仅支持 DOCX")).not.toBeInTheDocument();
 
     await user.type(textbox, "第一行");

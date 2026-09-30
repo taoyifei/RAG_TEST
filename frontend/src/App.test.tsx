@@ -63,10 +63,10 @@ describe("产品壳隔离", () => {
     });
     render(<App />);
 
-    expect(await screen.findByRole("link", { name: "进入湾事通管理后台" })).toHaveAttribute("href", "/admin/overview");
+    expect(await screen.findByRole("link", { name: "进入湾小度管理后台" })).toHaveAttribute("href", "/admin/overview");
     expect(screen.queryByText("企业知识助手")).not.toBeInTheDocument();
     expect(screen.queryByText("管理员控制台")).not.toBeInTheDocument();
-    expect(document.title).toBe("湾事通");
+    expect(document.title).toBe("湾小度");
   });
 
   it("kb 前缀下旧 React 管理路径指向唯一 Vue 后台且不跳 RDMS SSO", async () => {
@@ -84,7 +84,7 @@ describe("产品壳隔离", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("link", { name: "进入湾事通管理后台" })).toHaveAttribute("href", "/kb/admin/overview");
+    expect(await screen.findByRole("link", { name: "进入湾小度管理后台" })).toHaveAttribute("href", "/kb/admin/overview");
     expect(ssoRedirect).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe("/kb/admin");
   });

@@ -2,7 +2,7 @@
   <main class="wst-ops-view">
     <div class="wst-page-head">
       <div>
-        <p class="wst-eyebrow">湾事通 · 管理后台</p>
+        <p class="wst-eyebrow">湾小度 · 管理后台</p>
         <h1>{{ mode === 'overview' ? '运行概览' : mode === 'records' ? '使用记录' : '系统与诊断' }}</h1>
         <p class="wst-description">{{ mode === 'records' ? '查看真实 RDMS 用户问答与反馈，记录处理结果。' : mode === 'overview' ? '掌握用户端使用情况和当前资料状态。' : '查看迁移状态与诊断入口，发布门禁单独验收。' }}</p>
       </div>

@@ -76,7 +76,7 @@ export function AdminModelsPage() {
       <div className="section-heading">
         <div>
           <h2>模型与服务状态</h2>
-          <p>湾事通模式只读展示部署配置，不在浏览器中变更或验证 Provider。</p>
+          <p>湾小度模式只读展示部署配置，不在浏览器中变更或验证 Provider。</p>
         </div>
         <button className="secondary" onClick={load}>
           <RefreshCw aria-hidden="true" size={17} />

@@ -173,7 +173,7 @@ export function PublicAnswer({
   }, [active, turn.startedAt]);
 
   return (
-    <section className="wst-answer" aria-label="湾事通回答">
+    <section className="wst-answer" aria-label="湾小度回答">
       <div className="wst-answer-brand" aria-hidden="true">
         湾
       </div>

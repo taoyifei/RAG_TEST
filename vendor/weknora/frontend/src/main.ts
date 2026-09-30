@@ -24,7 +24,7 @@ import "@/assets/theme/wanshitong.css";
 
 if (WANSHITONG_GATEWAY_AUTH) {
   document.documentElement.classList.add("wanshitong-admin");
-  document.title = "湾事通 · 管理后台";
+  document.title = "湾小度 · 管理后台";
 }
 
 // 必须在 Vue 组件挂载之前执行，避免 tdesign-icons 运行时请求 tdesign.gtimg.com

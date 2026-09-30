@@ -407,7 +407,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                                 f"{APPLICATION_NAME} r{revision + 1} "
                                 f"{secrets.token_hex(4)}"
                             ),
-                            "description": "湾事通公共问答应用的已发布配置",
+                            "description": "湾小度公共问答应用的已发布配置",
                             "config": answer_settings.native_config(
                                 kb_ids
                             ),

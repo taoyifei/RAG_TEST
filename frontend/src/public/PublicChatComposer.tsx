@@ -40,11 +40,11 @@ export function PublicChatComposer({
         className="sr-only"
         htmlFor={`wst-question-${compact ? "chat" : "home"}`}
       >
-        向湾事通提问
+        向湾小度提问
       </label>
       <textarea
         id={`wst-question-${compact ? "chat" : "home"}`}
-        aria-label="向湾事通提问"
+        aria-label="向湾小度提问"
         disabled={busy}
         onChange={(event) => setQuestion(event.target.value)}
         onKeyDown={handleKeyDown}

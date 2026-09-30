@@ -2,9 +2,9 @@
   <main class="wst-login">
     <section class="wst-login-card">
       <div class="wst-login-mark">湾</div>
-      <p class="wst-login-eyebrow">湾事通 · 管理后台</p>
+      <p class="wst-login-eyebrow">湾小度 · 管理后台</p>
       <h1>管理员登录</h1>
-      <p class="wst-login-hint">使用湾事通管理员口令进入知识资料和用户端配置。</p>
+      <p class="wst-login-hint">使用湾小度管理员口令进入知识资料和用户端配置。</p>
       <form @submit.prevent="login">
         <label for="wst-admin-token">管理员口令</label>
         <input id="wst-admin-token" v-model="token" type="password" autocomplete="off" required :disabled="busy" />

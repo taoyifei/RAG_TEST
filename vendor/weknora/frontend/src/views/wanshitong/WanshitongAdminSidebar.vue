@@ -1,8 +1,8 @@
 <template>
-  <aside class="wst-admin-sidebar" aria-label="湾事通管理导航">
-    <RouterLink class="wst-admin-brand" to="/overview" aria-label="湾事通管理后台首页">
+  <aside class="wst-admin-sidebar" aria-label="湾小度管理导航">
+    <RouterLink class="wst-admin-brand" to="/overview" aria-label="湾小度管理后台首页">
       <span class="wst-admin-brand-mark">湾</span>
-      <span><strong>湾事通</strong><small>管理后台</small></span>
+      <span><strong>湾小度</strong><small>管理后台</small></span>
     </RouterLink>
     <p class="wst-admin-nav-label">工作台</p>
     <nav>

@@ -18,9 +18,9 @@ from wanshitong_gateway.weknora.admin import NativeAdminClient
 from wanshitong_gateway.weknora.client import NativeHttpError, WeKnoraClient
 
 APPLICATION_ID = "wanshitong-public"
-APPLICATION_NAME = "湾事通用户问答"
+APPLICATION_NAME = "湾小度用户问答"
 PUBLIC_IDENTITY_LINE = (
-    "你是湾事通（Wanshitong），中国移动（广东）湾区研究院（GMCII）的知识库问答助手。"
+    "你是湾小度，中国移动（广东）湾区研究院（GMCII）的知识库问答助手。"
 )
 _INTENT_IDS = frozenset(
     {
@@ -150,7 +150,7 @@ def config_digest(config: dict[str, Any]) -> str:
 def branded_system_prompt(prompt: str) -> str:
     """管理员载入原生默认模板时，避免保存后恢复原厂身份首句。"""
     first_line, separator, remainder = prompt.partition("\n")
-    if first_line.startswith("You are WeKnora"):
+    if first_line.startswith(("You are WeKnora", "你是湾事通（Wanshitong）")):
         return PUBLIC_IDENTITY_LINE + separator + remainder
     return prompt
 
