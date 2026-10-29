@@ -27,3 +27,12 @@ output/
 **/test-results/
 *Zone.Identifier*
 **/secrets*/
+
+# 旧项目资料与本地验收记录不随湾小度源码发布。
+/.wb*/
+/corpus-manifests/
+/evaluation/
+/design/
+/tmp/
+/docs/RAG资料库*/
+/docs/工业标准*/
