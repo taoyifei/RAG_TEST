@@ -11,9 +11,12 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from rag_app.wanshitong.sso_client import SsoClient
-from rag_app.wanshitong.sso_session import SsoIdentity, SsoSessionService
 from wanshitong_gateway.auth import GatewayAuth, register_auth_routes
+from wanshitong_gateway.compat.wanshitong.sso_client import SsoClient
+from wanshitong_gateway.compat.wanshitong.sso_session import (
+    SsoIdentity,
+    SsoSessionService,
+)
 from wanshitong_gateway.settings import GatewayAuthSettings
 
 _ORIGIN = "http://candidate.test:8289"
@@ -78,7 +81,14 @@ def gateway(tmp_path: Path) -> Iterator[tuple[GatewayAuth, TestClient]]:
         yield auth, browser
 
 
-def _login_public(browser: TestClient, monkeypatch: pytest.MonkeyPatch) -> dict:
+def _login_public(
+    browser: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    username: str = "tester",
+    user_id: str = "1001",
+    dept_id: str | None = None,
+) -> dict:
     entry = browser.get(
         "/kb/sso/entry",
         params={"return_to": "/kb/"},
@@ -96,10 +106,10 @@ def _login_public(browser: TestClient, monkeypatch: pytest.MonkeyPatch) -> dict:
         assert service == f"{_ORIGIN}/kb/sso/callback"
         assert state
         return SsoIdentity(
-            user_id="1001",
-            username="tester",
+            user_id=user_id,
+            username=username,
             nick_name="测试用户",
-            dept_id=None,
+            dept_id=dept_id,
             roles=("admin",),
             permissions=("*:*:*",),
         )
@@ -126,6 +136,9 @@ def test_sso_public_cookie_does_not_grant_admin(
     assert session["user"] == {
         "user_id": "1001",
         "display_name": "测试用户",
+        "username": "tester",
+        "dept_id": None,
+        "role": "user",
     }
     assert session["deployment_id"] == "candidate_8289"
     public = browser.post(
@@ -237,3 +250,76 @@ def test_settings_require_isolated_data_dir(tmp_path: Path) -> None:
                 "RAG_ADMIN_BOOTSTRAP_TOKEN_FILE": str(tmp_path / "bootstrap"),
             }
         )
+
+
+def test_taoyifei_sso_admin_uses_console_and_keeps_department(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(
+        browser, monkeypatch, username="taoyifei", dept_id="42"
+    )
+    assert session["user"]["role"] == "admin"
+    assert session["user"]["dept_id"] == "42"
+    assert auth.users is not None
+    assert auth.users.get("1001").dept_id == "42"
+    assert auth.settings.admin_cookie_name not in browser.cookies
+
+    resumed = browser.get("/kb/api/v1/console/session")
+    assert resumed.status_code == 200
+    assert resumed.json()["authenticated"] is True
+    assert resumed.json()["csrf_token"] == session["csrf_token"]
+    assert resumed.json()["session_id"] == session["session_id"]
+    assert auth.settings.admin_cookie_name not in browser.cookies
+
+    headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
+    assert (
+        browser.post("/kb/api/v1/console/session", headers=headers).status_code
+        == 200
+    )
+    assert (
+        browser.post(
+            "/kb/api/v1/console/session:rotate", headers=headers
+        ).status_code
+        == 200
+    )
+    assert (
+        browser.delete(
+            "/kb/api/v1/console/session", headers=headers
+        ).status_code
+        == 204
+    )
+    assert browser.get("/kb/api/v1/console/session").status_code == 401
+
+
+def test_local_role_change_applies_to_existing_sso_session(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(browser, monkeypatch)
+    assert browser.get("/kb/api/ops/users").status_code == 401
+    assert auth.users is not None
+    auth.users.set_role("1001", "admin")
+    assert browser.get("/kb/api/v1/console/session").status_code == 200
+    listing = browser.get("/kb/api/ops/users")
+    assert listing.status_code == 200
+    assert listing.json()["items"][0]["role"] == "admin"
+
+    headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
+    changed = browser.patch(
+        "/kb/api/ops/users/1001", json={"role": "hr"}, headers=headers
+    )
+    assert changed.status_code == 200
+    assert changed.json()["role"] == "hr"
+    assert browser.get("/kb/api/v1/console/session").status_code == 401
+    assert (
+        browser.patch(
+            "/kb/api/ops/users/1001", json={"role": "admin"}, headers=headers
+        ).status_code
+        == 401
+    )
+    resumed = browser.post(
+        "/kb/api/public/session", headers={"Origin": _ORIGIN}
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["user"]["role"] == "hr"

@@ -7,7 +7,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from rag_app.product.crypto import SecretAad, SecretCipher, load_master_key
+from wanshitong_gateway.compat.product.crypto import SecretAad, SecretCipher, load_master_key
 from wanshitong_gateway.legacy import LegacyHistoryReader
 
 

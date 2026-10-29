@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 import wanshitong_gateway.app as gateway_app
 from wanshitong_gateway.auth import GatewayAuth
 from wanshitong_gateway.engine_settings import EngineSettings
+from wanshitong_gateway.roles import UserProfile
 from wanshitong_gateway.store import GatewayStore
 from wanshitong_gateway.weknora.admin import NativeAdminClient
 from wanshitong_gateway.weknora.client import WeKnoraClient
@@ -56,6 +57,18 @@ class _FakeAuth:
         del csrf
         return SimpleNamespace(user_id=request.headers.get("x-test-user", "u1"))
 
+    def require_profile(
+        self, request: Request, *, csrf: bool | None = None
+    ) -> UserProfile:
+        principal = self.require_public(request, csrf=csrf)
+        return UserProfile(
+            user_id=principal.user_id,
+            username=principal.user_id,
+            display_name=principal.user_id,
+            dept_id=None,
+            role="user",
+        )
+
     def require_admin(
         self, request: Request, *, csrf: bool | None = None
     ) -> SimpleNamespace:
@@ -96,14 +109,14 @@ def test_public_native_round_trip_preserves_answer_and_isolation(  # noqa: PLR09
                 200,
                 json={
                     "success": True,
-                        "data": [
-                            {
-                                "id": "answer-1",
-                                "content": "第一段第二段",
-                                "created_at": "2026-09-26T00:00:00Z",
-                                "is_completed": True,
-                            }
-                        ],
+                    "data": [
+                        {
+                            "id": "answer-1",
+                            "content": "第一段第二段",
+                            "created_at": "2026-09-26T00:00:00Z",
+                            "is_completed": True,
+                        }
+                    ],
                 },
             )
         if path == "/api/v1/sessions/session-1":
@@ -294,7 +307,10 @@ def test_recommendations_require_review_before_publication(
         auth=cast(GatewayAuth, auth),
         store=store,
         engine=engine,
-        native=cast(WeKnoraClient, SimpleNamespace(close=close)),
+        native=cast(
+            WeKnoraClient,
+            SimpleNamespace(close=close, api_key_fingerprint=lambda: b"x" * 32),
+        ),
         admin_native=cast(NativeAdminClient, SimpleNamespace(close=close)),
     )
     base = "/kb/api/admin/ops/recommendations"
@@ -308,9 +324,10 @@ def test_recommendations_require_review_before_publication(
         item = draft.json()
         assert item["state"] == "DRAFT"
         assert browser.get(base).json()["items"][0]["question"] == question
-        assert browser.get("/kb/api/public/popular-questions").json()[
-            "mode"
-        ] == "EMPTY"
+        assert (
+            browser.get("/kb/api/public/popular-questions").json()["mode"]
+            == "EMPTY"
+        )
 
         url = f"{base}/{item['recommendation_id']}"
         body = {
@@ -322,9 +339,7 @@ def test_recommendations_require_review_before_publication(
             "state": "APPROVED",
         }
         assert browser.put(url, json=body).status_code == 422
-        approved = browser.put(
-            url, json={**body, "review_confirmed": True}
-        )
+        approved = browser.put(url, json={**body, "review_confirmed": True})
         assert approved.status_code == 200
         public = browser.get("/kb/api/public/popular-questions").json()
         assert public["mode"] == "POPULAR"
@@ -335,9 +350,12 @@ def test_recommendations_require_review_before_publication(
                 "topic_key": "研发",
             }
         ]
-        assert browser.put(
-            url, json={**body, "review_confirmed": True}
-        ).status_code == 409
+        assert (
+            browser.put(
+                url, json={**body, "review_confirmed": True}
+            ).status_code
+            == 409
+        )
         disabled = browser.put(
             url,
             json={
@@ -348,6 +366,7 @@ def test_recommendations_require_review_before_publication(
             },
         )
         assert disabled.status_code == 200
-        assert browser.get("/kb/api/public/popular-questions").json()[
-            "items"
-        ] == []
+        assert (
+            browser.get("/kb/api/public/popular-questions").json()["items"]
+            == []
+        )

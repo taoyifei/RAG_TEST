@@ -1,7 +1,19 @@
-import { LogIn, LogOut, Moon, RotateCcw, Sun } from "lucide-react";
+import {
+  Files,
+  LogIn,
+  LogOut,
+  MessageCircle,
+  Moon,
+  RotateCcw,
+  Sun,
+  Users,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { withAppBase } from "../app/basePath";
 import { consumeLoginDraft } from "./authNavigation";
+import { LibraryWorkspace } from "./LibraryWorkspace";
+import { UserRolesWorkspace } from "./UserRolesWorkspace";
 import type { PublicPopularQuestion } from "./publicApi";
 import type { SuggestedQuestion } from "./suggestedQuestions";
 import { WanshitongChat } from "./WanshitongChat";
@@ -12,6 +24,9 @@ import { useSuggestedQuestions } from "./useSuggestedQuestions";
 
 export function WanshitongApp() {
   const [restoredDraft, setRestoredDraft] = useState(consumeLoginDraft);
+  const [view, setView] = useState(
+    () => new URLSearchParams(window.location.search).get("view") ?? "chat",
+  );
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try {
       return window.localStorage.getItem("wanshitong-theme") === "light"
@@ -22,6 +37,23 @@ export function WanshitongApp() {
     }
   });
   const chat = usePublicChat();
+  const role = chat.user?.role ?? "user";
+  useEffect(() => {
+    document.title = "湾小度";
+    const onLocation = () =>
+      setView(
+        new URLSearchParams(window.location.search).get("view") ?? "chat",
+      );
+    window.addEventListener("popstate", onLocation);
+    return () => window.removeEventListener("popstate", onLocation);
+  }, []);
+  const openView = (next: "chat" | "library" | "users") => {
+    const url = new URL(window.location.href);
+    if (next === "chat") url.searchParams.delete("view");
+    else url.searchParams.set("view", next);
+    window.history.pushState({}, "", `${url.pathname}${url.search}`);
+    setView(next);
+  };
   const draftConversationRef = useRef(chat.conversationId);
   useEffect(() => {
     if (draftConversationRef.current === chat.conversationId) return;
@@ -151,31 +183,67 @@ export function WanshitongApp() {
         跳到主要内容
       </a>
       <div className="wst-toolbar">
-        {chat.pageSettings.show_history && chat.historySessions.length > 0 && (
-          <details className="wst-history-menu">
-            <summary>历史会话</summary>
-            <div className="wst-history-list">
-              {chat.historySessions.map((item) => (
-                <button
-                  disabled={chat.busy}
-                  key={item.conversation_id}
-                  onClick={() => {
-                    void chat.openHistory(item.conversation_id);
-                  }}
-                  type="button"
-                >
-                  {item.title}
-                </button>
-              ))}
-              {chat.historyMoreCount > 0 && (
-                <p>
-                  当前仅显示最近 50 个会话，另有 {chat.historyMoreCount}{" "}
-                  个较早会话。
-                </p>
-              )}
-            </div>
-          </details>
+        <button
+          className="wst-session-action"
+          type="button"
+          disabled={chat.busy}
+          onClick={() => openView(view === "chat" ? "library" : "chat")}
+        >
+          {view === "chat" ? (
+            <Files size={16} aria-hidden="true" />
+          ) : (
+            <MessageCircle size={16} aria-hidden="true" />
+          )}
+          {view === "chat" ? "我的资料" : "返回问答"}
+        </button>
+        {role === "admin" && (
+          <>
+            <button
+              className="wst-session-action"
+              type="button"
+              disabled={chat.busy}
+              onClick={() => openView("users")}
+            >
+              <Users size={16} aria-hidden="true" />
+              用户与角色
+            </button>
+            <a
+              className="wst-session-action wst-toolbar-link"
+              href={withAppBase("/admin/")}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              管理后台
+            </a>
+          </>
         )}
+        {view === "chat" &&
+          chat.pageSettings.show_history &&
+          chat.historySessions.length > 0 && (
+            <details className="wst-history-menu">
+              <summary>历史会话</summary>
+              <div className="wst-history-list">
+                {chat.historySessions.map((item) => (
+                  <button
+                    disabled={chat.busy}
+                    key={item.conversation_id}
+                    onClick={() => {
+                      void chat.openHistory(item.conversation_id);
+                    }}
+                    type="button"
+                  >
+                    {item.title}
+                  </button>
+                ))}
+                {chat.historyMoreCount > 0 && (
+                  <p>
+                    当前仅显示最近 50 个会话，另有 {chat.historyMoreCount}{" "}
+                    个较早会话。
+                  </p>
+                )}
+              </div>
+            </details>
+          )}
         {chat.user ? (
           <>
             <span className="wst-account-name">{chat.user.displayName}</span>
@@ -200,7 +268,18 @@ export function WanshitongApp() {
           {chat.logoutError}
         </p>
       ) : null}
-      {chat.turns.length === 0 ? (
+      {view === "library" ? (
+        <LibraryWorkspace
+          userRole={role}
+          getCsrfToken={chat.getCsrfToken}
+          onBack={() => openView("chat")}
+        />
+      ) : view === "users" && role === "admin" ? (
+        <UserRolesWorkspace
+          getCsrfToken={chat.getCsrfToken}
+          onBack={() => openView("chat")}
+        />
+      ) : chat.turns.length === 0 ? (
         <WanshitongHome
           busy={chat.busy}
           conversationId={chat.conversationId}

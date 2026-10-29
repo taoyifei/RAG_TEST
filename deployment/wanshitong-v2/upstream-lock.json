@@ -1,0 +1,21 @@
+{
+  "version": "v0.8.3",
+  "commit": "3e22822c1d2397be730c458c7539d0eb8c113a24",
+  "source_archive_sha256": "91e13c59134db179ca305dfb1dce2ee6fed752e1334ff0ab662255474e012568",
+  "official_amd64": {
+    "weknora-app": {
+      "manifest_digest": "sha256:28739bcf58a8f8e0fd3f5c120329d2ec538128ce52295ffb46ca47e0deee62c1",
+      "config_digest": "sha256:6f66d56dc139b3404e8e484058d1398e111351c746c99410a489d0891b66f6e0",
+      "revision": "3e22822c1d2397be730c458c7539d0eb8c113a24"
+    },
+    "weknora-docreader": {
+      "manifest_digest": "sha256:ee308c6d69f278619794bd5f42af1d78624efefb57dce345e5d00d12798b19fa",
+      "config_digest": "sha256:2e53ece9f2a1caa9acef4b54e70cc9f079ef0c2f3103abca9f372e44a6f67df0",
+      "revision": "3e22822c1d2397be730c458c7539d0eb8c113a24"
+    }
+  },
+  "docreader_dependency_sha256": {
+    "pyproject.toml": "757a432a66e826fbbc45f590bc41dd349cbafa2ecd1517596255a93b76d0259f",
+    "uv.lock": "57861b67cfcbbaeee7e8ae49b8f22985b6eae4d83ffd3c0b59f761181af1bf85"
+  }
+}

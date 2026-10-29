@@ -20,11 +20,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 
-from rag_app.wanshitong.public_models import (
-    PublicChatStopRequest,
-    PublicFeedbackRequest,
-)
-from rag_app.wanshitong.shortcuts import SHORTCUT_CATALOG
 from wanshitong_gateway.admission import (
     BoundedQaQueue,
     QaSlot,
@@ -33,11 +28,17 @@ from wanshitong_gateway.admission import (
     QueueWaitTimeoutError,
 )
 from wanshitong_gateway.auth import GatewayAuth, register_auth_routes
+from wanshitong_gateway.compat.wanshitong.public_models import (
+    PublicChatStopRequest,
+    PublicFeedbackRequest,
+)
+from wanshitong_gateway.compat.wanshitong.shortcuts import SHORTCUT_CATALOG
 from wanshitong_gateway.engine_settings import (
     EngineSettings,
     load_server_secret,
 )
 from wanshitong_gateway.legacy import LegacyHistoryReader
+from wanshitong_gateway.library import LibraryService, register_library_routes
 from wanshitong_gateway.models import GatewayChatRequest
 from wanshitong_gateway.public_app import (
     APPLICATION_ID,
@@ -190,6 +191,13 @@ async def _admit_qa(request: Request, queue: BoundedQaQueue) -> QaSlot:
         raise HTTPException(status_code=408, detail="请求已断开。") from None
 
 
+def _ready_slot(slot: QaSlot | None) -> QaSlot:
+    """进入流式响应前确认队列已分配资源。"""
+    if slot is None:
+        raise RuntimeError("问答队列尚未分配资源。")
+    return slot
+
+
 def create_app(  # noqa: PLR0913, PLR0915
     *,
     auth: GatewayAuth | None = None,
@@ -242,6 +250,22 @@ def create_app(  # noqa: PLR0913, PLR0915
 
     app = FastAPI(root_path=auth.settings.root_path, lifespan=lifespan)
     register_auth_routes(app, auth)
+    library = LibraryService(
+        auth.settings.database_path,
+        admin_native,
+        engine.public_kb_ids,
+        native.api_key_fingerprint(),
+        public_scope=lambda: (
+            current["knowledge_base_ids"]
+            if (
+                current := store.public_app(
+                    deployment_id=auth.settings.deployment_id
+                )
+            )
+            else engine.public_kb_ids
+        ),
+    )
+    register_library_routes(app, auth, library)
 
     def page_settings() -> PageSettings:
         binding = store.public_app(deployment_id=auth.settings.deployment_id)
@@ -267,9 +291,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                 "page_settings": PageSettings().model_dump(),
             }
         try:
-            _, _, config = await validate_binding(
-                native, admin_native, binding
-            )
+            _, _, config = await validate_binding(native, admin_native, binding)
             answer = answer_from_config(config).model_dump()
             status = "ACTIVE"
         except NativeHttpError as error:
@@ -340,9 +362,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                 key_scope = await admin_native.public_key_scope(
                     native.api_key_fingerprint()
                 )
-                if not set(kb_ids).issubset(
-                    key_scope.knowledge_base_ids
-                ):
+                if not set(kb_ids).issubset(key_scope.knowledge_base_ids):
                     raise HTTPException(
                         status_code=422,
                         detail="public API key cannot access selected KBs",
@@ -371,8 +391,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                     )
                     if (
                         model.get("id") != model_id
-                        or model.get("tenant_id")
-                        not in {0, engine.tenant_id}
+                        or model.get("tenant_id") not in {0, engine.tenant_id}
                         or model.get("type") != model_type
                         or model.get("status") != "active"
                     ):
@@ -408,9 +427,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                                 f"{secrets.token_hex(4)}"
                             ),
                             "description": "湾小度公共问答应用的已发布配置",
-                            "config": answer_settings.native_config(
-                                kb_ids
-                            ),
+                            "config": answer_settings.native_config(kb_ids),
                         },
                     )
                     try:
@@ -944,7 +961,18 @@ def create_app(  # noqa: PLR0913, PLR0915
                     status_code=503,
                     detail=f"public app unavailable ({error.status_code})",
                 ) from None
+        profile = auth.require_profile(request)
+        kb_ids = library.readable_kbs(profile)
         owner_id = _owner_id(auth, user_id)
+        # 原生会话会携带旧轮次内容；角色降级后必须使用新的会话。
+        library.check_history(
+            profile,
+            store.list_turns(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            ),
+        )
         client_context = _usage_context(body.client_context)
         retry_of = client_context.get("retry_of_trace_id")
         if retry_of is not None:
@@ -1003,7 +1031,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                 slot.release()
             lock.release()
             raise
-        assert slot is not None
+        slot = _ready_slot(slot)
 
         bridge = BridgeStream(
             trace_id=trace_id,
@@ -1162,6 +1190,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         turn = store.get_turn(trace_id=trace_id, owner_id=owner_id)
         if turn is None or turn["conversation_id"] != body.conversation_id:
             raise HTTPException(status_code=404, detail="turn not found")
+        library.check_turn(auth.require_profile(request), turn)
         message_id = turn["native_message_id"]
         if not isinstance(message_id, str) or not message_id:
             raise HTTPException(
@@ -1183,7 +1212,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                 slot.release()
             lock.release()
             raise
-        assert slot is not None
+        slot = _ready_slot(slot)
         bridge = BridgeStream(
             trace_id=trace_id,
             session_id=str(turn["native_session_id"]),
@@ -1426,6 +1455,10 @@ def create_app(  # noqa: PLR0913, PLR0915
             owner_id=owner_id,
             conversation_id=conversation_id,
         ):
+            try:
+                library.check_turn(auth.require_profile(request), turn)
+            except HTTPException:
+                continue
             native_message = native_by_id.get(turn["native_message_id"])
             native_answer = (
                 native_message.get("content")
@@ -1512,6 +1545,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         )
         if turn is None or turn["conversation_id"] != conversation_id:
             raise HTTPException(status_code=404, detail="turn not found")
+        library.check_turn(auth.require_profile(request), turn)
         reference = store.get_reference(reference_id=ref_id, trace_id=trace_id)
         if reference is None:
             raise HTTPException(status_code=404, detail="resource unavailable")
@@ -1574,6 +1608,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         )
         if turn is None or turn["conversation_id"] != conversation_id:
             raise HTTPException(status_code=404, detail="turn not found")
+        library.check_turn(auth.require_profile(request), turn)
         reference = store.get_reference(reference_id=ref_id, trace_id=trace_id)
         if reference is None:
             raise HTTPException(status_code=404, detail="resource unavailable")
@@ -1621,6 +1656,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         )
         if turn is None or turn["conversation_id"] != conversation_id:
             raise HTTPException(status_code=404, detail="turn not found")
+        library.check_turn(auth.require_profile(request), turn)
         if (
             not file_path.startswith("resource://")
             or len(file_path) > _MAX_RESOURCE_HANDLE_CHARS

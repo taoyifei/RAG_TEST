@@ -7,13 +7,17 @@ import asyncio
 import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
 import httpx
 
-from wanshitong_gateway.engine_settings import EngineSettings, load_server_secret
+from wanshitong_gateway.engine_settings import (
+    EngineSettings,
+    load_server_secret,
+)
 from wanshitong_gateway.settings import GatewayAuthSettings
 from wanshitong_gateway.weknora.client import WeKnoraClient
 from wanshitong_gateway.weknora.principal import ExternalPrincipalSigner
@@ -36,13 +40,19 @@ class NativeHistory(Protocol):
 
     async def messages(
         self, *, user_id: str, session_id: str
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[dict[str, Any]]:
+        """读取指定用户原生会话中的消息。"""
+        ...
 
     async def delete_message(
         self, *, user_id: str, session_id: str, message_id: str
-    ) -> None: ...
+    ) -> None:
+        """删除该用户会话内指定的原生消息。"""
+        ...
 
-    async def delete_session(self, *, user_id: str, session_id: str) -> None: ...
+    async def delete_session(self, *, user_id: str, session_id: str) -> None:
+        """删除该用户自己已过期的原生会话。"""
+        ...
 
 
 class NativeHistoryClient:
@@ -102,10 +112,10 @@ class NativeHistoryClient:
                 "X-External-User-Token": self._signer.sign(user_id),
             },
         )
-        if response.status_code == 404:
+        if response.status_code == HTTPStatus.NOT_FOUND:
             # 前次执行可能已删原生记录，却在提交网关 SQLite 前中断。
             return
-        if response.status_code != 200:
+        if response.status_code != HTTPStatus.OK:
             raise RuntimeError(f"原生历史清理失败，HTTP {response.status_code}")
         try:
             payload = response.json()
@@ -145,7 +155,7 @@ def _connect(path: Path, *, execute: bool) -> sqlite3.Connection:
 
 def _recent_feedback_clause(alias: str) -> str:
     return (
-        "EXISTS (SELECT 1 FROM gateway_feedback AS f "
+        "EXISTS (SELECT 1 FROM gateway_feedback AS f "  # noqa: S608 - 仅插入模块内固定别名t，值均参数化。
         "LEFT JOIN gateway_feedback_reviews AS r ON r.trace_id=f.trace_id "
         f"WHERE f.trace_id={alias}.trace_id "
         "AND (f.created_at>=? OR r.updated_at>=?)) "
@@ -158,15 +168,23 @@ def _old_sessions(
     connection: sqlite3.Connection, deployment_id: str, cutoff: str
 ) -> list[sqlite3.Row]:
     return connection.execute(
-        "SELECT c.* FROM gateway_conversations AS c "
+        "SELECT c.* FROM gateway_conversations AS c "  # noqa: S608 - 只拼接固定反馈条件，值均参数化。
         "WHERE c.deployment_id=? AND c.updated_at<? AND NOT EXISTS ("
-        "SELECT 1 FROM gateway_turns AS t WHERE t.deployment_id=c.deployment_id "
+        "SELECT 1 FROM gateway_turns AS t "
+        "WHERE t.deployment_id=c.deployment_id "
         "AND t.owner_id=c.owner_id AND t.conversation_id=c.conversation_id "
         "AND (t.created_at>=? OR "
         + _recent_feedback_clause("t")
         + ")) ORDER BY c.updated_at LIMIT ?",
-        (deployment_id, cutoff, cutoff, cutoff, cutoff, cutoff,
-         _MAX_SESSIONS_PER_RUN),
+        (
+            deployment_id,
+            cutoff,
+            cutoff,
+            cutoff,
+            cutoff,
+            cutoff,
+            _MAX_SESSIONS_PER_RUN,
+        ),
     ).fetchall()
 
 
@@ -174,15 +192,14 @@ def _old_turns(
     connection: sqlite3.Connection, deployment_id: str, cutoff: str
 ) -> list[sqlite3.Row]:
     return connection.execute(
-        "SELECT t.* FROM gateway_turns AS t JOIN gateway_conversations AS c "
+        "SELECT t.* FROM gateway_turns AS t JOIN gateway_conversations AS c "  # noqa: S608 - 只拼接固定反馈条件，值均参数化。
         "ON c.deployment_id=t.deployment_id AND c.owner_id=t.owner_id "
         "AND c.conversation_id=t.conversation_id "
         "WHERE t.deployment_id=? AND t.created_at<? "
         "AND t.status NOT IN ('streaming','stop_requested') "
         "AND NOT (" + _recent_feedback_clause("t") + ") "
         "ORDER BY t.created_at LIMIT ?",
-        (deployment_id, cutoff, cutoff, cutoff, cutoff,
-         _MAX_TURNS_PER_RUN),
+        (deployment_id, cutoff, cutoff, cutoff, cutoff, _MAX_TURNS_PER_RUN),
     ).fetchall()
 
 
@@ -206,13 +223,13 @@ def _delete_turn_children(
 ) -> None:
     for table in _TURN_CHILD_TABLES:
         connection.execute(
-            f"DELETE FROM {table} WHERE trace_id IN "
+            f"DELETE FROM {table} WHERE trace_id IN "  # noqa: S608 - 表名来自固定元组，where为内部常量。
             f"(SELECT trace_id FROM gateway_turns WHERE {where})",
             parameters,
         )
 
 
-async def prune_history(
+async def prune_history(  # noqa: PLR0912, PLR0915 - 保留删除与映射清理的事务边界。
     connection: sqlite3.Connection,
     native: NativeHistory | None,
     *,
@@ -227,7 +244,8 @@ async def prune_history(
         for row in sessions
     }
     turns = [
-        row for row in _old_turns(connection, deployment_id, cutoff)
+        row
+        for row in _old_turns(connection, deployment_id, cutoff)
         if (row["deployment_id"], row["owner_id"], row["conversation_id"])
         not in expiring_sessions
     ]
@@ -252,7 +270,7 @@ async def prune_history(
         connection.execute("BEGIN IMMEDIATE")
         try:
             current = connection.execute(
-                "SELECT c.updated_at FROM gateway_conversations AS c "
+                "SELECT c.updated_at FROM gateway_conversations AS c "  # noqa: S608 - 只拼接固定反馈条件，值均参数化。
                 "WHERE c.deployment_id=? AND c.owner_id=? "
                 "AND c.conversation_id=? AND c.updated_at=? "
                 "AND c.updated_at<? AND NOT EXISTS ("
@@ -262,8 +280,15 @@ async def prune_history(
                 "AND (t.created_at>=? OR "
                 + _recent_feedback_clause("t")
                 + "))",
-                (*scope, str(session["updated_at"]), cutoff, cutoff,
-                 cutoff, cutoff, cutoff),
+                (
+                    *scope,
+                    str(session["updated_at"]),
+                    cutoff,
+                    cutoff,
+                    cutoff,
+                    cutoff,
+                    cutoff,
+                ),
             ).fetchone()
             if current is None:
                 connection.rollback()
@@ -274,9 +299,13 @@ async def prune_history(
             )
             where = "deployment_id=? AND owner_id=? AND conversation_id=?"
             _delete_turn_children(connection, where, scope)
-            connection.execute(f"DELETE FROM gateway_turns WHERE {where}", scope)
             connection.execute(
-                f"DELETE FROM gateway_conversations WHERE {where}", scope
+                f"DELETE FROM gateway_turns WHERE {where}",  # noqa: S608 - where为内部常量，值参数化。
+                scope,
+            )
+            connection.execute(
+                f"DELETE FROM gateway_conversations WHERE {where}",  # noqa: S608 - where为内部常量，值参数化。
+                scope,
             )
             connection.commit()
             counts["sessions"] += 1
@@ -294,21 +323,22 @@ async def prune_history(
         # 原生全历史读取可能分页较久，放在 SQLite 写锁之外。
         messages = await native.messages(user_id=user_id, session_id=session_id)
         related = [
-            item for item in messages
-            if item.get("request_id") == request_id
+            item for item in messages if item.get("request_id") == request_id
         ]
         if related and not any(
-            item.get("id") == turn["native_message_id"]
-            for item in related
+            item.get("id") == turn["native_message_id"] for item in related
         ):
             raise RuntimeError("原生消息和网关轮次不匹配，停止清理")
-        message_ids = [item.get("id") for item in related]
-        if any(not isinstance(value, str) for value in message_ids):
-            raise RuntimeError("原生历史缺少消息 ID，停止清理")
+        message_ids: list[str] = []
+        for item in related:
+            message_id = item.get("id")
+            if not isinstance(message_id, str):
+                raise RuntimeError("原生历史缺少消息 ID，停止清理")
+            message_ids.append(message_id)
         connection.execute("BEGIN IMMEDIATE")
         try:
             current = connection.execute(
-                "SELECT t.trace_id FROM gateway_turns AS t JOIN "
+                "SELECT t.trace_id FROM gateway_turns AS t JOIN "  # noqa: S608 - 只拼接固定反馈条件，值均参数化。
                 "gateway_conversations AS c ON "
                 "c.deployment_id=t.deployment_id AND c.owner_id=t.owner_id "
                 "AND c.conversation_id=t.conversation_id "
@@ -321,13 +351,16 @@ async def prune_history(
             if current is None:
                 connection.rollback()
                 continue
-            await asyncio.gather(*(
-                native.delete_message(
-                    user_id=user_id, session_id=session_id,
-                    message_id=message_id,
+            await asyncio.gather(
+                *(
+                    native.delete_message(
+                        user_id=user_id,
+                        session_id=session_id,
+                        message_id=message_id,
+                    )
+                    for message_id in message_ids
                 )
-                for message_id in message_ids
-            ))
+            )
             _delete_turn_children(connection, "trace_id=?", (trace_id,))
             connection.execute(
                 "DELETE FROM gateway_turns WHERE trace_id=?", (trace_id,)

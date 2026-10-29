@@ -1,0 +1,17 @@
+# 在已固定的同版运行依赖上装入官方0.8.3完整应用产物，禁止在生产原镜像内修改。
+ARG WXD_APP_RUNTIME_IMAGE
+FROM ${WXD_APP_RUNTIME_IMAGE}
+USER root
+WORKDIR /app
+RUN rm -rf /app/config /app/scripts /app/migrations /app/WeKnora
+COPY vendor/weknora/config/ /app/config/
+COPY vendor/weknora/scripts/ /app/scripts/
+COPY vendor/weknora/migrations/ /app/migrations/
+COPY deployment/wanshitong-v2/build-context/native-app/ /app/
+RUN chmod +x /app/WeKnora /app/scripts/*.sh
+LABEL org.opencontainers.image.version="v0.8.3" \
+      org.opencontainers.image.revision="3e22822c1d2397be730c458c7539d0eb8c113a24" \
+      org.opencontainers.image.source="https://github.com/Tencent/WeKnora" \
+      io.wanxiaodu.runtime-kind="official-083-artifacts-on-locked-compatible-runtime"
+ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
+CMD ["./WeKnora"]

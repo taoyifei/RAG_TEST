@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 import wanshitong_gateway.app as gateway_app
 from wanshitong_gateway.auth import GatewayAuth
 from wanshitong_gateway.engine_settings import EngineSettings
+from wanshitong_gateway.roles import UserProfile
 from wanshitong_gateway.store import GatewayStore
 from wanshitong_gateway.weknora.admin import NativeAdminClient
 from wanshitong_gateway.weknora.client import WeKnoraClient
@@ -43,6 +44,18 @@ class _FakeAuth:
         del request, csrf
         return SimpleNamespace(user_id="u1")
 
+    def require_profile(
+        self, request: Request, *, csrf: bool | None = None
+    ) -> UserProfile:
+        principal = self.require_public(request, csrf=csrf)
+        return UserProfile(
+            user_id=principal.user_id,
+            username=principal.user_id,
+            display_name=principal.user_id,
+            dept_id=None,
+            role="user",
+        )
+
     def require_admin(
         self, request: Request, *, csrf: bool | None = None
     ) -> SimpleNamespace:
@@ -62,7 +75,7 @@ class _NativeState:
         self.missing_intent_template = False
         self.session_count = 0
 
-    def respond(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911 - 测试替身逐条模拟固定接口。
+    def respond(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911, PLR0912 - 测试替身逐条模拟固定接口。
         self.requests.append(request)
         path = request.url.path
         if path == "/api/v1/auth/login":
@@ -71,8 +84,13 @@ class _NativeState:
             )
         if path == "/api/v1/tenants/kv/prompt-templates":
             intent_ids = (
-                "greeting", "chitchat", "follow_up", "image_only",
-                "summarize", "web_search", "doc_only",
+                "greeting",
+                "chitchat",
+                "follow_up",
+                "image_only",
+                "summarize",
+                "web_search",
+                "doc_only",
             )
             if self.missing_intent_template:
                 intent_ids = intent_ids[:-1]
@@ -239,9 +257,7 @@ def _save_body(
     }
 
 
-def _app(
-    tmp_path: Path, state: _NativeState, store: GatewayStore
-) -> FastAPI:
+def _app(tmp_path: Path, state: _NativeState, store: GatewayStore) -> FastAPI:
     native = WeKnoraClient(
         base_url="http://native.test:8080",
         api_key="test-only-key",
@@ -307,10 +323,13 @@ def test_publish_model_and_kb_changes_next_public_chat(
             revision=0, model_id="model-a", kb_ids=["kb-old"]
         )
         unconfirmed["migration_confirmed"] = False
-        assert browser.put(
-            "/kb/api/admin/public-app",
-            json=unconfirmed,
-        ).status_code == 422
+        assert (
+            browser.put(
+                "/kb/api/admin/public-app",
+                json=unconfirmed,
+            ).status_code
+            == 422
+        )
         saved = browser.put(
             "/kb/api/admin/public-app",
             json=_save_body(revision=0, model_id="model-a", kb_ids=["kb-old"]),
@@ -318,17 +337,26 @@ def test_publish_model_and_kb_changes_next_public_chat(
         assert saved.status_code == 200, saved.text
         assert saved.json()["status"] == "ACTIVE"
         assert saved.json()["model_id"] == "model-a"
-        assert browser.put(
-            f"/kb/api/engine-admin/api/v1/agents/{_AGENT_ID_A}",
-            json={"name": "越过公共应用管理"},
-        ).status_code == 403
-        assert browser.post(
-            "/kb/api/engine-admin/api/v1/agents",
-            json={"name": "绕过统一配置"},
-        ).status_code == 403
-        assert browser.get(
-            "/kb/api/engine-admin/api/v1/tenants/8/api-keys"
-        ).status_code == 403
+        assert (
+            browser.put(
+                f"/kb/api/engine-admin/api/v1/agents/{_AGENT_ID_A}",
+                json={"name": "越过公共应用管理"},
+            ).status_code
+            == 403
+        )
+        assert (
+            browser.post(
+                "/kb/api/engine-admin/api/v1/agents",
+                json={"name": "绕过统一配置"},
+            ).status_code
+            == 403
+        )
+        assert (
+            browser.get(
+                "/kb/api/engine-admin/api/v1/tenants/8/api-keys"
+            ).status_code
+            == 403
+        )
         browser.post(
             "/kb/api/public/chat",
             json={"conversation_id": "one", "query": "问题一"},
@@ -365,14 +393,22 @@ def test_publish_model_and_kb_changes_next_public_chat(
         assert state.agents[_AGENT_ID_B]["config"]["model_id"] == "model-b"
         intent_prompts = state.agents[_AGENT_ID_A]["config"]["intent_prompts"]
         assert set(intent_prompts) == {
-            "greeting", "chitchat", "follow_up", "image_only",
-            "summarize", "web_search", "doc_only",
+            "greeting",
+            "chitchat",
+            "follow_up",
+            "image_only",
+            "summarize",
+            "web_search",
+            "doc_only",
         }
         assert intent_prompts["chitchat"] == (
             "你是湾小度，中国移动（广东）湾区研究院（GMCII）的知识库问答助手。\n"
             "Native instructions for chitchat."
         )
-        assert state.agents[_AGENT_ID_A]["config"]["system_prompt"] == "已核实系统提示"
+        assert (
+            state.agents[_AGENT_ID_A]["config"]["system_prompt"]
+            == "已核实系统提示"
+        )
         assert browser.get("/kb/api/admin/public-app").json()["revision"] == 2
     with TestClient(_app(tmp_path, state, store)) as restarted:
         assert (
@@ -392,41 +428,51 @@ def test_publish_rejects_conflicts_key_mismatch_and_partial_failure(
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     with TestClient(_app(tmp_path, state, store)) as browser:
         empty = _save_body(revision=0, model_id="model-a", kb_ids=[])
-        assert browser.put(
-            "/kb/api/admin/public-app", json=empty
-        ).status_code == 422
+        assert (
+            browser.put("/kb/api/admin/public-app", json=empty).status_code
+            == 422
+        )
         state.public_kbs.remove("kb-new")
         ungranted = _save_body(
             revision=0, model_id="model-a", kb_ids=["kb-new"]
         )
-        assert browser.put(
-            "/kb/api/admin/public-app", json=ungranted
-        ).status_code == 422
+        assert (
+            browser.put("/kb/api/admin/public-app", json=ungranted).status_code
+            == 422
+        )
         assert not state.agents
         first = _save_body(revision=0, model_id="model-a", kb_ids=["kb-old"])
-        assert browser.put(
-            "/kb/api/admin/public-app", json=first
-        ).status_code == 200
-        assert browser.put(
-            "/kb/api/admin/public-app", json=first
-        ).status_code == 409
+        assert (
+            browser.put("/kb/api/admin/public-app", json=first).status_code
+            == 200
+        )
+        assert (
+            browser.put("/kb/api/admin/public-app", json=first).status_code
+            == 409
+        )
         state.fail_create = True
         replacement = _save_body(
             revision=1, model_id="model-b", kb_ids=["kb-old"]
         )
-        assert browser.put(
-            "/kb/api/admin/public-app", json=replacement
-        ).status_code == 502
+        assert (
+            browser.put(
+                "/kb/api/admin/public-app", json=replacement
+            ).status_code
+            == 502
+        )
         assert store.public_app(deployment_id="candidate")["revision"] == 1
         assert (
             browser.get("/kb/api/admin/public-app").json()["model_id"]
             == "model-a"
         )
         state.public_kbs.remove("kb-old")
-        assert browser.post(
-            "/kb/api/public/chat",
-            json={"conversation_id": "key-gap", "query": "问题"},
-        ).status_code == 503
+        assert (
+            browser.post(
+                "/kb/api/public/chat",
+                json={"conversation_id": "key-gap", "query": "问题"},
+            ).status_code
+            == 503
+        )
         state.public_kbs.add("kb-old")
         state.agents[_AGENT_ID_A]["config"]["model_id"] = "external-change"
         assert (
@@ -456,14 +502,16 @@ def test_publish_requires_scoped_key_and_prompt_snapshot(
     with TestClient(_app(tmp_path, state, store)) as browser:
         state.full_access = True
         body = _save_body(revision=0, model_id="model-a", kb_ids=["kb-old"])
-        assert browser.put(
-            "/kb/api/admin/public-app", json=body
-        ).status_code == 422
+        assert (
+            browser.put("/kb/api/admin/public-app", json=body).status_code
+            == 422
+        )
         state.full_access = False
         body["answer_settings"]["rewrite_prompt_system"] = ""
-        assert browser.put(
-            "/kb/api/admin/public-app", json=body
-        ).status_code == 422
+        assert (
+            browser.put("/kb/api/admin/public-app", json=body).status_code
+            == 422
+        )
         assert store.public_app(deployment_id="candidate") is None
         assert not state.agents
 
@@ -528,31 +576,34 @@ def test_drift_requires_explicit_rebuild_without_reusing_old_agent(
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     with TestClient(_app(tmp_path, state, store)) as browser:
         first = _save_body(revision=0, model_id="model-a", kb_ids=["kb-old"])
-        assert browser.put(
-            "/kb/api/admin/public-app", json=first
-        ).status_code == 200
+        assert (
+            browser.put("/kb/api/admin/public-app", json=first).status_code
+            == 200
+        )
         state.agents[_AGENT_ID_A]["config"]["web_search_enabled"] = True
-        assert browser.get(
-            "/kb/api/admin/public-app"
-        ).json()["status"] == "DRIFTED"
+        assert (
+            browser.get("/kb/api/admin/public-app").json()["status"]
+            == "DRIFTED"
+        )
         replacement = _save_body(
             revision=1, model_id="model-b", kb_ids=["kb-new"]
         )
         replacement["migration_confirmed"] = False
-        assert browser.put(
-            "/kb/api/admin/public-app", json=replacement
-        ).status_code == 409
+        assert (
+            browser.put(
+                "/kb/api/admin/public-app", json=replacement
+            ).status_code
+            == 409
+        )
         assert len(state.agents) == 1
         replacement["migration_confirmed"] = True
-        repaired = browser.put(
-            "/kb/api/admin/public-app", json=replacement
-        )
+        repaired = browser.put("/kb/api/admin/public-app", json=replacement)
         assert repaired.status_code == 200, repaired.text
         assert repaired.json()["native_agent_id"] == _AGENT_ID_B
         assert repaired.json()["revision"] == 2
-        assert browser.get(
-            "/kb/api/admin/public-app"
-        ).json()["status"] == "ACTIVE"
+        assert (
+            browser.get("/kb/api/admin/public-app").json()["status"] == "ACTIVE"
+        )
 
 
 def test_page_switches_control_public_response_and_server_write(
@@ -565,18 +616,20 @@ def test_page_switches_control_public_response_and_server_write(
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     with TestClient(_app(tmp_path, state, store)) as browser:
         first = _save_body(revision=0, model_id="model-a", kb_ids=["kb-old"])
-        assert browser.put(
-            "/kb/api/admin/public-app", json=first
-        ).status_code == 200
+        assert (
+            browser.put("/kb/api/admin/public-app", json=first).status_code
+            == 200
+        )
         disabled = _save_body(revision=1, model_id="model-a", kb_ids=["kb-old"])
         disabled["page_settings"].update(
             show_recommendations=False,
             allow_feedback=False,
             allow_source_download=False,
         )
-        assert browser.put(
-            "/kb/api/admin/public-app", json=disabled
-        ).status_code == 200
+        assert (
+            browser.put("/kb/api/admin/public-app", json=disabled).status_code
+            == 200
+        )
         assert len(state.agents) == 1
         capabilities = browser.get("/kb/api/public/capabilities").json()
         assert capabilities["page_settings"]["welcome_text"] == "欢迎使用湾事通"
@@ -585,11 +638,17 @@ def test_page_switches_control_public_response_and_server_write(
             browser.get("/kb/api/public/popular-questions").json()["items"]
             == []
         )
-        assert browser.post(
-            "/kb/api/public/feedback",
-            json={"trace_id": "trace_" + "a" * 32, "useful": False},
-        ).status_code == 403
-        assert browser.get(
-            "/kb/api/public/conversations/one/turns/trace/"
-            "references/reference/original"
-        ).status_code == 403
+        assert (
+            browser.post(
+                "/kb/api/public/feedback",
+                json={"trace_id": "trace_" + "a" * 32, "useful": False},
+            ).status_code
+            == 403
+        )
+        assert (
+            browser.get(
+                "/kb/api/public/conversations/one/turns/trace/"
+                "references/reference/original"
+            ).status_code
+            == 403
+        )

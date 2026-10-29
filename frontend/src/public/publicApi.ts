@@ -5,6 +5,9 @@ import type { PublicCitation } from "./publicSse";
 export interface PublicSessionUser {
   userId: string;
   displayName: string;
+  username?: string;
+  role?: "admin" | "hr" | "user";
+  deptId?: string | null;
 }
 
 export interface PublicSession {
@@ -180,7 +183,13 @@ export async function createPublicSession(
     csrf_token: string;
     expires_in: number;
     deployment_id?: string;
-    user?: { user_id: string; display_name: string };
+    user?: {
+      user_id: string;
+      display_name: string;
+      username?: string;
+      role?: "admin" | "hr" | "user";
+      dept_id?: string | null;
+    };
   }>(response);
   return {
     sessionId: body.session_id,
@@ -191,6 +200,9 @@ export async function createPublicSession(
       ? {
           userId: body.user.user_id,
           displayName: body.user.display_name,
+          username: body.user.username,
+          role: body.user.role ?? "user",
+          deptId: body.user.dept_id,
         }
       : undefined,
   };

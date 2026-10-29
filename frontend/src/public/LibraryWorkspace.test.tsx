@@ -1,0 +1,174 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { LibraryWorkspace } from "./LibraryWorkspace";
+import { UserRolesWorkspace } from "./UserRolesWorkspace";
+
+afterEach(() => vi.restoreAllMocks());
+
+function requestPath(input: RequestInfo | URL): string {
+  return typeof input === "string"
+    ? input
+    : input instanceof URL
+      ? input.href
+      : input.url;
+}
+
+describe("用户资料和角色", () => {
+  it("普通用户上传资料默认放入个人区，随后可以共享和取消共享", async () => {
+    let uploaded = false;
+    let shared = false;
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input, init) => {
+        const path = requestPath(input);
+        if (path.startsWith("/api/public/library?")) {
+          return Promise.resolve(
+            Response.json({
+              scope: "personal",
+              can_manage: true,
+              items: uploaded
+                ? [
+                    {
+                      id: "doc-1",
+                      title: "个人笔记.txt",
+                      status: "completed",
+                      created_at: "2026-10-29T01:00:00Z",
+                      size: 20,
+                      shared,
+                    },
+                  ]
+                : [],
+            }),
+          );
+        }
+        if (path === "/api/public/library" && init?.method === "POST") {
+          expect((init.body as FormData).get("scope")).toBe("personal");
+          expect((init.body as FormData).get("file")).toBeInstanceOf(File);
+          expect(init.headers).toEqual({ "X-CSRF-Token": "csrf-token" });
+          uploaded = true;
+          return Promise.resolve(new Response(null, { status: 201 }));
+        }
+        if (path === "/api/public/library/doc-1/share") {
+          expect(init?.headers).toEqual({ "X-CSRF-Token": "csrf-token" });
+          shared = init?.method === "POST";
+          return Promise.resolve(new Response(null, { status: 204 }));
+        }
+        throw new Error(`unexpected request: ${path}`);
+      });
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        userRole="user"
+        getCsrfToken={() => "csrf-token"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByText(/这里还没有资料/);
+    expect(
+      screen.queryByRole("button", { name: "人力内部资料" }),
+    ).not.toBeInTheDocument();
+    await user.upload(
+      screen.getByLabelText("选择上传资料"),
+      new File(["内部笔记"], "个人笔记.txt", { type: "text/plain" }),
+    );
+    await screen.findByText("个人笔记.txt");
+    await user.click(screen.getByRole("button", { name: "共享给全员" }));
+    await screen.findByRole("button", { name: "取消共享" });
+    await user.click(screen.getByRole("button", { name: "取消共享" }));
+    await screen.findByRole("button", { name: "共享给全员" });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/public/library/doc-1/share",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("人力可以切换到独立内部区上传，公共资料浏览不显示上传按钮", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const scope = new URL(
+        requestPath(input),
+        "http://localhost",
+      ).searchParams.get("scope");
+      return Promise.resolve(
+        Response.json({ scope, can_manage: scope !== "public", items: [] }),
+      );
+    });
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        userRole="hr"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByRole("button", { name: "上传资料" });
+    await user.click(screen.getByRole("button", { name: "公共资料" }));
+    await screen.findByText(/资料发布后会显示在这里/);
+    expect(
+      screen.queryByRole("button", { name: "上传资料" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "人力内部资料" }));
+    expect(
+      await screen.findByRole("button", { name: "上传资料" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByText("仅人力角色和系统管理员可查看、检索和维护。"),
+    ).toBeVisible();
+  });
+
+  it("管理员选择并保存角色，传给后台真实用户 ID", async () => {
+    let role = "user";
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input, init) => {
+        if (init?.method === "PATCH") {
+          role = "hr";
+          return Promise.resolve(new Response(null, { status: 204 }));
+        }
+        return Promise.resolve(
+          Response.json({
+            items: [
+              {
+                user_id: "325",
+                username: "staff",
+                display_name: "测试同事",
+                dept_id: "42",
+                role,
+              },
+            ],
+          }),
+        );
+      });
+    const user = userEvent.setup();
+    render(
+      <UserRolesWorkspace
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByText("测试同事");
+    expect(screen.getByText("部门 ID：42")).toBeVisible();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "测试同事的角色" }),
+      "hr",
+    );
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/ops/users/325",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ role: "hr" }),
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Token": "csrf",
+          },
+        }),
+      ),
+    );
+    expect(
+      await screen.findByText("已将 测试同事 设置为人力角色。"),
+    ).toBeVisible();
+  });
+});

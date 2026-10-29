@@ -8,28 +8,43 @@ from dataclasses import dataclass
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
-from rag_app.core.errors import PolicyDenied
-from rag_app.product.auth import (
+from wanshitong_gateway.compat.adapters.stores.sqlite_connection import (
+    SqliteConnectionFactory,
+)
+from wanshitong_gateway.compat.core.errors import PolicyDenied
+from wanshitong_gateway.compat.product.auth import (
     AuthStore,
     ConsoleSessionService,
     load_bootstrap_token,
 )
-from rag_app.product.crypto import MasterKey, SecretCipher, load_master_key
-from rag_app.product.http_security import secure_cookie_for_request
-from rag_app.wanshitong.public_models import (
+from wanshitong_gateway.compat.product.crypto import (
+    MasterKey,
+    SecretCipher,
+    load_master_key,
+)
+from wanshitong_gateway.compat.product.http_security import (
+    secure_cookie_for_request,
+)
+from wanshitong_gateway.compat.wanshitong.public_models import (
     PublicSessionRequest,
     PublicSessionResponse,
     PublicSessionUser,
 )
-from rag_app.wanshitong.public_session import (
+from wanshitong_gateway.compat.wanshitong.public_session import (
     PublicSessionPrincipal,
     PublicSessionProvider,
     PublicSessionService,
 )
-from rag_app.wanshitong.sso_api import register_sso_routes
-from rag_app.wanshitong.sso_client import SsoClient, load_client_secret
-from rag_app.wanshitong.sso_session import SsoSessionService
+from wanshitong_gateway.compat.wanshitong.sso_api import register_sso_routes
+from wanshitong_gateway.compat.wanshitong.sso_client import (
+    SsoClient,
+    load_client_secret,
+)
+from wanshitong_gateway.compat.wanshitong.sso_session import (
+    SsoIdentity,
+    SsoSessionService,
+)
+from wanshitong_gateway.roles import Role, UserProfile, UserStore
 from wanshitong_gateway.settings import GatewayAuthSettings
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -42,6 +57,14 @@ class _AdminLoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bootstrap_token: str = Field(min_length=1, max_length=4096)
+
+
+class _RoleUpdateRequest(BaseModel):
+    """管理员只能选择预定义的三个角色。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Role
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +89,44 @@ class GatewayAuth:
     admin_store: AuthStore
     admin_sessions: ConsoleSessionService
     sso_client: SsoClient | None
+    users: UserStore | None = None
+
+    def __post_init__(self) -> None:
+        """认证和业务用户共用当前网关的独立数据库。"""
+        if self.users is None:
+            self.users = UserStore(self.settings.database_path)
+
+    def profile_for_principal(
+        self, principal: PublicSessionPrincipal
+    ) -> UserProfile:
+        """读取本地角色，兼容升级前已签发的受信用户会话。"""
+        if principal.user_id is None:
+            raise HTTPException(
+                status_code=401, detail="employee login required"
+            )
+        if self.users is None:
+            raise AssertionError("用户资料库未初始化。")
+        profile = self.users.get(principal.user_id)
+        if profile is not None:
+            return profile
+        return self.users.record_identity(
+            SsoIdentity(
+                user_id=principal.user_id,
+                username=principal.username,
+                nick_name=principal.nick_name,
+                dept_id=principal.dept_id,
+                roles=(),
+                permissions=(),
+            )
+        )
+
+    def require_profile(
+        self, request: Request, *, csrf: bool | None = None
+    ) -> UserProfile:
+        """认证真实员工，并在每次请求读取最新角色。"""
+        return self.profile_for_principal(
+            self.require_public(request, csrf=csrf)
+        )
 
     @classmethod
     def from_settings(cls, settings: GatewayAuthSettings) -> GatewayAuth:
@@ -169,9 +230,13 @@ class GatewayAuth:
         self.verify_origin(request)
         cookie = request.cookies.get(self.settings.admin_cookie_name)
         if cookie is None:
-            raise HTTPException(
-                status_code=401, detail="admin session required"
-            )
+            principal = self.require_public(request, csrf=False)
+            if self.profile_for_principal(principal).role != "admin":
+                raise HTTPException(
+                    status_code=401, detail="admin session required"
+                )
+            self.require_public(request, csrf=csrf)
+            return AdminPrincipal(session_id=principal.session_id)
         check_csrf = (
             request.method not in _SAFE_METHODS if csrf is None else csrf
         )
@@ -202,6 +267,9 @@ def register_auth_routes(app: FastAPI, auth: GatewayAuth) -> None:
             sessions=auth.public_sessions,
             client=auth.sso_client,
             trusted_proxies=auth.settings.trusted_proxies,
+            on_identity=(
+                auth.users.record_identity if auth.users is not None else None
+            ),
         )
 
     @app.post("/api/public/session", response_model=PublicSessionResponse)
@@ -236,13 +304,13 @@ def register_auth_routes(app: FastAPI, auth: GatewayAuth) -> None:
         response.headers["Cache-Control"] = _NO_STORE
         user = None
         if issue.principal.user_id is not None:
+            profile = auth.profile_for_principal(issue.principal)
             user = PublicSessionUser(
-                user_id=issue.principal.user_id,
-                display_name=(
-                    issue.principal.nick_name
-                    or issue.principal.username
-                    or issue.principal.user_id
-                ),
+                user_id=profile.user_id,
+                username=profile.username,
+                display_name=profile.display_name,
+                dept_id=profile.dept_id,
+                role=profile.role,
             )
         return PublicSessionResponse(
             session_id=issue.principal.session_id,
@@ -252,12 +320,25 @@ def register_auth_routes(app: FastAPI, auth: GatewayAuth) -> None:
             deployment_id=auth.public_sessions.deployment_id,
         )
 
+    _register_console_routes(app, auth)
+    _register_user_routes(app, auth)
+
+
+def _register_console_routes(app: FastAPI, auth: GatewayAuth) -> None:
+    """兼容旧管理员口令和员工 SSO 两种管理端会话。"""
+
     @app.post("/api/v1/console/session")
     def admin_login(
-        body: _AdminLoginRequest, request: Request, response: Response
+        request: Request,
+        response: Response,
+        body: _AdminLoginRequest | None = None,
     ) -> dict[str, object]:
         auth.verify_origin(request)
         _reject_query_parameters(request)
+        if body is None:
+            auth.require_admin(request, csrf=False)
+            response.headers["Cache-Control"] = _NO_STORE
+            return _sso_admin_session_payload(request, auth)
         client_key = request.client.host if request.client else "unknown"
         try:
             session_id, cookie, csrf = auth.admin_sessions.login(
@@ -273,7 +354,13 @@ def register_auth_routes(app: FastAPI, auth: GatewayAuth) -> None:
     @app.get("/api/v1/console/session")
     def admin_resume(request: Request, response: Response) -> dict[str, object]:
         auth.require_admin(request)
-        cookie = request.cookies[auth.settings.admin_cookie_name]
+        cookie = request.cookies.get(auth.settings.admin_cookie_name)
+        if cookie is None:
+            response.headers["Cache-Control"] = _NO_STORE
+            return {
+                "authenticated": True,
+                **_sso_admin_session_payload(request, auth),
+            }
         session_id, replacement, csrf = auth.admin_sessions.resume(cookie)
         _set_admin_cookie(request, response, auth, replacement)
         return {
@@ -284,7 +371,10 @@ def register_auth_routes(app: FastAPI, auth: GatewayAuth) -> None:
     @app.post("/api/v1/console/session:rotate")
     def admin_rotate(request: Request, response: Response) -> dict[str, object]:
         auth.require_admin(request)
-        cookie = request.cookies[auth.settings.admin_cookie_name]
+        cookie = request.cookies.get(auth.settings.admin_cookie_name)
+        if cookie is None:
+            response.headers["Cache-Control"] = _NO_STORE
+            return _sso_admin_session_payload(request, auth)
         csrf = request.headers["X-CSRF-Token"]
         session_id, replacement, next_csrf = auth.admin_sessions.rotate(
             cookie, csrf
@@ -295,14 +385,51 @@ def register_auth_routes(app: FastAPI, auth: GatewayAuth) -> None:
     @app.delete("/api/v1/console/session", status_code=204)
     def admin_logout(request: Request, response: Response) -> Response:
         auth.require_admin(request)
-        cookie = request.cookies[auth.settings.admin_cookie_name]
-        auth.admin_store.revoke_session(cookie)
+        cookie = request.cookies.get(auth.settings.admin_cookie_name)
+        if cookie is not None:
+            auth.admin_store.revoke_session(cookie)
+        else:
+            response.delete_cookie(
+                auth.public_sessions.cookie_name,
+                path=auth.public_sessions.cookie_path,
+            )
         response.delete_cookie(
             auth.settings.admin_cookie_name, path=auth.settings.root_path
         )
         response.headers["Cache-Control"] = _NO_STORE
         response.status_code = 204
         return response
+
+
+def _register_user_routes(app: FastAPI, auth: GatewayAuth) -> None:
+    """注册仅管理员可访问的用户角色管理接口。"""
+
+    @app.get("/api/ops/users")
+    def list_users(request: Request, response: Response) -> dict[str, object]:
+        auth.require_admin(request)
+        if auth.users is None:
+            raise AssertionError("用户资料库未初始化。")
+        response.headers["Cache-Control"] = _NO_STORE
+        return {"items": [item.as_dict() for item in auth.users.list_users()]}
+
+    @app.patch("/api/ops/users/{user_id}")
+    def set_user_role(
+        user_id: str,
+        body: _RoleUpdateRequest,
+        request: Request,
+        response: Response,
+    ) -> dict[str, str | None]:
+        auth.require_admin(request)
+        if auth.users is None:
+            raise AssertionError("用户资料库未初始化。")
+        try:
+            profile = auth.users.set_role(user_id, body.role)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail="user not found"
+            ) from None
+        response.headers["Cache-Control"] = _NO_STORE
+        return profile.as_dict()
 
 
 def _initialize_admin_schema(connections: SqliteConnectionFactory) -> None:
@@ -365,6 +492,20 @@ def _set_admin_cookie(
         path=auth.settings.root_path,
     )
     response.headers["Cache-Control"] = _NO_STORE
+
+
+def _sso_admin_session_payload(
+    request: Request, auth: GatewayAuth
+) -> dict[str, object]:
+    """管理端复用员工会话，不另发绕过角色变更的管理员 Cookie。"""
+    auth.require_admin(request, csrf=False)
+    cookie = request.cookies.get(auth.public_sessions.cookie_name)
+    issue = auth.public_sessions.bootstrap(cookie)
+    return {
+        "session_id": issue.principal.session_id,
+        "csrf_token": issue.csrf_token,
+        "expires_in": issue.expires_in,
+    }
 
 
 def _admin_session_payload(

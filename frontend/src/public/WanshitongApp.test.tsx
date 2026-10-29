@@ -151,6 +151,50 @@ afterEach(() => {
 });
 
 describe("湾事通公共应用", () => {
+  it("管理员后台使用新标签打开并保留当前对话", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = pathOf(input);
+      if (path === "/api/public/session") {
+        return Promise.resolve(
+          Response.json({
+            ...sessionBody,
+            user: {
+              user_id: "325",
+              display_name: "陶逸非",
+              role: "admin",
+            },
+          }),
+        );
+      }
+      if (path === "/api/public/capabilities") {
+        return Promise.resolve(Response.json(capabilitiesBody));
+      }
+      if (path === "/api/public/popular-questions") {
+        return Promise.resolve(Response.json(emptyRecommendations));
+      }
+      if (path === "/api/public/chat") {
+        return Promise.resolve(
+          streamResponse([
+            event("final", 0, {
+              answer: "这条对话仍保留。",
+              citations: [],
+            }),
+          ]),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    await openHome();
+    await ask();
+    await screen.findByText("这条对话仍保留。");
+
+    const admin = screen.getByRole("link", { name: "管理后台" });
+    expect(admin).toHaveAttribute("href", "/admin/");
+    expect(admin).toHaveAttribute("target", "_blank");
+    expect(admin).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByText("这条对话仍保留。")).toBeVisible();
+  });
+
   it("外观切换始终位于公共页面右上角并跨首问保持", async () => {
     installFetch(
       streamResponse([
@@ -649,23 +693,34 @@ describe("湾事通公共应用", () => {
   });
 
   it("否定限定从推荐卡片原样进入气泡与query", async () => {
+    const question = "哪些认证不适用外部认证管理办法？";
+    const recommendation = reviewedRecommendations.items.find(
+      (item) => item.question === question,
+    );
+    expect(recommendation).toBeDefined();
+    // 验证题面传递时保证目标题在本组，不依赖20题的随机抽样命中。
+    const recommendations: PublicPopularQuestions = {
+      ...reviewedRecommendations,
+      items: [
+        ...reviewedRecommendations.items
+          .filter((item) => item.question !== question)
+          .slice(0, 4),
+        recommendation!,
+      ],
+    };
     const fetchMock = installFetch(
       streamResponse([
         event("final", 0, { answer: "已按限定回答。", citations: [] }),
       ]),
+      recommendations,
     );
     const user = userEvent.setup();
-    const question = "哪些认证不适用外部认证管理办法？";
     await openHome();
     await screen.findByRole("region", { name: "你可能想问" });
 
-    let card = screen.queryByRole("button", { name: question });
-    for (let index = 0; !card && index < 2; index += 1) {
-      await user.click(screen.getByRole("button", { name: "换一换推荐问题" }));
-      card = screen.queryByRole("button", { name: question });
-    }
+    const card = await screen.findByRole("button", { name: question });
     expect(card).not.toBeNull();
-    await user.click(card!);
+    await user.click(card);
 
     expect(await screen.findByText("已按限定回答。")).toBeInTheDocument();
     expect(screen.getByText(question)).toBeInTheDocument();

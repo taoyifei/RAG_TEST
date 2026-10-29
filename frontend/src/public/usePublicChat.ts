@@ -578,7 +578,8 @@ export function usePublicChat() {
             const original = history.find(
               (item) => item.trace_id === recoverTraceId,
             );
-            if (!original) throw new Error("原回答状态无法确认，请联系管理员。");
+            if (!original)
+              throw new Error("原回答状态无法确认，请联系管理员。");
             if (original.status === "completed") {
               updateTurn(turnId, () =>
                 restoreNaturalTurn(turnConversationId, original, true),
@@ -1146,6 +1147,7 @@ export function usePublicChat() {
 
   return {
     announcement,
+    getCsrfToken: () => csrfRef.current,
     busy,
     conversationId,
     deploymentId,

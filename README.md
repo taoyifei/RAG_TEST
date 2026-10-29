@@ -1,49 +1,44 @@
-# 湾事通（Wanshitong）
+# 湾小度 V2
 
-湾事通是中国移动（广东）湾区研究院（GMCII）的内部知识库问答系统。本分支 `wanshitong-stable` 保留湾事通的用户界面和 RDMS 登录，使用 [WeKnora](https://github.com/Tencent/WeKnora) 处理文档、检索和回答。
+湾小度基于腾讯开源 WeKnora，提供院内知识问答、研发管理系统单点登录、三种固定角色和个人资料上传。
 
-## 访问
+当前开发分支：`codex/wxd-v2-weknora-083`。仅部署到 `http://10.242.180.54:8289/kb/` 测试环境，生产 8288/18288 的服务和资料不在本分支发布范围。
 
-- **员工问答**：[正式入口](http://10.242.180.54:18288/)；使用原有 RDMS 账号登录，可提问、查看流式回答与引用、浏览历史并反馈。
-- **管理后台**：[湾事通管理后台](http://10.242.180.54:18288/kb/admin/)；管理员用独立口令管理知识资料、用户端设置、模型与解析、使用记录及诊断。口令只保存在服务器 Secret 中，不写入仓库。
+## 代码结构
 
-当前发布状态与测试入口是否开放，以[发布门禁](deployment/wanshitong-stable/PILOT-RELEASE-GATE.md)为准。
+- `src/wanshitong_gateway/`：身份、角色、资料范围、历史、运营与原生 WeKnora API 桥接。
+- `src/wanshitong_gateway/compat/`：从旧项目抽出的必要登录、会话、加密和 SQLite 工具，不含旧 RAG 引擎。
+- `frontend/`：湾小度用户问答与个人资料界面。
+- `vendor/weknora/`：固定版本的上游源码和必要管理端适配，版本及镜像信息见 `upstream.lock.json`。
+- `deployment/wanshitong-stable/`：现有部署基线和运行约束，新测试环境须使用独立数据目录、网络和登录配置。
+- `deployment/wanshitong-v2/`：新版独立测试栈、离线构建和公共资料复制工具。
+- `tests/wanshitong_gateway/`、`tests/identity/`：网关行为与登录合同验证。
 
-## 工作方式
+## 资料与权限
 
-```text
-员工 → 湾事通 React 页面 → 身份与会话网关 → WeKnora
-                                             ├─ 文档解析、分块与检索
-                                             └─ 原生流式回答与引用
+系统管理员管理用户角色、资料和系统配置；人力角色维护公开人力制度并使用人力内部资料区；普通用户检索公共资料和自己的个人资料。个人上传默认私有，主动共享后才发布到公共范围。角色由湾小度服务端维护，不直接把研发管理系统的角色声明当作知识库权限。
 
-管理员 → 湾事通 Vue 后台 → 同一网关 → 同一套 WeKnora 配置与资料
+## 本地验证
+
+Python 版本为 3.11；使用隔离环境安装 `requirements.lock`，然后执行：
+
+```sh
+python -m pytest tests/wanshitong_gateway tests/identity
+python -m ruff check src/wanshitong_gateway
 ```
 
-网关负责身份、权限、会话和流式传输；问答算法与文档处理由 WeKnora 完成。管理员在“用户端设置”发布的知识库范围和回答配置供员工的新问答使用。管理后台只管理与复核，不提供另一套聊天入口。
+前端使用其自身 `package.json` 中的检查和构建命令。真实模型、文档解析与 8289 登录需要在独立测试栈验证；离线测试不能代替实际问答验收。
 
-## 管理员常用操作
+生产环境仍依赖名称包含 `wst_weknora_candidate_20260925` 的容器，不能按名称将其作为旧测试环境清理。服务器操作继续通过 54 连接 60。
 
-1. **上传资料**：进入“知识资料”→目标知识库→“添加文档”→“上传文档”，等待解析完成并检查分块。
-2. **控制用户端**：在“用户端设置”选择资料范围、模型和回答参数，保存后确认配置状态为 `ACTIVE`。上传到未发布的知识库，不会自动进入员工问答范围。
-3. **排查问题**：在“使用记录”查看提问与反馈，在“系统与诊断”查看运行状态和 Trace。
+## 测试环境使用
 
-新文件建议先在私有知识库验证解析结果，再发布到员工可用范围。图片、扫描 PDF 和含图 DOCX 的效果取决于当前解析配置与文件内容。
+- 问答与资料：[8289 测试入口](http://10.242.180.54:8289/kb/)。
+- 管理后台：[8289 管理入口](http://10.242.180.54:8289/kb/admin/)。
+- 使用研发管理系统登录；`taoyifei` 为初始系统管理员。新同事首次登录后出现在用户列表，管理员通过“用户与角色”选择普通、人力或管理员，无需重启。
+- 右上角“我的资料”可上传个人文件；默认仅本人使用，系统管理员可后台管理。主动共享后全员可检索，取消共享保留个人原件。
+- 人力角色通过“公开人力制度”和“人力内部资料”维护对应资料；公开制度保持全员可读。
 
-## 代码位置
+2026-10-29 已在独立 8289 完成真实登录、资料问答、含图 DOCX 上传、图片读取、共享撤回和角色隔离验证。已复制生产现有公共资料 99 份，其中 1 份公开人力制度单独放在人力公开区；未复制生产用户和历史会话。生产入口、资料及数据库保持原状。
 
-| 路径 | 用途 |
-| --- | --- |
-| [`frontend/src/public/`](frontend/src/public/) | 员工端 React 页面 |
-| [`src/wanshitong_gateway/`](src/wanshitong_gateway/) | 湾事通身份、会话、配置与 WeKnora 接入 |
-| [`vendor/weknora/frontend/src/views/wanshitong/`](vendor/weknora/frontend/src/views/wanshitong/) | 白标 Vue 管理页面 |
-| [`vendor/weknora/`](vendor/weknora/) | 固定版本的 WeKnora 源码 |
-| [`deployment/wanshitong-stable/`](deployment/wanshitong-stable/) | 部署配置、验收与回退说明 |
-
-## 开发与运维
-
-- [部署与配置](deployment/wanshitong-stable/README.md)：服务、镜像、Secret、OCR 与数据盘。
-- [发布门禁](deployment/wanshitong-stable/PILOT-RELEASE-GATE.md)：已验证能力和剩余限制。
-- [切流与回退](deployment/wanshitong-stable/PILOT-CUTOVER-ROLLBACK.md)：现行链路及故障处理。
-- [旧 Universal RAG 运行指引](docs/public/legacy-runtime.md)：仓库中保留的旧实现；当前湾事通公共问答不走这条链路。
-
-部署需要内网模型、RDMS 和服务器 Secret。修改分支代码不会自动更新正式环境；发布前应按部署文档核对实际镜像、配置与入口。
+实际部署和核验记录见 [V2 实施记录](docs/V2-8289-IMPLEMENTATION.md)，离线重建步骤见 [测试栈部署说明](deployment/wanshitong-v2/README.md)。

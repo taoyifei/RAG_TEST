@@ -1,7 +1,0 @@
-{
-  "error": {
-    "code": "INVALID_DOCUMENT",
-    "stage": "docx-ooxml-v4.relationship"
-  },
-  "status": "rejected"
-}
