@@ -9,6 +9,7 @@ import { generateRandomString } from '@/utils'
 import { getApiBaseUrl } from '@/utils/api-base'
 import { WANSHITONG_GATEWAY_AUTH, redirectToWanshitongAdminLogin } from '@/config/wanshitongGateway'
 import {
+  installRunFinished,
   liveInstallPercent,
   progressKey,
   type SkillInstallProgressTarget,
@@ -18,6 +19,7 @@ export type { SkillInstallProgressTarget } from './skillInstallProgress'
 export {
   clampInstallPercent,
   formatBusyInstallStatus,
+  installRunFinished,
   liveInstallPercent,
   progressKey,
 } from './skillInstallProgress'
@@ -116,7 +118,16 @@ export function useConfigSkillInstallProgress(options?: {
         setEvent(configId, skillId, parsed)
         if (parsed.done) {
           stopCurrent()
-          options?.onDone?.({ configId, skillId }, parsed)
+          // done is also set when the stream gives up while the skill is still
+          // installing. Reloading then resubscribes immediately, and on Lite
+          // that frame arrives on every connection.
+          if (installRunFinished(parsed)) {
+            options?.onDone?.({ configId, skillId }, parsed)
+          } else if (parsed.stage === 'detached') {
+            // The server stopped following at its cap while the run goes on.
+            // Keep following; the cap bounds how often this reconnects.
+            follow(configId, skillId)
+          }
         }
       },
       onerror() {

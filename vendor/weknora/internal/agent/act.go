@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -315,6 +316,18 @@ func (e *AgentEngine) executeToolCallsParallel(
 		}
 		readCtx := gCtx
 		g.Go(func() error {
+			// The registry recovers panics inside tool execution; this guards
+			// the bookkeeping around it, which would otherwise crash the
+			// process from a goroutine nothing above can recover.
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf(ctx, "[Agent][Round-%d] Tool call %s panicked: %v\n%s",
+						round, tc.Function.Name, r, debug.Stack())
+					mu.Lock()
+					results[i] = panickedToolCall(tc, i)
+					mu.Unlock()
+				}
+			}()
 			toolCall := e.runToolCall(readCtx, tc, i, iteration, round, sessionID, assistantMessageID)
 			mu.Lock()
 			results[i] = toolCall
@@ -329,6 +342,21 @@ func (e *AgentEngine) executeToolCallsParallel(
 	for _, toolCall := range results {
 		step.ToolCalls = append(step.ToolCalls, toolCall)
 		e.emitToolOutcome(ctx, toolCall, iteration, sessionID)
+	}
+}
+
+// panickedToolCall is the failed record for a call whose handling panicked, so
+// the round still returns one result per tool call the model issued.
+func panickedToolCall(tc types.LLMToolCall, i int) types.ToolCall {
+	return types.ToolCall{
+		ID:               agenttools.NormalizeToolCallID(tc.ID, tc.Function.Name, i),
+		Name:             tc.Function.Name,
+		Args:             map[string]any{"_raw": tc.Function.Arguments},
+		ProviderMetadata: tc.ProviderMetadata,
+		Result: &types.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("tool %s failed with an internal error", tc.Function.Name),
+		},
 	}
 }
 
@@ -529,6 +557,11 @@ func (e *AgentEngine) runToolCall(
 
 	principal, _ := types.PrincipalFromContext(ctx)
 	execTimeout := toolExecutionTimeout(tc.Function.Name, tc.Function.Arguments)
+	if tool, lookupErr := e.toolRegistry.GetTool(tc.Function.Name); lookupErr == nil {
+		if timed, ok := tool.(interface{ ExecutionTimeout() time.Duration }); ok {
+			execTimeout = max(execTimeout, timed.ExecutionTimeout())
+		}
+	}
 	toolExecCtx := agenttools.WithToolExecContext(toolCtx, &agenttools.ToolExecContext{
 		SessionID:          sessionID,
 		AssistantMessageID: assistantMessageID,
@@ -555,6 +588,9 @@ func (e *AgentEngine) runToolCall(
 			json.RawMessage(tc.Function.Arguments),
 		)
 		toolCancel()
+		if err == nil {
+			e.describeToolImages(toolCtx, result)
+		}
 	}
 	duration := time.Since(toolCallStartTime).Milliseconds()
 

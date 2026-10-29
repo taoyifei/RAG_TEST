@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Tencent/WeKnora/internal/agent/tools"
 	"github.com/Tencent/WeKnora/internal/application/service"
 	"github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/im"
@@ -37,6 +38,7 @@ type CustomAgentHandler struct {
 	// sandboxConfigs validates an agent's sandbox backend selection. Optional —
 	// nil in partially-wired unit tests, where the selection is left unchecked.
 	sandboxConfigs sandboxConfigLookup
+	desktop        bool
 }
 
 // NewCustomAgentHandler creates a new custom agent handler instance
@@ -46,6 +48,7 @@ func NewCustomAgentHandler(
 	disabledRepo interfaces.TenantDisabledSharedAgentRepository,
 	userService interfaces.UserService,
 	sandboxConfigs *service.TenantSandboxConfigService,
+	host service.HostSandboxManager,
 ) *CustomAgentHandler {
 	return &CustomAgentHandler{
 		service:        service,
@@ -53,6 +56,7 @@ func NewCustomAgentHandler(
 		disabledRepo:   disabledRepo,
 		userService:    userService,
 		sandboxConfigs: sandboxConfigs,
+		desktop:        host.Desktop,
 	}
 }
 
@@ -112,6 +116,11 @@ func (h *CustomAgentHandler) CreateAgent(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	toolWarnings, err := checkAgentAllowedTools(nil, &req.Config)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
 
 	// Build agent object
 	agent := &types.CustomAgent{
@@ -154,10 +163,14 @@ func (h *CustomAgentHandler) CreateAgent(c *gin.Context) {
 
 	logger.Infof(ctx, "Custom agent created successfully, ID: %s, name: %s",
 		secutils.SanitizeForLog(createdAgent.ID), secutils.SanitizeForLog(createdAgent.Name))
-	c.JSON(http.StatusCreated, gin.H{
+	resp := gin.H{
 		"success": true,
 		"data":    createdAgent,
-	})
+	}
+	if toolWarnings != nil {
+		resp["allowed_tools_warnings"] = toolWarnings
+	}
+	c.JSON(http.StatusCreated, resp)
 }
 
 // GetAgent godoc
@@ -382,6 +395,22 @@ func (h *CustomAgentHandler) UpdateAgent(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	// Names already stored are kept, so the stored list is needed first.
+	existing, err := h.service.GetAgentByID(ctx, id)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{"agent_id": id})
+		if err == service.ErrAgentNotFound {
+			_ = c.Error(errors.NewNotFoundError("Agent not found"))
+			return
+		}
+		_ = c.Error(errors.NewInternalServerError("Failed to update agent"))
+		return
+	}
+	toolWarnings, err := checkAgentAllowedTools(existing.Config.AllowedTools, &req.Config)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
 
 	// Only a sent avatar is validated: nil means the caller never touched the
 	// field, so there is no value to bound. Checking the length here is what
@@ -438,10 +467,14 @@ func (h *CustomAgentHandler) UpdateAgent(c *gin.Context) {
 	}
 
 	logger.Infof(ctx, "Custom agent updated successfully, ID: %s", secutils.SanitizeForLog(id))
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"success": true,
 		"data":    updatedAgent,
-	})
+	}
+	if toolWarnings != nil {
+		resp["allowed_tools_warnings"] = toolWarnings
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // DeleteAgent godoc
@@ -636,6 +669,23 @@ func (h *CustomAgentHandler) GetAgentTypePresets(c *gin.Context) {
 	})
 }
 
+// GetAgentTools godoc
+// @Summary      获取智能体可选工具
+// @Description  返回编辑器可勾选的内置工具（含分组和知识库能力要求）、工具列表未设置时生效的默认工具，以及由开关控制、写入工具列表也不生效的工具
+// @Tags         智能体
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}  "工具目录"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /agents/tools [get]
+func (h *CustomAgentHandler) GetAgentTools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    tools.BuildAgentToolCatalog(),
+	})
+}
+
 // GetSuggestedQuestions godoc
 // @Summary      获取推荐问题
 // @Description  基于智能体关联的知识库，返回推荐问题供用户快捷提问
@@ -742,6 +792,12 @@ func (h *CustomAgentHandler) validateAgentSandboxConfig(
 	ctx context.Context, cfg types.CustomAgentConfig,
 ) error {
 	configID := strings.TrimSpace(cfg.SandboxConfigID)
+	if h.desktop {
+		if configID != "" {
+			return errors.NewBadRequestError("Lite 不支持为智能体绑定沙箱配置")
+		}
+		return nil
+	}
 	if configID == "" || h.sandboxConfigs == nil {
 		// Empty means the deployment-wide default, which always exists.
 		return nil

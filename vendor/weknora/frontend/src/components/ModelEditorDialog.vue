@@ -87,10 +87,11 @@
               <span class="source-option__label">{{ $t('model.editor.sourceRemote') }}</span>
             </button>
             <button
+              v-if="activeModelType !== 'rerank'"
               type="button"
               class="source-option"
-              :class="{ 'is-active': formData.source === 'local', 'is-disabled': ollamaServiceStatus === false || activeModelType === 'rerank' }"
-              :disabled="ollamaServiceStatus === false || activeModelType === 'rerank'"
+              :class="{ 'is-active': formData.source === 'local', 'is-disabled': ollamaServiceStatus === false }"
+              :disabled="ollamaServiceStatus === false"
               role="radio"
               :aria-checked="formData.source === 'local'"
               @click="formData.source = 'local'"
@@ -100,14 +101,8 @@
             </button>
           </div>
 
-          <!-- ReRank模型不支持Ollama的提示信息 -->
-          <div v-if="activeModelType === 'rerank'" class="ollama-unavailable-tip rerank-tip">
-            <t-icon name="info-circle-filled" class="tip-icon info" />
-            <span class="tip-text">{{ $t('model.editor.ollamaNotSupportRerank') }}</span>
-          </div>
-
           <!-- Ollama不可用时的提示信息 -->
-          <div v-else-if="shouldShowOllamaUnavailableTip(formData.source, activeModelType, ollamaServiceStatus)"
+          <div v-if="shouldShowOllamaUnavailableTip(formData.source, activeModelType, ollamaServiceStatus)"
             class="ollama-unavailable-tip">
             <t-icon name="error-circle-filled" class="tip-icon" />
             <span class="tip-text">{{ $t('model.editor.ollamaUnavailable') }}</span>
@@ -501,6 +496,15 @@
           </div>
         </div>
 
+        <!-- Embedding: image input. Catalogued models answer it themselves; a row declares it in spec.input. -->
+        <div v-if="activeModelType === 'embedding'" class="form-item">
+          <label class="form-label">{{ $t('model.editor.embeddingImageInputLabel') }}</label>
+          <div class="vision-toggle">
+            <t-switch v-model="embeddingAcceptsImages" />
+            <span class="form-desc form-desc--inline">{{ $t('model.editor.embeddingImageInputDesc') }}</span>
+          </div>
+        </div>
+
         <!-- Chat / VLM: context window. Agent compaction sizes itself from this. -->
         <div v-if="activeModelType === 'chat' || activeModelType === 'vllm'" class="form-item">
           <label class="form-label">{{ $t('model.editor.contextWindowLabel') }}</label>
@@ -646,6 +650,7 @@ import CredentialResource, {
 } from '@/components/credentials/CredentialResource.vue'
 import { shouldShowOllamaUnavailableTip } from '@/components/modelEditorSourceState'
 import { WEKNORA_CLOUD_PROVIDER, WKC_MODEL_KINDS, WKC_MODEL_NAME_BY_KIND } from '@/utils/weknoraCloudModels'
+import { docsUrl } from '@/utils/docsUrl'
 import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
 
 interface CustomHeaderItem {
@@ -704,8 +709,7 @@ const PROTOCOL_OPTIONS = [
 ] as const
 
 /** Field reference for parameters.spec.compat, per protocol and model type. */
-const COMPAT_DOC_URL =
-  'https://github.com/Tencent/WeKnora/blob/main/website-docs/03-features/06-models.md#协议兼容覆盖-compat-json'
+const COMPAT_DOC_URL = docsUrl('modelsCompat')
 
 /** Legacy thinking_control values still honoured by catalog.Resolve. */
 const LEGACY_THINKING_CONTROL_VALUES = ['none', 'enable_thinking', 'thinking_type', 'chat_template_kwargs'] as const
@@ -754,9 +758,9 @@ const modelTypeChoices = computed(() => ([
 // 厂商列表完全来自后端目录（store 按模型类型缓存）；前端不再维护任何厂商表。
 const loadingProviders = computed(() => providersStore.isLoading(activeModelType.value))
 
-const loadProviders = async () => {
+const loadProviders = async (force = false) => {
   try {
-    await providersStore.ensureLoaded(activeModelType.value)
+    await providersStore.ensureLoaded(activeModelType.value, force)
   } catch (error) {
     console.error('Failed to load providers from API', error)
   }
@@ -956,6 +960,38 @@ const vendorDocLink = computed(() => {
  */
 const catalogFilled = ref<Partial<ModelFormData>>({})
 
+/** Whether the catalog says the selected embedding model takes images. */
+const catalogEmbeddingAcceptsImages = computed(() =>
+  !!findCatalogEntry((formData.value.modelName || '').trim())?.input?.includes('image'))
+
+/**
+ * Image input of an embedding model: spec.input when the row declares it,
+ * the catalog otherwise. The row only stores a declaration that differs from
+ * the catalog, so a later catalog correction still reaches it.
+ */
+const embeddingAcceptsImages = computed<boolean>({
+  get: () => {
+    const input = formData.value.spec?.input
+    return Array.isArray(input) && input.length > 0
+      ? input.includes('image')
+      : catalogEmbeddingAcceptsImages.value
+  },
+  set: (value) => {
+    const spec: ModelSpecOverride = { ...(formData.value.spec || {}) }
+    if (value === catalogEmbeddingAcceptsImages.value) delete spec.input
+    else spec.input = value ? ['text', 'image'] : ['text']
+    formData.value.spec = Object.keys(spec).length > 0 ? spec : null
+  },
+})
+
+/** A declared input belongs to the model it was declared for. */
+const dropEmbeddingInputOverride = () => {
+  if (!formData.value.spec?.input) return
+  const spec: ModelSpecOverride = { ...formData.value.spec }
+  delete spec.input
+  formData.value.spec = Object.keys(spec).length > 0 ? spec : null
+}
+
 /** Fill blank capability fields from a catalog entry the user just picked. */
 const applyCatalogEntry = (entry: ModelCatalogEntry) => {
   if (activeModelType.value === 'chat' || activeModelType.value === 'vllm') {
@@ -972,6 +1008,7 @@ const applyCatalogEntry = (entry: ModelCatalogEntry) => {
     formData.value.supportsVision = true
     catalogFilled.value.supportsVision = true
   }
+  if (activeModelType.value === 'embedding') dropEmbeddingInputOverride()
   if (activeModelType.value === 'embedding' && !formData.value.dimension && entry.dimension) {
     formData.value.dimension = entry.dimension
     catalogFilled.value.dimension = entry.dimension
@@ -1353,6 +1390,8 @@ const getModalDescription = () => {
 
 // 获取模型名称占位符
 const getModelNamePlaceholder = () => {
+  const catalogModel = catalogEntries.value[0]
+  if (formData.value.source === 'remote' && catalogModel) return catalogModel.id
   if (activeModelType.value === 'vllm') {
     return formData.value.source === 'local'
       ? t('model.editor.modelNamePlaceholder.localVllm')
@@ -1420,50 +1459,29 @@ const goToOllamaSettings = async () => {
 const lastOpenedModelId = ref<string | null>(null)
 
 const selectModelType = async (type: EditorModelType) => {
-  if (isEdit.value || draftModelType.value === type) return
+  if (saving.value || isEdit.value || draftModelType.value === type) return
   draftModelType.value = type
-
-  if (type === 'rerank') {
-    formData.value.source = 'remote'
-  }
-  if (type !== 'embedding') {
-    formData.value.dimension = undefined
-    formData.value.supportsDimensionOverride = false
-    dimensionChecked.value = false
-    dimensionSuccess.value = false
-    dimensionMessage.value = ''
-  }
-  if (type !== 'chat') {
-    formData.value.supportsVision = false
-  }
-  remoteChecked.value = false
-  remoteAvailable.value = false
-  remoteMessage.value = ''
-
+  // A different model type starts a new connection, including credentials
+  // and advanced overrides. Clear the old draft before waiting for its catalog.
+  resetForm()
+  const draft = formData.value
   await loadProviders()
-  const supported = providerOptions.value.some(p => p.value === formData.value.provider)
-  if (!supported) {
-    formData.value.provider = 'generic'
-    formData.value.baseUrl = ''
-    // 只丢厂商相关的 extra_config；协议 / 远端模型名是用户对这次接入的选择，
-    // 与厂商无关，和 handleProviderChange 保持同一套规则。
-    formData.value.extraConfig = keepVendorNeutralExtraConfig()
-    formData.value.appSecret = ''
-  } else {
-    handleProviderChange(formData.value.provider || 'generic')
+  if (props.visible && !isEdit.value && formData.value === draft && activeModelType.value === type) {
+    applyExtraFieldDefaults()
   }
 }
 
 // 监听 visible 变化，初始化表单
 watch(() => props.visible, (val) => {
   if (val) {
+    const typeChanged = draftModelType.value !== props.modelType
+    // Sync the entry type before loading its catalog; the previous draft may
+    // belong to another settings tab (including the initial chat default).
+    draftModelType.value = props.modelType
+
     // 检查Ollama服务状态
     checkOllamaServiceStatus()
 
-    // 从 API 加载 Model Provider 列表（编辑已有行时顺便补齐额外字段默认值）
-    loadProviders().then(() => {
-      if (props.visible && !isEdit.value) applyExtraFieldDefaults()
-    })
     advancedOpen.value = false
 
     // 每次打开都清理上一次遗留的校验/检测结果，避免编辑别的模型时
@@ -1478,7 +1496,6 @@ watch(() => props.visible, (val) => {
     dimensionMessage.value = ''
 
     const currentId = props.modelData?.id ?? null
-    draftModelType.value = props.modelType
 
     hydratingForm.value = true
     try {
@@ -1506,11 +1523,11 @@ watch(() => props.visible, (val) => {
             : [],
         }
         legacyThinkingControlLoaded.value = !!props.modelData.thinkingControl
-      } else if (lastOpenedModelId.value !== null || !formData.value.id) {
-        // 上次是编辑某个模型，或第一次新增 → 重置成空白
+      } else if (typeChanged || lastOpenedModelId.value !== null || !formData.value.id) {
+        // 切换类型、上次是编辑某个模型，或第一次新增 → 重置成空白
         resetForm()
       }
-      // 否则：连续两次"新增"打开（中间是点遮罩/ESC 关闭的）→ 保留上次填写
+      // 同一类型连续两次"新增"打开（中间是点遮罩/ESC 关闭的）→ 保留上次填写
 
       lastOpenedModelId.value = currentId
 
@@ -1528,6 +1545,16 @@ watch(() => props.visible, (val) => {
         hydratingForm.value = false
       })
     }
+
+    // Catalogs can be published while this page is open. Refresh this type,
+    // but do not apply defaults to a different draft if the request finishes late.
+    const draft = formData.value
+    const type = activeModelType.value
+    loadProviders(true).then(() => {
+      if (props.visible && !isEdit.value && formData.value === draft && activeModelType.value === type) {
+        applyExtraFieldDefaults()
+      }
+    })
   }
 })
 
@@ -1578,6 +1605,17 @@ const resetForm = () => {
     customHeaders: [],
     appSecret: '',
   }
+  catalogFilled.value = {}
+  advancedOpen.value = false
+  saveError.value = ''
+  searchKeyword.value = ''
+  invalidateConnectionTest(false)
+  resolveRevision++
+  if (resolveTimer) {
+    clearTimeout(resolveTimer)
+    resolveTimer = null
+  }
+  resolving.value = false
   resolved.value = null
   resolveFailed.value = false
   resolveError.value = ''
@@ -1589,6 +1627,7 @@ const resetForm = () => {
   dimensionChecked.value = false
   dimensionSuccess.value = false
   dimensionMessage.value = ''
+  nextTick(() => formRef.value?.clearValidate?.())
 }
 
 // 处理厂商选择变化 (自动填充默认 URL)
@@ -1622,6 +1661,7 @@ const resetModelSelectionForVendor = () => {
   if (filled.supportsVision && formData.value.supportsVision) {
     formData.value.supportsVision = false
   }
+  if (activeModelType.value === 'embedding') dropEmbeddingInputOverride()
   catalogFilled.value = {}
   modelChecked.value = false
   modelAvailable.value = false
@@ -1632,13 +1672,11 @@ const resetModelSelectionForVendor = () => {
 
 const handleProviderChange = (value: string) => {
   const provider = providerOptions.value.find(opt => opt.value === value)
-  if (provider?.defaultUrls) {
-    // 根据当前模型类型获取对应的默认 URL
-    const defaultUrl = provider.defaultUrls[activeModelType.value]
-    if (defaultUrl) {
-      formData.value.baseUrl = defaultUrl
-    }
-  }
+  // Older catalogs omit inherited type URLs. Mirror GetDefaultURL's chat
+  // fallback, preserving an explicitly empty URL and never the previous vendor's.
+  formData.value.baseUrl = provider?.defaultUrls?.[activeModelType.value]
+    ?? provider?.defaultUrls?.chat
+    ?? ''
   // 重置校验状态：它描述的是上一家厂商的连通性，跟新厂商无关。放在 defaultUrls
   // 判断之外，否则切到没有默认地址的厂商时会留着一条"连接正常"的旧结论。
   remoteChecked.value = false
@@ -2884,17 +2922,6 @@ const handleCancel = () => {
     color: var(--td-error-color);
     flex: 1;
     line-height: 1.5;
-  }
-
-  // ReRank提示使用主题绿色风格，与主页面保持一致
-  &.rerank-tip {
-    background: var(--td-success-color-light);
-    border: 1px solid var(--td-success-color-focus);
-    border-left: 3px solid var(--td-brand-color);
-
-    .tip-text {
-      color: var(--td-success-color);
-    }
   }
 
   :deep(.tip-link) {

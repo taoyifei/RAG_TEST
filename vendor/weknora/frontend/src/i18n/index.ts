@@ -4,11 +4,13 @@ import ruRU from './locales/ru-RU.ts'
 import enUS from './locales/en-US.ts'
 import koKR from './locales/ko-KR.ts'
 import jaJP from './locales/ja-JP.ts'
+import zhTW from './locales/zh-TW.ts'
 import { BUILT_IN_DEFAULT, resolveDefaultLocale } from './resolveDefaultLocale.ts'
 import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
 
 const nativeMessages = {
   'zh-CN': zhCN,
+  'zh-TW': zhTW,
   'en-US': enUS,
   'ru-RU': ruRU,
   'ko-KR': koKR,

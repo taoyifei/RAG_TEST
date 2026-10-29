@@ -18,6 +18,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/application/access"
 	"github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/event"
+	"github.com/Tencent/WeKnora/internal/infrastructure/docparser"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/api"
 	"github.com/Tencent/WeKnora/internal/sandbox"
@@ -43,7 +44,8 @@ type qaRequestContext struct {
 	sessionID             string
 	requestID             string
 	receivedAt            time.Time // Wall-clock time the handler started processing the request
-	query                 string
+	query                 string    // Question sent to models; the upload-only question when the user typed nothing
+	userInput             string    // Text the user typed, stored on the user message; may be empty
 	session               *types.Session
 	customAgent           *types.CustomAgent
 	assistantMessage      *types.Message
@@ -132,6 +134,25 @@ func (rc *qaRequestContext) buildQARequest() *types.QARequest {
 	return req
 }
 
+// uploadOnlyQuery returns the question used for a request that carries inline
+// image or file content but no text, or "" when it carries neither. URL-only
+// images do not count: parseQARequest strips client-supplied image URLs.
+// Pre-uploaded attachment IDs do not count either: those documents can still
+// fail or time out after the stream starts, leaving nothing to answer from.
+func uploadOnlyQuery(ctx context.Context, req *CreateKnowledgeQARequest) string {
+	hasUpload := false
+	for _, img := range req.Images {
+		hasUpload = hasUpload || strings.TrimSpace(img.Data) != ""
+	}
+	for _, att := range req.AttachmentUploads {
+		hasUpload = hasUpload || strings.TrimSpace(att.Data) != ""
+	}
+	if !hasUpload {
+		return ""
+	}
+	return types.UploadOnlyQuestion(types.LanguageFromContextOrDefault(ctx))
+}
+
 // parseQARequest parses and validates a QA request, returns the request context
 func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestContext, *CreateKnowledgeQARequest, error) {
 	receivedAt := time.Now()
@@ -170,9 +191,14 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		logger.Error(ctx, "Query content is invalid")
 		return nil, nil, errors.NewBadRequestError("Query content contains invalid content")
 	}
+	modelQuery := request.Query
 	if validatedQuery == "" {
-		logger.Error(ctx, "Query content is empty")
-		return nil, nil, errors.NewBadRequestError("Query content cannot be empty")
+		modelQuery = uploadOnlyQuery(ctx, &request)
+		if modelQuery == "" {
+			logger.Error(ctx, "Query content is empty")
+			return nil, nil, errors.NewBadRequestError("Query content cannot be empty")
+		}
+		request.Query = ""
 	}
 
 	// Resolve the storage-reference representation up front: once the SSE stream
@@ -219,7 +245,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	}
 
 	// Merge @mentioned items into knowledge_base_ids and knowledge_ids
-	kbIDs, knowledgeIDs := mergeKnowledgeTargets(request.KnowledgeBaseIDs, request.KnowledgeIds, request.MentionedItems)
+	kbIDs, knowledgeIDs := mergeKnowledgeTargets(request.KnowledgeBaseIDs, request.KnowledgeIDs, request.MentionedItems)
 	if err := types.AuthorizeTenantAPIKeyKnowledgeTargets(ctx, kbIDs, knowledgeIDs); err != nil {
 		return nil, nil, err
 	}
@@ -421,7 +447,8 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		sessionID:   sessionID,
 		requestID:   requestID,
 		receivedAt:  receivedAt,
-		query:       request.Query,
+		query:       modelQuery,
+		userInput:   request.Query,
 		session:     session,
 		customAgent: customAgent,
 		assistantMessage: &types.Message{
@@ -814,7 +841,7 @@ func (h *Handler) setupSSEStream(reqCtx *qaRequestContext, generateTitle bool, m
 
 // SearchKnowledge godoc
 // @Summary      知识搜索
-// @Description  在知识库中搜索（不使用LLM总结）
+// @Description  在知识库中搜索（不使用LLM总结）。与产品内问答使用同一检索流程（召回、rerank、合并），外部检索首选；可覆盖召回参数与 rerank
 // @Tags         问答
 // @Accept       json
 // @Produce      json
@@ -887,6 +914,11 @@ func (h *Handler) SearchKnowledge(c *gin.Context) {
 		c.Error(err)
 		return
 	}
+	opts, err := knowledgeSearchOptions(&request)
+	if err != nil {
+		_ = c.Error(errors.NewBadRequestError(err.Error()))
+		return
+	}
 
 	logger.Infof(
 		ctx,
@@ -898,18 +930,51 @@ func (h *Handler) SearchKnowledge(c *gin.Context) {
 	)
 
 	// Directly call knowledge retrieval service without LLM summarization
-	searchResults, err := h.sessionService.SearchKnowledge(ctx, knowledgeBaseIDs, request.KnowledgeIDs, tagScopes, request.Query)
+	retrieval, err := h.sessionService.SearchKnowledge(
+		ctx, knowledgeBaseIDs, request.KnowledgeIDs, tagScopes, request.Query, opts,
+	)
 	if err != nil {
+		// Typed AppErrors (e.g. an unknown rerank model_id) keep their code.
+		if appErr, ok := errors.IsAppError(err); ok {
+			_ = c.Error(appErr)
+			return
+		}
 		logger.ErrorWithFields(ctx, err, nil)
 		c.Error(errors.NewInternalServerError(err.Error()))
 		return
 	}
 
-	logger.Infof(ctx, "Knowledge search completed, found %d results", len(searchResults))
+	logger.Infof(ctx, "Knowledge search completed, found %d results", len(retrieval.Results))
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    rewriter.CopyReferences(ctx, searchResults),
+		"data":    rewriter.CopyReferences(ctx, retrieval.Results),
+		"meta":    retrieval.Meta,
 	})
+}
+
+// knowledgeSearchOptions validates the retrieval overrides of a
+// knowledge-search request.
+func knowledgeSearchOptions(request *SearchKnowledgeRequest) (*types.KnowledgeSearchOptions, error) {
+	if request.MatchCount < 0 {
+		return nil, fmt.Errorf("match_count must not be negative")
+	}
+	if request.MatchCount > types.MaxRequestedResults {
+		return nil, fmt.Errorf("match_count must not exceed %d", types.MaxRequestedResults)
+	}
+	if request.DisableVectorMatch && request.DisableKeywordsMatch {
+		return nil, fmt.Errorf("disable_vector_match and disable_keywords_match cannot both be true")
+	}
+	if err := request.Rerank.Validate(); err != nil {
+		return nil, err
+	}
+	return &types.KnowledgeSearchOptions{
+		VectorThreshold:      request.VectorThreshold,
+		KeywordThreshold:     request.KeywordThreshold,
+		MatchCount:           request.MatchCount,
+		DisableKeywordsMatch: request.DisableKeywordsMatch,
+		DisableVectorMatch:   request.DisableVectorMatch,
+		Rerank:               request.Rerank,
+	}, nil
 }
 
 // KnowledgeQA godoc
@@ -1026,7 +1091,7 @@ func (h *Handler) persistTurnMessages(ctx context.Context, reqCtx *qaRequestCont
 		userMsg, err := h.createUserMessage(
 			ctx,
 			reqCtx.sessionID,
-			reqCtx.query,
+			reqCtx.userInput,
 			reqCtx.requestID,
 			reqCtx.mentionedItems,
 			convertImageAttachments(reqCtx.images),
@@ -1396,7 +1461,11 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 
 		// Resolve pre-uploaded attachments (may still be parsing): waits with a
 		// timeline step so the send is not blocked, then injects content/images.
-		h.resolveTemporaryAttachments(streamCtx, reqCtx)
+		if mode == qaModeAgent {
+			h.describeTemporaryAttachmentsForAgent(streamCtx, reqCtx)
+		} else {
+			h.resolveTemporaryAttachments(streamCtx, reqCtx)
+		}
 
 		// Run VLM image analysis if applicable
 		h.runVLMAnalysisIfNeeded(streamCtx, reqCtx, mode)
@@ -1613,6 +1682,90 @@ func (h *Handler) resolveTemporaryAttachments(streamCtx *sseStreamContext, reqCt
 		return
 	}
 
+	h.applyTemporaryAttachments(ctx, reqCtx, temporaryResult)
+}
+
+// describeTemporaryAttachmentsForAgent hands an agent turn a manifest of the
+// pre-uploaded documents without waiting for parsing to finish or choosing
+// content by the question. The agent reads attachments itself through
+// read_file's attachment:// paths, which wait for a document that is still
+// parsing only when the agent actually needs it.
+func (h *Handler) describeTemporaryAttachmentsForAgent(streamCtx *sseStreamContext, reqCtx *qaRequestContext) {
+	if len(reqCtx.attachmentIDs) == 0 {
+		return
+	}
+	ctx := streamCtx.asyncCtx
+	h.awaitImageAttachmentsForAgent(streamCtx, reqCtx)
+	result, err := h.temporaryDocuments.DescribeForAgent(
+		ctx, reqCtx.session.TenantID, reqCtx.sessionID, reqCtx.attachmentIDs,
+	)
+	if err != nil || result == nil {
+		if err != nil {
+			logger.Warnf(ctx, "temporary attachment manifest failed for session %s: %v", reqCtx.sessionID, err)
+		}
+		return
+	}
+	h.applyTemporaryAttachments(ctx, reqCtx, result)
+}
+
+// awaitImageAttachmentsForAgent waits for standalone image uploads. Document
+// images are read on demand through read_file.
+func (h *Handler) awaitImageAttachmentsForAgent(streamCtx *sseStreamContext, reqCtx *qaRequestContext) {
+	if reqCtx.customAgent == nil || !reqCtx.customAgent.Config.ImageUploadEnabled {
+		return
+	}
+	var imageIDs []string
+	for _, meta := range reqCtx.attachmentMetas {
+		if meta.ID != "" && docparser.IsImageFormat(meta.FileType) {
+			imageIDs = append(imageIDs, meta.ID)
+		}
+	}
+	ctx := streamCtx.asyncCtx
+	tenantID := reqCtx.session.TenantID
+	if len(imageIDs) == 0 || !h.hasPendingAttachments(ctx, tenantID, reqCtx.sessionID, imageIDs) {
+		return
+	}
+	start := time.Now()
+	toolCallID := uuid.New().String()
+	_ = streamCtx.eventBus.Emit(ctx, event.Event{
+		Type:      event.EventAgentToolCall,
+		SessionID: reqCtx.sessionID,
+		Data:      event.AgentToolCallData{ToolCallID: toolCallID, ToolName: "attachment_parsing"},
+	})
+	waitTimeout := attachmentParseWaitTimeout()
+	if reqCtx.customAgent.Config.AttachmentParseWaitTimeoutSec > 0 {
+		waitTimeout = time.Duration(reqCtx.customAgent.Config.AttachmentParseWaitTimeoutSec) * time.Second
+	}
+	h.waitForAttachments(ctx, tenantID, reqCtx.sessionID, imageIDs, waitTimeout)
+	ready, skipped := h.partitionReadyAttachments(ctx, tenantID, reqCtx.sessionID, imageIDs)
+	output := fmt.Sprintf("已解析 %d 个附件", len(ready))
+	if skipped > 0 {
+		output += fmt.Sprintf("，%d 个未完成已跳过", skipped)
+	}
+	_ = streamCtx.eventBus.Emit(ctx, event.Event{
+		Type:      event.EventAgentToolResult,
+		SessionID: reqCtx.sessionID,
+		Data: event.AgentToolResultData{
+			ToolCallID: toolCallID,
+			ToolName:   "attachment_parsing",
+			Output:     output,
+			Success:    true,
+			Duration:   time.Since(start).Milliseconds(),
+			Data: map[string]interface{}{
+				"display_type":  "attachment_parsing",
+				"parsed_count":  len(ready),
+				"skipped_count": skipped,
+			},
+		},
+	})
+}
+
+// applyTemporaryAttachments filters resolved attachments by the agent's
+// supported file types, adds them (and their images) to the turn, and stores
+// the selected content on the user message for later history replay.
+func (h *Handler) applyTemporaryAttachments(
+	ctx context.Context, reqCtx *qaRequestContext, temporaryResult *types.TemporaryDocumentPromptResult,
+) {
 	attachments := temporaryResult.Attachments
 	if reqCtx.customAgent != nil && len(reqCtx.customAgent.Config.SupportedFileTypes) > 0 {
 		filtered := attachments[:0]

@@ -3,7 +3,10 @@
         'is-embedded': embeddedMode,
         'has-references-panel': referencesDrawerVisible,
         'has-sandbox-panel': sandboxPanel.visible.value,
-    }" :style="{ '--sandbox-panel-width': `${sandboxPanel.width.value}px` }">
+    }" :style="{
+        '--sandbox-panel-width': `${sandboxPanel.width.value}px`,
+        '--references-panel-width': `${referencesPanelWidth}px`,
+    }">
         <div v-if="!embeddedMode" class="chat-topbar">
             <ChatHeader :session="currentSession" />
             <div v-if="!sandboxPanel.visible.value" class="sandbox-header-toggle">
@@ -105,8 +108,7 @@
                                 :value="session.created_at" />
 
                             <div v-if="session.role == 'user'" class="message-row"
-                                :data-message-id="session.id || undefined"
-                                :class="{ 'is-minimap-target': session.id && session.id === minimapTargetId }">
+                                :data-message-id="session.id || undefined">
                                 <usermsg :content="session.content" :mentioned_items="session.mentioned_items"
                                     :images="session.images" :attachments="session.attachments" :embeddedMode="embeddedMode"
                                     :session-id="session_id"
@@ -187,6 +189,7 @@
         :agent-id="useSettingsStoreInstance.selectedAgentId"
         :agent-source-tenant-id="useSettingsStoreInstance.selectedAgentSourceTenantId"
         :shifted="referencesDrawerVisible"
+        :shift-width="referencesPanelWidth"
         :artifacts="sessionArtifacts" :artifacts-collecting="sessionArtifactsCollecting"
         @artifact-deleted="handleArtifactDeleted" />
 </template>
@@ -246,7 +249,7 @@ import { isCollectingSkillArtifacts } from '@/utils/skillArtifacts';
 const referencesDrawer = provideChatReferencesDrawer();
 provideChatAttachmentPreviewDrawer();
 const sandboxPanel = provideChatSandboxPanel();
-const { visible: referencesDrawerVisible } = referencesDrawer;
+const { visible: referencesDrawerVisible, panelWidth: referencesPanelWidth } = referencesDrawer;
 
 const props = defineProps({
     session_id: { type: String, default: '' },
@@ -573,6 +576,9 @@ watch([activitySessionId, isReplying, isImRecovering, currentAssistantMessageId]
     sessionActivity.update(activitySessionId.value, isReplying.value || isImRecovering.value, currentAssistantMessageId.value);
 }, { flush: 'sync' });
 const historyLoading = ref(true);
+watch(activitySessionId, (id) => {
+    if (!props.embeddedMode) sessionActivity.setViewing(id);
+}, { flush: 'sync' });
 const historyLoadingMore = ref(false);
 const hasMoreHistory = ref(true);
 
@@ -1776,7 +1782,7 @@ onBeforeRouteUpdate((to, from, next) => {
 
     &.has-references-panel:not(.is-embedded) {
         @media (min-width: 960px) {
-            padding-right: 420px;
+            padding-right: var(--references-panel-width, 420px);
             box-sizing: border-box;
 
             .chat_scroll_box {
@@ -1796,7 +1802,7 @@ onBeforeRouteUpdate((to, from, next) => {
 
     &.has-sandbox-panel.has-references-panel:not(.is-embedded) {
         @media (min-width: 1400px) {
-            padding-right: calc(420px + var(--sandbox-panel-width, 420px));
+            padding-right: calc(var(--references-panel-width, 420px) + var(--sandbox-panel-width, 420px));
         }
 
         @media (max-width: 1399.98px) and (min-width: 960px) {
@@ -2157,13 +2163,54 @@ onBeforeRouteUpdate((to, from, next) => {
 
 <style lang="less">
 .chat-rewind-popconfirm {
-    max-width: 260px;
+    .t-popconfirm__content {
+        width: 280px;
+        max-width: calc(100vw - 24px);
+        padding: 14px 16px 12px;
+        box-sizing: border-box;
+    }
 
-    .t-popconfirm__content,
-    .t-popup__content {
-        max-width: 260px;
+    .t-popconfirm__body {
+        gap: 8px;
+    }
+
+    .t-popconfirm__body > .t-icon {
+        flex-shrink: 0;
+        margin: 0;
+        padding: 3px 0 0;
+        font-size: var(--app-text-xl);
+    }
+
+    .t-popconfirm__inner {
+        flex: 1;
+        min-width: 0;
+        max-width: none;
         white-space: normal;
-        line-height: 1.5;
+    }
+
+    .chat-rewind-confirm__title {
+        font-size: var(--app-text-base);
+        font-weight: 500;
+        line-height: 22px;
+        color: var(--td-text-color-primary);
+    }
+
+    .chat-rewind-confirm__body {
+        margin-top: 2px;
+        font-size: var(--app-text-md);
+        line-height: 20px;
+        color: var(--td-text-color-secondary);
+    }
+
+    .t-popconfirm__buttons {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 12px;
+
+        .t-popconfirm__confirm {
+            margin-left: 0;
+        }
     }
 }
 </style>

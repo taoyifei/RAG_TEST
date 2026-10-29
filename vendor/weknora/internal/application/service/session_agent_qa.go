@@ -199,7 +199,7 @@ func (s *sessionService) AgentQA(
 	mgr, _, layoutErr := resolveSandboxForExecution(
 		ctx, s.sandboxResolver, s.sandboxMgr, s.sandboxPinner,
 		req.Session.TenantID, sessionID, agentConfig.SandboxConfigID, s.sandboxPolicy,
-		withLiteHostSandbox(s.hostSandbox),
+		withLiteHostSandbox(s.hostSandbox), withLiteDesktop(s.hostDesktop),
 	)
 	layout := sessionWorkspaceLayout(
 		ctx, sessionID, mgr, layoutErr, s.hostSandbox, agentConfig.SandboxConfigID,
@@ -214,6 +214,15 @@ func (s *sessionService) AgentQA(
 		)
 		if err != nil {
 			return fmt.Errorf("restore session attachments into sandbox: %w", err)
+		}
+		for _, staged := range stagedAttachments {
+			if staged.AttachmentPath == "" {
+				continue
+			}
+			if agentConfig.AttachmentSandboxCopies == nil {
+				agentConfig.AttachmentSandboxCopies = make(map[string]string, len(stagedAttachments))
+			}
+			agentConfig.AttachmentSandboxCopies[staged.Path] = staged.AttachmentPath
 		}
 	}
 
@@ -278,11 +287,10 @@ func (s *sessionService) AgentQA(
 	if req.QuotedContext != "" {
 		agentQuery += "\n\n" + req.QuotedContext
 	}
-	// Inject attachment content (documents, audio transcripts, etc.) so the agent
-	// can see uploaded files. Mirrors the behavior of the KnowledgeQA pipeline
-	// (see chat_pipeline/into_chat_message.go).
+	// Stored documents are listed for read_file rather than pasted in;
+	// inline uploads without a stored document still carry their content.
 	if len(req.Attachments) > 0 {
-		agentQuery += req.Attachments.BuildPrompt()
+		agentQuery += req.Attachments.BuildAgentPrompt()
 		logger.Infof(ctx, "Appended %d attachment(s) to agent query", len(req.Attachments))
 	}
 	if manifest := buildSandboxAttachmentsPrompt(stagedAttachments, layout); manifest != "" {
@@ -324,25 +332,32 @@ func (s *sessionService) buildAgentConfig(
 ) (*types.AgentConfig, error) {
 	customAgent := req.CustomAgent
 	agentConfig := &types.AgentConfig{
-		MaxIterations:               customAgent.Config.MaxIterations,
-		Temperature:                 customAgent.Config.Temperature,
-		WebSearchEnabled:            customAgent.Config.WebSearchEnabled && req.WebSearchEnabled,
-		LocalBrowserEnabled:         req.LocalBrowserEnabled,
-		WebSearchMaxResults:         customAgent.Config.WebSearchMaxResults,
-		WebSearchProviderID:         customAgent.Config.WebSearchProviderID,
-		MultiTurnEnabled:            customAgent.Config.MultiTurnEnabled,
-		MemoryEnabled:               customAgent.Config.MemoryEnabled,
-		MCPSelectionMode:            customAgent.Config.MCPSelectionMode,
-		MCPServices:                 customAgent.Config.MCPServices,
-		MCPAuthWaitTimeout:          customAgent.Config.MCPAuthWaitTimeout,
-		Thinking:                    customAgent.Config.Thinking,
-		ReasoningEffort:             customAgent.Config.ReasoningEffort,
-		CitationEnabled:             customAgent.Config.CitationEnabled,
-		RetrieveKBOnlyWhenMentioned: customAgent.Config.RetrieveKBOnlyWhenMentioned,
-		LLMCallTimeout:              customAgent.Config.LLMCallTimeout,
-		MaxCompletionTokens:         customAgent.Config.MaxCompletionTokens,
-		RetainRetrievalHistory:      customAgent.Config.RetainRetrievalHistory,
-		SharedAgentReadOnly:         req.SharedAgentReadOnly,
+		MaxIterations:                 customAgent.Config.MaxIterations,
+		Temperature:                   customAgent.Config.Temperature,
+		WebSearchEnabled:              customAgent.Config.WebSearchEnabled && req.WebSearchEnabled,
+		LocalBrowserEnabled:           req.LocalBrowserEnabled,
+		WebSearchMaxResults:           customAgent.Config.WebSearchMaxResults,
+		WebSearchProviderID:           customAgent.Config.WebSearchProviderID,
+		MultiTurnEnabled:              customAgent.Config.MultiTurnEnabled,
+		MemoryEnabled:                 customAgent.Config.MemoryEnabled,
+		MCPSelectionMode:              customAgent.Config.MCPSelectionMode,
+		MCPServices:                   customAgent.Config.MCPServices,
+		MCPAuthWaitTimeout:            customAgent.Config.MCPAuthWaitTimeout,
+		AttachmentParseWaitTimeoutSec: customAgent.Config.AttachmentParseWaitTimeoutSec,
+		Thinking:                      customAgent.Config.Thinking,
+		ReasoningEffort:               customAgent.Config.ReasoningEffort,
+		CitationEnabled:               customAgent.Config.CitationEnabled,
+		RetrieveKBOnlyWhenMentioned:   customAgent.Config.RetrieveKBOnlyWhenMentioned,
+		LLMCallTimeout:                customAgent.Config.LLMCallTimeout,
+		MaxCompletionTokens:           customAgent.Config.MaxCompletionTokens,
+		RetainRetrievalHistory:        customAgent.Config.RetainRetrievalHistory,
+		SharedAgentReadOnly:           req.SharedAgentReadOnly,
+		// The model is always told it may call tools in parallel; without
+		// this the engine still ran them one by one, so three searches in
+		// one reply cost three sequential embed/retrieve/rerank rounds.
+		// Only read-only tools overlap (agenttools.CanRunConcurrently);
+		// anything else is a barrier that runs alone, in model order.
+		ParallelToolCalls: true,
 	}
 	applyRequestReasoningEffort(req.ReasoningEffort, &agentConfig.Thinking, &agentConfig.ReasoningEffort)
 	// An unset MCP mode means "all" at runtime, but the share scope and the
@@ -367,10 +382,18 @@ func (s *sessionService) buildAgentConfig(
 	// because that is where resolveSandboxForExecution reads it; skillsForRun
 	// picks the config the same way the sandbox resolution does.
 	sandboxTenantID, _ := types.TenantIDFromContext(ctx)
-	skillConfigID, tenantSkills := skillsForRun(
-		ctx, s.sandboxPinner, s.sandboxConfigRepo, s.tenantSkillRepo,
-		sandboxTenantID, req.Session.ID, agentConfig.SandboxConfigID,
+	var (
+		skillConfigID string
+		tenantSkills  []*types.TenantSkillEntity
 	)
+	if s.hostDesktop {
+		skillConfigID, tenantSkills = hostSkillsForRun(ctx, s.tenantSkillRepo, s.hostSkillTree, sandboxTenantID)
+	} else {
+		skillConfigID, tenantSkills = skillsForRun(
+			ctx, s.sandboxPinner, s.sandboxConfigRepo, s.tenantSkillRepo,
+			sandboxTenantID, req.Session.ID, agentConfig.SandboxConfigID,
+		)
+	}
 	agentConfig.TenantSkills = tenantSkills
 	if len(tenantSkills) > 0 {
 		// The config named here is the one the skills came from, which is the
@@ -388,12 +411,8 @@ func (s *sessionService) buildAgentConfig(
 	agentConfig.KnowledgeBases = kbIDs
 	agentConfig.KnowledgeIDs = knowledgeIDs
 
-	// Use custom agent's allowed tools if specified, otherwise use defaults
-	if len(customAgent.Config.AllowedTools) > 0 {
-		agentConfig.AllowedTools = customAgent.Config.AllowedTools
-	} else {
-		agentConfig.AllowedTools = tools.DefaultAllowedTools()
-	}
+	// An unset list selects the default tools; an empty one means none.
+	agentConfig.AllowedTools = tools.EffectiveAllowedTools(customAgent.Config.AllowedTools)
 	// Apply per-turn @Skill / @MCP scope. Each helper narrows the agent's
 	// whitelist to the mentioned items and records the pinned set used for the
 	// <must_use> hint, keeping all scope logic in one place per resource type.

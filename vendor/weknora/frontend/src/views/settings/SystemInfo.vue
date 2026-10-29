@@ -196,13 +196,16 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { getSystemInfo, type SystemInfo } from '@/api/system'
+import type { SystemInfo } from '@/api/system'
+import { useEditorResourcesStore } from '@/stores/editorResources'
 import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
 import { useI18n } from 'vue-i18n'
+import { docsUrl } from '@/utils/docsUrl'
 
 const { t, locale } = useI18n()
 
 // Reactive state
+const editorResources = useEditorResourcesStore()
 const systemInfo = ref<SystemInfo | null>(null)
 const loading = ref(true)
 const error = ref('')
@@ -246,8 +249,7 @@ function formatUptime(totalSeconds: number): string {
   return parts.join(' ')
 }
 
-const troubleshootingDocsURL =
-  'https://github.com/Tencent/WeKnora/blob/main/website-docs/01-getting-started/05-troubleshooting.md#database-migrations'
+const troubleshootingDocsURL = docsUrl('troubleshootingMigrations')
 
 // Pre-fills a new issue with the current migration error so users don't have to
 // paste it manually. Body is intentionally minimal — the bug template will fill
@@ -284,10 +286,11 @@ const loadInfo = async () => {
     loading.value = true
     error.value = ''
     
-    const systemResponse = await getSystemInfo()
-    
-    if (systemResponse.data) {
-      systemInfo.value = systemResponse.data
+    // 设置面板每次打开都要最新值；侧栏启动时拉过的快照走同一个 store。
+    await editorResources.ensureSystemInfo(true)
+
+    if (editorResources.systemInfo) {
+      systemInfo.value = editorResources.systemInfo
     } else {
       error.value = t('system.messages.fetchFailed')
     }

@@ -4,12 +4,16 @@
       <div class="wst-login-mark">湾</div>
       <p class="wst-login-eyebrow">湾小度 · 管理后台</p>
       <h1>管理员登录</h1>
-      <p class="wst-login-hint">使用湾小度管理员口令进入知识资料和用户端配置。</p>
+      <p class="wst-login-hint">使用研发管理系统账号登录，系统管理员可进入知识资料和系统配置。</p>
+      <a class="wst-sso-login" :href="ssoLoginUrl">使用研发管理系统登录</a>
+      <details>
+        <summary>备用管理员口令</summary>
       <form @submit.prevent="login">
         <label for="wst-admin-token">管理员口令</label>
         <input id="wst-admin-token" v-model="token" type="password" autocomplete="off" required :disabled="busy" />
         <button type="submit" :disabled="busy || !token.trim()">{{ busy ? '正在登录…' : '进入管理后台' }}</button>
       </form>
+      </details>
       <p v-if="error" role="alert" class="wst-login-error">{{ error }}</p>
     </section>
   </main>
@@ -27,6 +31,7 @@ const error = ref('')
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const ssoLoginUrl = '/kb/sso/entry?return_to=' + encodeURIComponent('/kb/admin' + safeWanshitongReturnTo(route.query.returnTo))
 
 async function login() {
   if (!token.value.trim()) return
@@ -54,7 +59,10 @@ async function login() {
 .wst-login-eyebrow { margin: 23px 0 5px; color: #547996; font-size: var(--app-text-md); }
 h1 { margin: 0; color: #203a53; font-size: var(--app-text-4xl); }
 .wst-login-hint { margin: 11px 0 27px; color: #667e93; line-height: 1.6; }
-form { display: grid; gap: 10px; }
+.wst-sso-login { display: block; padding: 12px; border-radius: var(--app-radius-md); background: #145a8d; color: white; text-align: center; text-decoration: none; font-weight: 600; }
+details { margin-top: 22px; color: #667e93; }
+summary { cursor: pointer; }
+form { display: grid; gap: 10px; margin-top: 14px; }
 label { color: #314a63; font-weight: 600; }
 input { width: 100%; height: 43px; padding: 0 12px; border: 1px solid #c9d7e4; border-radius: var(--app-radius-md); font: inherit; }
 button { height: 43px; margin-top: 8px; border: 0; border-radius: var(--app-radius-md); background: #145a8d; color: white; font: inherit; font-weight: 600; cursor: pointer; }
