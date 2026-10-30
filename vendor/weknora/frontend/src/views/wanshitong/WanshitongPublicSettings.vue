@@ -146,6 +146,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { listKnowledgeBases } from '@/api/knowledge-base'
 import { listModels } from '@/api/model'
 import { getPromptTemplates } from '@/api/system'
+import { clonePublicSettings } from '@/utils/wanshitongPublicSettings'
 import {
   getPublicAppConfig, savePublicAppConfig,
   type PublicAnswerSettings, type PublicAppConfig, type PublicPageSettings,
@@ -230,8 +231,8 @@ async function reload() {
     const current = await getPublicAppConfig()
     config.value = current
     selectedIds.value = current.status === 'DRIFTED' ? [] : [...current.knowledge_base_ids]
-    answer.value = current.answer_settings ? structuredClone(current.answer_settings) : blankAnswer()
-    page.value = structuredClone(current.page_settings)
+    answer.value = current.answer_settings ? clonePublicSettings(current.answer_settings) : blankAnswer()
+    page.value = clonePublicSettings(current.page_settings)
     migrationVerified.value = false
     for (const item of answerBooleanChecks) verifiedFlags.value[item.key] = false
   } catch (cause) {
@@ -325,16 +326,16 @@ async function save() {
     await savePublicAppConfig({
       expected_revision: config.value.revision,
       migration_confirmed: requiresVerification.value ? true : undefined,
-      knowledge_base_ids: selectedIds.value,
-      answer_settings: structuredClone(answer.value),
-      page_settings: structuredClone(page.value),
+      knowledge_base_ids: clonePublicSettings(selectedIds.value),
+      answer_settings: clonePublicSettings(answer.value),
+      page_settings: clonePublicSettings(page.value),
     })
     const readback = await getPublicAppConfig()
     if (readback.status !== 'ACTIVE') throw new Error('保存后回读未显示已生效状态，请重新检查')
     config.value = readback
     selectedIds.value = [...readback.knowledge_base_ids]
-    answer.value = structuredClone(readback.answer_settings ?? answer.value)
-    page.value = structuredClone(readback.page_settings)
+    answer.value = clonePublicSettings(readback.answer_settings ?? answer.value)
+    page.value = clonePublicSettings(readback.page_settings)
     migrationVerified.value = false
     success.value = `配置已回读：版本 ${readback.revision}，模型 ${activeModelName.value}，资料范围 ${readback.knowledge_base_ids.length} 个知识库。后续新提问生效。`
   } catch (cause) {
