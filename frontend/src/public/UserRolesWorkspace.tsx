@@ -66,7 +66,9 @@ export function UserRolesWorkspace({
             ← 返回问答
           </button>
           <h1>用户与角色</h1>
-          <p>同事首次登录后会出现在这里。选择角色并保存即可生效。</p>
+          <p>
+            同事首次登录后会出现在这里。管理员可调整普通、人力角色；管理员任免由超级管理员处理。
+          </p>
         </div>
         <button
           type="button"
@@ -148,27 +150,38 @@ function UserRoleRow({
       </td>
       <td>{user.dept_id ? `部门 ID：${user.dept_id}` : "登录系统暂未提供"}</td>
       <td>
-        <div className="wst-role-editor">
-          <select
-            aria-label={`${user.display_name || user.username}的角色`}
-            value={role}
-            disabled={busy}
-            onChange={(event) => setRole(event.currentTarget.value as UserRole)}
-          >
-            {Object.entries(ROLE_LABELS).map(([value, title]) => (
-              <option key={value} value={value}>
-                {title}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={busy || role === user.role}
-            onClick={() => onSave(role)}
-          >
-            保存
-          </button>
-        </div>
+        {user.editable_roles.length === 0 ? (
+          <div>
+            <strong>
+              {user.is_super_admin ? "超级管理员" : ROLE_LABELS[user.role]}
+            </strong>
+            <div className="wst-document-meta">{user.role_edit_note}</div>
+          </div>
+        ) : (
+          <div className="wst-role-editor">
+            <select
+              aria-label={`${user.display_name || user.username}的角色`}
+              value={role}
+              disabled={busy}
+              onChange={(event) =>
+                setRole(event.currentTarget.value as UserRole)
+              }
+            >
+              {user.editable_roles.map((value) => (
+                <option key={value} value={value}>
+                  {ROLE_LABELS[value]}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={busy || role === user.role}
+              onClick={() => onSave(role)}
+            >
+              保存
+            </button>
+          </div>
+        )}
       </td>
     </tr>
   );

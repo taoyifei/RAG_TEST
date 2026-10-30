@@ -130,11 +130,14 @@ describe("用户资料和角色", () => {
           Response.json({
             items: [
               {
-                user_id: "325",
+                user_id: "1001",
                 username: "staff",
                 display_name: "测试同事",
                 dept_id: "42",
                 role,
+                is_super_admin: false,
+                editable_roles: ["user", "hr"],
+                role_edit_note: null,
               },
             ],
           }),
@@ -156,7 +159,7 @@ describe("用户资料和角色", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
-        "/api/ops/users/325",
+        "/api/ops/users/1001",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ role: "hr" }),
@@ -169,6 +172,60 @@ describe("用户资料和角色", () => {
     );
     expect(
       await screen.findByText("已将 测试同事 设置为人力角色。"),
+    ).toBeVisible();
+  });
+
+  it("管理员同级和超管行只读，普通用户不提供管理员选项", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            user_id: "325",
+            username: "taoyifei",
+            display_name: "超级管理员同事",
+            dept_id: "208",
+            role: "admin",
+            is_super_admin: true,
+            editable_roles: [],
+            role_edit_note: "超级管理员身份由服务端配置，不能在此修改。",
+          },
+          {
+            user_id: "201",
+            username: "peer",
+            display_name: "另一位管理员",
+            dept_id: "208",
+            role: "admin",
+            is_super_admin: false,
+            editable_roles: [],
+            role_edit_note: "仅超级管理员可以调整其他管理员的角色。",
+          },
+          {
+            user_id: "138",
+            username: "luoyang",
+            display_name: "普通同事",
+            dept_id: "208",
+            role: "user",
+            is_super_admin: false,
+            editable_roles: ["user", "hr"],
+            role_edit_note: null,
+          },
+        ],
+      }),
+    );
+    render(
+      <UserRolesWorkspace
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByText("超级管理员");
+    expect(screen.getAllByRole("combobox")).toHaveLength(1);
+    expect(
+      screen.getByRole("combobox", { name: "普通同事的角色" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("option", { name: "系统管理员" })).toBeNull();
+    expect(
+      screen.getByText("仅超级管理员可以调整其他管理员的角色。"),
     ).toBeVisible();
   });
 });

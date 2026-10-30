@@ -138,6 +138,7 @@ def test_sso_public_cookie_does_not_grant_admin(
         "display_name": "测试用户",
         "username": "tester",
         "dept_id": None,
+        "is_super_admin": False,
         "role": "user",
     }
     assert session["deployment_id"] == "candidate_8289"
@@ -257,12 +258,13 @@ def test_taoyifei_sso_admin_uses_console_and_keeps_department(
 ) -> None:
     auth, browser = gateway
     session = _login_public(
-        browser, monkeypatch, username="taoyifei", dept_id="42"
+        browser, monkeypatch, username="taoyifei", user_id="325", dept_id="42"
     )
     assert session["user"]["role"] == "admin"
+    assert session["user"]["is_super_admin"] is True
     assert session["user"]["dept_id"] == "42"
     assert auth.users is not None
-    assert auth.users.get("1001").dept_id == "42"
+    assert auth.users.get("325").dept_id == "42"
     assert auth.settings.admin_cookie_name not in browser.cookies
 
     resumed = browser.get("/kb/api/v1/console/session")
@@ -299,18 +301,39 @@ def test_local_role_change_applies_to_existing_sso_session(
     session = _login_public(browser, monkeypatch)
     assert browser.get("/kb/api/ops/users").status_code == 401
     assert auth.users is not None
-    auth.users.set_role("1001", "admin")
-    assert browser.get("/kb/api/v1/console/session").status_code == 200
-    listing = browser.get("/kb/api/ops/users")
-    assert listing.status_code == 200
-    assert listing.json()["items"][0]["role"] == "admin"
+    with TestClient(browser.app, base_url=_ORIGIN) as owner_browser:
+        owner_session = _login_public(
+            owner_browser, monkeypatch, username="taoyifei", user_id="325"
+        )
+        owner_headers = {
+            "Origin": _ORIGIN,
+            "X-CSRF-Token": owner_session["csrf_token"],
+        }
+        assert owner_browser.patch(
+            "/kb/api/ops/users/1001",
+            json={"role": "admin"},
+            headers=owner_headers,
+        ).status_code == 200
+        assert browser.get("/kb/api/v1/console/session").status_code == 200
+        listing = browser.get("/kb/api/ops/users")
+        assert listing.status_code == 200
+        listed = {item["user_id"]: item for item in listing.json()["items"]}
+        assert listed["325"]["is_super_admin"] is True
+        assert listed["325"]["editable_roles"] == []
+        assert listed["1001"]["editable_roles"] == []
 
-    headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
-    changed = browser.patch(
-        "/kb/api/ops/users/1001", json={"role": "hr"}, headers=headers
-    )
-    assert changed.status_code == 200
-    assert changed.json()["role"] == "hr"
+        headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
+        assert browser.patch(
+            "/kb/api/ops/users/1001", json={"role": "hr"}, headers=headers
+        ).status_code == 403
+        assert browser.patch(
+            "/kb/api/ops/users/325", json={"role": "user"}, headers=headers
+        ).status_code == 403
+        changed = owner_browser.patch(
+            "/kb/api/ops/users/1001", json={"role": "hr"}, headers=owner_headers
+        )
+        assert changed.status_code == 200
+        assert changed.json()["role"] == "hr"
     assert browser.get("/kb/api/v1/console/session").status_code == 401
     assert (
         browser.patch(

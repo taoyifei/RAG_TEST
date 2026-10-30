@@ -44,7 +44,14 @@ from wanshitong_gateway.compat.wanshitong.sso_session import (
     SsoIdentity,
     SsoSessionService,
 )
-from wanshitong_gateway.roles import Role, UserProfile, UserStore
+from wanshitong_gateway.roles import (
+    Role,
+    RoleChangeDeniedError,
+    UserProfile,
+    UserStore,
+    editable_roles,
+    role_edit_note,
+)
 from wanshitong_gateway.settings import GatewayAuthSettings
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -311,6 +318,7 @@ def register_auth_routes(app: FastAPI, auth: GatewayAuth) -> None:
                 display_name=profile.display_name,
                 dept_id=profile.dept_id,
                 role=profile.role,
+                is_super_admin=profile.is_super_admin,
             )
         return PublicSessionResponse(
             session_id=issue.principal.session_id,
@@ -407,10 +415,17 @@ def _register_user_routes(app: FastAPI, auth: GatewayAuth) -> None:
     @app.get("/api/ops/users")
     def list_users(request: Request, response: Response) -> dict[str, object]:
         auth.require_admin(request)
+        actor = auth.require_profile(request)
         if auth.users is None:
             raise AssertionError("用户资料库未初始化。")
         response.headers["Cache-Control"] = _NO_STORE
-        return {"items": [item.as_dict() for item in auth.users.list_users()]}
+        items: list[dict[str, object]] = []
+        for profile in auth.users.list_users():
+            item: dict[str, object] = dict(profile.as_dict())
+            item["editable_roles"] = list(editable_roles(actor, profile))
+            item["role_edit_note"] = role_edit_note(actor, profile)
+            items.append(item)
+        return {"items": items}
 
     @app.patch("/api/ops/users/{user_id}")
     def set_user_role(
@@ -418,12 +433,17 @@ def _register_user_routes(app: FastAPI, auth: GatewayAuth) -> None:
         body: _RoleUpdateRequest,
         request: Request,
         response: Response,
-    ) -> dict[str, str | None]:
+    ) -> dict[str, str | bool | None]:
         auth.require_admin(request)
+        actor = auth.require_profile(request)
         if auth.users is None:
             raise AssertionError("用户资料库未初始化。")
         try:
-            profile = auth.users.set_role(user_id, body.role)
+            profile = auth.users.set_role(
+                user_id, body.role, actor_user_id=actor.user_id
+            )
+        except RoleChangeDeniedError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from None
         except KeyError:
             raise HTTPException(
                 status_code=404, detail="user not found"

@@ -49,6 +49,7 @@ class PublicSessionUser(BaseModel):
     username: str | None = Field(default=None, max_length=256)
     dept_id: str | None = Field(default=None, max_length=128)
     role: Literal["admin", "hr", "user"] = "user"
+    is_super_admin: bool = False
 
 
 class PublicSessionResponse(BaseModel):

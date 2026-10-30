@@ -25,7 +25,9 @@ docker build --pull=false --network=none -f deployment/wanshitong-v2/Dockerfile.
 docker build --pull=false --network=none -f deployment/wanshitong-v2/Dockerfile.edge --build-arg WST_EDGE_RUNTIME_IMAGE=<已核对的Nginx运行镜像ID> -t wxd-edge:v2 deployment/wanshitong-v2
 ```
 
-`.env.example` 不包含凭据。复制为本次测试自己的 `.env` 后填写现场值及构建镜像ID。SSO注册表只含 `id/origin/authorize_url`，回调由网关自动推导；使用测试 `wanshitong_dev` client，Cookie部署ID为 `wxd_v2_test_8289`。管理员用户名配置为 `WANSHITONG_ADMIN_USERNAMES=taoyifei`。
+`.env.example` 不包含凭据。复制为本次测试自己的 `.env` 后填写现场值及构建镜像ID。SSO注册表只含 `id/origin/authorize_url`，回调由网关自动推导；使用测试 `wanshitong_dev` client，Cookie部署ID为 `wxd_v2_test_8289`。
+
+超级管理员通过 `WXD_SUPER_ADMIN_USER_IDS=325` 绑定研发系统稳定用户ID，Compose将其传给网关的 `WANSHITONG_SUPER_ADMIN_USER_IDS`。页面只能修改普通、人力、管理员三种业务角色，不能授予或撤销超管身份。管理员任免与同级保护规则见根目录README；角色变更记录保存在测试网关数据库 `user_role_changes` 表中。
 
 四个测试网络固定为 front `192.168.80.0/24`、engine `192.168.81.0/24`、data `192.168.82.0/24`、model-egress `192.168.83.0/24`。这些网段在部署前已核对无占用；edge使用 `192.168.80.3`，网关只信任该代理。
 

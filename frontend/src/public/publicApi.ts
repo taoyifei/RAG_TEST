@@ -7,6 +7,7 @@ export interface PublicSessionUser {
   displayName: string;
   username?: string;
   role?: "admin" | "hr" | "user";
+  isSuperAdmin?: boolean;
   deptId?: string | null;
 }
 
@@ -188,6 +189,7 @@ export async function createPublicSession(
       display_name: string;
       username?: string;
       role?: "admin" | "hr" | "user";
+      is_super_admin?: boolean;
       dept_id?: string | null;
     };
   }>(response);
@@ -202,6 +204,7 @@ export async function createPublicSession(
           displayName: body.user.display_name,
           username: body.user.username,
           role: body.user.role ?? "user",
+          isSuperAdmin: body.user.is_super_admin ?? false,
           deptId: body.user.dept_id,
         }
       : undefined,

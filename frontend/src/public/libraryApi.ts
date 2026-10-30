@@ -29,6 +29,9 @@ export interface ManagedUser {
   display_name: string;
   dept_id: string | null;
   role: UserRole;
+  is_super_admin: boolean;
+  editable_roles: UserRole[];
+  role_edit_note: string | null;
 }
 
 async function checkResponse(response: Response): Promise<Response> {
