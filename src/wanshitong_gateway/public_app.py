@@ -90,6 +90,11 @@ class AnswerSettings(BaseModel):
             or not self.rewrite_prompt_user.strip()
         ):
             raise ValueError("rewrite prompts must be verified")
+        if any(
+            intent_id not in _INTENT_IDS or not content.strip()
+            for intent_id, content in self.intent_prompts.items()
+        ):
+            raise ValueError("自定义意图提示词必须使用已知意图且正文非空。")
         return self
 
     def native_config(self, kb_ids: tuple[str, ...]) -> dict[str, Any]:
@@ -155,8 +160,10 @@ def branded_system_prompt(prompt: str) -> str:
     return prompt
 
 
-def branded_intent_prompts(templates: dict[str, Any]) -> dict[str, str]:
-    """保留原生非检索意图的行为指令，仅替换其首行产品身份。"""
+def branded_intent_prompts(
+    templates: dict[str, Any], overrides: dict[str, str] | None = None
+) -> dict[str, str]:
+    """保留显式意图提示词，缺省项采用已核实的原生品牌模板。"""
     source = templates.get("intent_prompts")
     if not isinstance(source, list):
         raise NativeHttpError(502, "原生意图提示词模板不可用。")
@@ -173,6 +180,10 @@ def branded_intent_prompts(templates: dict[str, Any]) -> dict[str, str]:
         result[item["id"]] = PUBLIC_IDENTITY_LINE + separator + remainder
     if result.keys() != _INTENT_IDS:
         raise NativeHttpError(502, "原生意图提示词不完整。")
+    for intent_id, content in (overrides or {}).items():
+        if intent_id not in _INTENT_IDS or not content.strip():
+            raise ValueError("自定义意图提示词必须使用已知意图且正文非空。")
+        result[intent_id] = branded_system_prompt(content)
     return result
 
 

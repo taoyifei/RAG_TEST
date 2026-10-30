@@ -293,6 +293,66 @@ def _app(tmp_path: Path, state: _NativeState, store: GatewayStore) -> FastAPI:
     )
 
 
+def test_custom_intent_prompts_survive_save_readback_and_page_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda _app, _auth: None
+    )
+    state = _NativeState()
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    custom = {
+        "chitchat": "你是湾小度。\n闲聊自然接话，适度正向，不因缺资料而拒绝。",
+        "follow_up": "你是湾小度。\n闲聊追问承接语气，业务事实仍须有依据。",
+    }
+    with TestClient(_app(tmp_path, state, store)) as browser:
+        body = _save_body(revision=0, model_id="model-a", kb_ids=["kb-old"])
+        body["answer_settings"]["intent_prompts"] = custom
+        saved = browser.put("/kb/api/admin/public-app", json=body)
+        assert saved.status_code == 200, saved.text
+        current = browser.get("/kb/api/admin/public-app").json()
+        prompts = current["answer_settings"]["intent_prompts"]
+        for intent_id, content in custom.items():
+            assert prompts[intent_id] == content
+        assert "Native instructions for greeting." in prompts["greeting"]
+        page = dict(current["page_settings"])
+        page["input_placeholder"] = "修改页面而不重置闲聊风格"
+        resaved = browser.put(
+            "/kb/api/admin/public-app",
+            json={
+                "expected_revision": current["revision"],
+                "knowledge_base_ids": current["knowledge_base_ids"],
+                "answer_settings": current["answer_settings"],
+                "page_settings": page,
+            },
+        )
+        assert resaved.status_code == 200, resaved.text
+        readback = browser.get("/kb/api/admin/public-app").json()
+        assert readback["answer_settings"]["intent_prompts"] == prompts
+        assert (
+            state.agents[readback["native_agent_id"]]["config"]["intent_prompts"]
+            == prompts
+        )
+
+
+@pytest.mark.parametrize("custom", [{"unknown": "不应发布"}, {"chitchat": " "}])
+def test_invalid_intent_override_does_not_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, custom: dict[str, str]
+) -> None:
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda _app, _auth: None
+    )
+    state = _NativeState()
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    with TestClient(_app(tmp_path, state, store)) as browser:
+        body = _save_body(revision=0, model_id="model-a", kb_ids=["kb-old"])
+        body["answer_settings"]["intent_prompts"] = custom
+        response = browser.put("/kb/api/admin/public-app", json=body)
+        assert response.status_code == 422
+        assert state.agents == {}
+        assert store.public_app(deployment_id="candidate") is None
+
+
 def test_publish_model_and_kb_changes_next_public_chat(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

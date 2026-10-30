@@ -407,7 +407,9 @@ def create_app(  # noqa: PLR0913, PLR0915
                         "system_prompt": branded_system_prompt(
                             body.answer_settings.system_prompt
                         ),
-                        "intent_prompts": branded_intent_prompts(templates),
+                        "intent_prompts": branded_intent_prompts(
+                            templates, body.answer_settings.intent_prompts
+                        ),
                     }
                 )
                 if (
