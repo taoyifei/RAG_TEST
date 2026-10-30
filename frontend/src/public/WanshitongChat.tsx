@@ -1,7 +1,10 @@
 import { Plus } from "lucide-react";
 
 import { PublicAnswer } from "./PublicAnswer";
-import { PublicChatComposer } from "./PublicChatComposer";
+import {
+  PublicChatComposer,
+  type PublicSearchSelectionProps,
+} from "./PublicChatComposer";
 import { PublicQuestionTabs } from "./PublicQuestionTabs";
 import type { SuggestedQuestion } from "./suggestedQuestions";
 import type {
@@ -18,6 +21,10 @@ export function WanshitongChat({
   allowFeedback,
   allowSourceDownload,
   placeholder,
+  searchScopes,
+  searchScopeOptions,
+  scopeNotice,
+  onSearchScopesChange,
   showRecommendations,
   initialQuestion,
   onFeedback,
@@ -34,7 +41,7 @@ export function WanshitongChat({
   questions,
   popular,
   turns,
-}: {
+}: PublicSearchSelectionProps & {
   busy: boolean;
   conversationId: string;
   feedbackDetailsEnabled: boolean;
@@ -151,6 +158,10 @@ export function WanshitongChat({
             compact
             initialQuestion={initialQuestion}
             placeholder={placeholder}
+            searchScopes={searchScopes}
+            searchScopeOptions={searchScopeOptions}
+            scopeNotice={scopeNotice}
+            onSearchScopesChange={onSearchScopesChange}
             key={conversationId}
             onStop={onStop}
             onSubmit={onSubmit}

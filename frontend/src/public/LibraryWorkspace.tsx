@@ -29,7 +29,7 @@ const SCOPES: Record<LibraryScope, { title: string; description: string }> = {
   },
   hr_internal: {
     title: "人力内部资料",
-    description: "仅人力角色和系统管理员可查看、检索和维护。",
+    description: "仅人力角色和超级管理员可查看、检索和维护。",
   },
 };
 
@@ -69,18 +69,23 @@ function errorMessage(error: unknown): string {
 
 export function LibraryWorkspace({
   userRole,
+  isSuperAdmin = false,
   getCsrfToken,
   onBack,
 }: {
   userRole: UserRole;
+  isSuperAdmin?: boolean;
   getCsrfToken: () => string | undefined;
   onBack: () => void;
 }) {
   const [scope, setScope] = useState<LibraryScope>("personal");
-  const scopes: LibraryScope[] =
-    userRole === "user"
-      ? ["personal", "public"]
-      : ["personal", "public", "hr_public", "hr_internal"];
+  const scopes: LibraryScope[] = [
+    "personal",
+    "public",
+    ...(userRole !== "user" ? ["hr_public" as const] : []),
+    ...(userRole === "hr" || isSuperAdmin ? ["hr_internal" as const] : []),
+  ];
+  const visibleScope = scopes.includes(scope) ? scope : "personal";
   return (
     <main className="wst-workspace" id="main-content">
       <header className="wst-workspace-heading">
@@ -97,14 +102,18 @@ export function LibraryWorkspace({
           <button
             key={item}
             type="button"
-            aria-current={scope === item ? "page" : undefined}
+            aria-current={visibleScope === item ? "page" : undefined}
             onClick={() => setScope(item)}
           >
             {SCOPES[item].title}
           </button>
         ))}
       </nav>
-      <LibraryListing key={scope} scope={scope} getCsrfToken={getCsrfToken} />
+      <LibraryListing
+        key={visibleScope}
+        scope={visibleScope}
+        getCsrfToken={getCsrfToken}
+      />
     </main>
   );
 }

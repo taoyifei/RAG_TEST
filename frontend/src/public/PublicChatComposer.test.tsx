@@ -1,10 +1,55 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PublicChatComposer } from "./PublicChatComposer";
+import type { PublicSearchScope } from "./publicApi";
+
+function ScopeComposer() {
+  const [scopes, setScopes] = useState<PublicSearchScope[]>(["public"]);
+  return (
+    <PublicChatComposer
+      busy={false}
+      onStop={vi.fn()}
+      onSubmit={vi.fn()}
+      searchScopes={scopes}
+      onSearchScopesChange={setScopes}
+      searchScopeOptions={[
+        { id: "public", label: "公共知识库" },
+        { id: "personal", label: "我的资料" },
+      ]}
+    />
+  );
+}
 
 describe("湾事通提问输入框", () => {
+  it("默认公共知识库，可以多选或仅选个人资料，不能清空全部范围", async () => {
+    const user = userEvent.setup();
+    render(<ScopeComposer />);
+    await user.click(
+      screen.getByRole("button", { name: "资料范围：公共知识库" }),
+    );
+    const publicScope = screen.getByRole("checkbox", { name: "公共知识库" });
+    const personal = screen.getByRole("checkbox", { name: "我的资料" });
+    expect(publicScope).toBeChecked();
+    expect(publicScope).toBeDisabled();
+    expect(personal).not.toBeChecked();
+    await user.click(personal);
+    expect(
+      screen.getByRole("button", { name: "资料范围：公共知识库 + 我的资料" }),
+    ).toBeVisible();
+    await user.click(publicScope);
+    expect(
+      screen.getByRole("button", { name: "资料范围：我的资料" }),
+    ).toBeVisible();
+    expect(personal).toBeChecked();
+    expect(personal).toBeDisabled();
+    expect(
+      screen.queryByRole("checkbox", { name: "人力内部资料" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("Shift+Enter 换行，Enter 发送完整多行问题", async () => {
     const onSubmit = vi.fn();
     const user = userEvent.setup();

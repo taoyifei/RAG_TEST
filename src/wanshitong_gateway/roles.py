@@ -44,6 +44,11 @@ class UserProfile:
         }
 
 
+def can_access_hr_internal(profile: UserProfile) -> bool:
+    """人力内部资料只向人力角色和受保护的超级管理员开放。"""
+    return profile.role == "hr" or profile.is_super_admin
+
+
 def role_edit_note(actor: UserProfile, target: UserProfile) -> str | None:
     """返回目标角色不能修改的原因，供界面与保存检查共用。"""
     if target.is_super_admin:

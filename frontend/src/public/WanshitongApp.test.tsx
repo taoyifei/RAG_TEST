@@ -593,7 +593,8 @@ describe("湾事通公共应用", () => {
     const body = JSON.parse(
       typeof chatBody === "string" ? chatBody : "{}",
     ) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["conversation_id", "query"]);
+    expect(Object.keys(body).sort()).toEqual(["conversation_id", "query", "search_scopes"]);
+    expect(body.search_scopes).toEqual(["public"]);
     expect(typeof body.conversation_id).toBe("string");
     expect(body.query).toBe(question);
     expect(body).not.toHaveProperty("shortcut_id");
@@ -663,7 +664,8 @@ describe("湾事通公共应用", () => {
       bodies.every(
         (body) =>
           JSON.stringify(Object.keys(body).sort()) ===
-          JSON.stringify(["conversation_id", "query"]),
+          JSON.stringify(["conversation_id", "query", "search_scopes"]) &&
+          JSON.stringify(body.search_scopes) === JSON.stringify(["public"]),
       ),
     ).toBe(true);
   });
@@ -857,7 +859,7 @@ describe("湾事通公共应用", () => {
     expect(chatCalls).toBe(2);
   });
 
-  it("首问后切换聊天模式，且请求只含 WB-03 允许字段", async () => {
+  it("首问后切换聊天模式，请求携带默认资料范围且不混入额外业务字段", async () => {
     const fetchMock = installFetch(
       streamResponse([
         event("meta", 0),
@@ -883,7 +885,9 @@ describe("湾事通公共应用", () => {
     expect(Object.keys(requestBody).sort()).toEqual([
       "conversation_id",
       "query",
+      "search_scopes",
     ]);
+    expect(requestBody.search_scopes).toEqual(["public"]);
     expect(requestBody.query).toBe("材料多久完成核验？");
     expect(requestBody).not.toHaveProperty("departments");
     expect(requestBody).not.toHaveProperty("shortcut_id");

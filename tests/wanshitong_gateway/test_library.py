@@ -333,6 +333,58 @@ async def test_hr_internal_access_and_downgraded_history(
 
 
 @pytest.mark.asyncio
+async def test_regular_admin_cannot_read_or_manage_hr_internal(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    uploaded = await service.upload("hr_internal", _HR, "hr.txt", b"hr-only")
+    identifier = uploaded["id"]
+    kb_id = native.documents[identifier]["knowledge_base_id"]
+    administrator = UserProfile("admin", "admin", "管理员", None, "admin")
+    super_admin = replace(administrator, is_super_admin=True)
+    assert kb_id not in service.readable_kbs(administrator)
+    for operation in (
+        lambda: service.list_documents("hr_internal", administrator),
+        lambda: service.document(identifier, administrator),
+        lambda: service.download(identifier, administrator),
+        lambda: service.delete(identifier, administrator),
+        lambda: service.upload("hr_internal", administrator, "new.txt", b"x"),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await operation()
+        assert denied.value.status_code == 403
+    assert identifier in native.documents
+    assert kb_id in service.readable_kbs(super_admin)
+    assert (
+        await service.download(identifier, super_admin)
+    ).content == b"hr-only"
+    # 即使绑定里误选了人力内部库，也不能变成公开检索范围。
+    library[2].append(kb_id)
+    assert kb_id not in service.public_kb_ids
+    assert kb_id not in service.search_kbs(_ALICE, ("public",))
+
+
+@pytest.mark.asyncio
+async def test_recreated_hr_library_keeps_old_scope_protected(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    old_document = await service.upload("hr_internal", _HR, "old.txt", b"old")
+    old_kb = native.documents[old_document["id"]]["knowledge_base_id"]
+    native.kbs.pop(old_kb)
+    current = await service.upload("hr_internal", _HR, "new.txt", b"new")
+    new_kb = native.documents[current["id"]]["knowledge_base_id"]
+    administrator = UserProfile("admin", "admin", "管理员", None, "admin")
+    assert old_kb != new_kb
+    assert set(service.restricted_kbs(administrator)) == {old_kb, new_kb}
+    assert service.search_kbs(_HR, ("hr_internal",)) == (new_kb,)
+    with pytest.raises(HTTPException):
+        service.check_turn(
+            administrator, {"kb_scope_json": json.dumps([old_kb])}
+        )
+
+
+@pytest.mark.asyncio
 async def test_share_withdraw_and_delete_keep_private_original(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS gateway_conversations (
     owner_id TEXT NOT NULL,
     conversation_id TEXT NOT NULL,
     native_session_id TEXT NOT NULL,
+    search_scopes_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (deployment_id, owner_id, conversation_id),
@@ -141,6 +142,12 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+_VISIBLE_TURN_SQL = (
+    " AND NOT EXISTS (SELECT 1 FROM json_each(t.kb_scope_json) AS scope "
+    "WHERE scope.value IN (SELECT value FROM json_each(?))) "
+)
+
+
 class GatewayStore:
     """只保存必要映射和真实观察事件，不写原生业务表。"""
 
@@ -166,6 +173,17 @@ class GatewayStore:
                 + _RECOMMENDATION_SCHEMA
                 + _PUBLIC_APP_SCHEMA
             )
+            conversation_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(gateway_conversations)"
+                )
+            }
+            if "search_scopes_json" not in conversation_columns:
+                connection.execute(
+                    "ALTER TABLE gateway_conversations "
+                    "ADD COLUMN search_scopes_json TEXT"
+                )
             columns = {
                 row["name"]
                 for row in connection.execute(
@@ -317,6 +335,7 @@ class GatewayStore:
         owner_id: str,
         conversation_id: str,
         native_session_id: str,
+        search_scopes: tuple[str, ...] | None = None,
     ) -> str:
         """唯一绑定外部会话；并发竞争时返回已存在的权威映射。"""
         now = _now()
@@ -324,7 +343,8 @@ class GatewayStore:
             connection.execute(
                 "INSERT OR IGNORE INTO gateway_conversations "
                 "(deployment_id,owner_id,conversation_id,native_session_id,"
-                "created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                "created_at,updated_at,search_scopes_json) "
+                "VALUES (?,?,?,?,?,?,?)",
                 (
                     deployment_id,
                     owner_id,
@@ -332,8 +352,33 @@ class GatewayStore:
                     native_session_id,
                     now,
                     now,
+                    json.dumps(search_scopes) if search_scopes else None,
                 ),
             )
+            if search_scopes is not None:
+                connection.execute(
+                    "UPDATE gateway_conversations SET search_scopes_json=? "
+                    "WHERE deployment_id=? AND owner_id=? "
+                    "AND conversation_id=? "
+                    "AND search_scopes_json IS NULL",
+                    (
+                        json.dumps(search_scopes),
+                        deployment_id,
+                        owner_id,
+                        conversation_id,
+                    ),
+                )
+                stored = connection.execute(
+                    "SELECT search_scopes_json FROM gateway_conversations "
+                    "WHERE deployment_id=? AND owner_id=? "
+                    "AND conversation_id=?",
+                    (deployment_id, owner_id, conversation_id),
+                ).fetchone()
+                if (
+                    tuple(json.loads(stored["search_scopes_json"]))
+                    != search_scopes
+                ):
+                    raise ValueError("资料范围已变化，请新建对话。")
         bound = self.native_session(
             deployment_id=deployment_id,
             owner_id=owner_id,
@@ -342,6 +387,22 @@ class GatewayStore:
         if bound is None:
             raise RuntimeError("无法保存原生会话映射。")
         return bound
+
+    def conversation_search_scopes(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> tuple[str, ...] | None:
+        """会话固定逻辑范围，旧记录空值由实际历史库列表恢复。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT search_scopes_json FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+        return (
+            tuple(json.loads(row["search_scopes_json"]))
+            if row is not None and row["search_scopes_json"] is not None
+            else None
+        )
 
     def list_conversations(
         self, *, deployment_id: str, owner_id: str
@@ -643,7 +704,7 @@ class GatewayStore:
                 (actor, method, path, status_code, _now()),
             )
 
-    def list_traces(
+    def list_traces(  # noqa: PLR0913 - 分页和业务可见范围分别传入。
         self,
         *,
         deployment_id: str,
@@ -651,6 +712,7 @@ class GatewayStore:
         offset: int = 0,
         query: str = "",
         feedback_only: bool = False,
+        excluded_kb_ids: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         """管理员列表返回本候选的提问者、问题和原生 ID。"""
         arguments = (
@@ -660,6 +722,7 @@ class GatewayStore:
             query,
             f"rdms:{deployment_id}:{query}",
             int(feedback_only),
+            json.dumps(excluded_kb_ids),
             limit,
             offset,
         )
@@ -681,7 +744,8 @@ class GatewayStore:
                 "AND (?='' OR instr(t.question,?)>0 OR "
                 "instr(COALESCE(t.asker_name,''),?)>0 OR t.owner_id=?) "
                 "AND (?=0 OR f.trace_id IS NOT NULL) "
-                "ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
+                + _VISIBLE_TURN_SQL
+                + "ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
                 arguments,
             ).fetchall()
         return [
@@ -698,6 +762,7 @@ class GatewayStore:
         deployment_id: str,
         query: str = "",
         feedback_only: bool = False,
+        excluded_kb_ids: tuple[str, ...] = (),
     ) -> int:
         """给管理页分页提供与列表相同的筛选总数。"""
         arguments = (
@@ -707,20 +772,23 @@ class GatewayStore:
             query,
             f"rdms:{deployment_id}:{query}",
             int(feedback_only),
+            json.dumps(excluded_kb_ids),
         )
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT COUNT(*) AS total FROM gateway_turns AS t "
+                "SELECT COUNT(*) AS total FROM gateway_turns AS t "  # noqa: S608 - 仅拼接固定SQL，值均绑定。
                 "LEFT JOIN gateway_feedback AS f ON f.trace_id=t.trace_id "
                 "WHERE t.deployment_id=? "
                 "AND (?='' OR instr(t.question,?)>0 OR "
                 "instr(COALESCE(t.asker_name,''),?)>0 OR t.owner_id=?) "
-                "AND (?=0 OR f.trace_id IS NOT NULL)",
+                "AND (?=0 OR f.trace_id IS NOT NULL)" + _VISIBLE_TURN_SQL,
                 arguments,
             ).fetchone()
         return int(row["total"])
 
-    def ops_summary(self, *, deployment_id: str) -> dict[str, int]:
+    def ops_summary(
+        self, *, deployment_id: str, excluded_kb_ids: tuple[str, ...] = ()
+    ) -> dict[str, int]:
         """统计当前候选部署内的新引擎记录与反馈。"""
         with self._connect() as connection:
             row = connection.execute(
@@ -741,8 +809,9 @@ class GatewayStore:
                 "FROM gateway_turns AS t LEFT JOIN gateway_feedback AS f "
                 "ON f.trace_id=t.trace_id "
                 "LEFT JOIN gateway_feedback_reviews AS r "
-                "ON r.trace_id=t.trace_id WHERE t.deployment_id=?",
-                (deployment_id,),
+                "ON r.trace_id=t.trace_id WHERE t.deployment_id=?"
+                + _VISIBLE_TURN_SQL,
+                (deployment_id, json.dumps(excluded_kb_ids)),
             ).fetchone()
         return {
             key: int(row[key] or 0)
@@ -759,7 +828,12 @@ class GatewayStore:
         }
 
     def frequent_questions(
-        self, *, deployment_id: str, days: int = 7, limit: int = 20
+        self,
+        *,
+        deployment_id: str,
+        days: int = 7,
+        limit: int = 20,
+        excluded_kb_ids: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         """按原问题精确归组，不把不同业务表述擅自合并。"""
         since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
@@ -772,9 +846,10 @@ class GatewayStore:
                 "FROM gateway_turns AS t LEFT JOIN gateway_feedback AS f "
                 "ON f.trace_id=t.trace_id "
                 "WHERE t.deployment_id=? AND t.created_at>=? "
-                "GROUP BY TRIM(t.question) "
+                + _VISIBLE_TURN_SQL
+                + "GROUP BY TRIM(t.question) "
                 "ORDER BY count DESC,last_asked_at DESC LIMIT ?",
-                (deployment_id, since, limit),
+                (deployment_id, since, json.dumps(excluded_kb_ids), limit),
             ).fetchall()
         return [dict(row) for row in rows]
 

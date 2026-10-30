@@ -271,6 +271,7 @@ export function WanshitongApp() {
       {view === "library" ? (
         <LibraryWorkspace
           userRole={role}
+          isSuperAdmin={chat.user?.isSuperAdmin === true}
           getCsrfToken={chat.getCsrfToken}
           onBack={() => openView("chat")}
         />
@@ -285,8 +286,15 @@ export function WanshitongApp() {
           conversationId={chat.conversationId}
           initialQuestion={restoredDraft}
           placeholder={chat.pageSettings.input_placeholder}
+          searchScopes={chat.searchScopes}
+          searchScopeOptions={chat.searchScopeOptions}
+          scopeNotice={chat.scopeNotice}
+          onSearchScopesChange={chat.changeSearchScopes}
           welcomeText={chat.pageSettings.welcome_text}
-          showRecommendations={chat.pageSettings.show_recommendations}
+          showRecommendations={
+            chat.pageSettings.show_recommendations &&
+            chat.searchScopes.includes("public")
+          }
           onRefresh={suggestions.refresh}
           onPopularQuestionSubmit={submitPopularQuestion}
           onSuggestedQuestionSubmit={submitSuggestedQuestion}
@@ -303,7 +311,14 @@ export function WanshitongApp() {
           allowFeedback={chat.pageSettings.allow_feedback}
           allowSourceDownload={chat.pageSettings.allow_source_download}
           placeholder={chat.pageSettings.input_placeholder}
-          showRecommendations={chat.pageSettings.show_recommendations}
+          searchScopes={chat.searchScopes}
+          searchScopeOptions={chat.searchScopeOptions}
+          scopeNotice={chat.scopeNotice}
+          onSearchScopesChange={chat.changeSearchScopes}
+          showRecommendations={
+            chat.pageSettings.show_recommendations &&
+            chat.searchScopes.includes("public")
+          }
           initialQuestion={restoredDraft}
           onFeedback={chat.submitFeedback}
           onFeedbackLogin={chat.login}

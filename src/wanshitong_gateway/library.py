@@ -28,7 +28,8 @@ from wanshitong_gateway.auth import GatewayAuth
 from wanshitong_gateway.compat.adapters.stores.sqlite_connection import (
     SqliteConnectionFactory,
 )
-from wanshitong_gateway.roles import UserProfile
+from wanshitong_gateway.models import SEARCH_SCOPE_ORDER, SearchScope
+from wanshitong_gateway.roles import UserProfile, can_access_hr_internal
 from wanshitong_gateway.weknora.admin import (
     NativeAdminClient,
     NativeAdminResponse,
@@ -116,15 +117,117 @@ class LibraryService:
                 "native_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, "
                 "owner_name TEXT NOT NULL, source_id TEXT UNIQUE, "
                 "created_at TEXT NOT NULL);"
+                "CREATE TABLE IF NOT EXISTS library_hr_internal_kbs ("
+                "kb_id TEXT PRIMARY KEY);"
+                "INSERT OR IGNORE INTO library_hr_internal_kbs(kb_id) "
+                "SELECT kb_id FROM library_kbs WHERE scope='hr_internal';"
             )
 
     @property
     def public_kb_ids(self) -> tuple[str, ...]:
         """读取当前已发布的公共范围，避免继续使用已撤销的旧绑定。"""
-        return (
+        candidates = (
             self._public_scope()
             if self._public_scope is not None
             else self._initial_public_kb_ids
+        )
+        internal = self.hr_internal_kbs()
+        return tuple(kb_id for kb_id in candidates if kb_id not in internal)
+
+    def hr_internal_kbs(self) -> frozenset[str]:
+        """内部区即使误选进公共绑定，也不能按公共资料对外提供。"""
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT kb_id FROM library_hr_internal_kbs UNION "
+                "SELECT kb_id FROM library_kbs WHERE scope='hr_internal'"
+            ).fetchall()
+        return frozenset(row["kb_id"] for row in rows)
+
+    def restricted_kbs(self, profile: UserProfile) -> tuple[str, ...]:
+        """普通管理员也不能通过后台记录读取人力内部资料。"""
+        return (
+            ()
+            if can_access_hr_internal(profile)
+            else tuple(sorted(self.hr_internal_kbs()))
+        )
+
+    @staticmethod
+    def available_search_scopes(
+        profile: UserProfile,
+    ) -> list[dict[str, str]]:
+        """只公布当前账号可以选择的资料区，不接受浏览器传入库ID。"""
+        scopes = [
+            {"id": "public", "label": "公共知识库"},
+            {"id": "personal", "label": "我的资料"},
+        ]
+        if can_access_hr_internal(profile):
+            scopes.append({"id": "hr_internal", "label": "人力内部资料"})
+        return scopes
+
+    def search_kbs(
+        self, profile: UserProfile, scopes: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """把已授权的逻辑范围转换成实际知识库，只缩小检索集合。"""
+        if not scopes or not set(scopes).issubset(SEARCH_SCOPE_ORDER):
+            raise HTTPException(422, "请选择有效的资料范围。")
+        if "hr_internal" in scopes and not can_access_hr_internal(profile):
+            raise HTTPException(403, "人力内部资料仅限人力和超级管理员访问。")
+        values = list(self.public_kb_ids) if "public" in scopes else []
+        for row in self.registered_kbs():
+            kind = row["scope"]
+            if (
+                (kind in {"public", "hr_public"} and "public" in scopes)
+                or (
+                    kind == "personal"
+                    and "personal" in scopes
+                    and row["owner_id"] == profile.user_id
+                )
+                or (kind == "hr_internal" and "hr_internal" in scopes)
+            ):
+                values.append(row["kb_id"])
+        return tuple(dict.fromkeys(values))
+
+    def historical_search_scopes(
+        self, turns: list[dict[str, Any]]
+    ) -> tuple[SearchScope, ...]:
+        """旧会话按记录中的实际库恢复范围，避免默默缩小后复用旧上下文。"""
+        selected: set[str] = set()
+        for turn in turns:
+            for kb_id in json.loads(turn.get("kb_scope_json") or "[]"):
+                record = self._scope_for_kb(kb_id)
+                if record is not None:
+                    kind = record["scope"]
+                    selected.add("public" if kind == "hr_public" else kind)
+        return tuple(scope for scope in SEARCH_SCOPE_ORDER if scope in selected)
+
+    async def require_searchable(
+        self, kb_ids: tuple[str, ...], scopes: tuple[str, ...]
+    ) -> None:
+        """独立私库或人力区尚无已解析资料时提示，不扩大到公共区。"""
+        if not kb_ids:
+            raise HTTPException(
+                409, "所选资料范围暂无资料，请先上传或选择其他范围。"
+            )
+        if "public" in scopes:
+            return
+        for kb_id in kb_ids:
+            page = 1
+            while True:
+                result = await self._request(
+                    "GET",
+                    f"knowledge-bases/{kb_id}/knowledge",
+                    query=f"page_size={_PAGE_SIZE}&page={page}",
+                )
+                items = result.get("data", [])
+                if any(
+                    item.get("parse_status") == "completed" for item in items
+                ):
+                    return
+                if len(items) < _PAGE_SIZE:
+                    break
+                page += 1
+        raise HTTPException(
+            409, "所选资料尚无解析完成的文档，请完成上传解析后再提问。"
         )
 
     def registered_kbs(self) -> list[dict[str, Any]]:
@@ -145,7 +248,7 @@ class LibraryService:
             if (
                 scope in {"public", "hr_public"}
                 or (scope == "personal" and row["owner_id"] == profile.user_id)
-                or (scope == "hr_internal" and profile.role in {"admin", "hr"})
+                or (scope == "hr_internal" and can_access_hr_internal(profile))
             ):
                 values.append(row["kb_id"])
         return tuple(dict.fromkeys(values))
@@ -298,6 +401,8 @@ class LibraryService:
         scope = self._scope_for_kb(kb_id)
         if scope is None:
             raise HTTPException(404, "资料不存在。")
+        if scope["scope"] == "hr_internal":
+            self._check_scope("hr_internal", profile)
         if profile.role != "admin" and kb_id not in self.readable_kbs(profile):
             raise HTTPException(403, "没有访问这份资料的权限。")
         if write and not self._can_manage(item, scope, profile):
@@ -310,6 +415,8 @@ class LibraryService:
         scope: dict[str, Any],
         profile: UserProfile,
     ) -> bool:
+        if scope["scope"] == "hr_internal":
+            return can_access_hr_internal(profile)
         if profile.role == "admin":
             return True
         if scope["scope"] in {"hr_public", "hr_internal"}:
@@ -394,11 +501,20 @@ class LibraryService:
         kb_id = created["data"].get("id")
         if not isinstance(kb_id, str) or not kb_id:
             raise HTTPException(502, "原生资料库创建未返回有效 ID。")
+        if scope == "hr_internal":
+            with self._connections.transaction(write=True) as connection:
+                connection.execute(
+                    "INSERT OR IGNORE INTO library_hr_internal_kbs(kb_id) "
+                    "VALUES (?)",
+                    (kb_id,),
+                )
         return kb_id
 
     @staticmethod
     def _check_scope(scope: LibraryScope, profile: UserProfile) -> None:
-        if scope in {"hr_public", "hr_internal"} and profile.role not in {
+        if scope == "hr_internal" and not can_access_hr_internal(profile):
+            raise HTTPException(403, "人力内部资料仅限人力和超级管理员访问。")
+        if scope == "hr_public" and profile.role not in {
             "admin",
             "hr",
         }:

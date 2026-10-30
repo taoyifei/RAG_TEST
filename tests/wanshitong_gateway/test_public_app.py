@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -31,30 +32,27 @@ _NATIVE_SSE = (
 class _FakeAuth:
     """仅替代登录入口；本项目的真实 CSRF 门禁另由认证测试覆盖。"""
 
-    def __init__(self, database_path: Path) -> None:
+    def __init__(
+        self, database_path: Path, profile: UserProfile | None = None
+    ) -> None:
         self.settings = SimpleNamespace(
             database_path=database_path,
             deployment_id="candidate",
             root_path="/kb",
         )
+        self.profile = profile or UserProfile("u1", "u1", "u1", None, "user")
 
     def require_public(
         self, request: Request, *, csrf: bool | None = None
     ) -> SimpleNamespace:
         del request, csrf
-        return SimpleNamespace(user_id="u1")
+        return SimpleNamespace(user_id=self.profile.user_id)
 
     def require_profile(
         self, request: Request, *, csrf: bool | None = None
     ) -> UserProfile:
-        principal = self.require_public(request, csrf=csrf)
-        return UserProfile(
-            user_id=principal.user_id,
-            username=principal.user_id,
-            display_name=principal.user_id,
-            dept_id=None,
-            role="user",
-        )
+        self.require_public(request, csrf=csrf)
+        return self.profile
 
     def require_admin(
         self, request: Request, *, csrf: bool | None = None
@@ -257,7 +255,12 @@ def _save_body(
     }
 
 
-def _app(tmp_path: Path, state: _NativeState, store: GatewayStore) -> FastAPI:
+def _app(
+    tmp_path: Path,
+    state: _NativeState,
+    store: GatewayStore,
+    profile: UserProfile | None = None,
+) -> FastAPI:
     native = WeKnoraClient(
         base_url="http://native.test:8080",
         api_key="test-only-key",
@@ -285,12 +288,350 @@ def _app(tmp_path: Path, state: _NativeState, store: GatewayStore) -> FastAPI:
         admin_password_file=tmp_path / "unused-password",
     )
     return gateway_app.create_app(
-        auth=cast(GatewayAuth, _FakeAuth(tmp_path / "gateway.sqlite3")),
+        auth=cast(
+            GatewayAuth, _FakeAuth(tmp_path / "gateway.sqlite3", profile)
+        ),
         store=store,
         engine=engine,
         native=native,
         admin_native=admin,
     )
+
+
+class _ScopeNativeState(_NativeState):
+    """提供私库解析状态和历史接口，直接检查最终原生检索目标。"""
+
+    pending = False
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/knowledge"):
+            self.requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "scoped-document",
+                            "parse_status": (
+                                "pending" if self.pending else "completed"
+                            ),
+                        }
+                    ],
+                },
+            )
+        if path.startswith("/api/v1/messages/"):
+            self.requests.append(request)
+            return httpx.Response(200, json={"success": True, "data": []})
+        return super().respond(request)
+
+
+def _scope_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: UserProfile
+) -> tuple[TestClient, _ScopeNativeState, GatewayStore]:
+    monkeypatch.setattr(gateway_app, "register_auth_routes", lambda *_: None)
+    state = _ScopeNativeState()
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    app = _app(tmp_path, state, store, profile)
+    with sqlite3.connect(tmp_path / "gateway.sqlite3") as connection:
+        connection.executemany(
+            "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES (?,?,?)",
+            [
+                ("own-private", "personal", profile.user_id),
+                ("other-private", "personal", "another-user"),
+                ("shared", "public", ""),
+                ("hr-public", "hr_public", ""),
+                ("hr-secret", "hr_internal", ""),
+            ],
+        )
+    return TestClient(app), state, store
+
+
+@pytest.mark.parametrize(
+    ("scopes", "expected"),
+    [
+        (None, {"kb-old", "shared", "hr-public"}),
+        (["public"], {"kb-old", "shared", "hr-public"}),
+        (["personal"], {"own-private"}),
+        (
+            ["personal", "public"],
+            {"kb-old", "shared", "hr-public", "own-private"},
+        ),
+    ],
+)
+def test_selected_scopes_are_the_actual_native_request_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scopes: list[str] | None,
+    expected: set[str],
+) -> None:
+    browser, state, store = _scope_browser(
+        tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
+    )
+    with browser:
+        body = {"conversation_id": "scope-test", "query": "查找这份资料"}
+        if scopes is not None:
+            body["search_scopes"] = scopes
+        response = browser.post("/kb/api/public/chat", json=body)
+        assert response.status_code == 200, response.text
+        requests = [
+            request
+            for request in state.requests
+            if request.url.path.startswith("/api/v1/knowledge-chat/")
+        ]
+        assert len(requests) == 1
+        assert (
+            set(json.loads(requests[0].content)["knowledge_base_ids"])
+            == expected
+        )
+        turn = store.get_turn(trace_id=response.headers["X-Trace-Id"])
+        assert set(json.loads(turn["kb_scope_json"])) == expected
+        history = browser.get("/kb/api/public/conversations/scope-test").json()
+        assert history["turns"][0]["search_scopes"] == (
+            ["public", "personal"]
+            if scopes and len(scopes) == 2
+            else scopes or ["public"]
+        )
+
+
+@pytest.mark.parametrize(
+    ("role", "is_super", "expected_status"),
+    [
+        ("user", False, 403),
+        ("admin", False, 403),
+        ("hr", False, 200),
+        ("admin", True, 200),
+    ],
+)
+def test_hr_internal_selection_requires_hr_or_super_admin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    is_super: bool,
+    expected_status: int,
+) -> None:
+    profile = UserProfile("u1", "u1", "甲", None, cast(Any, role), is_super)
+    browser, state, _ = _scope_browser(tmp_path, monkeypatch, profile)
+    with browser:
+        capabilities = browser.get("/kb/api/public/capabilities").json()
+        available = {item["id"] for item in capabilities["search_scopes"]}
+        assert ("hr_internal" in available) == (expected_status == 200)
+        assert capabilities["default_search_scopes"] == ["public"]
+        response = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "hr-scope",
+                "query": "查询人力内部资料",
+                "search_scopes": ["hr_internal"],
+            },
+        )
+        assert response.status_code == expected_status, response.text
+        requests = [
+            request
+            for request in state.requests
+            if request.url.path.startswith("/api/v1/knowledge-chat/")
+        ]
+        if expected_status == 200:
+            assert json.loads(requests[0].content)["knowledge_base_ids"] == [
+                "hr-secret"
+            ]
+        else:
+            assert requests == []
+
+
+def test_scope_change_needs_new_native_conversation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser, state, _ = _scope_browser(
+        tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
+    )
+    with browser:
+        assert (
+            browser.post(
+                "/kb/api/public/chat",
+                json={
+                    "conversation_id": "private-chat",
+                    "query": "个人问题",
+                    "search_scopes": ["personal"],
+                },
+            ).status_code
+            == 200
+        )
+        rejected = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "private-chat",
+                "query": "只查公共",
+                "search_scopes": ["public"],
+            },
+        )
+        assert rejected.status_code == 409
+        assert "新建对话" in rejected.json()["detail"]
+        assert state.session_count == 1
+        assert (
+            browser.post(
+                "/kb/api/public/chat",
+                json={
+                    "conversation_id": "public-chat",
+                    "query": "只查公共",
+                    "search_scopes": ["public"],
+                },
+            ).status_code
+            == 200
+        )
+        assert state.session_count == 2
+
+
+def test_private_scope_waits_for_parsing_without_public_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser, state, _ = _scope_browser(
+        tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
+    )
+    state.pending = True
+    with browser:
+        response = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "pending-private",
+                "query": "找个人文档",
+                "search_scopes": ["personal"],
+            },
+        )
+        assert response.status_code == 409
+        assert "解析" in response.json()["detail"]
+        assert state.session_count == 0
+
+
+@pytest.mark.parametrize("scopes", [[], ["other-private"], ["all"]])
+def test_browser_cannot_inject_knowledge_base_ids_as_scopes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scopes: list[str],
+) -> None:
+    browser, state, _ = _scope_browser(
+        tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
+    )
+    with browser:
+        response = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "bad-scope",
+                "query": "查资料",
+                "search_scopes": scopes,
+            },
+        )
+        assert response.status_code == 422
+        assert state.session_count == 0
+
+
+def test_legacy_conversation_preserves_scope_and_refuses_narrowed_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser, state, store = _scope_browser(
+        tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
+    )
+    owner_id = "rdms:candidate:u1"
+    store.bind_session(
+        deployment_id="candidate",
+        owner_id=owner_id,
+        conversation_id="legacy",
+        native_session_id="native-s-old",
+    )
+    store.start_turn(
+        trace_id="old-turn",
+        deployment_id="candidate",
+        owner_id=owner_id,
+        conversation_id="legacy",
+        native_session_id="native-s-old",
+        question="旧问题",
+        kb_scope=("kb-old", "own-private"),
+    )
+    with browser:
+        rejected = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "legacy",
+                "query": "只查公共",
+                "search_scopes": ["public"],
+            },
+        )
+        assert rejected.status_code == 409
+        assert state.session_count == 0
+        accepted = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "legacy",
+                "query": "沿用之前的范围",
+            },
+        )
+        assert accepted.status_code == 200
+        assert store.conversation_search_scopes(
+            deployment_id="candidate",
+            owner_id=owner_id,
+            conversation_id="legacy",
+        ) == ("public", "personal")
+
+
+@pytest.mark.parametrize("super_admin", [False, True])
+def test_admin_ops_respect_hr_internal_visibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    super_admin: bool,
+) -> None:
+    profile = UserProfile("u1", "u1", "管理员", None, "admin", super_admin)
+    browser, _, store = _scope_browser(tmp_path, monkeypatch, profile)
+    for name, scope in (("public", "kb-old"), ("secret", "hr-secret")):
+        store.start_turn(
+            trace_id="trace-" + name,
+            deployment_id="candidate",
+            owner_id="rdms:candidate:someone",
+            conversation_id=name,
+            native_session_id="native-" + name,
+            question=name + " question",
+            kb_scope=(scope,),
+        )
+        store.save_feedback(
+            trace_id="trace-" + name,
+            owner_id="rdms:candidate:someone",
+            useful=False,
+            reason_code=None,
+            reason_detail=None,
+            comment="note",
+        )
+    with browser:
+        expected = 2 if super_admin else 1
+        traces = browser.get("/kb/api/admin/ops/traces").json()
+        assert traces["total"] == expected and len(traces["items"]) == expected
+        feedback = browser.get("/kb/api/admin/ops/feedback").json()
+        assert len(feedback["items"]) == expected
+        questions = browser.get("/kb/api/admin/ops/questions").json()
+        assert len(questions["items"]) == expected
+        summary = browser.get("/kb/api/admin/ops/summary").json()
+        assert summary["turns"] == expected
+        detail = browser.get("/kb/api/admin/ops/traces/trace-secret")
+        assert detail.status_code == (200 if super_admin else 404)
+        exported = browser.post(
+            "/kb/api/admin/ops/traces/trace-secret/export",
+            json={
+                "include_content": True,
+                "confirm_id": "trace-secret",
+            },
+        )
+        assert exported.status_code == (200 if super_admin else 404)
+        bulk = browser.post(
+            "/kb/api/admin/ops/traces/export",
+            json={
+                "include_content": True,
+                "confirm_id": "candidate",
+            },
+        )
+        assert bulk.status_code == 200
+        assert ("secret question" in bulk.text) is super_admin
 
 
 def test_custom_intent_prompts_survive_save_readback_and_page_edit(
@@ -330,7 +671,9 @@ def test_custom_intent_prompts_survive_save_readback_and_page_edit(
         readback = browser.get("/kb/api/admin/public-app").json()
         assert readback["answer_settings"]["intent_prompts"] == prompts
         assert (
-            state.agents[readback["native_agent_id"]]["config"]["intent_prompts"]
+            state.agents[readback["native_agent_id"]]["config"][
+                "intent_prompts"
+            ]
             == prompts
         )
 

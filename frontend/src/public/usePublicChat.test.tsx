@@ -127,6 +127,7 @@ function chatBodies(fetchMock: ReturnType<typeof installFetch>) {
         JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
           conversation_id: string;
           query: string;
+          search_scopes?: string[];
           client_context?: {
             entrypoint: string;
             recommendation_id?: string;
@@ -139,6 +140,182 @@ afterEach(() => {
   vi.restoreAllMocks();
   window.localStorage.clear();
   window.sessionStorage.clear();
+});
+
+function installScopeFetch(
+  options: {
+    chat?: () => Response;
+    history?: (conversation: string) => Array<Record<string, unknown>>;
+    role?: "user" | "hr" | "admin";
+    isSuperAdmin?: boolean;
+  } = {},
+) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const path = pathOf(input);
+    if (path === "/api/public/session")
+      return Promise.resolve(
+        Response.json({
+          session_id: "wstsid_11111111111111111111111111111111",
+          csrf_token: "a".repeat(64),
+          expires_in: 3600,
+          deployment_id: "candidate_8289",
+          user: {
+            user_id: "1001",
+            display_name: "测试用户",
+            role: options.role ?? "user",
+            is_super_admin: options.isSuperAdmin ?? false,
+          },
+        }),
+      );
+    if (path === "/api/public/capabilities")
+      return Promise.resolve(
+        Response.json({
+          mode: "wanshitong",
+          stream: true,
+          stream_protocol: "wanshitong-weknora-sse-v1",
+          natural_stream_protocol: "wanshitong-weknora-sse-v1",
+          document_visibility: "all_internal",
+          feedback: true,
+          request_usage_context: true,
+          shortcuts: [],
+          search_scopes: [
+            { id: "public", label: "公共知识库" },
+            { id: "personal", label: "我的资料" },
+            { id: "hr_internal", label: "人力内部资料" },
+          ],
+          default_search_scopes: ["public"],
+        }),
+      );
+    if (path === "/api/public/conversations")
+      return Promise.resolve(Response.json({ items: [] }));
+    if (path.startsWith("/api/public/conversations/"))
+      return Promise.resolve(
+        Response.json({
+          turns: options.history?.(path.split("/").at(-1)!) ?? [],
+        }),
+      );
+    if (path === "/api/public/chat")
+      return Promise.resolve(
+        options.chat?.() ??
+          streamResponse(
+            weknoraEvent("final", 0, { answer: "范围内回答", citations: [], truncated: false }),
+          ),
+      );
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+}
+
+describe("问答范围选择与会话隔离", () => {
+  it("默认公共、支持个人及组合，切换清空当前上下文，新问题恢复公共", async () => {
+    const fetchMock = installScopeFetch({ role: "admin" });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    expect(result.current.searchScopes).toEqual(["public"]);
+    expect(result.current.searchScopeOptions.map((item) => item.id)).toEqual([
+      "public",
+      "personal",
+    ]);
+    act(() => result.current.submit("公共问题"));
+    await waitFor(() =>
+      expect(result.current.turns[0]?.status).toBe("completed"),
+    );
+    const originalConversation = result.current.conversationId;
+    expect(chatBodies(fetchMock)[0].search_scopes).toEqual(["public"]);
+    act(() => result.current.changeSearchScopes(["personal"]));
+    expect(result.current.conversationId).not.toBe(originalConversation);
+    expect(result.current.turns).toEqual([]);
+    expect(result.current.scopeNotice).toBe("已切换资料范围，开始新对话。");
+    act(() => result.current.submit("私人问题"));
+    await waitFor(() =>
+      expect(result.current.turns[0]?.status).toBe("completed"),
+    );
+    expect(chatBodies(fetchMock)[1].search_scopes).toEqual(["personal"]);
+    act(() => result.current.changeSearchScopes(["personal", "public"]));
+    expect(result.current.searchScopes).toEqual(["public", "personal"]);
+    act(() => result.current.submit("组合问题"));
+    await waitFor(() =>
+      expect(result.current.turns[0]?.status).toBe("completed"),
+    );
+    expect(chatBodies(fetchMock)[2].search_scopes).toEqual([
+      "public",
+      "personal",
+    ]);
+    expect(chatBodies(fetchMock)[2].conversation_id).not.toBe(
+      chatBodies(fetchMock)[1].conversation_id,
+    );
+    act(() => result.current.startNewTopic());
+    expect(result.current.searchScopes).toEqual(["public"]);
+    expect(result.current.scopeNotice).toBeUndefined();
+  });
+
+  it("刷新历史恢复原范围，重试保留原范围，空的旧会话改为新对话", async () => {
+    const originalId = "saved-personal";
+    window.sessionStorage.setItem(
+      "wst-natural-conversation:candidate_8289:1001",
+      originalId,
+    );
+    const fetchMock = installScopeFetch({
+      history: (conversation) =>
+        conversation === originalId
+          ? [
+              {
+                turn_id: "old-turn",
+                trace_id: `trace_${"a".repeat(32)}`,
+                question: "私人资料",
+                answer: "原回答",
+                status: "completed",
+                citations: [],
+                created_at: "2026-10-30T01:00:00Z",
+                search_scopes: ["personal"],
+                native_message_id: "message-old",
+              },
+            ]
+          : [],
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    expect(result.current.conversationId).toBe(originalId);
+    expect(result.current.searchScopes).toEqual(["personal"]);
+    act(() => result.current.retry("old-turn", "私人资料", originalId));
+    await waitFor(() =>
+      expect(result.current.turns.at(-1)?.status).toBe("completed"),
+    );
+    expect(chatBodies(fetchMock)[0].search_scopes).toEqual(["personal"]);
+    await act(async () => result.current.openHistory("no-access-history"));
+    expect(result.current.conversationId).not.toBe("no-access-history");
+    expect(result.current.turns).toEqual([]);
+    expect(result.current.searchScopes).toEqual(["public"]);
+  });
+
+  it("生成人力内部回答时禁止切换，业务403保留登录状态并提示权限变化", async () => {
+    const redirect = vi
+      .spyOn(authNavigation, "redirectToSso")
+      .mockImplementation(() => undefined);
+    const fetchMock = installScopeFetch({
+      role: "hr",
+      chat: () =>
+        Response.json(
+          { detail: "没有访问所选资料的权限，请新建对话。" },
+          { status: 403 },
+        ),
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    act(() => result.current.changeSearchScopes(["hr_internal"]));
+    expect(result.current.searchScopes).toEqual(["hr_internal"]);
+    act(() => {
+      result.current.submit("内部问题");
+      result.current.changeSearchScopes(["public"]);
+    });
+    await waitFor(() => expect(result.current.turns[0]?.status).toBe("failed"));
+    expect(chatBodies(fetchMock)[0].search_scopes).toEqual(["hr_internal"]);
+    expect(result.current.searchScopes).toEqual(["hr_internal"]);
+    expect(result.current.turns[0]?.errorMessage).toBe(
+      "没有访问所选资料的权限，请新建对话。",
+    );
+    expect(result.current.sessionReady).toBe(true);
+    expect(redirect).not.toHaveBeenCalled();
+  });
 });
 
 describe("WeKnora 问答流", () => {

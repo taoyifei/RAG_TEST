@@ -557,6 +557,62 @@ pre {
   justify-content: flex-end;
   gap: 12px;
 }
+.wst-search-scopes {
+  position: relative;
+  min-width: 0;
+  margin-right: auto;
+}
+.wst-search-scopes-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  max-width: 100%;
+  padding: 8px 11px;
+  border: 1px solid var(--wst-border);
+  border-radius: 12px;
+  color: inherit;
+  background: var(--wst-panel-raised);
+  text-align: left;
+  font-size: 13px;
+}
+.wst-search-scopes-trigger span {
+  overflow-wrap: anywhere;
+}
+.wst-search-scopes-options {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(310px, calc(100vw - 70px));
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--wst-border);
+  border-radius: 14px;
+  color: inherit;
+  background: var(--wst-panel-raised);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 20%);
+}
+.wst-search-scopes-options label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 8px;
+  cursor: pointer;
+}
+.wst-search-scopes-options input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--wst-accent);
+}
+.wst-search-scopes-options p,
+.wst-search-scopes-notice {
+  margin: 7px 8px;
+  color: var(--wst-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .wst-send-button,
 .wst-stop-button {
   min-height: 42px;

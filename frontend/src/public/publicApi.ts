@@ -26,6 +26,13 @@ export interface PublicShortcut {
   revision: number;
 }
 
+export type PublicSearchScope = "public" | "personal" | "hr_internal";
+
+export interface PublicSearchScopeOption {
+  id: PublicSearchScope;
+  label: string;
+}
+
 export interface PublicCapabilities {
   mode: "wanshitong";
   stream: true;
@@ -39,6 +46,8 @@ export interface PublicCapabilities {
   request_usage_context?: boolean;
   shortcuts: PublicShortcut[];
   page_settings?: Partial<PublicPageSettings>;
+  search_scopes?: PublicSearchScopeOption[];
+  default_search_scopes?: PublicSearchScope[];
 }
 
 export interface PublicPageSettings {
@@ -134,6 +143,7 @@ export interface PublicNaturalHistoryTurn {
   finish_reason?: string | null;
   native_message_id?: string | null;
   native_request_id?: string | null;
+  search_scopes?: PublicSearchScope[];
 }
 
 export interface PublicNaturalSession {
@@ -152,7 +162,11 @@ async function readError(response: Response): Promise<PublicApiError> {
   const code =
     typeof body.error?.code === "string" ? body.error.code : undefined;
   const serverMessage =
-    typeof body.error?.message === "string" ? body.error.message : undefined;
+    typeof body.error?.message === "string"
+      ? body.error.message
+      : typeof body.detail === "string"
+        ? body.detail
+        : undefined;
   const retryAfter = Number.parseInt(
     response.headers.get("Retry-After") ?? "",
     10,
@@ -240,6 +254,7 @@ export async function openPublicChat(options: {
   signal: AbortSignal;
   clientContext?: PublicUsageContext;
   naturalProtocol?: "wanshitong-natural-sse-v1" | "wanshitong-weknora-sse-v1";
+  searchScopes?: PublicSearchScope[];
 }): Promise<Response> {
   const response = await fetch(withAppBase(PUBLIC_CHAT_PATH), {
     method: "POST",
@@ -255,6 +270,7 @@ export async function openPublicChat(options: {
     body: JSON.stringify({
       conversation_id: options.conversationId,
       query: options.question,
+      search_scopes: options.searchScopes ?? ["public"],
       ...(options.clientContext
         ? { client_context: options.clientContext }
         : {}),
@@ -441,8 +457,18 @@ export function publicErrorMessage(error: unknown): string {
     if (error.status === 429 || error.code === "RATE_LIMITED") {
       return "当前使用人数较多，请稍后再试。";
     }
-    if (error.status === 401 || error.status === 403) {
+    if (error.status === 401) {
       return "会话已过期，请重新尝试。";
+    }
+    if (error.status === 403) {
+      return error.message === "公共服务请求失败。"
+        ? "当前角色没有访问所选资料的权限，请切换资料范围或新建对话。"
+        : error.message;
+    }
+    if (error.status === 409) {
+      return error.message === "公共服务请求失败。"
+        ? "资料范围已变化，请新建对话后再试。"
+        : error.message;
     }
     if (error.status === 503 || error.code === "QUEUE_LIMIT_EXCEEDED") {
       return "当前服务较忙或尚未就绪，请稍后再试。";

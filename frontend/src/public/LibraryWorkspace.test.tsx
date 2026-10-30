@@ -113,8 +113,34 @@ describe("用户资料和角色", () => {
       await screen.findByRole("button", { name: "上传资料" }),
     ).toBeEnabled();
     expect(
-      screen.getByText("仅人力角色和系统管理员可查看、检索和维护。"),
+      screen.getByText("仅人力角色和超级管理员可查看、检索和维护。"),
     ).toBeVisible();
+  });
+
+  it("普通管理员看不到人力内部区，超级管理员可以访问", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ scope: "personal", can_manage: true, items: [] }),
+    );
+    const { rerender } = render(
+      <LibraryWorkspace
+        userRole="admin"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByRole("button", { name: "上传资料" });
+    expect(
+      screen.queryByRole("button", { name: "人力内部资料" }),
+    ).not.toBeInTheDocument();
+    rerender(
+      <LibraryWorkspace
+        userRole="admin"
+        isSuperAdmin
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "人力内部资料" })).toBeVisible();
   });
 
   it("管理员选择并保存角色，传给后台真实用户 ID", async () => {
