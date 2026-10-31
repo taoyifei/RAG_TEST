@@ -24,6 +24,31 @@ function ScopeComposer() {
 }
 
 describe("湾事通提问输入框", () => {
+  it("生成中可以写草稿，Enter 不会发送，结束后只发送一次", async () => {
+    const onSubmit = vi.fn();
+    const onStop = vi.fn();
+    const user = userEvent.setup();
+    const view = render(
+      <PublicChatComposer busy onStop={onStop} onSubmit={onSubmit} />,
+    );
+    const textbox = screen.getByRole("textbox", { name: "向湾小度提问" });
+    expect(textbox).toBeEnabled();
+    await user.type(textbox, "下一问的草稿");
+    await user.keyboard("{Enter}");
+    expect(textbox).toHaveValue("下一问的草稿");
+    expect(onSubmit).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "停止" }));
+    expect(onStop).toHaveBeenCalledOnce();
+    view.rerender(
+      <PublicChatComposer busy={false} onStop={onStop} onSubmit={onSubmit} />,
+    );
+    await user.click(textbox);
+    await user.keyboard("{Enter}{Enter}");
+    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).toHaveBeenCalledWith("下一问的草稿");
+    expect(textbox).toHaveValue("");
+  });
+
   it("点击范围框外部收起，保留选择且不拦截外部操作", async () => {
     const user = userEvent.setup();
     const outsideAction = vi.fn();

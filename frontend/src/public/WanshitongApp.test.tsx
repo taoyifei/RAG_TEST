@@ -215,9 +215,7 @@ describe("湾事通公共应用", () => {
     });
     const user = userEvent.setup();
     await openHome();
-    await user.click(
-      screen.getByRole("button", { name: "我的资料" }),
-    );
+    await user.click(screen.getByRole("button", { name: "我的资料" }));
     await screen.findByRole("heading", { name: "我的资料" });
     await user.click(screen.getByRole("button", { name: "个人资料会话" }));
     expect(await screen.findByText("这里是原会话回答")).toBeVisible();
@@ -287,7 +285,7 @@ describe("湾事通公共应用", () => {
     expect(screen.getByText("这条对话仍保留。")).toBeVisible();
   });
 
-  it("外观切换始终位于公共页面右上角并跨首问保持", async () => {
+  it("账号菜单中的外观切换跨首问保持", async () => {
     installFetch(
       streamResponse([
         event("final", 0, { answer: "已完成回答。", citations: [] }),
@@ -297,6 +295,7 @@ describe("湾事通公共应用", () => {
     await openHome();
     const root = document.querySelector(".wst-root");
     expect(root).toHaveAttribute("data-theme", "dark");
+    await user.click(screen.getByRole("button", { name: "账户与外观" }));
     await user.click(screen.getByRole("button", { name: "切换到浅色模式" }));
     expect(root).toHaveAttribute("data-theme", "light");
     expect(window.localStorage.getItem("wanshitong-theme")).toBe("light");
@@ -304,6 +303,7 @@ describe("湾事通公共应用", () => {
     await ask();
     await screen.findByText("已完成回答。");
     expect(root).toHaveAttribute("data-theme", "light");
+    await user.click(screen.getByRole("button", { name: "账户与外观" }));
     await user.click(screen.getByRole("button", { name: "切换到深色模式" }));
     expect(root).toHaveAttribute("data-theme", "dark");
   });
@@ -316,6 +316,9 @@ describe("湾事通公共应用", () => {
       "data-theme",
       "light",
     );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "账户与外观" }));
     expect(
       screen.getByRole("button", { name: "切换到深色模式" }),
     ).toBeVisible();
@@ -615,6 +618,9 @@ describe("湾事通公共应用", () => {
     await openHome();
 
     expect(screen.getByText("测试用户")).toBeVisible();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "账户与外观" }));
     await userEvent
       .setup()
       .click(screen.getByRole("button", { name: "退出湾小度" }));

@@ -135,8 +135,10 @@ pre {
   cursor: pointer;
 }
 .wst-app-layout {
-  --wst-sidebar-width: 264px;
-  min-height: 100svh;
+  --wst-sidebar-width: 232px;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   padding-left: var(--wst-sidebar-width);
 }
 .wst-app-layout.is-sidebar-collapsed,
@@ -144,30 +146,41 @@ pre {
   --wst-sidebar-width: 0px;
 }
 .wst-main-pane {
+  display: flex;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wst-content-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 .wst-app-header {
-  position: sticky;
+  position: relative;
   z-index: 30;
-  top: 0;
   display: flex;
-  min-height: 72px;
+  height: 60px;
+  min-height: 60px;
+  flex-shrink: 0;
   align-items: center;
-  flex-wrap: wrap;
   gap: 12px;
-  padding: 12px 20px;
+  padding: 8px 20px;
   border-bottom: 1px solid var(--wst-border);
   background: var(--wst-panel);
 }
 .wst-app-header-heading {
   display: flex;
   min-width: 0;
+  flex: 1;
   align-items: center;
   gap: 6px;
 }
 .wst-app-view-label {
   overflow: hidden;
-  max-width: min(260px, 32vw);
+  min-width: 0;
   padding-left: 4px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -176,8 +189,7 @@ pre {
 }
 .wst-app-header .wst-toolbar {
   position: static;
-  max-width: 100%;
-  flex: 1;
+  flex-wrap: nowrap;
 }
 .wst-sidebar-icon {
   display: inline-flex;
@@ -200,8 +212,8 @@ pre {
   z-index: 40;
   inset: 0 auto 0 0;
   display: flex;
-  width: 264px;
-  height: 100svh;
+  width: var(--wst-sidebar-width);
+  height: 100dvh;
   min-height: 0;
   flex-direction: column;
   gap: 14px;
@@ -411,9 +423,10 @@ pre {
   grid-template-columns: minmax(0, 1fr);
   width: 100%;
   min-width: 0;
-  min-height: calc(100vh - 72px);
-  min-height: calc(100svh - 72px);
-  padding: clamp(90px, 23vh, 260px) 24px 64px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: clamp(32px, 8vh, 80px) 28px 32px;
   align-items: start;
 }
 .wst-home-content {
@@ -428,7 +441,7 @@ pre {
 .wst-wordmark {
   display: block;
   color: #fafcfb;
-  font-size: clamp(34px, 4vw, 48px);
+  font-size: clamp(30px, 3.2vw, 40px);
   font-weight: 780;
   letter-spacing: -0.035em;
   line-height: 1.08;
@@ -436,7 +449,7 @@ pre {
 .wst-hero-copy h1 {
   margin: 8px 0 0;
   color: #f7f9f8;
-  font-size: clamp(32px, 4.2vw, 48px);
+  font-size: clamp(28px, 3.5vw, 42px);
   font-weight: 720;
   letter-spacing: -0.035em;
   line-height: 1.14;
@@ -706,7 +719,7 @@ pre {
 .wst-composer {
   width: 100%;
   min-width: 0;
-  min-height: 174px;
+  min-height: 112px;
   margin-top: 20px;
   padding: 10px 12px 12px 16px;
   border: 1px solid var(--wst-border);
@@ -732,8 +745,9 @@ pre {
   display: block;
   width: 100%;
   min-width: 0;
-  min-height: 108px;
-  max-height: 220px;
+  min-height: 40px;
+  max-height: 176px;
+  overflow-y: auto;
   padding: 10px 8px;
   resize: none;
   border: 0;
@@ -780,7 +794,12 @@ pre {
   font-size: 13px;
 }
 .wst-search-scopes-trigger span {
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wst-search-scopes-trigger svg {
+  flex-shrink: 0;
 }
 .wst-search-scopes-options {
   position: absolute;
@@ -855,8 +874,8 @@ pre {
     0 14px 42px rgb(0 0 0 / 24%);
 }
 .wst-composer.is-compact textarea {
-  min-height: 52px;
-  max-height: 160px;
+  min-height: 40px;
+  max-height: 176px;
   padding-top: 5px;
 }
 .wst-session-screen {
@@ -898,18 +917,31 @@ pre {
   background: rgb(49 215 179 / 10%);
 }
 .wst-chat-shell {
-  min-height: calc(100svh - 72px);
+  height: 100%;
+  min-height: 0;
 }
 .wst-chat {
+  display: flex;
   width: min(920px, 100%);
-  min-height: calc(100vh - 72px);
-  min-height: calc(100svh - 72px);
+  height: 100%;
+  min-height: 0;
   margin: 0 auto;
-  padding: 50px 20px 0;
+  flex-direction: column;
+}
+.wst-chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 28px 24px 24px;
+}
+.wst-chat-scroll-content {
+  min-width: 0;
 }
 .wst-turns {
   display: grid;
-  gap: 52px;
+  gap: 36px;
 }
 .wst-turn {
   min-width: 0;
@@ -1432,15 +1464,35 @@ pre {
   background: transparent;
 }
 .wst-chat-suggestions {
-  margin-top: 56px;
+  margin-top: 28px;
 }
 .wst-chat-composer {
-  position: sticky;
-  z-index: 10;
-  bottom: 0;
-  margin-top: 24px;
-  padding: 26px 0 24px;
-  background: linear-gradient(to bottom, transparent, #17191b 24%);
+  position: relative;
+  z-index: 20;
+  flex-shrink: 0;
+  padding: 12px 24px 16px;
+  background: var(--wst-panel);
+}
+.wst-jump-latest {
+  position: absolute;
+  right: 30px;
+  top: -42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--wst-border);
+  border-radius: 18px;
+  color: inherit;
+  background: var(--wst-panel-raised);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 12%);
+}
+.wst-composer-hint {
+  margin: 5px 8px 0;
+  color: var(--wst-muted);
+  font-size: 11px;
+  line-height: 1.6;
 }
 .wst-chat-suggestions .wst-suggestions {
   margin: 0 0 14px;
@@ -1672,7 +1724,7 @@ pre {
   background: #fff;
 }
 .wst-root[data-theme="light"] .wst-chat-composer {
-  background: linear-gradient(to bottom, transparent, #f7f9f7 24%);
+  background: var(--wst-panel);
 }
 
 @keyframes wst-rise {
@@ -1712,8 +1764,8 @@ pre {
     gap: 8px;
   }
   .wst-app-header .wst-toolbar {
-    flex-basis: 100%;
-    justify-content: flex-start;
+    flex-basis: auto;
+    justify-content: flex-end;
     gap: 6px;
   }
   .wst-app-header .wst-session-action,
@@ -1735,10 +1787,10 @@ pre {
     display: none;
   }
   .wst-home {
-    padding: clamp(70px, 16vh, 140px) 16px 36px;
+    padding: 36px 18px 28px;
   }
   .wst-composer {
-    min-height: 158px;
+    min-height: 112px;
     margin-top: 18px;
     border-radius: 20px;
   }
@@ -1746,10 +1798,10 @@ pre {
     margin-top: 24px;
   }
   .wst-composer textarea {
-    min-height: 92px;
+    min-height: 40px;
   }
-  .wst-chat {
-    padding: 34px 14px 0;
+  .wst-chat-scroll {
+    padding: 20px 14px;
   }
   .wst-question {
     max-width: 90%;
@@ -1779,8 +1831,7 @@ pre {
     grid-column: 2;
   }
   .wst-chat-composer {
-    margin-top: 42px;
-    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    padding: 10px 14px max(12px, env(safe-area-inset-bottom));
   }
 }
 
@@ -1793,4 +1844,96 @@ pre {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+.wst-account-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+.wst-account-trigger {
+  display: inline-flex;
+  min-height: 38px;
+  max-width: min(200px, 35vw);
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 9px;
+  color: inherit;
+  background: transparent;
+  font-size: 13px;
+}
+.wst-account-trigger:hover {
+  background: var(--wst-sidebar-active);
+}
+.wst-account-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wst-account-trigger svg {
+  flex-shrink: 0;
+}
+.wst-account-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 210px;
+  padding: 6px;
+  border: 1px solid var(--wst-border);
+  border-radius: 12px;
+  background: var(--wst-panel-raised);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+.wst-account-popover p {
+  margin: 4px 8px 8px;
+  padding-bottom: 10px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--wst-border);
+  color: var(--wst-muted);
+  font-size: 12px;
+}
+.wst-account-popover button {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+}
+.wst-account-popover button:hover {
+  background: var(--wst-sidebar-active);
+}
+.wst-sidebar-navigation {
+  display: grid;
+  gap: 3px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--wst-border);
+}
+.wst-sidebar-navigation button,
+.wst-sidebar-navigation a {
+  display: flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--wst-muted);
+  background: transparent;
+  text-align: left;
+  text-decoration: none;
+  font-size: 13px;
+}
+.wst-sidebar-navigation [aria-current="page"],
+.wst-sidebar-navigation button:hover:not(:disabled),
+.wst-sidebar-navigation a:hover {
+  color: inherit;
+  background: var(--wst-sidebar-active);
 }

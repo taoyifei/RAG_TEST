@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createFrameBatch } from "./frameBatch";
 
 import {
   continuePublicNaturalChat,
@@ -285,6 +286,11 @@ export function usePublicChat() {
     "wanshitong-natural-sse-v1" | typeof WEKNORA_STREAM_PROTOCOL | undefined
   >();
   const [turns, setTurns] = useState<PublicTurn[]>([]);
+  const turnsRef = useRef(turns);
+  const pendingStreamFlushRef = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => {
+    turnsRef.current = turns;
+  }, [turns]);
   const [historySessions, setHistorySessions] = useState<
     PublicNaturalSession[]
   >([]);
@@ -603,6 +609,15 @@ export function usePublicChat() {
       setPhase("submitting");
 
       const isCurrent = () => requestIdRef.current === requestId;
+      const batch = createFrameBatch<(turn: PublicTurn) => PublicTurn>(
+        (updates) => {
+          if (isCurrent())
+            updateTurn(turnId, (turn) =>
+              updates.reduce((value, update) => update(value), turn),
+            );
+        },
+      );
+      pendingStreamFlushRef.current = batch.flush;
       try {
         const csrfToken = csrfRef.current;
         if (!csrfToken) {
@@ -697,7 +712,7 @@ export function usePublicChat() {
             typeof event.trace_id === "string" ? event.trace_id : undefined;
           if (event.type === "meta") {
             if (recoverTraceId) {
-              updateTurn(turnId, (turn) => ({
+              batch.push((turn) => ({
                 ...turn,
                 answer: undefined,
                 provisionalAnswer: undefined,
@@ -708,13 +723,13 @@ export function usePublicChat() {
             }
             if (traceId) {
               activeTraceIdRef.current = traceId;
-              updateTurn(turnId, (turn) => ({ ...turn, traceId }));
+              batch.push((turn) => ({ ...turn, traceId }));
             }
             return true;
           }
           if (event.type === "stage") {
             const stageLabel = publicStageLabel(event.stage);
-            updateTurn(turnId, (turn) => ({
+            batch.push((turn) => ({
               ...turn,
               traceId: traceId ?? turn.traceId,
               stageMessage: stageLabel,
@@ -730,7 +745,7 @@ export function usePublicChat() {
             if (tracker.claimIndexes.has(event.claim_index)) return true;
             tracker.claimIndexes.add(event.claim_index);
             tracker.claimCount += 1;
-            updateTurn(turnId, (turn) => ({
+            batch.push((turn) => ({
               ...turn,
               traceId: traceId ?? turn.traceId,
               claims: [
@@ -746,7 +761,7 @@ export function usePublicChat() {
           }
           if (event.type === "answer_delta") {
             tracker.deltaCount += 1;
-            updateTurn(turnId, (turn) => ({
+            batch.push((turn) => ({
               ...turn,
               traceId: traceId ?? turn.traceId,
               provisionalAnswer: (turn.provisionalAnswer ?? "") + event.text,
@@ -757,7 +772,7 @@ export function usePublicChat() {
             return true;
           }
           if (event.type === "references") {
-            updateTurn(turnId, (turn) => ({
+            batch.push((turn) => ({
               ...turn,
               traceId: traceId ?? turn.traceId,
               citations: event.items,
@@ -766,7 +781,7 @@ export function usePublicChat() {
             return true;
           }
           if (event.type === "native_event") {
-            updateTurn(turnId, (turn) => ({
+            batch.push((turn) => ({
               ...turn,
               traceId: traceId ?? turn.traceId,
               nativeEvents: [
@@ -781,6 +796,7 @@ export function usePublicChat() {
             }));
             return true;
           }
+          batch.flush();
           if (event.type === "final") {
             tracker.terminal = true;
             updateTurn(turnId, (turn) => ({
@@ -858,7 +874,7 @@ export function usePublicChat() {
           controller.signal,
           () => {
             if (isCurrent() && !tracker.terminal) {
-              updateTurn(turnId, (turn) => ({
+              batch.push((turn) => ({
                 ...turn,
                 lastSignalAt: Date.now(),
               }));
@@ -879,6 +895,7 @@ export function usePublicChat() {
             .catch(() => undefined);
         }
       } catch (error) {
+        batch.flush();
         if (!isCurrent() || controller.signal.aborted) return;
         if (isSessionExpired(error)) {
           clearLocalSession(false);
@@ -911,6 +928,10 @@ export function usePublicChat() {
         });
         setPhase("failed");
       } finally {
+        batch.flush();
+        batch.cancel();
+        if (pendingStreamFlushRef.current === batch.flush)
+          pendingStreamFlushRef.current = undefined;
         if (isCurrent()) {
           busyRef.current = false;
           streamControllerRef.current = undefined;
@@ -1055,7 +1076,7 @@ export function usePublicChat() {
       if (busyRef.current || conversationRef.current !== turnConversationId)
         return;
       if (naturalProtocol) {
-        const previous = turns.find((item) => item.id === turnId);
+        const previous = turnsRef.current.find((item) => item.id === turnId);
         void runTurn(
           randomId("turn"),
           question,
@@ -1077,14 +1098,14 @@ export function usePublicChat() {
         });
       }
     },
-    [naturalProtocol, runTurn, turns],
+    [naturalProtocol, runTurn],
   );
 
   const recover = useCallback(
     (turnId: string, question: string, turnConversationId: string) => {
       if (busyRef.current || conversationRef.current !== turnConversationId)
         return;
-      const original = turns.find((item) => item.id === turnId);
+      const original = turnsRef.current.find((item) => item.id === turnId);
       if (!original?.traceId || !original.nativeMessageId) return;
       void runTurn(
         turnId,
@@ -1098,7 +1119,7 @@ export function usePublicChat() {
         original,
       );
     },
-    [runTurn, turns],
+    [runTurn],
   );
 
   const stop = useCallback(() => {
@@ -1107,6 +1128,7 @@ export function usePublicChat() {
     const traceId = activeTraceIdRef.current;
     const csrfToken = csrfRef.current;
     const turnConversationId = conversationRef.current;
+    pendingStreamFlushRef.current?.();
     requestIdRef.current += 1;
     streamControllerRef.current?.abort();
     busyRef.current = false;
@@ -1237,6 +1259,7 @@ export function usePublicChat() {
       });
   }, [clearLocalSession, user]);
 
+  const login = useCallback(() => authNavigation.redirectToSso(), []);
   const busy =
     phase === "creating_session" ||
     phase === "submitting" ||
@@ -1259,7 +1282,7 @@ export function usePublicChat() {
     historySessions,
     historyMoreCount,
     loggedOut,
-    login: () => authNavigation.redirectToSso(),
+    login,
     logout,
     logoutError,
     openHistory,

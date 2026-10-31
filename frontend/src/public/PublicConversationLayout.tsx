@@ -10,6 +10,8 @@ import {
   useEffect,
   useCallback,
   useId,
+  memo,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -59,7 +61,7 @@ function dateGroup(value: string, today: Date): string {
   return age < 7 ? "近 7 天" : "更早";
 }
 
-function ConversationItem({
+const ConversationItem = memo(function ConversationItem({
   item,
   selected,
   disabled,
@@ -89,6 +91,15 @@ function ConversationItem({
       {opening && <small role="status">打开中…</small>}
     </button>
   );
+});
+
+export interface PublicNavigationItem {
+  label: string;
+  icon: ReactNode;
+  active?: boolean;
+  disabled?: boolean;
+  href?: string;
+  onSelect?: () => void;
 }
 
 export function PublicConversationLayout({
@@ -100,6 +111,7 @@ export function PublicConversationLayout({
   onNewTopic,
   onSelect,
   toolbar,
+  navigation = [],
   viewLabel,
   children,
 }: {
@@ -111,6 +123,7 @@ export function PublicConversationLayout({
   onNewTopic: () => void;
   onSelect: (conversationId: string) => Promise<void>;
   toolbar: ReactNode;
+  navigation?: PublicNavigationItem[];
   viewLabel: string;
   children: ReactNode;
 }) {
@@ -132,18 +145,24 @@ export function PublicConversationLayout({
   const focusComposerOnCloseRef = useRef(false);
   const sidebarId = useId();
   const expanded = compact ? drawerOpen : !collapsed;
-  const today = new Date();
   const keyword = query.trim().toLocaleLowerCase();
-  const groups = new Map<string, PublicNaturalSession[]>();
-  const filtered = sessions.filter((item) =>
-    item.title.toLocaleLowerCase().includes(keyword),
-  );
-  for (const item of [...filtered].sort(
-    (a, b) => (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0),
-  )) {
-    const group = dateGroup(item.updated_at, today);
-    groups.set(group, [...(groups.get(group) ?? []), item]);
-  }
+  const { groups, count } = useMemo(() => {
+    const today = new Date();
+    const groups = new Map<string, PublicNaturalSession[]>();
+    const filtered = sessions.filter((item) =>
+      item.title.toLocaleLowerCase().includes(keyword),
+    );
+    for (const item of [...filtered].sort(
+      (a, b) =>
+        (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0),
+    )) {
+      const group = dateGroup(item.updated_at, today);
+      const items = groups.get(group) ?? [];
+      items.push(item);
+      groups.set(group, items);
+    }
+    return { groups, count: filtered.length };
+  }, [sessions, keyword]);
 
   const focusComposer = useCallback(() => {
     if (focusFrameRef.current !== undefined)
@@ -311,6 +330,37 @@ export function PublicConversationLayout({
             <Plus aria-hidden="true" size={18} />
             新对话
           </button>
+          {navigation.length > 0 && (
+            <nav aria-label="工作区导航" className="wst-sidebar-navigation">
+              {navigation.map((item) =>
+                item.href ? (
+                  <a
+                    key={item.label}
+                    href={item.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </a>
+                ) : (
+                  <button
+                    key={item.label}
+                    type="button"
+                    aria-current={item.active ? "page" : undefined}
+                    disabled={item.disabled}
+                    onClick={() => {
+                      item.onSelect?.();
+                      if (compact) changeExpanded(false);
+                    }}
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </button>
+                ),
+              )}
+            </nav>
+          )}
           {historyEnabled && (
             <>
               <div className="wst-sidebar-search">
@@ -344,7 +394,7 @@ export function PublicConversationLayout({
                 aria-busy={!!openingId}
                 className="wst-sidebar-history"
               >
-                {filtered.length === 0 ? (
+                {count === 0 ? (
                   <p className="wst-sidebar-empty">
                     {keyword
                       ? "没有匹配的会话，试试其他关键词。"
@@ -417,7 +467,7 @@ export function PublicConversationLayout({
           </div>
           {toolbar}
         </header>
-        {children}
+        <div className="wst-content-pane">{children}</div>
       </div>
     </div>
   );

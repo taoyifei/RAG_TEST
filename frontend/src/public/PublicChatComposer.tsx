@@ -1,5 +1,11 @@
 import { ArrowUp, ChevronDown, Library, Square } from "lucide-react";
-import { useId, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 
 import type { PublicSearchScope, PublicSearchScopeOption } from "./publicApi";
 import { useDismissiblePopover } from "./useDismissiblePopover";
@@ -32,6 +38,13 @@ export function PublicChatComposer({
 }) {
   const [question, setQuestion] = useState(initialQuestion);
   const [scopeOpen, setScopeOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 176)}px`;
+  }, [question]);
   const scopeId = useId();
   const scopeTriggerRef = useRef<HTMLButtonElement>(null);
   const scopeContainerRef = useDismissiblePopover<HTMLDivElement>(
@@ -68,11 +81,11 @@ export function PublicChatComposer({
       <textarea
         id={`wst-question-${compact ? "chat" : "home"}`}
         aria-label="向湾小度提问"
-        disabled={busy}
+        ref={textareaRef}
         onChange={(event) => setQuestion(event.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
-        rows={compact ? 2 : 3}
+        rows={1}
         value={question}
       />
       <div className="wst-composer-footer">
@@ -87,7 +100,12 @@ export function PublicChatComposer({
             type="button"
           >
             <Library aria-hidden="true" size={15} />
-            <span>
+            <span
+              title={searchScopeOptions
+                .filter((option) => searchScopes.includes(option.id))
+                .map((option) => option.label)
+                .join(" + ")}
+            >
               资料范围：
               {searchScopeOptions
                 .filter((option) => searchScopes.includes(option.id))
@@ -143,6 +161,11 @@ export function PublicChatComposer({
           </button>
         )}
       </div>
+      <p className="wst-composer-hint">
+        {busy
+          ? "可以先写下一问，当前回答结束后再发送"
+          : "Enter 发送 · Shift + Enter 换行"}
+      </p>
       {scopeNotice && (
         <p className="wst-search-scopes-notice" role="status">
           {scopeNotice}

@@ -1,19 +1,22 @@
 import {
   Files,
   LogIn,
-  LogOut,
   MessageCircle,
   Moon,
   RotateCcw,
   Sun,
   Users,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { withAppBase } from "../app/basePath";
 import { consumeLoginDraft } from "./authNavigation";
+import { AccountMenu } from "./AccountMenu";
 import { LibraryWorkspace } from "./LibraryWorkspace";
-import { PublicConversationLayout } from "./PublicConversationLayout";
+import {
+  PublicConversationLayout,
+  type PublicNavigationItem,
+} from "./PublicConversationLayout";
 import { UserRolesWorkspace } from "./UserRolesWorkspace";
 import type { PublicPopularQuestion } from "./publicApi";
 import type { SuggestedQuestion } from "./suggestedQuestions";
@@ -38,6 +41,7 @@ export function WanshitongApp() {
     }
   });
   const chat = usePublicChat();
+  const { startNewTopic: resetTopic, openHistory: openHistorySession } = chat;
   const role = chat.user?.role ?? "user";
   useEffect(() => {
     document.title = "湾小度";
@@ -48,14 +52,17 @@ export function WanshitongApp() {
     window.addEventListener("popstate", onLocation);
     return () => window.removeEventListener("popstate", onLocation);
   }, []);
-  const openView = (next: "chat" | "library" | "users") => {
-    if (next === view) return;
-    const url = new URL(window.location.href);
-    if (next === "chat") url.searchParams.delete("view");
-    else url.searchParams.set("view", next);
-    window.history.pushState({}, "", `${url.pathname}${url.search}`);
-    setView(next);
-  };
+  const openView = useCallback(
+    (next: "chat" | "library" | "users") => {
+      if (next === view) return;
+      const url = new URL(window.location.href);
+      if (next === "chat") url.searchParams.delete("view");
+      else url.searchParams.set("view", next);
+      window.history.pushState({}, "", `${url.pathname}${url.search}`);
+      setView(next);
+    },
+    [view],
+  );
   const draftConversationRef = useRef(chat.conversationId);
   useEffect(() => {
     if (draftConversationRef.current === chat.conversationId) return;
@@ -100,23 +107,67 @@ export function WanshitongApp() {
     setRestoredDraft("");
     chat.submitRecommendation(question.question, question.id, "popular");
   };
-  const startNewTopic = () => {
+  const startNewTopic = useCallback(() => {
     setRestoredDraft("");
-    chat.startNewTopic();
+    resetTopic();
+  }, [resetTopic]);
+  const selectConversation = useCallback(
+    async (id: string) => {
+      openView("chat");
+      await openHistorySession(id);
+    },
+    [openView, openHistorySession],
+  );
+  const newConversation = useCallback(() => {
+    openView("chat");
+    startNewTopic();
+  }, [openView, startNewTopic]);
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    try {
+      window.localStorage.setItem("wanshitong-theme", next);
+    } catch {
+      /* 当前页面仍可切换。 */
+    }
   };
+  const navigation: PublicNavigationItem[] = [
+    {
+      label: "知识问答",
+      icon: <MessageCircle size={17} aria-hidden="true" />,
+      active: view === "chat",
+      disabled: chat.busy,
+      onSelect: () => openView("chat"),
+    },
+    {
+      label: "我的资料",
+      icon: <Files size={17} aria-hidden="true" />,
+      active: view === "library",
+      disabled: chat.busy,
+      onSelect: () => openView("library"),
+    },
+    ...(role === "admin"
+      ? [
+          {
+            label: "用户与角色",
+            icon: <Users size={17} aria-hidden="true" />,
+            active: view === "users",
+            disabled: chat.busy,
+            onSelect: () => openView("users"),
+          },
+          {
+            label: "管理后台",
+            icon: <Files size={17} aria-hidden="true" />,
+            href: withAppBase("/admin/"),
+          },
+        ]
+      : []),
+  ];
   const themeToggle = (
     <button
       aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}
       className="wst-theme-toggle"
-      onClick={() => {
-        const next = theme === "dark" ? "light" : "dark";
-        setTheme(next);
-        try {
-          window.localStorage.setItem("wanshitong-theme", next);
-        } catch {
-          // 存储不可用时仍允许当前页面切换。
-        }
-      }}
+      onClick={toggleTheme}
       type="button"
     >
       {theme === "dark" ? (
@@ -190,14 +241,8 @@ export function WanshitongApp() {
         historyEnabled={chat.pageSettings.show_history}
         sessions={chat.historySessions}
         moreCount={chat.historyMoreCount}
-        onNewTopic={() => {
-          openView("chat");
-          startNewTopic();
-        }}
-        onSelect={async (conversationId) => {
-          openView("chat");
-          await chat.openHistory(conversationId);
-        }}
+        onNewTopic={newConversation}
+        onSelect={selectConversation}
         viewLabel={
           view === "library"
             ? "我的资料"
@@ -207,63 +252,21 @@ export function WanshitongApp() {
                   (item) => item.conversation_id === chat.conversationId,
                 )?.title ?? "知识问答")
         }
+        navigation={navigation}
         toolbar={
-          <div className="wst-toolbar">
-            <button
-              className="wst-session-action"
-              type="button"
-              disabled={chat.busy}
-              onClick={() => openView(view === "chat" ? "library" : "chat")}
-            >
-              {view === "chat" ? (
-                <Files size={16} aria-hidden="true" />
-              ) : (
-                <MessageCircle size={16} aria-hidden="true" />
-              )}
-              {view === "chat" ? "我的资料" : "返回问答"}
-            </button>
-            {role === "admin" && (
-              <>
-                <button
-                  className="wst-session-action"
-                  type="button"
-                  disabled={chat.busy}
-                  onClick={() => openView("users")}
-                >
-                  <Users size={16} aria-hidden="true" />
-                  用户与角色
-                </button>
-                <a
-                  className="wst-session-action wst-toolbar-link"
-                  href={withAppBase("/admin/")}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  管理后台
-                </a>
-              </>
-            )}
-            {chat.user ? (
-              <>
-                <span className="wst-account-name">
-                  {chat.user.displayName}
-                </span>
-                <button
-                  aria-label="退出湾小度"
-                  className="wst-session-action"
-                  onClick={() => {
+          <AccountMenu
+            name={chat.user?.displayName}
+            theme={theme}
+            onThemeChange={toggleTheme}
+            onLogout={
+              chat.user
+                ? () => {
                     setRestoredDraft("");
                     chat.logout();
-                  }}
-                  type="button"
-                >
-                  <LogOut aria-hidden="true" size={16} />
-                  退出
-                </button>
-              </>
-            ) : null}
-            {themeToggle}
-          </div>
+                  }
+                : undefined
+            }
+          />
         }
       >
         {chat.logoutError ? (
