@@ -1,7 +1,8 @@
 import { ArrowUp, ChevronDown, Library, Square } from "lucide-react";
-import { useId, useState, type KeyboardEvent } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 
 import type { PublicSearchScope, PublicSearchScopeOption } from "./publicApi";
+import { useDismissiblePopover } from "./useDismissiblePopover";
 
 export interface PublicSearchSelectionProps {
   searchScopes?: PublicSearchScope[];
@@ -32,8 +33,15 @@ export function PublicChatComposer({
   const [question, setQuestion] = useState(initialQuestion);
   const [scopeOpen, setScopeOpen] = useState(false);
   const scopeId = useId();
+  const scopeTriggerRef = useRef<HTMLButtonElement>(null);
+  const scopeContainerRef = useDismissiblePopover<HTMLDivElement>(
+    scopeOpen,
+    () => setScopeOpen(false),
+    scopeTriggerRef,
+  );
   const send = () => {
     if (!question.trim() || busy) return;
+    setScopeOpen(false);
     onSubmit(question);
     setQuestion("");
   };
@@ -68,16 +76,14 @@ export function PublicChatComposer({
         value={question}
       />
       <div className="wst-composer-footer">
-        <div className="wst-search-scopes">
+        <div className="wst-search-scopes" ref={scopeContainerRef}>
           <button
             aria-controls={scopeId}
             aria-expanded={scopeOpen}
             className="wst-search-scopes-trigger"
             disabled={busy || !onSearchScopesChange}
             onClick={() => setScopeOpen((value) => !value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setScopeOpen(false);
-            }}
+            ref={scopeTriggerRef}
             type="button"
           >
             <Library aria-hidden="true" size={15} />
@@ -109,9 +115,6 @@ export function PublicChatComposer({
                           )
                           .map((item) => item.id);
                         if (next.length) onSearchScopesChange?.(next);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") setScopeOpen(false);
                       }}
                       type="checkbox"
                     />

@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { withAppBase } from "../app/basePath";
 import { consumeLoginDraft } from "./authNavigation";
 import { LibraryWorkspace } from "./LibraryWorkspace";
+import { PublicHistoryMenu } from "./PublicHistoryMenu";
 import { UserRolesWorkspace } from "./UserRolesWorkspace";
 import type { PublicPopularQuestion } from "./publicApi";
 import type { SuggestedQuestion } from "./suggestedQuestions";
@@ -220,29 +221,14 @@ export function WanshitongApp() {
         {view === "chat" &&
           chat.pageSettings.show_history &&
           chat.historySessions.length > 0 && (
-            <details className="wst-history-menu">
-              <summary>历史会话</summary>
-              <div className="wst-history-list">
-                {chat.historySessions.map((item) => (
-                  <button
-                    disabled={chat.busy}
-                    key={item.conversation_id}
-                    onClick={() => {
-                      void chat.openHistory(item.conversation_id);
-                    }}
-                    type="button"
-                  >
-                    {item.title}
-                  </button>
-                ))}
-                {chat.historyMoreCount > 0 && (
-                  <p>
-                    当前仅显示最近 50 个会话，另有 {chat.historyMoreCount}{" "}
-                    个较早会话。
-                  </p>
-                )}
-              </div>
-            </details>
+            <PublicHistoryMenu
+              busy={chat.busy}
+              sessions={chat.historySessions}
+              moreCount={chat.historyMoreCount}
+              onSelect={(conversationId) => {
+                void chat.openHistory(conversationId);
+              }}
+            />
           )}
         {chat.user ? (
           <>

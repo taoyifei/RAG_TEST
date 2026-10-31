@@ -135,7 +135,7 @@ pre {
 .wst-history-menu {
   position: relative;
 }
-.wst-history-menu > summary {
+.wst-history-trigger {
   min-height: 44px;
   padding: 11px 16px;
   border: 1px solid var(--wst-border);
@@ -145,7 +145,6 @@ pre {
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
-  list-style: none;
 }
 .wst-history-list {
   position: absolute;
@@ -1303,12 +1302,12 @@ pre {
 .wst-root[data-theme="light"] .wst-session-action:hover {
   background: #ecf4ee;
 }
-.wst-root[data-theme="light"] .wst-history-menu > summary {
+.wst-root[data-theme="light"] .wst-history-trigger {
   color: #34443c;
   background: rgb(255 255 255 / 94%);
   box-shadow: 0 8px 24px rgb(36 69 52 / 9%);
 }
-.wst-root[data-theme="light"] .wst-history-menu > summary:hover {
+.wst-root[data-theme="light"] .wst-history-trigger:hover {
   background: #ecf4ee;
 }
 .wst-root[data-theme="light"] .wst-history-list button {
