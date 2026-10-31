@@ -76,7 +76,7 @@ def main() -> None:
     if _UPSTREAM.scheme != "http" or not _UPSTREAM.hostname:
         raise ValueError("WXD_OCR_UPSTREAM 必须是固定 HTTP 模型地址。")
     bind_host = os.environ.get("WXD_OCR_BIND_HOST", "172.17.0.1")
-    bind_port = int(os.environ.get("WXD_OCR_BIND_PORT", "18095"))
+    bind_port = int(os.environ.get("WXD_OCR_BIND_PORT", "18097"))
     with ThreadingHTTPServer((bind_host, bind_port), OcrRelayHandler) as server:
         server.serve_forever()
 

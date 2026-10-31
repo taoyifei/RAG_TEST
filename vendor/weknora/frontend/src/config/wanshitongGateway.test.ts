@@ -13,6 +13,7 @@ test('管理员登录不会回跳到外站、原生聊天或未注册管理页�
   for (const target of [
     'https://example.com', '//example.com', '/login', '/platform/creatChat',
     '/platform/chat/123', '/platform/knowledge-bases/kb-123/creatChat',
+    '/platform/automations', '/platform/automations/task-123',
     '/kb/admin/ops/', null,
   ]) {
     assert.equal(safeWanshitongReturnTo(target), '/overview')

@@ -280,6 +280,25 @@ def test_native_admin_ui_routes_are_reachable(path: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("method", "path", "allowed"),
+    [
+        ("GET", "api/v1/image-pipelines", True),
+        ("POST", "api/v1/image-pipelines/validate", True),
+        ("HEAD", "api/v1/image-pipelines", False),
+        ("POST", "api/v1/image-pipelines", False),
+        ("GET", "api/v1/image-pipelines/validate", False),
+        ("PUT", "api/v1/image-pipelines/validate", False),
+        ("GET", "api/v1/image-pipelines/private-image", False),
+        ("POST", "api/v1/image-pipelines/validate/extra", False),
+    ],
+)
+def test_image_pipeline_proxy_allows_only_config_endpoints(
+    method: str, path: str, allowed: bool
+) -> None:
+    assert _allowed_admin_path(method, path) is allowed
+
+
+@pytest.mark.parametrize(
     "path",
     [
         "api/v1/auth/login",
@@ -308,6 +327,10 @@ def test_native_admin_proxy_keeps_account_and_host_boundaries(
         ("POST", "api/v1/agents"),
         ("PUT", "api/v1/agents/agent-1"),
         ("GET", "api/v1/tenants/8/api-keys"),
+        ("GET", "api/v1/assistant/config"),
+        ("POST", "api/v1/assistant/sessions"),
+        ("GET", "api/v1/automations"),
+        ("POST", "api/v1/automations/automation-1/run"),
     ],
 )
 def test_admin_proxy_denies_chat_generation_and_mutation(

@@ -1,6 +1,6 @@
-# WeKnora v0.8.3
+# WeKnora v0.9.0
 
-湾小度使用 Tencent/WeKnora 的固定版本 `v0.8.3`，源提交 `3e22822c1d2397be730c458c7539d0eb8c113a24`。
+湾小度使用 Tencent/WeKnora 的固定版本 `v0.9.0`，源提交 `3e22822c1d2397be730c458c7539d0eb8c113a24`。
 
 - [固定上游源码](https://github.com/Tencent/WeKnora/tree/3e22822c1d2397be730c458c7539d0eb8c113a24)
 - [官方使用文档](https://weknora.weixin.qq.com/docs/)

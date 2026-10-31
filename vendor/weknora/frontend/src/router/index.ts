@@ -180,6 +180,12 @@ const router = createRouter({
           component: () => import("../views/toolbox/Toolbox.vue"),
           meta: { requiresInit: true, requiresAuth: true, requiredCapability: 'toolbox' }
         },
+        ...(!WANSHITONG_GATEWAY_AUTH ? [{
+          path: "automations/:automationId?",
+          name: "automationList",
+          component: () => import("../views/automation/AutomationList.vue"),
+          meta: { requiresInit: true, requiresAuth: true }
+        }] : []),
         {
           path: "agents",
           name: "agentList",

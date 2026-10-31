@@ -563,6 +563,13 @@ def _allowed_admin_path(  # noqa: PLR0911, PLR0912 - 权限矩阵逐项拒绝。
     if segments[:2] != ["api", "v1"] or len(segments) < _MIN_API_SEGMENTS:
         return False
     category = segments[2]
+    if category == "image-pipelines":
+        # 两个端点仅返回全局配置说明或校验参数，不放行该类别的其他路径。
+        return (
+            method == "GET" and segments[3:] == []
+        ) or (
+            method == "POST" and segments[3:] == ["validate"]
+        )
     if category == "tenants" and segments[4:5] == ["api-keys"]:
         return False
     if category == "agents" and method not in {"GET", "HEAD"}:

@@ -1,0 +1,130 @@
+# WeKnora 0.9.0 与湾小度的融合方案
+
+## 版本与阶段
+
+- 上游固定为 v0.9.0，提交 `f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7`，不跟随 main。
+- 本轮目标是 8289 测试环境；8288 生产环境、资料和入口规则不在变更范围。
+- 当前已导入新源码并准备运行时，候选仍处于预演；本文不代表端到端验收或上线完成。
+- 本文集中记录新增能力的接入边界；实际部署与验收状态以对应部署记录为准。
+
+## 底座收益与数据处理
+
+0.9.0 的直接收益包括图片处理管线、Office/PDF 解析保真、资源复用、
+引用定位、流式错误处理和检索兼容性改进。这些收益不要求开放原生助手。
+
+- 保留当前模型、知识库与文档标识，沿用已有文件和向量；不因升级全量重建或重解析。
+- PostgreSQL 新增迁移 000119–000134；其中 000125 清理符合条件的空图片派生分块，
+  不删除源文档或文件。该清理不由 down 恢复，回退依赖升级前备份。
+- 图片预处理、Excel 百分比文本等新解析选项只影响新上传或主动重新解析的资料。
+- 需要新解析效果时，先挑选对应文档验证，再决定是否重新解析；不批量处理正常资料。
+
+依据：[官方版本与升级说明][release]、[空图片分块迁移][empty-images]。
+
+## 本轮定向接入
+
+### 图片管线：在现有管理后台使用
+
+使用上游 `image_processing_config.image_pipeline`，提供两种原生选择：
+
+| 管线 | 用途 | 本轮边界 |
+| --- | --- | --- |
+| `default` | 手动选择图片描述、OCR | 沿用原生开关及校验，不增加本地识别流程 |
+| `smartocr` | 先观察图片，再决定是否 OCR | 按知识库显式选择，不自动替换所有旧配置 |
+
+- 目录与配置校验仅定向放行 `GET /api/v1/image-pipelines` 和
+  `POST /api/v1/image-pipelines/validate`；校验不触发文档解析或模型生成。
+- 配置仍通过已有知识库设置保存，原有资料归属检查继续生效。
+- 普通管理员仍不能读取或修改人力内部库；人力角色不因此获得全局管理后台。
+- 参数按管线保存，例如 `default.caption_enabled`、`default.ocr_enabled`；
+  未显式保存新管线的知识库保留上游对旧 `image_attrs_enabled` 的兼容。
+- 文档照片矫正、裁边属于可选预处理，默认关闭；开启后仍需单独验证目标图片效果。
+
+依据：[原生图片管线说明][parsing]、[管线参数命名与兼容规则][pipeline]。
+
+### RRF：使用原生检索设置
+
+在已有后台检索设置中使用原生 `rrf_k`、`rrf_vector_weight`、
+`rrf_keyword_weight`，由 `tenants/kv/retrieval-config` 保存。
+网关不另写融合、重排或召回算法；参数只影响排序，不扩大允许检索的资料集合。
+本轮不因新增界面而主动调整所有参数；如需调优，使用明确问题比较引用及回答。
+
+依据：[原生 RRF 设置接口][rrf]。
+
+## 为什么暂不开放助手、协作和自动化
+
+当前普通问答通过公共 API Key 和签名的 RDMS 用户标识建立原生会话；
+资料分区由湾小度 `LibraryService` 判断，管理操作通过共享原生管理员账号执行。
+这与上游新增能力要求的“原生 Web 用户本人身份”并不相同。
+
+1. 上游 operations 只接受真实 `WebUser`，明确拒绝 API Key；多智能体父任务也
+   使用该身份检查，子任务恢复时重新读取原生用户及工作区成员身份。
+2. 自动化接口未向 API Key 开放；后台按原生 `OwnerUserID` 重建执行身份。
+   直接使用共享管理员账号会让多位 RDMS 用户的任务、历史和审批归到同一人。
+3. 同原生 tenant 内的知识库按工作区资源授权，不能表达现有“个人资料仅本人”
+   和“人力内部仅人力及超管”的全部规则；仅新建原生用户仍不足以替代网关授权。
+4. 内置助手的页面上下文不会自动缩小知识范围；未显式限制时可使用工作区范围。
+   `read_only` 只限制写操作，“修改前确认”只表示同意，二者都不能代替资料授权。
+5. 原生工具在后台直接执行时，不会再次经过当前网关的 HTTP 资料检查。
+   不能靠隐藏按钮、提示词声明或共享管理员令牌完成权限适配。
+
+因此，本轮保留现有 quick-answer 问答方式，新助手、协作、自动化入口默认不开放；
+服务端也不为这些功能增加泛化代理。审批、任务进度和通知需按业务用户接入后再启用。
+
+依据：[操作身份检查][operation-identity]、[协作身份恢复][collaboration]、
+[自动化接口边界][automation]、[同 tenant 授权][kb-access]、[助手资料范围][assistant-scope]。
+
+## 沿用的权限矩阵
+
+公共资料包含公开人力制度。所有角色的问答默认选择公共资料；个人或人力内部范围
+由用户明确选择。超级管理员以 `admin + is_super_admin` 表达，不新增第四种普通角色。
+
+| 身份 | 可选问答范围 | 资料维护 | 用户与角色 |
+| --- | --- | --- | --- |
+| 普通用户 | 公共、本人个人资料 | 本人资料及本人主动共享的副本 | 无 |
+| 人力 | 公共、本人个人资料、人力内部 | 本人资料、公开人力制度、人力内部资料 | 无 |
+| 管理员 | 公共、本人个人资料 | 公共及现有授权的个人资料管理；不含人力内部 | 普通/人力角色，不能任免其他管理员 |
+| 超级管理员 | 公共、本人个人资料、人力内部 | 全部现有授权资料管理 | 管理员任免及其他角色管理 |
+
+- “管理员可管理个人资料”不自动变成“问答可搜索其他人的私库”。
+- 普通管理员之间不能互相降级；不能修改自己的角色或受保护的超级管理员身份。
+- 人力内部权限只认当前人力身份或超级管理员；普通管理员不继承该权限。
+- 既有会话、引用、图片和下载同样受资料权限检查，不能通过旧记录扩大访问范围。
+
+## 分阶段的最小接入
+
+### 阶段一：完成当前底座升级
+
+仅接入上述图片管线及原生 RRF 设置，保留已有登录、资料选择、历史与权限行为。
+针对图片配置保存、文件解析、引用图片、普通用户私库和管理员的人力隔离进行验收。
+预演完成前不把“新源码可编译”或“依赖可导入”写成完整功能验收通过。
+
+### 阶段二：只读资料摘要与对比
+
+先提供“概括这份资料”“比较这几份制度”等小入口，复用当前受控检索及引用能力。
+服务端按当前 RDMS 用户和选定范围确定资料标识，不接受模型自行扩大范围。
+结果保留引用，不自动发布为公共资料；该阶段不启用原生管理操作、协作或自动化。
+
+### 阶段三：按需接入少量写操作与后台任务
+
+- 文档写操作复用 `LibraryService.document(write=True)`、上传、删除和共享等
+  现有业务入口；最终执行时检查真实操作者，不能改成任意原生 HTTP 转发。
+- 用户角色调整继续调用现有角色服务，保留超管保护和管理员之间的限制。
+- 接入原生助手前，先解决原生执行身份与 RDMS 用户的可靠对应，并在操作执行层
+  保留湾小度资料授权；原生账号映射与业务资料授权必须同时成立。
+- 协作子任务只继承父任务已经授权的范围，模板不能扩大范围；历史、取消和审批归本人。
+- 自动化任务记录创建者和明确资料范围；每次启动、续跑、审批恢复及关键资料操作前，
+  重新读取当前角色和资料权限。角色收紧后停止越权任务，旧授权不能继续放行。
+- 任务结果、通知及产物按本人和当前权限读取；先做只读任务，有具体需求再增加写操作。
+
+阶段二、三属于后续接入方案，不是本轮已交付功能，也不引入无关的安全系统或业务能力。
+
+[release]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/website-docs/07-releases/v0.9.0.md
+[empty-images]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/migrations/versioned/000125_remove_empty_image_chunks.up.sql
+[parsing]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/website-docs/03-features/03-document-parsing.md
+[pipeline]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/docs/design/image-pipeline-naming.md
+[rrf]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/frontend/src/api/retrieval.ts
+[operation-identity]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/agent/tools/operations.go#L164
+[collaboration]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/application/service/agent_collaboration.go#L380
+[automation]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/router/routes_automation.go#L9
+[kb-access]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/application/access/knowledgebase.go#L117
+[assistant-scope]: https://github.com/Tencent/WeKnora/blob/f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/internal/application/service/assistant_knowledge_scope_test.go

@@ -152,8 +152,11 @@ async def test_messages_do_not_skip_shared_timestamp_at_page_boundary() -> None:
     ]
     for index in range(118, 123):
         messages[index]["created_at"] = "2026-09-26T00:01:58Z"
+    requested_limits: list[int] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
+        limit = int(request.url.params["limit"])
+        requested_limits.append(limit)
         before = request.url.params.get("before_time")
         eligible = [
             item
@@ -164,7 +167,7 @@ async def test_messages_do_not_skip_shared_timestamp_at_page_boundary() -> None:
             200,
             json={
                 "success": True,
-                "data": eligible[-int(request.url.params["limit"]) :],
+                "data": eligible[-min(limit, 200) :],
             },
         )
 
@@ -174,6 +177,74 @@ async def test_messages_do_not_skip_shared_timestamp_at_page_boundary() -> None:
     finally:
         await client.close()
     assert {item["id"] for item in result} == {item["id"] for item in messages}
+    assert max(requested_limits) <= 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared_count", [101, 199])
+async def test_messages_expand_within_native_page_cap(
+    shared_count: int,
+) -> None:
+    """整页同刻时只扩到200，仍补齐更早消息。"""
+    messages = [
+        {"id": f"old-{index}", "created_at": f"2026-10-01T00:00:0{index}Z"}
+        for index in range(5)
+    ] + [
+        {"id": f"shared-{index}", "created_at": "2026-10-01T00:00:10Z"}
+        for index in range(shared_count)
+    ]
+    requested_limits: list[int] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        before = request.url.params.get("before_time")
+        limit = int(request.url.params["limit"])
+        requested_limits.append(limit)
+        eligible = [
+            item
+            for item in messages
+            if before is None or item["created_at"] < before
+        ]
+        return httpx.Response(
+            200, json={"success": True, "data": eligible[-min(limit, 200) :]}
+        )
+
+    client = _message_client(respond)
+    try:
+        result = await client.messages(user_id="user-1", session_id="native-s1")
+    finally:
+        await client.close()
+    assert {item["id"] for item in result} == {item["id"] for item in messages}
+    assert len(result) == len(messages)
+    assert 200 in requested_limits
+    assert max(requested_limits) <= 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [200, 201])
+async def test_messages_fail_when_timestamp_group_fills_native_cap(
+    count: int,
+) -> None:
+    """仅有时间游标时无法证明同刻整组完整，必须明确失败。"""
+    messages = [
+        {"id": f"m-{index}", "created_at": "2026-10-01T00:00:00Z"}
+        for index in range(count)
+    ]
+    requested_limits: list[int] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        limit = int(request.url.params["limit"])
+        requested_limits.append(limit)
+        return httpx.Response(
+            200, json={"success": True, "data": messages[-min(limit, 200) :]}
+        )
+
+    client = _message_client(respond)
+    try:
+        with pytest.raises(NativeHttpError, match="无法安全分页"):
+            await client.messages(user_id="user-1", session_id="native-s1")
+    finally:
+        await client.close()
+    assert requested_limits == [101, 200]
 
 
 @pytest.mark.asyncio

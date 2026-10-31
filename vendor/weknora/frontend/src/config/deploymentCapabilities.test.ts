@@ -34,11 +34,17 @@ test('organizations stay hidden in lite even when capabilities fail open', () =>
   )
 })
 
-test('only route-backed settings sections require deployment capabilities', () => {
+test('native and gateway settings sections retain their capability mappings', () => {
   assert.equal(SETTINGS_SECTION_CAPABILITY.mcp, 'settings.mcp')
   assert.equal(SETTINGS_SECTION_CAPABILITY.storage, 'settings.storage')
   assert.equal(SETTINGS_SECTION_CAPABILITY.parser, undefined)
-  assert.equal(SETTINGS_SECTION_CAPABILITY['runtime-queues'], undefined)
+  assert.equal(SETTINGS_SECTION_CAPABILITY['runtime-queues'], 'settings.systemadmin')
+})
+
+test('湾小度关闭的原生管理能力不会被上游探测结果重新开启', () => {
+  for (const key of ['agents', 'toolbox', 'settings.systemadmin'] as const) {
+    assert.equal(isDeploymentCapabilitySupported({ [key]: { supported: true } }, key, { gatewayMode: true }), false)
+  }
 })
 
 test('skill credentials follow the sandbox capability rather than a key of their own', () => {
@@ -97,6 +103,24 @@ test('remote sandbox capability fails closed', () => {
   assert.equal(isDeploymentCapabilitySupported({}, 'settings.sandbox.remote'), false)
   assert.equal(
     isDeploymentCapabilitySupported({ 'settings.sandbox.remote': { supported: true } }, 'settings.sandbox.remote'),
+    true,
+  )
+})
+
+test('user allocation stays hidden unless the deployment explicitly enables it', () => {
+  assert.equal(isDeploymentCapabilitySupported({}, 'settings.sandbox.user_allocation'), false)
+  assert.equal(
+    isDeploymentCapabilitySupported(
+      { 'settings.sandbox.user_allocation': { supported: false, reason: 'deployment_gate_off' } },
+      'settings.sandbox.user_allocation',
+    ),
+    false,
+  )
+  assert.equal(
+    isDeploymentCapabilitySupported(
+      { 'settings.sandbox.user_allocation': { supported: true } },
+      'settings.sandbox.user_allocation',
+    ),
     true,
   )
 })

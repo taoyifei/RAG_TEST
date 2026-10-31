@@ -1,5 +1,5 @@
 # 湾小度 V2：仅用于 8289，禁止引用生产数据卷或生产 Compose project。
-name: ${WXD_PROJECT_NAME:-wxd_v2_083_8289}
+name: ${WXD_PROJECT_NAME:-wxd_v2_090_8289}
 services:
   app:
     logging: &id001
@@ -7,7 +7,7 @@ services:
       options:
         max-size: 10m
         max-file: '3'
-    image: ${WXD_APP_IMAGE:?必须填写固定083派生镜像ID}
+    image: ${WXD_APP_IMAGE:?必须填写固定090官方镜像ID}
     pull_policy: never
     entrypoint:
     - /bin/sh
@@ -90,7 +90,7 @@ services:
     - no-new-privileges:true
   docreader:
     logging: *id001
-    image: ${WXD_DOCREADER_IMAGE:?必须填写固定083派生镜像ID}
+    image: ${WXD_DOCREADER_IMAGE:?必须填写固定090解析镜像ID}
     pull_policy: never
     environment:
       TZ: Asia/Shanghai
@@ -231,7 +231,7 @@ services:
       RAG_MASTER_KEY_FILE: /run/wst-secrets/gateway_master_key
       RAG_ADMIN_BOOTSTRAP_TOKEN_FILE: /run/wst-secrets/gateway_admin_bootstrap_token
       RAG_TRUSTED_ORIGINS: ${WST_PUBLIC_ORIGIN:?必须填写已登记的候选 Origin}
-      RAG_TRUSTED_PROXIES: ${WXD_EDGE_IP:-192.168.80.3}
+      RAG_TRUSTED_PROXIES: ${WXD_EDGE_IP:-192.168.88.3}
       WEKNORA_BASE_URL: http://app:8080
       WEKNORA_TENANT_ID: ${WST_WEKNORA_TENANT_ID:?必须填写原生 workspace 的真实 tenant ID}
       WEKNORA_PUBLIC_KB_IDS: ${WST_PUBLIC_KB_IDS:?必须填写已发布的非空原生 KB ID 列表}
@@ -300,7 +300,7 @@ services:
     - gateway
     networks:
       front:
-        ipv4_address: ${WXD_EDGE_IP:-192.168.80.3}
+        ipv4_address: ${WXD_EDGE_IP:-192.168.88.3}
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -319,7 +319,7 @@ services:
     environment:
       WXD_OCR_UPSTREAM: ${WXD_OCR_UPSTREAM:?必须只读核对现有OCR模型IP后填写}
       WXD_OCR_BIND_HOST: 172.17.0.1
-      WXD_OCR_BIND_PORT: '18095'
+      WXD_OCR_BIND_PORT: '18097'
     volumes:
     - ./ocr_relay.py:/adapter/ocr_relay.py:ro
     read_only: true
@@ -329,7 +329,7 @@ services:
       - CMD
       - python
       - -c
-      - import urllib.request; urllib.request.urlopen('http://172.17.0.1:18095/health', timeout=2)
+      - import urllib.request; urllib.request.urlopen('http://172.17.0.1:18097/health', timeout=2)
       interval: 10s
       timeout: 3s
       retries: 3
@@ -343,20 +343,20 @@ networks:
     internal: true
     ipam:
       config:
-      - subnet: 192.168.81.0/24
+      - subnet: 192.168.89.0/24
   data:
     internal: true
     ipam:
       config:
-      - subnet: 192.168.82.0/24
+      - subnet: 192.168.90.0/24
   model-egress:
     ipam:
       config:
-      - subnet: 192.168.83.0/24
+      - subnet: 192.168.91.0/24
   front:
     ipam:
       config:
-      - subnet: ${WXD_FRONT_SUBNET:-192.168.80.0/24}
+      - subnet: ${WXD_FRONT_SUBNET:-192.168.88.0/24}
 volumes:
   native-postgres:
     driver: local

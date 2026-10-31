@@ -13,6 +13,7 @@ export const DEPLOYMENT_CAPABILITY_KEYS = [
   'settings.sandbox.docker',
   'settings.sandbox.host',
   'settings.sandbox.remote',
+  'settings.sandbox.user_allocation',
 ] as const
 
 // 湾事通网关的入口约束不属于原生 /system/capabilities 返回值。
@@ -85,10 +86,13 @@ export function isDeploymentCapabilitySupported(
   // Host sandbox is Lite-desktop-only; keep the same fail-closed gate so a
   // missed probe does not show the new-session open-project UI on other deployments.
   // Remote sandbox is unavailable on Lite desktop; fail closed like docker/host.
+  // User allocation is a deployment gate (env opt-in plus Redis). A missed
+  // probe must not show the switch.
   if (
     key === 'settings.sandbox.docker'
     || key === 'settings.sandbox.host'
     || key === 'settings.sandbox.remote'
+    || key === 'settings.sandbox.user_allocation'
   ) {
     return capabilities[key]?.supported === true
   }

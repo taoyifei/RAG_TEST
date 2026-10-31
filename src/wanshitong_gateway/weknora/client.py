@@ -16,7 +16,7 @@ _HTTP_BAD_REQUEST = 400
 _HTTP_BAD_GATEWAY = 502
 _HTTP_TOO_MANY_REQUESTS = 429
 _MESSAGE_PAGE_SIZE = 100
-_MAX_MESSAGE_PAGE_SIZE = 10_000
+_MAX_MESSAGE_PAGE_SIZE = 200
 
 
 class NativeHttpError(Exception):
@@ -174,7 +174,7 @@ class WeKnoraClient:
     async def messages(
         self, *, user_id: str, session_id: str
     ) -> list[dict[str, Any]]:
-        """沿原生时间游标读全历史；同时间戳边界先扩页再推进。"""
+        """沿原生时间游标读全历史，不丢弃被分页切开的同刻消息。"""
         before_time: str | None = None
         items: dict[str, dict[str, Any]] = {}
         while True:
@@ -200,16 +200,28 @@ class WeKnoraClient:
                     selected = data
                     next_cursor = None
                     break
-                # 原生按时间倒序取 limit 后升序返回；首条是探针。
-                if data[0]["created_at"] != data[1]["created_at"]:
-                    selected = data[1:]
+                # 原生游标严格小于 before_time；整组最老时间戳留给下页，
+                # 避免分页边界把同刻消息切开后跳过未返回的部分。
+                boundary_time = data[0]["created_at"]
+                boundary_end = next(
+                    (
+                        index
+                        for index, item in enumerate(data)
+                        if item["created_at"] != boundary_time
+                    ),
+                    None,
+                )
+                if boundary_end is not None:
+                    selected = data[boundary_end:]
                     next_cursor = selected[0]["created_at"]
                     break
-                limit *= 2
-                if limit > _MAX_MESSAGE_PAGE_SIZE:
+                if limit == _MAX_MESSAGE_PAGE_SIZE:
                     raise NativeHttpError(
                         502, "原生历史同时间戳消息过多，无法安全分页。"
                     )
+                # 0.9.0 会把更大的 limit 静默裁成 200，不能把裁剪后的
+                # 返回数量误判为历史已读完。满页仍无边界时必须明确失败。
+                limit = _MAX_MESSAGE_PAGE_SIZE
             for item in selected:
                 items[item["id"]] = item
             if next_cursor is None:

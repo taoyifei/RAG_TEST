@@ -155,6 +155,9 @@ class AdminScopeGuard:
         browser_headers: Mapping[str, str],
     ) -> None:
         """先检查路径、参数和对象归属，再允许共享原生管理凭据发请求。"""
+        if path.split("/")[2:3] == ["image-pipelines"]:
+            self._check_image_pipeline_request(method, path, query, content)
+            return
         if can_access_hr_internal(profile):
             return
         if path == "files":
@@ -200,6 +203,33 @@ class AdminScopeGuard:
         if self._contains_internal(unquote(query)):
             _deny()
         await self._check_path(category, tail, method, parameters)
+
+    def _check_image_pipeline_request(
+        self, method: str, path: str, query: str, content: bytes
+    ) -> None:
+        """图片流水线目录与校验不接受资料目标，也不触发解析或生成。"""
+        if query:
+            _deny()
+        if method == "GET" and path == "api/v1/image-pipelines":
+            if content:
+                _deny()
+            return
+        if method != "POST" or path != "api/v1/image-pipelines/validate":
+            _deny()
+        try:
+            body = json.loads(content)
+        except ValueError as error:
+            raise HTTPException(422, "图片流水线校验须为JSON对象。") from error
+        if (
+            not isinstance(body, dict)
+            or set(body) != {"pipeline_id", "params"}
+            or not isinstance(body.get("pipeline_id"), str)
+            or not body["pipeline_id"].strip()
+            or not isinstance(body.get("params"), dict)
+        ):
+            raise HTTPException(422, "图片流水线校验参数格式无效。")
+        if self._contains_internal(body):
+            _deny()
 
     async def _check_path(  # noqa: PLR0912 - 内容路由按对象种类分别绑定。
         self,

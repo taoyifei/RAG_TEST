@@ -1,17 +1,17 @@
 {
   "component": "Tencent/WeKnora",
   "repository": "https://github.com/Tencent/WeKnora.git",
-  "tag": "v0.8.3",
-  "commit_sha": "3e22822c1d2397be730c458c7539d0eb8c113a24",
-  "tree_sha": "c08fc19e07c6da4fe6d4120418ef5b776a20ad48",
+  "tag": "v0.9.0",
+  "commit_sha": "f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7",
+  "tree_sha": "de9e8951de64824a2f654d8ff5ace37fe5672b23",
   "source_path": "vendor/weknora",
   "import_method": "verified GitHub tag source archive",
-  "archive_prefix": "WeKnora-3e22822c1d2397be730c458c7539d0eb8c113a24/",
-  "archive_sha256": "91e13c59134db179ca305dfb1dce2ee6fed752e1334ff0ab662255474e012568",
-  "source_file_count": 4950,
-  "source_size_bytes": 134521117,
+  "archive_prefix": "WeKnora-f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7/",
+  "archive_sha256": "4d5f8f93298a049ea9a35163d8317af7c918e62411a0a2573dce8ddbb2d6f831",
+  "source_file_count": 5870,
+  "source_size_bytes": 174025371,
   "source_matches_checked_out_tag": false,
-  "source_note": "官方0.8.3可构建业务源码；管理端保留湾小度品牌、网关认证及角色导航适配。Go与Docreader业务源码使用官方固定提交。工程忽略规则已适配本仓库，许可证仅规范化行尾空白。归档文件数与字节数记录原始校验归档，未表示裁剪后数量。",
+  "source_note": "官方0.9.0固定提交的业务源码；Go与Docreader源文件使用官方内容，Vue重放湾小度品牌、网关认证和管理导航适配，并在网关模式禁用未适配的原生助手及自动化入口。归档文件数与字节数记录完整官方归档，不代表裁剪后数量。",
   "license_files": [
     {
       "path": "vendor/weknora/LICENSE",
@@ -19,24 +19,25 @@
     },
     {
       "path": "vendor/weknora/THIRD_PARTY_NOTICES.md",
-      "sha256": "8018c8ddcb92ccbcd2259acbe9d14524889a23114df4470cc5838a8aa8bac953"
+      "sha256": "6f66bcc006a3dfe34817709ee5df75473279e47b32e6aed92a6fd3f2c061cf9c"
     }
   ],
   "image_digests": {
-    "app_official_amd64_reference": "wechatopenai/weknora-app@sha256:28739bcf58a8f8e0fd3f5c120329d2ec538128ce52295ffb46ca47e0deee62c1",
-    "docreader_official_amd64_reference": "wechatopenai/weknora-docreader@sha256:ee308c6d69f278619794bd5f42af1d78624efefb57dce345e5d00d12798b19fa",
+    "app_official_amd64_reference": "wechatopenai/weknora-app@sha256:0497efa4dbe365e0f99d25fa386c9034346f095a95facddf2fade02edc16bccd",
+    "docreader_official_amd64_reference": "wechatopenai/weknora-docreader@sha256:16f688d246af299d9d46f30695526596e59a4ccbc33e7deb430a020a2fb68eab",
     "postgres": "paradedb/paradedb@sha256:58bf87d2a6f1e72f56590b0f0ae1467e82c3f99ca203dde646672c8ac13148b2",
     "redis": "redis@sha256:c9d92d840fd011c908f040592857c724ae6d877f2aba5c40ad963276507386b2"
   },
-  "image_digests_status": "8289运行完整官方083应用产物和083 Docreader源码派生镜像；固定兼容基础运行时。实际镜像ID固定在60独立测试.env中，构建依据见deployment/wanshitong-v2/README.md。",
+  "image_digests_status": "090测试栈使用经所有层摘要及diff_id核验的完整官方app，解析器使用官方090完整venv与源码派生镜像；实际daemon镜像ID另记在现场部署清单。生产继续运行083，不使用此分支更新生产。",
   "runtime_contract": {
-    "app_binary_sha256": "e6ed5baa4e08f09d3963b1421690a80917c9220a18301b7eda2ff61b9c3eb383",
+    "app_official_config_digest": "sha256:902186be9c292b3b3ea8080d0a8dbaeea59b62923473c7cb04df0c53386dd50b",
+    "docreader_official_config_digest": "sha256:8ce30838b94de852cb2c81cc5262e4518ee5ea1df16df6eeda00ba3d5d020d09",
     "docreader_dependencies": {
-      "pyproject.toml": "757a432a66e826fbbc45f590bc41dd349cbafa2ecd1517596255a93b76d0259f",
-      "uv.lock": "57861b67cfcbbaeee7e8ae49b8f22985b6eae4d83ffd3c0b59f761181af1bf85"
+      "pyproject.toml": "a85445f165dce7a726c9e811262b3258b254840e5c37c8e47d5c40f20de34f07",
+      "uv.lock": "6ecfda79ce459deb23b1686858d6e3c304aafd2c612c360c6d957c0b8c14a8f4"
     },
-    "app_base_image": "sha256:bc8a534799fcb54045100daf4bc5db86270b38ae45c5f761c410c50b4dcd6cdc",
-    "docreader_base_image": "sha256:3c36e7e738ba515315523876d8041f9bb02809145a4e3b331e2550e4bff98b7a"
+    "docreader_base_image": "sha256:3c36e7e738ba515315523876d8041f9bb02809145a4e3b331e2550e4bff98b7a",
+    "docreader_venv_source": "complete verified layer from official v0.9.0 amd64 image; same Python 3.10.18 and first eight base layers as v0.8.3"
   },
   "delivery_omissions": [
     "上游官网构建工程、截图及其余网站资料；仅保留UI实际链接的8个参考页面供契约检查。",

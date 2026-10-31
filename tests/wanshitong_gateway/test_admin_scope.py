@@ -235,6 +235,81 @@ async def test_normal_settings_routes_remain_available(
         await _check(guard[0], path)
 
 
+@pytest.mark.asyncio
+async def test_plain_admin_can_read_and_validate_image_pipeline_config(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    await _check(guard[0], "api/v1/image-pipelines")
+    # 参数组合是否可用由原生规则回答，网关只校验配置接口的边界。
+    await _check(
+        guard[0],
+        "api/v1/image-pipelines/validate",
+        method="POST",
+        body={
+            "pipeline_id": "default",
+            "params": {"caption_enabled": False, "ocr_enabled": False},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "query", "body"),
+    [
+        ("GET", "api/v1/image-pipelines", "kb_id=kb-public", None),
+        ("GET", "api/v1/image-pipelines", "", {"kb_id": _HR_KB_ID}),
+        ("GET", "api/v1/image-pipelines/validate", "", None),
+        ("POST", "api/v1/image-pipelines/validate/extra", "", {}),
+        (
+            "POST",
+            "api/v1/image-pipelines/validate",
+            "knowledge_id=hr-doc",
+            {"pipeline_id": "default", "params": {}},
+        ),
+        (
+            "POST",
+            "api/v1/image-pipelines/validate",
+            "",
+            {"pipeline_id": "default", "params": {"kb_id": _HR_KB_ID}},
+        ),
+    ],
+)
+async def test_image_pipeline_config_rejects_resource_targets(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+    method: str,
+    path: str,
+    query: str,
+    body: object,
+) -> None:
+    with pytest.raises(HTTPException) as denied:
+        await _check(guard[0], path, method=method, query=query, body=body)
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        {},
+        {"pipeline_id": "", "params": {}},
+        {"pipeline_id": "default", "params": []},
+        {"pipeline_id": "default", "params": {}, "knowledge_id": "hr-doc"},
+    ],
+)
+async def test_image_pipeline_validation_requires_native_config_shape(
+    guard: tuple[AdminScopeGuard, GatewayStore], body: object
+) -> None:
+    with pytest.raises(HTTPException) as denied:
+        await _check(
+            guard[0],
+            "api/v1/image-pipelines/validate",
+            method="POST",
+            body=body,
+        )
+    assert denied.value.status_code == 422
+
+
 def _remember_session(
     store: GatewayStore, identifier: str, kb_scope: tuple[str, ...]
 ) -> None:
