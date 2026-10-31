@@ -151,6 +151,98 @@ afterEach(() => {
 });
 
 describe("湾事通公共应用", () => {
+  it("从资料页点选侧栏历史恢复原个人范围，新对话回到公共且不增加管理权限", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = pathOf(input);
+      if (path === "/api/public/session")
+        return Promise.resolve(
+          Response.json({
+            ...sessionBody,
+            deployment_id: "sidebar-test",
+            user: { user_id: "1001", display_name: "测试同事", role: "user" },
+          }),
+        );
+      if (path === "/api/public/capabilities")
+        return Promise.resolve(
+          Response.json({
+            ...capabilitiesBody,
+            stream_protocol: "wanshitong-weknora-sse-v1",
+            natural_stream_protocol: "wanshitong-weknora-sse-v1",
+            search_scopes: [
+              { id: "public", label: "公共知识库" },
+              { id: "personal", label: "我的资料" },
+            ],
+          }),
+        );
+      if (path === "/api/public/popular-questions")
+        return Promise.resolve(Response.json(emptyRecommendations));
+      if (path === "/api/public/conversations")
+        return Promise.resolve(
+          Response.json({
+            items: [
+              {
+                conversation_id: "saved-personal",
+                title: "个人资料会话",
+                updated_at: new Date().toISOString(),
+              },
+            ],
+          }),
+        );
+      if (path.startsWith("/api/public/conversations/"))
+        return Promise.resolve(
+          Response.json({
+            turns: path.endsWith("saved-personal")
+              ? [
+                  {
+                    turn_id: "saved-turn",
+                    trace_id: `trace_${"a".repeat(32)}`,
+                    question: "个人资料中的项目名称",
+                    answer: "这里是原会话回答",
+                    status: "completed",
+                    citations: [],
+                    created_at: new Date().toISOString(),
+                    search_scopes: ["personal"],
+                  },
+                ]
+              : [],
+          }),
+        );
+      if (path === "/api/public/library")
+        return Promise.resolve(
+          Response.json({ scope: "personal", can_manage: true, items: [] }),
+        );
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const user = userEvent.setup();
+    await openHome();
+    await user.click(
+      screen.getByRole("button", { name: "我的资料" }),
+    );
+    await screen.findByRole("heading", { name: "我的资料" });
+    await user.click(screen.getByRole("button", { name: "个人资料会话" }));
+    expect(await screen.findByText("这里是原会话回答")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "资料范围：我的资料" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "个人资料会话" }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(
+      screen.queryByRole("link", { name: "管理后台" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "用户与角色" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "新对话" }));
+    expect(
+      await screen.findByRole("heading", { name: "你的内部知识助手" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "资料范围：公共知识库" }),
+    ).toBeVisible();
+    expect(screen.queryByText("这里是原会话回答")).not.toBeInTheDocument();
+  });
+
   it("管理员后台使用新标签打开并保留当前对话", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const path = pathOf(input);
@@ -236,7 +328,9 @@ describe("湾事通公共应用", () => {
     );
     await openHome();
 
-    expect(screen.getByText("湾小度")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("main")).getByText("湾小度"),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText("从已核验的内部资料中寻找答案，并把来源交代清楚。"),
     ).not.toBeInTheDocument();
@@ -372,24 +466,30 @@ describe("湾事通公共应用", () => {
     expect(within(panel).getAllByRole("button")).toHaveLength(5);
     expect(screen.queryByText(/最近审核于/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "查看全部" }));
-    expect(within(panel).getAllByRole("button", { name: /审核通过|哪些认证/ }))
-      .toHaveLength(20);
+    expect(
+      within(panel).getAllByRole("button", { name: /审核通过|哪些认证/ }),
+    ).toHaveLength(20);
 
     await user.click(within(panel).getByRole("button", { name: "制度-9" }));
-    expect(within(panel).getByRole("button", {
-      name: "哪些认证不适用外部认证管理办法？",
-    })).toBeInTheDocument();
-    expect(within(panel).getAllByRole("button", { name: /审核通过|哪些认证/ }))
-      .toHaveLength(1);
+    expect(
+      within(panel).getByRole("button", {
+        name: "哪些认证不适用外部认证管理办法？",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getAllByRole("button", { name: /审核通过|哪些认证/ }),
+    ).toHaveLength(1);
 
     await user.click(screen.getByRole("button", { name: "收起" }));
     expect(within(panel).getAllByRole("button")).toHaveLength(5);
   });
 
   it("聊天页的大家常问默认只显示三题", async () => {
-    installFetch(streamResponse([
-      event("final", 0, { answer: "已回答。", citations: [] }),
-    ]));
+    installFetch(
+      streamResponse([
+        event("final", 0, { answer: "已回答。", citations: [] }),
+      ]),
+    );
     const user = userEvent.setup();
     await openHome();
     await ask("先问一个问题");
@@ -398,7 +498,9 @@ describe("湾事通公共应用", () => {
 
     const panel = screen.getByRole("tabpanel", { name: "大家常问" });
     expect(within(panel).getAllByRole("button")).toHaveLength(3);
-    expect(screen.getByRole("button", { name: "查看全部" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "查看全部" }),
+    ).toBeInTheDocument();
   });
 
   it("聊天页大家常问保留已有问答并沿用会话", async () => {
@@ -593,7 +695,11 @@ describe("湾事通公共应用", () => {
     const body = JSON.parse(
       typeof chatBody === "string" ? chatBody : "{}",
     ) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["conversation_id", "query", "search_scopes"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "conversation_id",
+      "query",
+      "search_scopes",
+    ]);
     expect(body.search_scopes).toEqual(["public"]);
     expect(typeof body.conversation_id).toBe("string");
     expect(body.query).toBe(question);
@@ -664,7 +770,7 @@ describe("湾事通公共应用", () => {
       bodies.every(
         (body) =>
           JSON.stringify(Object.keys(body).sort()) ===
-          JSON.stringify(["conversation_id", "query", "search_scopes"]) &&
+            JSON.stringify(["conversation_id", "query", "search_scopes"]) &&
           JSON.stringify(body.search_scopes) === JSON.stringify(["public"]),
       ),
     ).toBe(true);
@@ -870,7 +976,7 @@ describe("湾事通公共应用", () => {
     await ask();
 
     expect(await screen.findByText("五个工作日内完成。")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新问题" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "新对话" })).toBeEnabled();
     expect(
       screen.queryByRole("heading", { name: "你的内部知识助手" }),
     ).not.toBeInTheDocument();
@@ -1061,7 +1167,7 @@ describe("湾事通公共应用", () => {
     await screen.findByText("本轮答案");
 
     expect(screen.getByText("第一轮问题")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新问题" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "新对话" })).toBeEnabled();
     expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toBeEnabled();
   });
 
@@ -1089,7 +1195,7 @@ describe("湾事通公共应用", () => {
       "",
     );
 
-    screen.getByRole("button", { name: "新问题" }).focus();
+    screen.getByRole("button", { name: "新对话" }).focus();
     await user.keyboard("{Enter}");
     expect(
       await screen.findByRole("heading", { name: "你的内部知识助手" }),
@@ -1187,7 +1293,7 @@ describe("湾事通公共应用", () => {
     const fetchMock = installFetch(pending.response);
     await openHome();
     const user = await ask("正在回答的问题");
-    const newTopic = screen.getByRole("button", { name: "新问题" });
+    const newTopic = screen.getByRole("button", { name: "新对话" });
     expect(newTopic).toBeDisabled();
     await user.click(newTopic);
     expect(screen.getByText("正在回答的问题")).toBeInTheDocument();

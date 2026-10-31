@@ -1,5 +1,3 @@
-import { Plus } from "lucide-react";
-
 import { PublicAnswer } from "./PublicAnswer";
 import {
   PublicChatComposer,
@@ -30,7 +28,6 @@ export function WanshitongChat({
   onFeedback,
   onFeedbackLogin,
   onDownloadReference,
-  onNewTopic,
   onPopularQuestionSubmit,
   onRefresh,
   onRetry,
@@ -63,7 +60,6 @@ export function WanshitongChat({
     documentName: string,
     original?: boolean,
   ) => Promise<void>;
-  onNewTopic: () => void;
   onPopularQuestionSubmit: (question: PublicPopularQuestion) => void;
   onRefresh: () => void;
   onRetry: (turnId: string, question: string, conversationId: string) => void;
@@ -81,18 +77,6 @@ export function WanshitongChat({
 }) {
   return (
     <div className="wst-chat-shell">
-      <header className="wst-chat-header">
-        <strong>湾小度</strong>
-        <button
-          className="wst-new-topic-button"
-          disabled={busy}
-          onClick={onNewTopic}
-          type="button"
-        >
-          <Plus aria-hidden="true" size={17} />
-          新问题
-        </button>
-      </header>
       <main className="wst-chat" id="main-content">
         <div className="wst-turns">
           {turns.map((turn) => (

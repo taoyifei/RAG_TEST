@@ -79,6 +79,8 @@ pre {
   --wst-muted: #a3aaa8;
   --wst-panel: #1d1f20;
   --wst-panel-raised: #222526;
+  --wst-sidebar: #141716;
+  --wst-sidebar-active: rgb(49 215 179 / 13%);
 }
 .wst-toolbar {
   position: fixed;
@@ -132,45 +134,247 @@ pre {
   min-width: auto;
   cursor: pointer;
 }
-.wst-history-menu {
-  position: relative;
+.wst-app-layout {
+  --wst-sidebar-width: 264px;
+  min-height: 100svh;
+  padding-left: var(--wst-sidebar-width);
 }
-.wst-history-trigger {
-  min-height: 44px;
-  padding: 11px 16px;
-  border: 1px solid var(--wst-border);
-  border-radius: 999px;
-  color: #e5eeea;
-  background: rgb(39 44 43 / 92%);
-  cursor: pointer;
+.wst-app-layout.is-sidebar-collapsed,
+.wst-app-layout.is-compact {
+  --wst-sidebar-width: 0px;
+}
+.wst-main-pane {
+  min-width: 0;
+}
+.wst-app-header {
+  position: sticky;
+  z-index: 30;
+  top: 0;
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--wst-border);
+  background: var(--wst-panel);
+}
+.wst-app-header-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+.wst-app-view-label {
+  overflow: hidden;
+  max-width: min(260px, 32vw);
+  padding-left: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
   font-weight: 600;
 }
-.wst-history-list {
-  position: absolute;
-  right: 0;
-  width: min(340px, calc(100vw - 40px));
-  max-height: 360px;
-  overflow: auto;
-  padding: 8px;
-  border: 1px solid var(--wst-border);
-  border-radius: 14px;
-  background: var(--wst-panel-raised);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 25%);
+.wst-app-header .wst-toolbar {
+  position: static;
+  max-width: 100%;
+  flex: 1;
 }
-.wst-history-list button {
-  display: block;
-  width: 100%;
-  padding: 10px;
+.wst-sidebar-icon {
+  display: inline-flex;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: 0;
-  border-radius: 8px;
-  color: #e5eeea;
+  border-radius: 9px;
+  color: inherit;
   background: transparent;
-  cursor: pointer;
-  text-align: left;
 }
-.wst-history-list button:hover {
-  background: rgb(255 255 255 / 9%);
+.wst-sidebar-icon:hover:not(:disabled) {
+  background: var(--wst-sidebar-active);
+}
+.wst-conversation-sidebar {
+  position: fixed;
+  z-index: 40;
+  inset: 0 auto 0 0;
+  display: flex;
+  width: 264px;
+  height: 100svh;
+  min-height: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: max(16px, env(safe-area-inset-top)) 14px
+    max(12px, env(safe-area-inset-bottom));
+  border-right: 1px solid var(--wst-border);
+  background: var(--wst-sidebar);
+}
+.wst-sidebar-heading,
+.wst-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wst-sidebar-heading {
+  justify-content: space-between;
+  padding: 0 2px;
+}
+.wst-sidebar-brand {
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+.wst-sidebar-brand > span {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border: 1px solid var(--wst-border);
+  border-radius: 10px;
+  color: var(--wst-accent);
+  background: var(--wst-sidebar-active);
+  font-size: 14px;
+}
+.wst-sidebar-new {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--wst-border);
+  border-radius: 12px;
+  color: inherit;
+  background: var(--wst-panel-raised);
+  font-weight: 600;
+}
+.wst-sidebar-new:hover:not(:disabled) {
+  border-color: var(--wst-accent);
+  background: var(--wst-sidebar-active);
+}
+.wst-sidebar-search {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 7px;
+  padding-left: 11px;
+  border: 1px solid var(--wst-border);
+  border-radius: 10px;
+  color: var(--wst-muted);
+  background: var(--wst-panel);
+}
+.wst-sidebar-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 4px 10px 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 13px;
+}
+.wst-sidebar-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.wst-sidebar-search input::placeholder {
+  color: var(--wst-muted);
+}
+.wst-sidebar-search:focus-within {
+  outline: 2px solid var(--wst-accent);
+  outline-offset: 2px;
+}
+.wst-sidebar-search input:focus-visible {
+  outline: none;
+}
+.wst-sidebar-label {
+  margin: 2px 10px -4px;
+  color: var(--wst-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.wst-sidebar-history {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.wst-sidebar-group + .wst-sidebar-group {
+  margin-top: 14px;
+}
+.wst-sidebar-group h3 {
+  margin: 8px 10px;
+  color: var(--wst-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.wst-sidebar-session {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+}
+.wst-sidebar-session > svg {
+  min-width: 15px;
+  color: var(--wst-muted);
+}
+.wst-sidebar-session > span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wst-sidebar-session:hover:not(:disabled),
+.wst-sidebar-session[aria-current="page"] {
+  background: var(--wst-sidebar-active);
+}
+.wst-sidebar-session[aria-current="page"] {
+  border-color: var(--wst-border);
+}
+.wst-sidebar-session[aria-current="page"] > svg {
+  color: var(--wst-accent);
+}
+.wst-sidebar-session small {
+  flex-shrink: 0;
+  color: var(--wst-muted);
+  font-size: 11px;
+}
+.wst-sidebar-empty,
+.wst-sidebar-footnote,
+.wst-sidebar-error {
+  margin: 0;
+  padding: 10px;
+  color: var(--wst-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.wst-sidebar-footnote {
+  padding-bottom: 0;
+}
+.wst-sidebar-error {
+  color: #f1a6a6;
+}
+.wst-sidebar-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: rgb(0 0 0 / 48%);
+}
+.wst-app-layout.is-compact .wst-conversation-sidebar {
+  z-index: 60;
+  width: min(288px, calc(100vw - 48px));
+  box-shadow: 16px 0 48px rgb(0 0 0 / 25%);
 }
 .wst-toolbar-error {
   position: fixed;
@@ -207,9 +411,9 @@ pre {
   grid-template-columns: minmax(0, 1fr);
   width: 100%;
   min-width: 0;
-  min-height: 100vh;
-  min-height: 100svh;
-  padding: clamp(180px, 34vh, 370px) 20px 64px;
+  min-height: calc(100vh - 72px);
+  min-height: calc(100svh - 72px);
+  padding: clamp(90px, 23vh, 260px) 24px 64px;
   align-items: start;
 }
 .wst-home-content {
@@ -694,48 +898,12 @@ pre {
   background: rgb(49 215 179 / 10%);
 }
 .wst-chat-shell {
-  min-height: 100vh;
-  min-height: 100svh;
-}
-.wst-chat-header {
-  position: sticky;
-  z-index: 20;
-  top: 0;
-  display: flex;
-  min-height: 64px;
-  padding: 10px max(20px, calc((100% - 920px) / 2));
-  border-bottom: 1px solid var(--wst-border);
-  align-items: center;
-  background: rgb(23 25 27 / 90%);
-  backdrop-filter: blur(14px);
-}
-.wst-chat-header strong {
-  font-size: 18px;
-  letter-spacing: -0.02em;
-}
-.wst-new-topic-button {
-  display: inline-flex;
-  min-height: 44px;
-  margin-left: 16px;
-  padding: 0 12px;
-  border: 1px solid rgb(49 215 179 / 35%);
-  border-radius: 10px;
-  align-items: center;
-  gap: 6px;
-  color: #cffff4;
-  background: rgb(49 215 179 / 10%);
-}
-.wst-new-topic-button:hover:not(:disabled) {
-  background: rgb(49 215 179 / 18%);
-}
-.wst-new-topic-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  min-height: calc(100svh - 72px);
 }
 .wst-chat {
   width: min(920px, 100%);
-  min-height: calc(100vh - 64px);
-  min-height: calc(100svh - 64px);
+  min-height: calc(100vh - 72px);
+  min-height: calc(100svh - 72px);
   margin: 0 auto;
   padding: 50px 20px 0;
 }
@@ -1291,6 +1459,8 @@ pre {
   --wst-muted: #53635a;
   --wst-panel: #fff;
   --wst-panel-raised: #fff;
+  --wst-sidebar: #edf2ef;
+  --wst-sidebar-active: #dcebe2;
 }
 .wst-root[data-theme="light"] .wst-theme-toggle,
 .wst-root[data-theme="light"] .wst-session-action {
@@ -1302,19 +1472,8 @@ pre {
 .wst-root[data-theme="light"] .wst-session-action:hover {
   background: #ecf4ee;
 }
-.wst-root[data-theme="light"] .wst-history-trigger {
-  color: #34443c;
-  background: rgb(255 255 255 / 94%);
-  box-shadow: 0 8px 24px rgb(36 69 52 / 9%);
-}
-.wst-root[data-theme="light"] .wst-history-trigger:hover {
-  background: #ecf4ee;
-}
-.wst-root[data-theme="light"] .wst-history-list button {
-  color: #34443c;
-}
-.wst-root[data-theme="light"] .wst-history-list button:hover {
-  background: #ecf4ee;
+.wst-root[data-theme="light"] .wst-sidebar-error {
+  color: #a93939;
 }
 .wst-root[data-theme="light"] .wst-wordmark,
 .wst-root[data-theme="light"] .wst-hero-copy h1 {
@@ -1388,14 +1547,6 @@ pre {
   box-shadow: 0 16px 45px rgb(36 69 52 / 8%);
 }
 .wst-root[data-theme="light"] .wst-session-card button {
-  border-color: #acd7c4;
-  color: #0b6856;
-  background: #eef8f1;
-}
-.wst-root[data-theme="light"] .wst-chat-header {
-  background: rgb(247 249 247 / 92%);
-}
-.wst-root[data-theme="light"] .wst-new-topic-button {
   border-color: #acd7c4;
   color: #0b6856;
   background: #eef8f1;
@@ -1556,6 +1707,25 @@ pre {
 }
 
 @media (max-width: 680px) {
+  .wst-app-header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .wst-app-header .wst-toolbar {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+  .wst-app-header .wst-session-action,
+  .wst-app-header .wst-theme-toggle {
+    min-width: auto;
+    min-height: 36px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+  .wst-app-view-label {
+    max-width: calc(100vw - 150px);
+  }
   .wst-popular-item {
     grid-template-columns: 28px minmax(0, 1fr) 16px;
     padding-inline: 12px;
@@ -1565,7 +1735,7 @@ pre {
     display: none;
   }
   .wst-home {
-    padding: clamp(130px, 25vh, 210px) 16px 36px;
+    padding: clamp(70px, 16vh, 140px) 16px 36px;
   }
   .wst-composer {
     min-height: 158px;
@@ -1577,9 +1747,6 @@ pre {
   }
   .wst-composer textarea {
     min-height: 92px;
-  }
-  .wst-chat-header {
-    padding: 66px 14px 10px;
   }
   .wst-chat {
     padding: 34px 14px 0;

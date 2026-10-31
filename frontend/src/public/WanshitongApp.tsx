@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { withAppBase } from "../app/basePath";
 import { consumeLoginDraft } from "./authNavigation";
 import { LibraryWorkspace } from "./LibraryWorkspace";
-import { PublicHistoryMenu } from "./PublicHistoryMenu";
+import { PublicConversationLayout } from "./PublicConversationLayout";
 import { UserRolesWorkspace } from "./UserRolesWorkspace";
 import type { PublicPopularQuestion } from "./publicApi";
 import type { SuggestedQuestion } from "./suggestedQuestions";
@@ -49,6 +49,7 @@ export function WanshitongApp() {
     return () => window.removeEventListener("popstate", onLocation);
   }, []);
   const openView = (next: "chat" | "library" | "users") => {
+    if (next === view) return;
     const url = new URL(window.location.href);
     if (next === "chat") url.searchParams.delete("view");
     else url.searchParams.set("view", next);
@@ -183,148 +184,164 @@ export function WanshitongApp() {
       <a className="skip-link wst-skip-link" href="#main-content">
         跳到主要内容
       </a>
-      <div className="wst-toolbar">
-        <button
-          className="wst-session-action"
-          type="button"
-          disabled={chat.busy}
-          onClick={() => openView(view === "chat" ? "library" : "chat")}
-        >
-          {view === "chat" ? (
-            <Files size={16} aria-hidden="true" />
-          ) : (
-            <MessageCircle size={16} aria-hidden="true" />
-          )}
-          {view === "chat" ? "我的资料" : "返回问答"}
-        </button>
-        {role === "admin" && (
-          <>
+      <PublicConversationLayout
+        busy={chat.busy}
+        conversationId={view === "chat" ? chat.conversationId : undefined}
+        historyEnabled={chat.pageSettings.show_history}
+        sessions={chat.historySessions}
+        moreCount={chat.historyMoreCount}
+        onNewTopic={() => {
+          openView("chat");
+          startNewTopic();
+        }}
+        onSelect={async (conversationId) => {
+          openView("chat");
+          await chat.openHistory(conversationId);
+        }}
+        viewLabel={
+          view === "library"
+            ? "我的资料"
+            : view === "users" && role === "admin"
+              ? "用户与角色"
+              : (chat.historySessions.find(
+                  (item) => item.conversation_id === chat.conversationId,
+                )?.title ?? "知识问答")
+        }
+        toolbar={
+          <div className="wst-toolbar">
             <button
               className="wst-session-action"
               type="button"
               disabled={chat.busy}
-              onClick={() => openView("users")}
+              onClick={() => openView(view === "chat" ? "library" : "chat")}
             >
-              <Users size={16} aria-hidden="true" />
-              用户与角色
+              {view === "chat" ? (
+                <Files size={16} aria-hidden="true" />
+              ) : (
+                <MessageCircle size={16} aria-hidden="true" />
+              )}
+              {view === "chat" ? "我的资料" : "返回问答"}
             </button>
-            <a
-              className="wst-session-action wst-toolbar-link"
-              href={withAppBase("/admin/")}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              管理后台
-            </a>
-          </>
-        )}
-        {view === "chat" &&
-          chat.pageSettings.show_history &&
-          chat.historySessions.length > 0 && (
-            <PublicHistoryMenu
-              busy={chat.busy}
-              sessions={chat.historySessions}
-              moreCount={chat.historyMoreCount}
-              onSelect={(conversationId) => {
-                void chat.openHistory(conversationId);
-              }}
-            />
-          )}
-        {chat.user ? (
-          <>
-            <span className="wst-account-name">{chat.user.displayName}</span>
-            <button
-              aria-label="退出湾小度"
-              className="wst-session-action"
-              onClick={() => {
-                setRestoredDraft("");
-                chat.logout();
-              }}
-              type="button"
-            >
-              <LogOut aria-hidden="true" size={16} />
-              退出
-            </button>
-          </>
+            {role === "admin" && (
+              <>
+                <button
+                  className="wst-session-action"
+                  type="button"
+                  disabled={chat.busy}
+                  onClick={() => openView("users")}
+                >
+                  <Users size={16} aria-hidden="true" />
+                  用户与角色
+                </button>
+                <a
+                  className="wst-session-action wst-toolbar-link"
+                  href={withAppBase("/admin/")}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  管理后台
+                </a>
+              </>
+            )}
+            {chat.user ? (
+              <>
+                <span className="wst-account-name">
+                  {chat.user.displayName}
+                </span>
+                <button
+                  aria-label="退出湾小度"
+                  className="wst-session-action"
+                  onClick={() => {
+                    setRestoredDraft("");
+                    chat.logout();
+                  }}
+                  type="button"
+                >
+                  <LogOut aria-hidden="true" size={16} />
+                  退出
+                </button>
+              </>
+            ) : null}
+            {themeToggle}
+          </div>
+        }
+      >
+        {chat.logoutError ? (
+          <p className="wst-toolbar-error" role="alert">
+            {chat.logoutError}
+          </p>
         ) : null}
-        {themeToggle}
-      </div>
-      {chat.logoutError ? (
-        <p className="wst-toolbar-error" role="alert">
-          {chat.logoutError}
-        </p>
-      ) : null}
-      {view === "library" ? (
-        <LibraryWorkspace
-          userRole={role}
-          isSuperAdmin={chat.user?.isSuperAdmin === true}
-          getCsrfToken={chat.getCsrfToken}
-          onBack={() => openView("chat")}
-        />
-      ) : view === "users" && role === "admin" ? (
-        <UserRolesWorkspace
-          getCsrfToken={chat.getCsrfToken}
-          onBack={() => openView("chat")}
-        />
-      ) : chat.turns.length === 0 ? (
-        <WanshitongHome
-          busy={chat.busy}
-          conversationId={chat.conversationId}
-          initialQuestion={restoredDraft}
-          placeholder={chat.pageSettings.input_placeholder}
-          searchScopes={chat.searchScopes}
-          searchScopeOptions={chat.searchScopeOptions}
-          scopeNotice={chat.scopeNotice}
-          onSearchScopesChange={chat.changeSearchScopes}
-          welcomeText={chat.pageSettings.welcome_text}
-          showRecommendations={
-            chat.pageSettings.show_recommendations &&
-            chat.searchScopes.includes("public")
-          }
-          onRefresh={suggestions.refresh}
-          onPopularQuestionSubmit={submitPopularQuestion}
-          onSuggestedQuestionSubmit={submitSuggestedQuestion}
-          onStop={chat.stop}
-          onSubmit={submitCurrentQuestion}
-          questions={suggestions.questions}
-          popular={popular}
-        />
-      ) : (
-        <WanshitongChat
-          busy={chat.busy}
-          conversationId={chat.conversationId}
-          feedbackDetailsEnabled={chat.feedbackDetailsEnabled}
-          allowFeedback={chat.pageSettings.allow_feedback}
-          allowSourceDownload={chat.pageSettings.allow_source_download}
-          placeholder={chat.pageSettings.input_placeholder}
-          searchScopes={chat.searchScopes}
-          searchScopeOptions={chat.searchScopeOptions}
-          scopeNotice={chat.scopeNotice}
-          onSearchScopesChange={chat.changeSearchScopes}
-          showRecommendations={
-            chat.pageSettings.show_recommendations &&
-            chat.searchScopes.includes("public")
-          }
-          initialQuestion={restoredDraft}
-          onFeedback={chat.submitFeedback}
-          onFeedbackLogin={chat.login}
-          onDownloadReference={chat.downloadReference}
-          onNewTopic={startNewTopic}
-          onPopularQuestionSubmit={submitPopularQuestion}
-          onRefresh={suggestions.refresh}
-          onRetry={chat.retry}
-          onRecover={chat.recover}
-          onStop={chat.stop}
-          onSubmit={submitCurrentQuestion}
-          onSuggestedQuestionSubmit={submitSuggestedQuestion}
-          questions={suggestions.questions}
-          popular={popular}
-          turns={chat.turns}
-        />
-      )}
-      <div aria-live="polite" className="sr-only" role="status">
-        {chat.announcement}
-      </div>
+        {view === "library" ? (
+          <LibraryWorkspace
+            userRole={role}
+            isSuperAdmin={chat.user?.isSuperAdmin === true}
+            getCsrfToken={chat.getCsrfToken}
+            onBack={() => openView("chat")}
+          />
+        ) : view === "users" && role === "admin" ? (
+          <UserRolesWorkspace
+            getCsrfToken={chat.getCsrfToken}
+            onBack={() => openView("chat")}
+          />
+        ) : chat.turns.length === 0 ? (
+          <WanshitongHome
+            busy={chat.busy}
+            conversationId={chat.conversationId}
+            initialQuestion={restoredDraft}
+            placeholder={chat.pageSettings.input_placeholder}
+            searchScopes={chat.searchScopes}
+            searchScopeOptions={chat.searchScopeOptions}
+            scopeNotice={chat.scopeNotice}
+            onSearchScopesChange={chat.changeSearchScopes}
+            welcomeText={chat.pageSettings.welcome_text}
+            showRecommendations={
+              chat.pageSettings.show_recommendations &&
+              chat.searchScopes.includes("public")
+            }
+            onRefresh={suggestions.refresh}
+            onPopularQuestionSubmit={submitPopularQuestion}
+            onSuggestedQuestionSubmit={submitSuggestedQuestion}
+            onStop={chat.stop}
+            onSubmit={submitCurrentQuestion}
+            questions={suggestions.questions}
+            popular={popular}
+          />
+        ) : (
+          <WanshitongChat
+            busy={chat.busy}
+            conversationId={chat.conversationId}
+            feedbackDetailsEnabled={chat.feedbackDetailsEnabled}
+            allowFeedback={chat.pageSettings.allow_feedback}
+            allowSourceDownload={chat.pageSettings.allow_source_download}
+            placeholder={chat.pageSettings.input_placeholder}
+            searchScopes={chat.searchScopes}
+            searchScopeOptions={chat.searchScopeOptions}
+            scopeNotice={chat.scopeNotice}
+            onSearchScopesChange={chat.changeSearchScopes}
+            showRecommendations={
+              chat.pageSettings.show_recommendations &&
+              chat.searchScopes.includes("public")
+            }
+            initialQuestion={restoredDraft}
+            onFeedback={chat.submitFeedback}
+            onFeedbackLogin={chat.login}
+            onDownloadReference={chat.downloadReference}
+            onPopularQuestionSubmit={submitPopularQuestion}
+            onRefresh={suggestions.refresh}
+            onRetry={chat.retry}
+            onRecover={chat.recover}
+            onStop={chat.stop}
+            onSubmit={submitCurrentQuestion}
+            onSuggestedQuestionSubmit={submitSuggestedQuestion}
+            questions={suggestions.questions}
+            popular={popular}
+            turns={chat.turns}
+          />
+        )}
+        <div aria-live="polite" className="sr-only" role="status">
+          {chat.announcement}
+        </div>
+      </PublicConversationLayout>
     </div>
   );
 }

@@ -5,7 +5,7 @@
 .wst-workspace {
   width: min(1180px, 100%);
   margin: 0 auto;
-  padding: 112px 28px 64px;
+  padding: 36px 28px 64px;
 }
 .wst-workspace-heading,
 .wst-library-toolbar {
@@ -186,7 +186,7 @@
 }
 @media (max-width: 680px) {
   .wst-workspace {
-    padding: 152px 16px 40px;
+    padding: 28px 16px 40px;
   }
   .wst-library-panel {
     padding: 16px;
