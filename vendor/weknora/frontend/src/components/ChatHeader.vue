@@ -74,7 +74,7 @@
               <t-icon class="icon" name="edit-1" />
               <span>{{ t('menu.renameSession') }}</span>
             </button>
-            <button type="button" class="card-menu-item" @click="enterGrantsMode">
+            <button v-if="!WANSHITONG_WORKBENCH" type="button" class="card-menu-item" @click="enterGrantsMode">
               <t-icon class="icon" name="lock-on" />
               <span>{{ t('chatHeader.grants.menu') }}</span>
             </button>
@@ -153,6 +153,7 @@ import { buildSessionMarkdown, collectAllSessionMessages } from '@/utils/session
 import { useSessionTitleMotion } from '@/composables/useSessionTitleMotion'
 import { useDeploymentCapabilitiesStore } from '@/stores/deploymentCapabilities'
 import { hostWorkspaceHeaderText, shouldRenderHostProjectSettings } from '@/utils/hostWorkspace'
+import { WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway'
 
 interface ChatHeaderSession {
   id: string

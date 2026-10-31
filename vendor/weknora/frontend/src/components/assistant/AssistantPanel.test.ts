@@ -25,6 +25,7 @@ function evaluate(source: string, dependencies: Record<string, unknown>, globals
     exports, console, ...globals,
     require(name: string) {
       if (name in dependencies) return dependencies[name]
+      if (name === '@/config/wanshitongGateway') return { WANSHITONG_GATEWAY_AUTH: false, WANSHITONG_WORKBENCH: false }
       throw new Error(`Unexpected component dependency: ${name}`)
     },
   })

@@ -4,6 +4,7 @@ import {
   MessageCircle,
   Moon,
   RotateCcw,
+  Sparkles,
   Sun,
   Users,
 } from "lucide-react";
@@ -13,6 +14,7 @@ import { withAppBase } from "../app/basePath";
 import { consumeLoginDraft } from "./authNavigation";
 import { AccountMenu } from "./AccountMenu";
 import { LibraryWorkspace } from "./LibraryWorkspace";
+import { WorkbenchWorkspace } from "./WorkbenchWorkspace";
 import {
   PublicConversationLayout,
   type PublicNavigationItem,
@@ -53,7 +55,7 @@ export function WanshitongApp() {
     return () => window.removeEventListener("popstate", onLocation);
   }, []);
   const openView = useCallback(
-    (next: "chat" | "library" | "users") => {
+    (next: "chat" | "library" | "users" | "workbench") => {
       if (next === view) return;
       const url = new URL(window.location.href);
       if (next === "chat") url.searchParams.delete("view");
@@ -146,6 +148,17 @@ export function WanshitongApp() {
       disabled: chat.busy,
       onSelect: () => openView("library"),
     },
+    ...(chat.workbenchEnabled
+      ? [
+          {
+            label: "工作助手",
+            icon: <Sparkles size={17} aria-hidden="true" />,
+            active: view === "workbench",
+            disabled: chat.busy,
+            onSelect: () => openView("workbench"),
+          },
+        ]
+      : []),
     ...(role === "admin"
       ? [
           {
@@ -246,11 +259,13 @@ export function WanshitongApp() {
         viewLabel={
           view === "library"
             ? "我的资料"
-            : view === "users" && role === "admin"
-              ? "用户与角色"
-              : (chat.historySessions.find(
-                  (item) => item.conversation_id === chat.conversationId,
-                )?.title ?? "知识问答")
+            : view === "workbench" && chat.workbenchEnabled
+              ? "工作助手"
+              : view === "users" && role === "admin"
+                ? "用户与角色"
+                : (chat.historySessions.find(
+                    (item) => item.conversation_id === chat.conversationId,
+                  )?.title ?? "知识问答")
         }
         navigation={navigation}
         toolbar={
@@ -274,7 +289,14 @@ export function WanshitongApp() {
             {chat.logoutError}
           </p>
         ) : null}
-        {view === "library" ? (
+        {view === "workbench" && chat.workbenchEnabled ? (
+          <WorkbenchWorkspace
+            key={`${chat.deploymentId}:${chat.user?.userId}`}
+            getCsrfToken={chat.getCsrfToken}
+            scopeOptions={chat.searchScopeOptions}
+            theme={theme}
+          />
+        ) : view === "library" ? (
           <LibraryWorkspace
             userRole={role}
             isSuperAdmin={chat.user?.isSuperAdmin === true}

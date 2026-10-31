@@ -2,7 +2,7 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { getDeploymentCapabilities } from '@/api/system'
 import { useAuthStore } from '@/stores/auth'
-import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
+import { WANSHITONG_GATEWAY_AUTH, WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway'
 import {
   isDeploymentCapabilitySupported,
   type DeploymentCapabilityKey,
@@ -17,6 +17,10 @@ export const useDeploymentCapabilitiesStore = defineStore('deploymentCapabilitie
   let loadingPromise: Promise<void> | null = null
 
   const ensureLoaded = async (force = false): Promise<void> => {
+    if (WANSHITONG_WORKBENCH) {
+      loaded.value = true
+      return
+    }
     if (loaded.value && !force) return
     if (loadingPromise) return loadingPromise
 
@@ -40,6 +44,7 @@ export const useDeploymentCapabilitiesStore = defineStore('deploymentCapabilitie
   }
 
   const isSupported = (key?: DeploymentCapabilityKey) => {
+    if (WANSHITONG_WORKBENCH && key) return false
     const authStore = useAuthStore()
     return isDeploymentCapabilitySupported(capabilities.value, key, {
       liteMode: authStore.isLiteMode,

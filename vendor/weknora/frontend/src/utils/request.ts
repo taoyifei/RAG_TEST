@@ -3,7 +3,7 @@ import axios from "axios";
 import { generateRandomString, MAX_FILE_SIZE_MB, MAX_SKILL_BUNDLE_SIZE_MB } from "./index";
 import i18n from '@/i18n'
 import { getApiBaseUrl } from './api-base';
-import { WANSHITONG_GATEWAY_AUTH, gatewayCsrfHeaders, redirectToWanshitongAdminLogin } from '@/config/wanshitongGateway';
+import { WANSHITONG_GATEWAY_AUTH, WANSHITONG_WORKBENCH, gatewayCsrfHeaders, redirectToWanshitongAdminLogin } from '@/config/wanshitongGateway';
 import { isSkillBundleUploadUrl } from './uploadLimit';
 import { isTimeoutError, uploadTimeoutMs } from './requestTimeouts';
 import {
@@ -104,7 +104,8 @@ instance.interceptors.request.use(
     // 换之后只有第一批请求带 X-Tenant-ID"调成永久状态。
     // 后端 IsTenantAccessible 已经允许 header 指向 home 空间（自家），
     // 所以无脑附不会引入新风险。
-    if (!isEmbedAuth && !isEmbedPath) {
+    if (WANSHITONG_WORKBENCH) delete config.headers['X-Tenant-ID'];
+    if (!WANSHITONG_WORKBENCH && !isEmbedAuth && !isEmbedPath) {
       const selectedTenantId = localStorage.getItem('weknora_selected_tenant_id');
       if (selectedTenantId) {
         config.headers["X-Tenant-ID"] = selectedTenantId;
@@ -156,7 +157,7 @@ instance.interceptors.response.use(
     // 管理端由湾事通 Cookie 会话认证；不能请求原生 refresh token。
     if (WANSHITONG_GATEWAY_AUTH && error.response.status === 401) {
       redirectToWanshitongAdminLogin();
-      return Promise.reject(withHttpStatus({ status: 401, message: '管理员会话已失效', success: false }, 401));
+      return Promise.reject(withHttpStatus({ status: 401, message: WANSHITONG_WORKBENCH ? '工作区会话已失效' : '管理员会话已失效', success: false }, 401));
     }
 
     // 文件下载失败时服务端仍返回 JSON；先还原错误信息，避免被 Blob 隐藏。

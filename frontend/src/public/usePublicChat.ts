@@ -270,6 +270,7 @@ export function usePublicChat() {
   const [user, setUser] = useState<PublicSessionUser>();
   const [deploymentId, setDeploymentId] = useState<string>();
   const [feedbackDetailsEnabled, setFeedbackDetailsEnabled] = useState(false);
+  const [workbenchEnabled, setWorkbenchEnabled] = useState(false);
   const [pageSettings, setPageSettings] = useState<PublicPageSettings>(
     DEFAULT_PAGE_SETTINGS,
   );
@@ -339,6 +340,7 @@ export function usePublicChat() {
     setLogoutError(undefined);
     setUser(undefined);
     setFeedbackDetailsEnabled(false);
+    setWorkbenchEnabled(false);
     setPageSettings(DEFAULT_PAGE_SETTINGS);
     setUsageContextEnabled(false);
     searchScopesRef.current = ["public"];
@@ -401,6 +403,7 @@ export function usePublicChat() {
     setScopeNotice(undefined);
     setDeploymentId(session.deploymentId);
     setFeedbackDetailsEnabled(capabilities.feedback_details === true);
+    setWorkbenchEnabled(capabilities.workbench_enabled === true);
     const effectivePageSettings = normalizePageSettings(
       capabilities.page_settings,
       capabilities.feedback,
@@ -1269,15 +1272,18 @@ export function usePublicChat() {
     turns.at(-1)?.errorMessage ??
     (phase === "creating_session" ? "正在连接湾小度" : "");
 
+  const getCsrfToken = useCallback(() => csrfRef.current, []);
+
   return {
     announcement,
-    getCsrfToken: () => csrfRef.current,
+    getCsrfToken,
     busy,
     changeSearchScopes,
     conversationId,
     deploymentId,
     downloadReference,
     feedbackDetailsEnabled,
+    workbenchEnabled,
     pageSettings,
     historySessions,
     historyMoreCount,

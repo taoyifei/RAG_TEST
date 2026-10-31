@@ -9,7 +9,7 @@
     }">
         <div v-if="!embeddedMode" class="chat-topbar">
             <ChatHeader :session="currentSession" />
-            <div v-if="!sandboxPanel.visible.value" class="sandbox-header-toggle">
+            <div v-if="!WANSHITONG_WORKBENCH && !sandboxPanel.visible.value" class="sandbox-header-toggle">
                 <t-tooltip placement="bottom">
                     <template #content>{{ t('chatHeader.toggleSandboxPanel') }}</template>
                     <button type="button" class="sandbox-header-toggle__btn"
@@ -189,7 +189,7 @@
                         @stop-generation="handleStopGeneration"
                         @stop-confirmed="handleStopConfirmed"
                         @stop-failed="handleStopFailed" :isReplying="isReplying" :composer-locked="composerLocked" :sessionId="session_id"
-                        :assistantMessageId="currentAssistantMessageId" :embeddedMode="embeddedMode"
+                        :assistantMessageId="currentAssistantMessageId" :embeddedMode="embeddedMode || WANSHITONG_WORKBENCH"
                         :model-id="modelId" :default-model-id="defaultModelId"
                         @update:model-id="(id) => emit('update:modelId', id)"
                         :queuedSteers="steerQueue.filter(item => item.delivery === 'after')" :canSteer="isAgentStreamSession()">
@@ -204,7 +204,7 @@
                 </div>
             </div>
             <div v-if="!embeddedMode" class="chat_overlays">
-                <BrowserTaskPreview v-if="session_id" :key="session_id" :session-id="session_id" />
+                <BrowserTaskPreview v-if="!WANSHITONG_WORKBENCH && session_id" :key="session_id" :session-id="session_id" />
                 <ChatQuestionMinimap :scroll-container="scrollContainer" :messages="messagesList"
                     @jump="jumpToQuestion" />
             </div>
@@ -213,12 +213,12 @@
             <ChildAgentStream :key="tab.task.sessionId + ':' + tab.task.runId" :task="tab.task" :active="childTabs.activeId.value === tab.id" />
         </div>
     </div>
-    <KnowledgeBaseEditorModal v-if="!embeddedMode" :visible="uiStore.showKBEditorModal" :mode="uiStore.kbEditorMode"
+    <KnowledgeBaseEditorModal v-if="!WANSHITONG_WORKBENCH && !embeddedMode" :visible="uiStore.showKBEditorModal" :mode="uiStore.kbEditorMode"
         :kb-id="uiStore.currentKBId || undefined" :initial-type="uiStore.kbEditorType"
         @update:visible="(val) => val ? null : uiStore.closeKBEditor()" @success="handleKBEditorSuccess" />
     <ChatReferencesDrawer />
     <ChatAttachmentPreviewDrawer />
-    <SandboxSidePanel v-if="!embeddedMode" :session-id="session_id"
+    <SandboxSidePanel v-if="!WANSHITONG_WORKBENCH && !embeddedMode" :session-id="session_id"
         :agent-id="useSettingsStoreInstance.selectedAgentId"
         :agent-source-tenant-id="useSettingsStoreInstance.selectedAgentSourceTenantId"
         :shifted="referencesDrawerVisible"
@@ -252,6 +252,7 @@ import { resolveForkAffordance } from './forkPoint';
 import { rewindSkipMessage } from './rewindNotice';
 import { rewindPrefillText, rewindBlockedByOutgoingWork, canReplaceRewindTranscript, shouldApplyRewindLocally, rewindHistoryHasMore, keepMessagesThroughRewindPoint, rewindableMessageIds, rewindHttpConflictCode, rewindConflictI18nKey } from './rewindView';
 import { getSuggestedQuestions } from "@/api/agent/index";
+import { WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway';
 import { questionOriginFromSuggestion } from '@/utils/questionOrigin';
 import { deleteTemporaryAttachment, uploadTemporaryAttachment } from '@/api/chat/temporary-attachments';
 import { useStream } from '../../api/chat/streame'
@@ -498,7 +499,7 @@ watch(backgroundWorkStamp, (stamp, previous) => {
 });
 
 function forkAffordanceOf(messageId) {
-    if (isAutomationSession.value || !messageId) return { canFork: false }
+    if (WANSHITONG_WORKBENCH || isAutomationSession.value || !messageId) return { canFork: false }
     return resolveForkAffordance(messagesList, messageId)
 }
 
@@ -510,7 +511,7 @@ const rewindableIds = computed(() => rewindableMessageIds(messagesList, {
 }))
 
 function canRewindMessage(messageId) {
-    return !isAutomationSession.value && Boolean(messageId) && rewindableIds.value.has(String(messageId))
+    return !WANSHITONG_WORKBENCH && !isAutomationSession.value && Boolean(messageId) && rewindableIds.value.has(String(messageId))
 }
 
 const FORK_PREFILL_KEY = 'weknora:fork-prefill'
@@ -830,7 +831,7 @@ const cancelSuggestedQuestionsFetch = () => {
 };
 
 const fetchSuggestedQuestionsIfNeeded = async () => {
-    if (props.embeddedMode) return;
+    if (WANSHITONG_WORKBENCH || props.embeddedMode) return;
     // 初始历史尚未拉完时不能判断是否有消息，避免有历史的会话误请求推荐问法
     if (historyLoading.value || messagesList.length > 0) {
         if (messagesList.length > 0) {
@@ -884,7 +885,7 @@ const handleAnswerRenderComplete = (message, ready) => {
 };
 
 const loadFollowUpSuggestions = async (message, ensure = false, regenerate = false) => {
-    if (isAutomationSession.value) return;
+    if (WANSHITONG_WORKBENCH || isAutomationSession.value) return;
     const messageId = resolveAssistantMessageId(message);
     const targetSessionId = session_id.value;
     if (!messageId || !targetSessionId || message.suggestionsDismissed) return;
@@ -1688,7 +1689,7 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
 
     // Get web search status from settings store. The embedded assistant has no
     // toggle of its own; its agent config decides on the server.
-    const webSearchEnabled = props.embeddedMode ? true : useSettingsStoreInstance.isWebSearchEnabled;
+    const webSearchEnabled = !WANSHITONG_WORKBENCH && (props.embeddedMode ? true : useSettingsStoreInstance.isWebSearchEnabled);
 
     // Get knowledge_base_ids from settings store (selected by user via KnowledgeBaseSelector)
     // Merge @mentioned KB/file IDs so retrieval uses the same targets user @mentioned (including shared KBs)

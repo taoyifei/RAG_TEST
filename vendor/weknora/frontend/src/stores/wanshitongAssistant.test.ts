@@ -23,7 +23,7 @@ function evaluate(script: string, dependencies: Record<string, unknown>, globals
   return exports
 }
 
-function fixture(gatewayMode: boolean) {
+function fixture(gatewayMode: boolean, workbench = false) {
   const auth = vue.reactive({ user: { id: 'user-a' }, effectiveTenantId: 1 })
   const values = new Map([
     ['weknora:assistant-session:user-a:1', 'native-assistant-session'],
@@ -38,10 +38,13 @@ function fixture(gatewayMode: boolean) {
   const stores = evaluate(source, {
     vue, pinia,
     './auth': { useAuthStore: () => auth },
-    '@/config/wanshitongGateway': { WANSHITONG_GATEWAY_AUTH: gatewayMode },
+    '@/config/wanshitongGateway': { WANSHITONG_GATEWAY_AUTH: gatewayMode, WANSHITONG_WORKBENCH: workbench, WANSHITONG_WORKBENCH_ID: 'workspace-a' },
     '@/api/assistant': {
       DEFAULT_ASSISTANT_ACCESS_LEVEL: 'confirm',
-      capAssistantAccessLevel: (level: string) => level,
+      capAssistantAccessLevel: (level: string, ceiling: string) => {
+        const rank = ['read_only', 'confirm', 'auto_write']
+        return rank.indexOf(level) > rank.indexOf(ceiling) ? ceiling : level
+      },
       isAssistantAccessLevel: (value: unknown) => ['read_only', 'confirm', 'auto_write'].includes(String(value)),
       getTenantAssistantConfig: async () => {
         reads.push('config')
@@ -69,6 +72,27 @@ test('湾小度不恢复原生助手，不读取配置，也不能通过快捷�
     assert.equal(f.assistant.pendingRequest, null)
     assert.equal(f.assistant.queuedMessage, null)
     assert.deepEqual(f.reads, [])
+  } finally {
+    f.close()
+  }
+})
+
+test('独立工作助手只能只读，不能恢复管理台会话或继承另一范围的身份', async () => {
+  const f = fixture(true, true)
+  try {
+    assert.equal(f.assistant.sessionId, '')
+    assert.equal(f.assistant.pageAccess, false)
+    f.assistant.setWorkspaceConfig({ display_name: 'Unsafe', max_access_level: 'auto_write' })
+    f.assistant.setAccessLevel('auto_write')
+    assert.equal(f.assistant.effectiveAccessLevel, 'read_only')
+    f.assistant.open({ query: '整理当前资料' })
+    assert.equal(f.assistant.visible, true)
+    f.assistant.setSession('own-workspace-session')
+    f.auth.effectiveTenantId = 2
+    await vue.nextTick()
+    assert.equal(f.assistant.sessionId, '')
+    assert.equal(f.assistant.pageAccess, false)
+    assert.equal(f.assistant.effectiveAccessLevel, 'read_only')
   } finally {
     f.close()
   }

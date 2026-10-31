@@ -3,10 +3,10 @@
   <Teleport to="body" :disabled="effectiveLayout === 'docked'">
   <!-- Hidden with a class, not v-if, so a reply keeps streaming while closed. -->
   <aside ref="panelElement" class="assistant-panel"
-    :class="[`is-${effectiveLayout}`, { 'is-open': assistant.visible, 'is-resizing': resizing, 'is-dragging': dragging }]"
-    :style="[{ width: `${panelWidth}px` }, effectiveLayout === 'floating' ? positionStyle : {}]" role="complementary" :aria-label="assistantName"
+    :class="[`is-${effectiveLayout}`, { 'is-open': assistant.visible, 'is-workbench': WANSHITONG_WORKBENCH, 'is-resizing': resizing, 'is-dragging': dragging }]"
+    :style="WANSHITONG_WORKBENCH ? { width: '100%' } : [{ width: `${panelWidth}px` }, effectiveLayout === 'floating' ? positionStyle : {}]" role="complementary" :aria-label="assistantName"
     :aria-hidden="!assistant.visible">
-    <PanelResizeHandle edge="left" :label="t('assistant.resize')" :value="panelWidth"
+    <PanelResizeHandle v-if="!WANSHITONG_WORKBENCH" edge="left" :label="t('assistant.resize')" :value="panelWidth"
       :min="ASSISTANT_PANEL_MIN_WIDTH" :max="ASSISTANT_PANEL_MAX_WIDTH"
       @start="startResize" @resize="resize" @end="resizing = false" />
 
@@ -28,10 +28,13 @@
             </button>
             <template #content>
               <div class="assistant-help">
-                <p class="assistant-help__title">{{ t('assistant.help.title') }}</p>
-                <p>{{ t('assistant.help.identity') }}</p>
-                <p>{{ t('assistant.help.page') }}</p>
-                <p>{{ t('assistant.help.access') }}</p>
+                <p class="assistant-help__title">{{ WANSHITONG_WORKBENCH ? '湾小度工作助手' : t('assistant.help.title') }}</p>
+                <p v-if="WANSHITONG_WORKBENCH">仅使用本次选择的资料范围。可以检索、整理和对比资料，不能修改资料或系统设置。</p>
+                <template v-else>
+                  <p>{{ t('assistant.help.identity') }}</p>
+                  <p>{{ t('assistant.help.page') }}</p>
+                  <p>{{ t('assistant.help.access') }}</p>
+                </template>
               </div>
             </template>
           </t-popup>
@@ -55,7 +58,7 @@
           <t-icon :name="assistant.layout === 'docked' ? 'pin-filled' : 'pin'" size="16px" />
         </button>
       </t-tooltip>
-      <t-tooltip :content="t('common.close')" placement="bottom">
+      <t-tooltip v-if="!WANSHITONG_WORKBENCH" :content="t('common.close')" placement="bottom">
         <button type="button" class="assistant-panel__action" :aria-label="t('common.close')"
           @click="assistant.close()">
           <t-icon name="close" size="16px" />
@@ -112,8 +115,8 @@
             </div>
           </template>
           <template #composer-controls>
-            <AssistantContextMenu />
-            <AssistantAccessPicker />
+            <span v-if="WANSHITONG_WORKBENCH" class="workbench-readonly">只读资料</span>
+            <template v-else><AssistantContextMenu /><AssistantAccessPicker /></template>
           </template>
         </ChatView>
 
@@ -153,8 +156,8 @@
                 </div>
               </template>
               <template #controls>
-                <AssistantContextMenu />
-                <AssistantAccessPicker />
+                <span v-if="WANSHITONG_WORKBENCH" class="workbench-readonly">只读资料</span>
+                <template v-else><AssistantContextMenu /><AssistantAccessPicker /></template>
               </template>
             </InputField>
           </div>
@@ -195,6 +198,7 @@ import {
 } from '@/stores/assistant'
 import { removeSession, SESSION_MUTATION_EVENT, type SessionMutationDetail } from '@/components/sessionMutations'
 import type { PageContextPayload } from '@/api/chat/streame'
+import { WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway'
 
 const { t, te } = useI18n()
 const route = useRoute()
@@ -204,7 +208,7 @@ const assistant = useAssistantStore()
 const auth = useAuthStore()
 useAssistantDataChange(() => { void auth.refreshFromAuthMe() }, { areas: ['workspace'] })
 const conversationOwner = computed(() => `${auth.user?.id}:${auth.effectiveTenantId}`)
-const assistantName = computed(() => assistant.displayName || t('assistant.title'))
+const assistantName = computed(() => WANSHITONG_WORKBENCH ? '湾小度工作助手' : assistant.displayName || t('assistant.title'))
 
 // Below this the page would be too cramped beside a docked panel, so the
 // panel floats instead whatever the preference.
@@ -215,8 +219,8 @@ const FLOATING_MARGIN = 12
 
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth || 0 : 0)
 const onViewportResize = () => { viewportWidth.value = window.innerWidth }
-const canDock = computed(() => viewportWidth.value >= DOCK_MIN_VIEWPORT)
-const effectiveLayout = computed(() => assistant.layout === 'docked' && canDock.value ? 'docked' : 'floating')
+const canDock = computed(() => !WANSHITONG_WORKBENCH && viewportWidth.value >= DOCK_MIN_VIEWPORT)
+const effectiveLayout = computed(() => WANSHITONG_WORKBENCH || (assistant.layout === 'docked' && canDock.value) ? 'docked' : 'floating')
 const docked = computed(() => assistant.visible && effectiveLayout.value === 'docked')
 const panelElement = ref<HTMLElement | null>(null)
 const { positionStyle, dragging, startDrag, moveDrag, stopDrag } = useFloatingPreviewDrag(
@@ -251,7 +255,7 @@ const resize = (delta: number) => assistant.setWidth(resizeStartWidth - delta)
 // instead of covering it: TDesign's in the unscoped styles below, ours by
 // reading --assistant-dock-width in their own styles.
 watch([docked, panelWidth], ([isDocked, width]) => {
-  if (typeof document === 'undefined') return
+  if (typeof document === 'undefined' || WANSHITONG_WORKBENCH) return
   const root = document.documentElement
   root.classList.toggle('has-assistant-dock', isDocked)
   root.style.setProperty('--assistant-dock-width', isDocked ? `${width}px` : '0px')
@@ -279,6 +283,10 @@ function settingsWelcome(section: string) {
 }
 
 const welcomeContent = computed(() => {
+  if (WANSHITONG_WORKBENCH) return {
+    description: '告诉我想整理或对比什么，我会在所选资料范围内查找依据。',
+    starters: ['帮我梳理所选资料的主要主题，并列出来源', '对比两份资料的要求和差异，先让我选择文档', '从所选资料中整理一份有来源依据的操作清单'],
+  }
   const general = {
     description: t('assistant.welcomeDesc'),
     starters: [t('assistant.starters.releaseHighlights'), t('assistant.starters.gettingStarted'), t('assistant.starters.workflow')],
@@ -633,6 +641,15 @@ onUnmounted(() => {
       pointer-events: none;
     }
   }
+}
+.assistant-panel.is-workbench {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+}
+.workbench-readonly {
+  color: var(--td-text-color-secondary);
+  font-size: var(--app-text-xs);
 }
 
 .assistant-composer-context {

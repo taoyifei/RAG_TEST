@@ -29,6 +29,7 @@ from wanshitong_gateway.admission import (
     QueueWaitTimeoutError,
 )
 from wanshitong_gateway.auth import GatewayAuth, register_auth_routes
+from wanshitong_gateway.compat.product.crypto import load_master_key
 from wanshitong_gateway.compat.wanshitong.public_models import (
     PublicChatStopRequest,
     PublicFeedbackRequest,
@@ -69,6 +70,8 @@ from wanshitong_gateway.weknora.stream import (
     BridgeStream,
     NativeSseDecoder,
 )
+from wanshitong_gateway.workbench import WorkbenchService
+from wanshitong_gateway.workbench_routes import register_workbench_routes
 
 _MAX_HISTORY_SESSIONS = 50
 _MAX_OPS_LIST_LIMIT = 1000
@@ -210,6 +213,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     admin_native: NativeAdminClient | None = None,
     legacy: LegacyHistoryReader | None = None,
     qa_queue: BoundedQaQueue | None = None,
+    workbench: WorkbenchService | None = None,
 ) -> FastAPI:
     """构建不初始化旧 Parser、索引、检索或答案校验器的 ASGI 应用。"""
     auth = auth or GatewayAuth.from_settings(
@@ -250,9 +254,10 @@ def create_app(  # noqa: PLR0913, PLR0915
         finally:
             await native.close()
             await admin_native.close()
+            if workbench is not None:
+                await workbench.close()
 
     app = FastAPI(root_path=auth.settings.root_path, lifespan=lifespan)
-    register_auth_routes(app, auth)
     library = LibraryService(
         auth.settings.database_path,
         admin_native,
@@ -268,7 +273,29 @@ def create_app(  # noqa: PLR0913, PLR0915
             else engine.public_kb_ids
         ),
     )
+    if engine.workbench_enabled and workbench is None:
+        if auth.users is None:
+            raise AssertionError("工作助手需要真实员工资料库。")
+        workbench = WorkbenchService(
+            database_path=auth.settings.database_path,
+            native_base_url=engine.base_url,
+            service_email=engine.admin_email,
+            service_password=load_server_secret(engine.admin_password_file),
+            source_tenant_id=engine.tenant_id,
+            deployment_id=auth.settings.deployment_id,
+            master_key=load_master_key(auth.settings.master_key_file).value,
+            library=library,
+            users=auth.users,
+            chat_model_override=engine.workbench_chat_model_id,
+        )
+    if workbench is None:
+        register_auth_routes(app, auth)
+    else:
+        register_auth_routes(
+            app, auth, before_role_change=workbench.before_role_change
+        )
     register_library_routes(app, auth, library)
+    register_workbench_routes(app, auth, workbench)
     admin_scope_guard = AdminScopeGuard(library, store)
 
     def admin_profile(request: Request) -> UserProfile:
@@ -483,6 +510,11 @@ def create_app(  # noqa: PLR0913, PLR0915
                     public_agent = await native.public_agent(agent_id)
                     if public_agent.get("config") != config:
                         raise NativeHttpError(502, "公共 Key 无法回读新应用。")
+                if workbench is not None and (
+                    current is None
+                    or set(current["knowledge_base_ids"]) != set(kb_ids)
+                ):
+                    await workbench.invalidate_scopes({"public"})
                 saved = store.save_public_app(
                     deployment_id=auth.settings.deployment_id,
                     expected_revision=revision,
@@ -940,6 +972,7 @@ def create_app(  # noqa: PLR0913, PLR0915
             "request_usage_context": True,
             "search_scopes": library.available_search_scopes(profile),
             "default_search_scopes": ["public"],
+            "workbench_enabled": workbench is not None,
             "shortcuts": [
                 {
                     "shortcut_id": item.shortcut_id,

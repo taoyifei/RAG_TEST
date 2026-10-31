@@ -47,7 +47,7 @@
               <span :title="t('automation.fields.sessionMode')">{{ t(`automation.sessionMode.${automation.session_mode}`) }}</span>
             </div>
           </div>
-          <t-popup v-model:visible="grantsVisible" trigger="click" placement="bottom-right" :z-index="2600">
+          <t-popup v-if="!WANSHITONG_WORKBENCH" v-model:visible="grantsVisible" trigger="click" placement="bottom-right" :z-index="2600">
             <button type="button" class="automation-detail__grants-trigger" :class="{ 'is-attention': candidates.length }"
               :aria-expanded="grantsVisible">
               <t-icon name="secured" size="14px" />
@@ -205,6 +205,7 @@ import SettingDrawer from '@/components/settings/SettingDrawer.vue'
 import AutomationStatusTag from './AutomationStatusTag.vue'
 import ChatActionIcon from '@/components/ChatActionIcon.vue'
 import AssistantActionsButton from '@/components/assistant/AssistantActionsButton.vue'
+import { WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway'
 
 const props = defineProps<{
   visible: boolean
@@ -371,6 +372,7 @@ useAssistantDataChange(changes => {
 }, { areas: ['automation'] })
 
 async function loadGrants() {
+  if (WANSHITONG_WORKBENCH) return
   const a = props.automation
   if (!a) return
   grantsLoading.value = true

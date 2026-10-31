@@ -11,7 +11,7 @@
  * 这里把该决策收敛成单一真相源，渲染组件只需声明作用域，不再各自拼 URL。
  */
 
-import { WANSHITONG_GATEWAY_AUTH, engineResourceUrl } from '../config/wanshitongGateway';
+import { WANSHITONG_ENGINE_API, WANSHITONG_GATEWAY_AUTH, engineResourceUrl } from '../config/wanshitongGateway';
 
 export const PROVIDER_SCHEME_PATTERN = 'resource|local|minio|cos|tos|s3|oss|ks3|obs';
 
@@ -101,7 +101,8 @@ export function isProviderFileURL(url: string): boolean {
 /** 是否为受保护文件代理之一的路径。 */
 export function isProtectedFileProxyPath(pathname: string): boolean {
   const resourcePath = WANSHITONG_GATEWAY_AUTH
-    ? pathname.replace(/^\/kb\/api\/engine-admin(?=\/)/, '')
+    && pathname.startsWith(`${WANSHITONG_ENGINE_API}/`)
+    ? pathname.slice(WANSHITONG_ENGINE_API.length)
     : pathname;
   return (
     resourcePath === '/files'
@@ -113,6 +114,8 @@ export function isProtectedFileProxyPath(pathname: string): boolean {
 
 function tenantRequestHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
+  // 网关文件代理从 Cookie 决定本人工作区，不能继承浏览器残留的原生租户。
+  if (WANSHITONG_GATEWAY_AUTH) return headers;
   try {
     const token = WANSHITONG_GATEWAY_AUTH ? '' : (localStorage.getItem('weknora_token') || '').trim();
     if (token) {

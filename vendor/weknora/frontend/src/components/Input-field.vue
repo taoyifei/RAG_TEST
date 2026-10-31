@@ -56,6 +56,7 @@ import { formatLocalizedList } from '@/utils/format-list';
 import { SKILL_ICON, type MentionItem, type MentionItemType, type MentionRequestItem } from '@/types/mention';
 import { toolboxLocation } from '@/config/toolbox';
 import { supportedLevels, levelLabelKey, levelFromLegacy, clampLevel, type ReasoningLevel } from '@/utils/reasoningEffort';
+import { WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway';
 
 const route = useRoute();
 const router = useRouter();
@@ -98,6 +99,7 @@ const isImageFile = (file: File) => {
 };
 
 const handleDroppedFiles = (files: File[]) => {
+  if (WANSHITONG_WORKBENCH) return;
   if (!files.length) return;
 
   const imageFiles = files.filter(isImageFile);
@@ -2813,7 +2815,7 @@ defineExpose({
       </div>
 
       <!-- 附件列表区域 (由 AttachmentUpload 组件渲染) -->
-      <AttachmentUpload ref="attachmentUploadRef" :max-files="5"
+      <AttachmentUpload v-if="!WANSHITONG_WORKBENCH" ref="attachmentUploadRef" :max-files="5"
         :session-id="sessionId" :agent-id="selectedAgentId"
         :agent-source-tenant-id="settingsStore.selectedAgentSourceTenantId ?? undefined"
         @update:files="uploadedAttachments = $event" />
@@ -2997,7 +2999,8 @@ defineExpose({
           <slot name="controls" />
 
           <!-- 模型显示 -->
-          <t-tooltip :content="modelTriggerTooltip" :disabled="!modelTriggerTooltip">
+          <span v-if="WANSHITONG_WORKBENCH" class="model-selector-name">系统默认模型</span>
+          <t-tooltip v-else :content="modelTriggerTooltip" :disabled="!modelTriggerTooltip">
             <div class="model-display" :class="{ 'agent-controlled': isModelLockedByAgent }">
               <div ref="modelButtonRef" class="model-selector-trigger" @click.stop="toggleModelSelector">
                 <span class="model-selector-name">

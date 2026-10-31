@@ -103,6 +103,7 @@ function installFetch(
   capabilities: typeof capabilitiesBody & {
     request_usage_context?: boolean;
     page_settings?: Partial<PublicPageSettings>;
+    workbench_enabled?: boolean;
   } = capabilitiesBody,
 ) {
   return vi
@@ -151,6 +152,51 @@ afterEach(() => {
 });
 
 describe("湾事通公共应用", () => {
+  it("工作助手入口默认关闭，服务端启用后普通用户可进入公共工作区", async () => {
+    const fetch = installFetch(new Response(), emptyRecommendations, {
+      ...capabilitiesBody,
+      workbench_enabled: true,
+    });
+    const fallback = fetch.getMockImplementation()!;
+    fetch.mockImplementation((input, init) => {
+      if (pathOf(input) === "/api/public/workbench/bootstrap") {
+        expect(init?.body).toBe(JSON.stringify({ search_scopes: ["public"] }));
+        return Promise.resolve(
+          Response.json({
+            workspace_id: "11111111-1111-4111-8111-111111111111",
+            search_scopes: ["public"],
+            scope_label: "公共知识库",
+          }),
+        );
+      }
+      return fallback(input, init);
+    });
+    const user = userEvent.setup();
+    await openHome();
+    await user.click(screen.getByRole("button", { name: "工作助手" }));
+    expect(
+      await screen.findByTitle("湾小度工作助手 · 公共知识库"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "用户与角色" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "管理后台" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("人力内部资料")).not.toBeInTheDocument();
+  });
+
+  it("服务端未启用工作助手时不显示入口，也不调用bootstrap", async () => {
+    const fetch = installFetch(new Response());
+    await openHome();
+    expect(
+      screen.queryByRole("button", { name: "工作助手" }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetch.mock.calls.some(([input]) => pathOf(input).includes("workbench")),
+    ).toBe(false);
+  });
+
   it("从资料页点选侧栏历史恢复原个人范围，新对话回到公共且不增加管理权限", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const path = pathOf(input);

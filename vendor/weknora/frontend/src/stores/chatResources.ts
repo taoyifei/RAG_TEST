@@ -2,7 +2,8 @@ import { subscribeAssistantDataChange } from '@/utils/assistantDataChange'
 import { defineStore } from 'pinia'
 import { ref, computed, watch, onScopeDispose } from 'vue'
 import { listKnowledgeBases, getKnowledgeBaseById } from '@/api/knowledge-base'
-import { listAgents, type CustomAgent } from '@/api/agent'
+import { listAgents, getAgentById, BUILTIN_WEKNORA_ASSISTANT_ID, type CustomAgent } from '@/api/agent'
+import { WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway'
 import { listModels, type ModelConfig } from '@/api/model'
 import { listWebSearchProviders, type WebSearchProviderEntity } from '@/api/web-search-provider'
 import { isNamedSandboxBackend, listSandboxConfigs, type SandboxConfigRecord } from '@/api/system'
@@ -59,6 +60,10 @@ export const useChatResourcesStore = defineStore('chatResources', () => {
     async () => {
       const locale = getCurrentLanguage()
       agentsInflightLocale = locale
+      if (WANSHITONG_WORKBENCH) {
+        const res = await getAgentById(BUILTIN_WEKNORA_ASSISTANT_ID)
+        return { data: res.data ? [res.data] : [], disabled: [] as string[], locale }
+      }
       const res = (await listAgents()) as { data?: CustomAgent[]; disabled_own_agent_ids?: string[] }
       return { data: res.data || [], disabled: res.disabled_own_agent_ids || [], locale }
     },
@@ -220,7 +225,7 @@ export const useChatResourcesStore = defineStore('chatResources', () => {
       shouldForceLocalizedRefetch(agentsResource.hasInFlightRequest(), agentsInflightLocale, locale)
     await Promise.all([
       agentsResource.ensure(mustForce),
-      swallow(orgStore.fetchSharedAgents({ force })),
+      ...(WANSHITONG_WORKBENCH ? [] : [swallow(orgStore.fetchSharedAgents({ force }))]),
     ])
   }
 
@@ -240,6 +245,7 @@ export const useChatResourcesStore = defineStore('chatResources', () => {
   }
 
   async function ensureWebSearchProviders(force = false): Promise<void> {
+    if (WANSHITONG_WORKBENCH) return
     return webSearchProvidersResource.ensure(force)
   }
 
@@ -248,6 +254,7 @@ export const useChatResourcesStore = defineStore('chatResources', () => {
    * 不进 prefetchChatInput：只有编辑智能体时才需要，对话输入栏用不到。
    */
   async function ensureSandboxConfigs(force = false): Promise<void> {
+    if (WANSHITONG_WORKBENCH) return
     return sandboxConfigsResource.ensure(force)
   }
 
@@ -259,7 +266,7 @@ export const useChatResourcesStore = defineStore('chatResources', () => {
       ensureAgents(force),
       ensureModels(force),
       ensureWebSearchProviders(force),
-      orgStore.fetchOrganizations({ force }),
+      ...(WANSHITONG_WORKBENCH ? [] : [orgStore.fetchOrganizations({ force })]),
     ])
   }
 

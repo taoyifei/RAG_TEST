@@ -6,6 +6,7 @@ import { compileScript, compileTemplate, parse } from '@vue/compiler-sfc'
 import * as vue from 'vue'
 import { change, fixture, flush } from '../../test-utils/vueFixture.ts'
 import * as schedule from '../../utils/automationSchedule.ts'
+import { workbenchAutomationInput } from '../../utils/workbenchPolicy.ts'
 
 const require = createRequire(import.meta.url)
 const useInputNumber = require('tdesign-vue-next/cjs/input-number/hooks/useInputNumber.js').default
@@ -19,7 +20,7 @@ const automation = {
   carry_last_result: false, misfire_policy: 'skip', overlap_policy: 'skip', notify_on_success: false,
 }
 
-function setup(t: TestContext, file: string, api: Record<string, unknown>, props: Record<string, unknown>, translate = (key: string, _params?: unknown) => key) {
+function setup(t: TestContext, file: string, api: Record<string, unknown>, props: Record<string, unknown>, translate = (key: string, _params?: unknown) => key, workbench = false) {
   const f = fixture(t)
   const url = new URL(file, import.meta.url)
   const page = f.component(url, {
@@ -29,6 +30,8 @@ function setup(t: TestContext, file: string, api: Record<string, unknown>, props
     '@/api/automation': api,
     '@/api/assistant': { ASSISTANT_ACCESS_LEVELS: ['read_only', 'confirm', 'auto_write'] },
     '@/stores/ui': { useUIStore: () => ({ openSettings() {} }) },
+    '@/config/wanshitongGateway': { WANSHITONG_WORKBENCH: workbench },
+    '@/utils/workbenchPolicy': { workbenchAutomationInput },
     '@/utils/automationSchedule': schedule,
     '@/composables/useModalShell': { useModalShell: () => ({ markClean() {}, requestClose() {} }) },
   }, props)
@@ -54,6 +57,49 @@ function nodes(node: any): any[] {
     : children && typeof children === 'object'
       ? Object.values(children).flatMap(slot => typeof slot === 'function' ? nodes(slot()) : []) : [])]
 }
+
+test('工作助手直接打开手工任务表单，不打开AI代建对话', async t => {
+  const list = setup(t, './AutomationList.vue', {
+    listAutomations: async () => ({ data: [] }),
+  }, {}, key => key, true)
+  await flush()
+  list.vm.startCreate()
+  assert.equal(list.vm.editorVisible, true)
+  assert.equal(list.vm.assistantCreateVisible, false)
+})
+
+test('工作助手编辑已有任务也强制保留只读边界', async t => {
+  let saved: any
+  const editor = setup(t, './AutomationEditor.vue', {
+    updateAutomation: async (_id: string, input: unknown) => { saved = input; return { data: automation } },
+    validateAutomationTrigger: async () => ({ data: { next_runs: [] } }),
+  }, { visible: false, automation: { ...automation, access_level: 'auto_write', session_mode: 'persistent', carry_last_result: true } }, key => key, true)
+  editor.vm.$.props.visible = true
+  await vue.nextTick()
+  assert.equal(editor.vm.form.access_level, 'read_only')
+  assert.equal(editor.vm.form.session_mode, 'per_run')
+  assert.equal(editor.vm.form.carry_last_result, false)
+  // 即使内存中的旧表单被改动，真正提交的接口载荷仍收敛到工作助手契约。
+  Object.assign(editor.vm.form, { access_level: 'auto_write', session_mode: 'persistent', carry_last_result: true })
+  await editor.vm.save()
+  assert.equal(saved.access_level, 'read_only')
+  assert.equal(saved.session_mode, 'per_run')
+  assert.equal(saved.carry_last_result, false)
+  assert.equal(saved.model_id, '')
+})
+
+test('工作区详情读取运行结果但不请求或显示永久授权管理', async t => {
+  let grantReads = 0
+  const { vm, render } = setup(t, './AutomationDetail.vue', {
+    listAutomationRuns: async () => ({ data: [], total: 0 }),
+    listAutomationGrants: async () => { grantReads++; return { data: [] } },
+    listAutomationGrantCandidates: async () => { grantReads++; return { data: [] } },
+  }, { visible: true, automation }, key => key, true)
+  await flush()
+  await vm.loadGrants()
+  assert.equal(grantReads, 0)
+  assert.equal(nodes(render()).some(node => String(node.props?.class).includes('automation-detail__grants-trigger')), false)
+})
 
 test('run analysis targets the chosen run and compares only earlier successful runs', async t => {
   const { vm } = setup(t, './AutomationDetail.vue', {}, { visible: false, automation },

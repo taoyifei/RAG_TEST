@@ -4,7 +4,7 @@
       <div class="automation-page__title-row" style="--wails-draggable: drag">
         <h2 style="--wails-draggable: drag">
           <ResourceIcon type="automation" :size="24" />
-          {{ t('automation.title') }}
+          {{ WANSHITONG_WORKBENCH ? '自动化任务' : t('automation.title') }}
         </h2>
         <div class="automation-page__tools" style="--wails-draggable: no-drag">
           <t-input v-if="automations.length > 0" v-model="query" class="automation-page__search"
@@ -17,7 +17,7 @@
           </t-button>
         </div>
       </div>
-      <p class="automation-page__subtitle" style="--wails-draggable: drag">{{ t('automation.description') }}</p>
+      <p class="automation-page__subtitle" style="--wails-draggable: drag">{{ WANSHITONG_WORKBENCH ? '按计划整理、对比当前资料范围，结果保存在任务运行记录中。任务只能读取资料。' : t('automation.description') }}</p>
     </header>
 
     <div v-if="loading" class="loading-container">
@@ -86,12 +86,12 @@
         <button type="button" class="automation-card automation-card--add" @click="startCreate">
           <span class="automation-card--add__icon" aria-hidden="true"><t-icon name="add" /></span>
           <span class="automation-card--add__label">{{ t('automation.add') }}</span>
-          <span class="automation-card--add__hint">{{ t('automation.addHint') }}</span>
+          <span class="automation-card--add__hint">{{ WANSHITONG_WORKBENCH ? '手工设置任务说明和时间，每次独立运行' : t('automation.addHint') }}</span>
         </button>
       </div>
     </section>
 
-    <AssistantCreateDialog v-model:visible="assistantCreateVisible" kind="automation" @manual="openEditor(null)" />
+    <AssistantCreateDialog v-if="!WANSHITONG_WORKBENCH" v-model:visible="assistantCreateVisible" kind="automation" @manual="openEditor(null)" />
     <AutomationEditor v-model:visible="editorVisible" :automation="editing" @saved="onSaved" />
     <AutomationDetail v-model:visible="detailVisible" :automation="detail"
       :focus-run-id="focusRunId" @changed="onSaved" @edit="openEditor" />
@@ -120,6 +120,7 @@ import AutomationStatusTag from './AutomationStatusTag.vue'
 import ChatActionIcon from '@/components/ChatActionIcon.vue'
 import ResourceIcon from '@/components/icons/ResourceIcon.vue'
 import AssistantCreateDialog from '@/components/assistant/AssistantCreateDialog.vue'
+import { WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -132,6 +133,10 @@ const busy = ref(new Set<string>())
 const editorVisible = ref(false)
 const assistantCreateVisible = ref(false)
 function startCreate() {
+  if (WANSHITONG_WORKBENCH) {
+    openEditor(null)
+    return
+  }
   assistantCreateVisible.value = true
 }
 const editing = ref<Automation | null>(null)

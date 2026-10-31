@@ -1,6 +1,6 @@
 import { post, get, put } from '@/utils/request'
 import i18n from '@/i18n'
-import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
+import { WANSHITONG_GATEWAY_AUTH, WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway'
 
 const t = (key: string) => i18n.global.t(key)
 
@@ -354,7 +354,7 @@ export interface AuthCapabilities {
 
 export async function getCurrentUser(): Promise<{ success: boolean; data?: { user: UserInfo; tenant?: TenantInfo | null; memberships?: MembershipInfo[]; tenant_required?: boolean; capabilities?: AuthCapabilities; preference_defaults?: { browser_search_instructions: string } }; message?: string }> {
   try {
-    const response = await get(WANSHITONG_GATEWAY_AUTH ? '/bootstrap' : '/api/v1/auth/me')
+    const response = await get(WANSHITONG_GATEWAY_AUTH && !WANSHITONG_WORKBENCH ? '/bootstrap' : '/api/v1/auth/me')
     return response as unknown as { success: boolean; data?: { user: UserInfo; tenant?: TenantInfo | null; memberships?: MembershipInfo[]; tenant_required?: boolean; capabilities?: AuthCapabilities; preference_defaults?: { browser_search_instructions: string } }; message?: string }
   } catch (error: any) {
     return {

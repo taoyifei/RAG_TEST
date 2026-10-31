@@ -120,7 +120,7 @@ export default defineConfig({
     },
     rollupOptions: {
       input: WANSHITONG_GATEWAY_AUTH
-        ? { main: resolve(__dirname, 'index.html') }
+        ? { main: resolve(__dirname, 'index.html'), workbench: resolve(__dirname, 'workbench.html') }
         : { main: resolve(__dirname, 'index.html'), embed: resolve(__dirname, 'embed.html') },
       output: {
         manualChunks(id) {

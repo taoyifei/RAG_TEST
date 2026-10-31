@@ -3,8 +3,33 @@ export const WANSHITONG_GATEWAY_AUTH = import.meta.env?.VITE_WANSHITONG_GATEWAY_
 
 export const WANSHITONG_ADMIN_BASE = '/kb/admin/'
 export const WANSHITONG_ADMIN_LOGIN = '/kb/admin/login'
-export const WANSHITONG_ENGINE_API = '/kb/api/engine-admin'
+/** 独立工作区只从当前同源地址取得标识，不复用管理端的服务身份。 */
+export function workbenchIdFromPath(pathname: string): string {
+  return /^\/kb\/workbench\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i.exec(pathname)?.[1] || ''
+}
+const locationPath = typeof window === 'undefined' ? '' : window.location.pathname
+export const WANSHITONG_WORKBENCH = WANSHITONG_GATEWAY_AUTH && locationPath.startsWith('/kb/workbench/')
+export const WANSHITONG_WORKBENCH_ID = workbenchIdFromPath(locationPath)
+export const WANSHITONG_ENGINE_API = WANSHITONG_WORKBENCH
+  ? `/kb/api/workbench/${WANSHITONG_WORKBENCH_ID || 'invalid'}/native`
+  : '/kb/api/engine-admin'
+export const WORKBENCH_SESSION_EXPIRED = 'wanshitong:workbench-session-expired'
 let adminCsrfToken = ''
+let publicCsrfToken = ''
+
+/** 员工 Cookie 恢复 CSRF；不缓存 JWT，也不使用管理后台的 CSRF。 */
+export async function resumeWanshitongWorkbenchSession(): Promise<void> {
+  if (!WANSHITONG_WORKBENCH || !WANSHITONG_WORKBENCH_ID) throw new Error('工作区地址无效，请从湾小度重新进入。')
+  publicCsrfToken = ''
+  const response = await fetch('/kb/api/public/session', {
+    method: 'POST', credentials: 'include', cache: 'no-store',
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) throw new Error(response.status === 401 ? '登录已过期，请返回湾小度重新登录。' : '暂时无法连接工作区，请重试。')
+  const payload = await response.json() as { csrf_token?: string }
+  if (!payload.csrf_token) throw new Error('会话响应不完整，请重试。')
+  publicCsrfToken = payload.csrf_token
+}
 
 /** 只允许登录后返回本管理站已经注册的页面。 */
 export function safeWanshitongReturnTo(value: unknown): string {
@@ -69,7 +94,8 @@ export async function resumeWanshitongAdminSession(): Promise<boolean> {
 
 export function gatewayCsrfHeaders(method: string): Record<string, string> {
   if (!WANSHITONG_GATEWAY_AUTH || /^(GET|HEAD|OPTIONS)$/i.test(method)) return {}
-  return adminCsrfToken ? { 'X-CSRF-Token': adminCsrfToken } : {}
+  const token = WANSHITONG_WORKBENCH ? publicCsrfToken : adminCsrfToken
+  return token ? { 'X-CSRF-Token': token } : {}
 }
 
 /** 原生 API 路径在白标构建中统一由服务端代理，不直连 WeKnora。 */
@@ -93,6 +119,11 @@ export function engineResourceUrl(path: string): string {
 
 export function redirectToWanshitongAdminLogin(): void {
   if (typeof window !== 'undefined' && WANSHITONG_GATEWAY_AUTH) {
+    if (WANSHITONG_WORKBENCH) {
+      publicCsrfToken = ''
+      window.dispatchEvent(new Event(WORKBENCH_SESSION_EXPIRED))
+      return
+    }
     adminCsrfToken = ''
     if (window.location.pathname === WANSHITONG_ADMIN_LOGIN) return
     const localPath = window.location.pathname.startsWith(WANSHITONG_ADMIN_BASE)

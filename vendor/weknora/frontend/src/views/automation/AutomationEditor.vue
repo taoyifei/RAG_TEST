@@ -19,7 +19,7 @@
               <t-input v-model="form.name" :maxlength="100" :placeholder="t('automation.editor.namePlaceholder')" />
             </div>
           </div>
-          <div class="setting-row">
+          <div v-if="!WANSHITONG_WORKBENCH" class="setting-row">
             <div class="setting-info">
               <label>{{ t('automation.editor.model') }}</label>
               <p class="desc">{{ t('automation.editor.modelHelp') }}</p>
@@ -29,6 +29,7 @@
                 :placeholder="t('automation.editor.modelDefault')" @add-model="uiStore.openSettings('models', 'llm')" />
             </div>
           </div>
+          <p v-if="WANSHITONG_WORKBENCH" class="automation-editor__hint">使用系统默认模型，仅整理当前工作区中的资料。每次运行独立，不继承上次结果。</p>
           <div class="setting-row setting-row-vertical">
             <div class="setting-info">
               <label>{{ t('automation.fields.instruction') }}<span class="required">*</span></label>
@@ -173,7 +174,8 @@
               <p class="desc">{{ t(`automation.editor.access.${form.access_level}`) }}</p>
             </div>
             <div class="setting-control">
-              <t-select v-model="form.access_level">
+              <span v-if="WANSHITONG_WORKBENCH">只读资料</span>
+              <t-select v-else v-model="form.access_level">
                 <t-option v-for="level in ASSISTANT_ACCESS_LEVELS" :key="level" :value="level"
                   :label="t(`assistant.access.levels.${level}.label`)" />
               </t-select>
@@ -185,13 +187,14 @@
               <p class="desc">{{ t(`automation.editor.sessionModeDesc.${form.session_mode}`) }}</p>
             </div>
             <div class="setting-control">
-              <t-select v-model="form.session_mode">
+              <span v-if="WANSHITONG_WORKBENCH">每次独立运行</span>
+              <t-select v-else v-model="form.session_mode">
                 <t-option value="per_run" :label="t('automation.sessionMode.per_run')" />
                 <t-option value="persistent" :label="t('automation.sessionMode.persistent')" />
               </t-select>
             </div>
           </div>
-          <div v-if="form.session_mode === 'per_run'" class="setting-row">
+          <div v-if="!WANSHITONG_WORKBENCH && form.session_mode === 'per_run'" class="setting-row">
             <div class="setting-info">
               <label>{{ t('automation.fields.carryLastResult') }}</label>
               <p class="desc">{{ t('automation.editor.carryDesc') }}</p>
@@ -242,11 +245,11 @@
       <!-- 审批与通知 -->
       <div v-show="section === 'notify'" class="section">
         <div class="section-header">
-          <h2>{{ t('automation.editor.sections.notify.title') }}</h2>
-          <p class="section-description">{{ t('automation.editor.sections.notify.desc') }}</p>
+          <h2>{{ WANSHITONG_WORKBENCH ? '结果通知' : t('automation.editor.sections.notify.title') }}</h2>
+          <p class="section-description">{{ WANSHITONG_WORKBENCH ? '可在工作区通知和任务运行记录中查看结果。' : t('automation.editor.sections.notify.desc') }}</p>
         </div>
         <div class="settings-group">
-          <div class="setting-row">
+          <div v-if="!WANSHITONG_WORKBENCH" class="setting-row">
             <div class="setting-info">
               <label>{{ t('automation.fields.approvalTimeout') }}</label>
               <p class="desc">{{ t('automation.editor.approvalTimeoutHelp') }}</p>
@@ -314,6 +317,8 @@ import {
 } from '@/utils/automationSchedule'
 import ModelSelector from '@/components/ModelSelector.vue'
 import { useUIStore } from '@/stores/ui'
+import { WANSHITONG_WORKBENCH } from '@/config/wanshitongGateway'
+import { workbenchAutomationInput } from '@/utils/workbenchPolicy'
 
 const props = defineProps<{
   visible: boolean
@@ -346,7 +351,7 @@ const navGroups = computed(() => [
     label: t('automation.editor.navGroups.run'),
     items: [
       { key: 'execution', label: t('automation.editor.sections.execution.title'), icon: 'secured' },
-      { key: 'notify', label: t('automation.editor.sections.notify.title'), icon: 'notification' },
+      { key: 'notify', label: WANSHITONG_WORKBENCH ? '结果通知' : t('automation.editor.sections.notify.title'), icon: 'notification' },
     ],
   },
 ])
@@ -359,7 +364,7 @@ const blank = (): Required<Omit<AutomationInput, 'trigger' | 'limits' | 'descrip
   carry_last_result: false,
   misfire_policy: 'skip',
   overlap_policy: 'skip',
-  access_level: 'confirm',
+  access_level: WANSHITONG_WORKBENCH ? 'read_only' : 'confirm',
   approval_timeout_minutes: 1440,
   notify_on_success: false,
 })
@@ -426,6 +431,7 @@ watch(() => props.visible, (open) => {
     timezone.value = a.trigger.timezone || 'UTC'
     maxMinutes.value = a.limits?.max_duration_minutes || 30
   }
+  if (WANSHITONG_WORKBENCH) Object.assign(form, workbenchAutomationInput(form))
   previewRuns.value = []
   previewError.value = ''
   modalShell.markClean()
@@ -479,10 +485,11 @@ async function save() {
     trigger: trigger.value!,
     limits: { max_duration_minutes: maxMinutes.value },
   }
+  const payload = WANSHITONG_WORKBENCH ? workbenchAutomationInput(input) : input
   try {
     const res = props.automation
-      ? await updateAutomation(props.automation.id, input)
-      : await createAutomation(input)
+      ? await updateAutomation(props.automation.id, payload)
+      : await createAutomation(payload)
     MessagePlugin.success(props.automation ? t('common.saveSuccess') : t('common.createSuccess'))
     modalShell.markClean()
     emit('saved', res.data)

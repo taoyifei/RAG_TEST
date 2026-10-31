@@ -48,6 +48,13 @@ export interface PublicCapabilities {
   page_settings?: Partial<PublicPageSettings>;
   search_scopes?: PublicSearchScopeOption[];
   default_search_scopes?: PublicSearchScope[];
+  workbench_enabled?: boolean;
+}
+
+export interface PublicWorkbench {
+  workspace_id: string;
+  search_scopes: PublicSearchScope[];
+  scope_label: string;
 }
 
 export interface PublicPageSettings {
@@ -182,6 +189,38 @@ async function readError(response: Response): Promise<PublicApiError> {
 async function requireJson<T>(response: Response): Promise<T> {
   if (!response.ok) throw await readError(response);
   return (await response.json()) as T;
+}
+
+/** 工作助手只接受当前员工有权选择的范围，最终权限由服务端校验。 */
+export async function bootstrapPublicWorkbench(
+  searchScopes: readonly PublicSearchScope[],
+  csrfToken: string,
+  signal?: AbortSignal,
+): Promise<PublicWorkbench> {
+  const response = await fetch(withAppBase("/api/public/workbench/bootstrap"), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify({ search_scopes: searchScopes }),
+    signal,
+  });
+  const workspace = await requireJson<PublicWorkbench>(response);
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      workspace.workspace_id,
+    ) ||
+    !Array.isArray(workspace.search_scopes) ||
+    workspace.search_scopes.length !== searchScopes.length ||
+    new Set(workspace.search_scopes).size !== searchScopes.length ||
+    workspace.search_scopes.some((scope) => !searchScopes.includes(scope)) ||
+    typeof workspace.scope_label !== "string"
+  ) {
+    throw new Error("工作区响应不完整，请重试。");
+  }
+  return workspace;
 }
 
 export async function createPublicSession(

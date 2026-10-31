@@ -17,7 +17,9 @@ from wanshitong_gateway.compat.wanshitong.sso_session import (
     SsoIdentity,
     SsoSessionService,
 )
+from wanshitong_gateway.roles import Role, UserProfile
 from wanshitong_gateway.settings import GatewayAuthSettings
+from wanshitong_gateway.weknora.client import NativeHttpError
 
 _ORIGIN = "http://candidate.test:8289"
 _TICKET = "a" * 32
@@ -309,11 +311,14 @@ def test_local_role_change_applies_to_existing_sso_session(
             "Origin": _ORIGIN,
             "X-CSRF-Token": owner_session["csrf_token"],
         }
-        assert owner_browser.patch(
-            "/kb/api/ops/users/1001",
-            json={"role": "admin"},
-            headers=owner_headers,
-        ).status_code == 200
+        assert (
+            owner_browser.patch(
+                "/kb/api/ops/users/1001",
+                json={"role": "admin"},
+                headers=owner_headers,
+            ).status_code
+            == 200
+        )
         assert browser.get("/kb/api/v1/console/session").status_code == 200
         listing = browser.get("/kb/api/ops/users")
         assert listing.status_code == 200
@@ -323,12 +328,18 @@ def test_local_role_change_applies_to_existing_sso_session(
         assert listed["1001"]["editable_roles"] == []
 
         headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
-        assert browser.patch(
-            "/kb/api/ops/users/1001", json={"role": "hr"}, headers=headers
-        ).status_code == 403
-        assert browser.patch(
-            "/kb/api/ops/users/325", json={"role": "user"}, headers=headers
-        ).status_code == 403
+        assert (
+            browser.patch(
+                "/kb/api/ops/users/1001", json={"role": "hr"}, headers=headers
+            ).status_code
+            == 403
+        )
+        assert (
+            browser.patch(
+                "/kb/api/ops/users/325", json={"role": "user"}, headers=headers
+            ).status_code
+            == 403
+        )
         changed = owner_browser.patch(
             "/kb/api/ops/users/1001", json={"role": "hr"}, headers=owner_headers
         )
@@ -346,3 +357,87 @@ def test_local_role_change_applies_to_existing_sso_session(
     )
     assert resumed.status_code == 200
     assert resumed.json()["user"]["role"] == "hr"
+
+
+@pytest.mark.parametrize("sync_fails", [False, True])
+def test_role_change_revokes_background_before_saving(
+    gateway: tuple[GatewayAuth, TestClient],
+    monkeypatch: pytest.MonkeyPatch,
+    sync_fails: bool,
+) -> None:
+    auth, existing_browser = gateway
+    owner = _login_public(
+        existing_browser, monkeypatch, username="taoyifei", user_id="325"
+    )
+    assert auth.users is not None
+    auth.users.record_identity(
+        SsoIdentity(
+            user_id="138",
+            username="luoyang",
+            nick_name="普通用户",
+            dept_id="208",
+            roles=(),
+            permissions=(),
+        )
+    )
+    auth.users.set_role("138", "hr", actor_user_id="325")
+    observed: list[tuple[str, str, str]] = []
+
+    async def revoke(target: UserProfile, new_role: Role) -> None:
+        assert auth.users is not None
+        current = auth.users.get(target.user_id)
+        assert current is not None
+        observed.append((target.user_id, current.role, new_role))
+        if sync_fails:
+            raise NativeHttpError(502, "synthetic unavailable")
+
+    app = FastAPI(root_path="/kb")
+    register_auth_routes(app, auth, before_role_change=revoke)
+    with TestClient(app, base_url=_ORIGIN) as browser:
+        browser.cookies.update(existing_browser.cookies)
+        result = browser.patch(
+            "/kb/api/ops/users/138",
+            json={"role": "user"},
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": owner["csrf_token"]},
+        )
+    assert observed == [("138", "hr", "user")]
+    assert result.status_code == (503 if sync_fails else 200)
+    current = auth.users.get("138")
+    assert current is not None
+    assert current.role == ("hr" if sync_fails else "user")
+
+
+def test_denied_role_change_cannot_stop_other_users_workbench(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, existing_browser = gateway
+    assert auth.users is not None
+    auth.users.record_identity(
+        SsoIdentity(
+            user_id="325",
+            username="taoyifei",
+            nick_name="超管",
+            dept_id="208",
+            roles=(),
+            permissions=(),
+        )
+    )
+    actor = _login_public(existing_browser, monkeypatch, user_id="138")
+    auth.users.set_role("138", "admin", actor_user_id="325")
+    called: list[str] = []
+
+    async def revoke(target: UserProfile, _new_role: Role) -> None:
+        called.append(target.user_id)
+
+    app = FastAPI(root_path="/kb")
+    register_auth_routes(app, auth, before_role_change=revoke)
+    with TestClient(app, base_url=_ORIGIN) as browser:
+        browser.cookies.update(existing_browser.cookies)
+        result = browser.patch(
+            "/kb/api/ops/users/325",
+            json={"role": "user"},
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": actor["csrf_token"]},
+        )
+    assert result.status_code == 403
+    assert called == []
+    assert auth.users.get("325").is_super_admin

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -53,6 +55,7 @@ from wanshitong_gateway.roles import (
     role_edit_note,
 )
 from wanshitong_gateway.settings import GatewayAuthSettings
+from wanshitong_gateway.weknora.client import NativeHttpError
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _NO_STORE = "no-store"
@@ -261,7 +264,13 @@ class GatewayAuth:
         return AdminPrincipal(session_id=session_id)
 
 
-def register_auth_routes(app: FastAPI, auth: GatewayAuth) -> None:
+def register_auth_routes(
+    app: FastAPI,
+    auth: GatewayAuth,
+    *,
+    before_role_change: Callable[[UserProfile, Role], Awaitable[None]]
+    | None = None,
+) -> None:
     """注册与现有湾事通页面兼容的公共和管理员会话路由。"""
     if auth.settings.sso.enabled:
         if not isinstance(auth.public_sessions, SsoSessionService):
@@ -329,7 +338,7 @@ def register_auth_routes(app: FastAPI, auth: GatewayAuth) -> None:
         )
 
     _register_console_routes(app, auth)
-    _register_user_routes(app, auth)
+    _register_user_routes(app, auth, before_role_change=before_role_change)
 
 
 def _register_console_routes(app: FastAPI, auth: GatewayAuth) -> None:
@@ -409,8 +418,14 @@ def _register_console_routes(app: FastAPI, auth: GatewayAuth) -> None:
         return response
 
 
-def _register_user_routes(app: FastAPI, auth: GatewayAuth) -> None:
-    """注册仅管理员可访问的用户角色管理接口。"""
+def _register_user_routes(
+    app: FastAPI,
+    auth: GatewayAuth,
+    *,
+    before_role_change: Callable[[UserProfile, Role], Awaitable[None]] | None,
+) -> None:
+    """注册角色管理；先撤后台执行权限，再提交新的业务角色。"""
+    role_change_lock = asyncio.Lock()
 
     @app.get("/api/ops/users")
     def list_users(request: Request, response: Response) -> dict[str, object]:
@@ -428,7 +443,7 @@ def _register_user_routes(app: FastAPI, auth: GatewayAuth) -> None:
         return {"items": items}
 
     @app.patch("/api/ops/users/{user_id}")
-    def set_user_role(
+    async def set_user_role(
         user_id: str,
         body: _RoleUpdateRequest,
         request: Request,
@@ -439,9 +454,26 @@ def _register_user_routes(app: FastAPI, auth: GatewayAuth) -> None:
         if auth.users is None:
             raise AssertionError("用户资料库未初始化。")
         try:
-            profile = auth.users.set_role(
-                user_id, body.role, actor_user_id=actor.user_id
-            )
+            async with role_change_lock:
+                target = auth.users.get(user_id)
+                if target is None:
+                    raise KeyError(user_id)
+                # 校验通过后才撤工作区权限，防止未授权请求干扰其他员工任务。
+                if body.role not in editable_roles(actor, target):
+                    raise RoleChangeDeniedError(
+                        role_edit_note(actor, target)
+                        or "仅超级管理员可以授予管理员角色。"
+                    )
+                if before_role_change is not None:
+                    await before_role_change(target, body.role)
+                profile = auth.users.set_role(
+                    user_id, body.role, actor_user_id=actor.user_id
+                )
+        except NativeHttpError as error:
+            raise HTTPException(
+                status_code=503,
+                detail="后台任务权限同步暂不可用，角色尚未保存，请重试。",
+            ) from error
         except RoleChangeDeniedError as error:
             raise HTTPException(status_code=403, detail=str(error)) from None
         except KeyError:

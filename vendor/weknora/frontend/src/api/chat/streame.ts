@@ -3,7 +3,7 @@ import { ref, onUnmounted } from 'vue';
 import { generateRandomString } from '@/utils/index';
 import i18n from '@/i18n';
 import { getApiBaseUrl } from '@/utils/api-base';
-import { WANSHITONG_GATEWAY_AUTH, gatewayCsrfHeaders, redirectToWanshitongAdminLogin } from '@/config/wanshitongGateway';
+import { WANSHITONG_GATEWAY_AUTH, WANSHITONG_WORKBENCH, gatewayCsrfHeaders, redirectToWanshitongAdminLogin } from '@/config/wanshitongGateway';
 import type { AssistantAccessLevel } from '@/api/assistant';
 export type { CollaborationStatus, CollaborationTaskStatus, CollaborationProgress,
   CollaborationStatusStreamEvent, ProgressStreamEvent, AgentStepRecord, ChatHistoryMessage } from './streamTypes';
@@ -100,7 +100,7 @@ export function useStream() {
     // home 空间上，导致 SSE 接口返回 404。直接附即可——后端
     // IsTenantAccessible 也允许 header 指向自家空间。
     const selectedTenantId = localStorage.getItem('weknora_selected_tenant_id');
-    const tenantIdHeader: string | null = selectedTenantId || null;
+    const tenantIdHeader: string | null = WANSHITONG_WORKBENCH ? null : selectedTenantId || null;
 
     // TTFB instrumentation: record the moment we kick off the request so
     // we can compare it with the first answer chunk we receive from the

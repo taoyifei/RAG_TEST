@@ -10,7 +10,7 @@ import {
   type AssistantConfig,
 } from '@/api/assistant'
 import { useAuthStore } from './auth'
-import { WANSHITONG_GATEWAY_AUTH } from '@/config/wanshitongGateway'
+import { WANSHITONG_GATEWAY_AUTH, WANSHITONG_WORKBENCH, WANSHITONG_WORKBENCH_ID } from '@/config/wanshitongGateway'
 
 /** Pages that tell the assistant where the user is. */
 export type AssistantPageId =
@@ -226,7 +226,8 @@ export const useAssistantStore = defineStore('assistant', () => {
   // or workspace never inherits them.
   const storageKey = (prefix: string): string => {
     const auth = useAuthStore()
-    return `${prefix}:${auth.user?.id || 'anon'}:${auth.effectiveTenantId ?? 'none'}`
+    const key = `${prefix}:${auth.user?.id || 'anon'}:${auth.effectiveTenantId ?? 'none'}`
+    return WANSHITONG_WORKBENCH ? `${key}:workbench:${WANSHITONG_WORKBENCH_ID}` : key
   }
   // The user's own level; the workspace ceiling caps what a run gets.
   const accessLevel = ref<AssistantAccessLevel>(DEFAULT_ASSISTANT_ACCESS_LEVEL)
@@ -234,6 +235,7 @@ export const useAssistantStore = defineStore('assistant', () => {
   // the same one the server applies to a workspace that never set it.
   const workspaceConfig = ref<AssistantConfig | null>(null)
   const accessCeiling = computed<AssistantAccessLevel>(() => {
+    if (WANSHITONG_WORKBENCH) return 'read_only'
     const level = workspaceConfig.value?.max_access_level
     return isAssistantAccessLevel(level) ? level : DEFAULT_ASSISTANT_ACCESS_LEVEL
   })
@@ -248,20 +250,20 @@ export const useAssistantStore = defineStore('assistant', () => {
   const restore = () => {
     clearActionSuggestions()
     // 网关使用自己的资料权限与服务端管理身份，不恢复原生助手或读取其配置。
-    if (WANSHITONG_GATEWAY_AUTH) return
+    if (WANSHITONG_GATEWAY_AUTH && !WANSHITONG_WORKBENCH) return
     try {
       sessionId.value = sessionStorage.getItem(storageKey(SESSION_KEY_PREFIX)) || ''
       visible.value = sessionStorage.getItem(storageKey(VISIBLE_KEY_PREFIX)) === '1'
       modelId.value = localStorage.getItem(storageKey(MODEL_KEY_PREFIX)) || ''
       const level = localStorage.getItem(storageKey(ACCESS_KEY_PREFIX))
       accessLevel.value = isAssistantAccessLevel(level) ? level : DEFAULT_ASSISTANT_ACCESS_LEVEL
-      pageAccess.value = localStorage.getItem(storageKey(PAGE_ACCESS_KEY_PREFIX)) !== '0'
+      pageAccess.value = !WANSHITONG_WORKBENCH && localStorage.getItem(storageKey(PAGE_ACCESS_KEY_PREFIX)) !== '0'
     } catch {
       sessionId.value = ''
       visible.value = false
       modelId.value = ''
       accessLevel.value = DEFAULT_ASSISTANT_ACCESS_LEVEL
-      pageAccess.value = true
+      pageAccess.value = !WANSHITONG_WORKBENCH
     }
     void loadWorkspaceConfig()
   }
@@ -285,9 +287,9 @@ export const useAssistantStore = defineStore('assistant', () => {
     workspaceConfig.value = { ...config }
   }
   const setAccessLevel = (level: AssistantAccessLevel) => {
-    accessLevel.value = level
+    accessLevel.value = WANSHITONG_WORKBENCH ? 'read_only' : level
     try {
-      localStorage.setItem(storageKey(ACCESS_KEY_PREFIX), level)
+      localStorage.setItem(storageKey(ACCESS_KEY_PREFIX), accessLevel.value)
     } catch {
       // See setSession.
     }
@@ -358,7 +360,7 @@ export const useAssistantStore = defineStore('assistant', () => {
   }, restore)
 
   const setVisible = (next: boolean) => {
-    if (WANSHITONG_GATEWAY_AUTH && next) return
+    if (WANSHITONG_GATEWAY_AUTH && !WANSHITONG_WORKBENCH && next) return
     visible.value = next
     try {
       if (next) sessionStorage.setItem(storageKey(VISIBLE_KEY_PREFIX), '1')
@@ -368,7 +370,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     }
   }
   const open = (request?: AssistantOpenRequest) => {
-    if (WANSHITONG_GATEWAY_AUTH) return
+    if (WANSHITONG_GATEWAY_AUTH && !WANSHITONG_WORKBENCH) return
     if (request?.query) {
       setSession('')
       pendingRequest.value = request
