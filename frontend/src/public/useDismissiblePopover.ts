@@ -4,6 +4,7 @@ export function useDismissiblePopover<T extends HTMLElement>(
   open: boolean,
   onDismiss: () => void,
   triggerRef: RefObject<HTMLElement | null>,
+  additionalInsideRefs?: readonly RefObject<HTMLElement | null>[],
 ) {
   const containerRef = useRef<T>(null);
 
@@ -13,7 +14,10 @@ export function useDismissiblePopover<T extends HTMLElement>(
     const dismissOutside = (event: Event) => {
       if (
         event.target instanceof Node &&
-        !containerRef.current?.contains(event.target)
+        !containerRef.current?.contains(event.target) &&
+        !additionalInsideRefs?.some((ref) =>
+          ref.current?.contains(event.target as Node),
+        )
       ) {
         onDismiss();
       }
@@ -34,7 +38,7 @@ export function useDismissiblePopover<T extends HTMLElement>(
       document.removeEventListener("focusin", dismissOutside, true);
       document.removeEventListener("keydown", dismissEscape, true);
     };
-  }, [open, onDismiss, triggerRef]);
+  }, [open, onDismiss, triggerRef, additionalInsideRefs]);
 
   return containerRef;
 }

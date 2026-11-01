@@ -1,5 +1,6 @@
 import { ArrowUp, ChevronDown, Library, Square } from "lucide-react";
 import {
+  useCallback,
   useId,
   useLayoutEffect,
   useRef,
@@ -9,7 +10,7 @@ import {
 
 import type { PublicSearchScope, PublicSearchScopeOption } from "./publicApi";
 import { toggleSearchScope } from "./searchScopes";
-import { useDismissiblePopover } from "./useDismissiblePopover";
+import { AnchoredPopover } from "./AnchoredPopover";
 
 export interface PublicSearchSelectionProps {
   searchScopes?: PublicSearchScope[];
@@ -48,11 +49,7 @@ export function PublicChatComposer({
   }, [question]);
   const scopeId = useId();
   const scopeTriggerRef = useRef<HTMLButtonElement>(null);
-  const scopeContainerRef = useDismissiblePopover<HTMLDivElement>(
-    scopeOpen,
-    () => setScopeOpen(false),
-    scopeTriggerRef,
-  );
+  const dismissScope = useCallback(() => setScopeOpen(false), []);
   const send = () => {
     if (!question.trim() || busy) return;
     setScopeOpen(false);
@@ -90,7 +87,7 @@ export function PublicChatComposer({
         value={question}
       />
       <div className="wst-composer-footer">
-        <div className="wst-search-scopes" ref={scopeContainerRef}>
+        <div className="wst-search-scopes">
           <button
             aria-controls={scopeId}
             aria-expanded={scopeOpen}
@@ -115,36 +112,42 @@ export function PublicChatComposer({
             </span>
             <ChevronDown aria-hidden="true" size={14} />
           </button>
-          {scopeOpen && (
-            <fieldset className="wst-search-scopes-options" id={scopeId}>
-              <legend className="sr-only">选择问答资料范围</legend>
-              {searchScopeOptions.map((option) => {
-                const checked = searchScopes.includes(option.id);
-                return (
-                  <label key={option.id}>
-                    <input
-                      checked={checked}
-                      disabled={busy || (checked && searchScopes.length === 1)}
-                      onChange={() => {
-                        const next = toggleSearchScope(
-                          searchScopes,
-                          option.id,
-                          searchScopeOptions,
-                        );
-                        if (next.length) onSearchScopesChange?.(next);
-                      }}
-                      type="checkbox"
-                    />
-                    {option.label}
-                  </label>
-                );
-              })}
-              <p>至少选择一项；切换范围会开启新对话。</p>
-              {searchScopeOptions.some((option) => option.id === "hr_public") && (
-                <p>公共知识库包含公开人力制度，也可单独选择制度缩小检索范围。</p>
-              )}
-            </fieldset>
-          )}
+          <AnchoredPopover
+            as="fieldset"
+            className="wst-search-scopes-options"
+            id={scopeId}
+            onDismiss={dismissScope}
+            open={scopeOpen}
+            preferredSide={compact ? "top" : "bottom"}
+            triggerRef={scopeTriggerRef}
+          >
+            <legend className="sr-only">选择问答资料范围</legend>
+            {searchScopeOptions.map((option) => {
+              const checked = searchScopes.includes(option.id);
+              return (
+                <label key={option.id}>
+                  <input
+                    checked={checked}
+                    disabled={busy || (checked && searchScopes.length === 1)}
+                    onChange={() => {
+                      const next = toggleSearchScope(
+                        searchScopes,
+                        option.id,
+                        searchScopeOptions,
+                      );
+                      if (next.length) onSearchScopesChange?.(next);
+                    }}
+                    type="checkbox"
+                  />
+                  {option.label}
+                </label>
+              );
+            })}
+              <p>切换范围会开启新对话。</p>
+            {searchScopeOptions.some((option) => option.id === "hr_public") && (
+                <p>公共知识库已包含公开人力制度。</p>
+            )}
+          </AnchoredPopover>
         </div>
         {busy ? (
           <button className="wst-stop-button" onClick={onStop} type="button">

@@ -214,12 +214,23 @@ describe("历史会话侧栏", () => {
     const user = userEvent.setup();
     const parameters = props();
     const first = render(<PublicConversationLayout {...parameters} />);
+    const sidebar = screen.getByRole("complementary", { name: "会话侧栏" });
+    const history = screen.getByRole("navigation", { name: "历史会话" });
+    history.scrollTop = 140;
     await user.type(
       screen.getByRole("textbox", { name: "向湾小度提问" }),
       "还没发送的问题",
     );
     await user.click(screen.getByRole("button", { name: "收起会话侧栏" }));
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(sidebar).toBeInTheDocument();
+    expect(sidebar).toHaveAttribute("aria-hidden", "true");
+    expect(sidebar).toHaveAttribute("inert");
+    await user.click(screen.getByRole("button", { name: "展开会话侧栏" }));
+    expect(screen.getByRole("complementary")).toBe(sidebar);
+    expect(screen.getByRole("navigation", { name: "历史会话" })).toBe(history);
+    expect(history.scrollTop).toBe(140);
+    await user.click(screen.getByRole("button", { name: "收起会话侧栏" }));
     expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toHaveValue(
       "还没发送的问题",
     );
@@ -235,6 +246,38 @@ describe("历史会话侧栏", () => {
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "展开会话侧栏" }));
     expect(screen.getByRole("navigation", { name: "历史会话" })).toBeVisible();
+  });
+
+  it("只显示一个侧栏开关，收起时关闭会话菜单且不把焦点留在隐藏内容", async () => {
+    const user = userEvent.setup();
+    render(
+      <div className="wst-root" data-theme="dark">
+        <PublicConversationLayout
+          {...props()}
+          onArchive={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      </div>,
+    );
+    expect(
+      screen.getAllByRole("button", { name: /收起会话侧栏/ }),
+    ).toHaveLength(1);
+    await user.click(
+      screen.getByRole("button", { name: `会话操作：${sessions[0].title}` }),
+    );
+    const menu = screen.getByRole("group", {
+      name: `操作：${sessions[0].title}`,
+    });
+    expect(menu.parentElement).toHaveClass("wst-root");
+    await user.click(screen.getByRole("button", { name: "收起会话侧栏" }));
+    expect(
+      screen.queryByRole("button", { name: "归档会话" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开会话侧栏" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "展开会话侧栏" }));
+    expect(
+      screen.queryByRole("button", { name: "归档会话" }),
+    ).not.toBeInTheDocument();
   });
 
   it("忙碌时不能换会话或新建，历史关闭时也不展示列表和搜索", () => {

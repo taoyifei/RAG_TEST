@@ -378,8 +378,16 @@ describe("湾事通公共应用", () => {
     await openHome();
 
     expect(
-      within(screen.getByRole("main")).getByText("湾小度"),
+      within(
+        screen.getByRole("complementary", { name: "会话侧栏" }),
+      ).getByText("湾小度"),
     ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("main")).getByRole("heading", { level: 1 }),
+    ).toHaveTextContent("你的内部知识助手");
+    expect(
+      within(screen.getByRole("main")).queryByText("湾小度"),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText("从已核验的内部资料中寻找答案，并把来源交代清楚。"),
     ).not.toBeInTheDocument();

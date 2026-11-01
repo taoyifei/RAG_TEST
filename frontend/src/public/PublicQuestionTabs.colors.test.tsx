@@ -35,7 +35,7 @@ describe.each([
     foreground: "rgb(32, 43, 39)",
     panel: "#fff",
   },
-  { theme: "dark", foreground: "rgb(242, 245, 244)", panel: "#222526" },
+  { theme: "dark", foreground: "rgb(242, 245, 244)", panel: "#303030" },
 ])("$theme 推荐标签", ({ theme, foreground, panel }) => {
   it("两个标签切换后都有深绿选中底色和清楚的文字", async () => {
     const user = userEvent.setup();
