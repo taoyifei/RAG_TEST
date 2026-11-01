@@ -248,10 +248,11 @@ class _Native:
                     "config": {"agent_mode": "smart-reasoning"},
                 },
             )
-            # 官方 Config 对空 sandbox_config_id 使用 omitempty。
+            # 官方 Config 对空可选标识使用 omitempty。
             visible = {**agent, "config": dict(agent["config"])}
-            if not visible["config"].get("sandbox_config_id"):
-                visible["config"].pop("sandbox_config_id", None)
+            for field in ("sandbox_config_id", "system_prompt_id"):
+                if not visible["config"].get(field):
+                    visible["config"].pop(field, None)
             return self.ok(visible)
         if path == "auth/me":
             return self.ok({"user": self.users[email]})

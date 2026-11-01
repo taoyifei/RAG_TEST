@@ -42,14 +42,20 @@ from wanshitong_gateway.workbench_store import (
 )
 
 _ASSISTANT_ID = "builtin-weknora-assistant"
+_WORKBENCH_SYSTEM_PROMPT = (
+    "你是湾小度资料助手。只依据当前工作区可见资料回答。"
+    "先搜索相关资料，再读取原文核对，回答标明来源；"
+    "资料不足时说明缺口，不编造制度和流程。"
+    "需要协作时只创建少量继承当前资料范围的子任务，"
+    "不指定其他智能体模板，等待结果后汇总。"
+    "保持只读，不修改资料和角色，不使用外网。用简洁中文回答。"
+)
 _SCOPE_LABELS = {
     "public": "公共知识库",
     "personal": "我的资料",
     "hr_internal": "人力内部资料",
 }
 _READ_TOOLS = [
-    "ask_user",
-    "todo_write",
     "search_knowledge",
     "read_document",
     "list_documents",
@@ -529,7 +535,12 @@ class WorkbenchService:
             "agent_mode": mode,
         }
         if not isinstance(verified, dict) or any(
-            verified.get(key, "" if key == "sandbox_config_id" else None)
+            verified.get(
+                key,
+                ""
+                if key in {"sandbox_config_id", "system_prompt_id"}
+                else None,
+            )
             != value
             for key, value in expected.items()
         ):
@@ -852,6 +863,10 @@ def _model(models: list[dict[str, Any]], kind: str) -> str:
 
 def _safe_agent_config(model_id: str, rerank_id: str) -> dict[str, Any]:
     return {
+        # 精简管理说明，为8K上下文保留输出空间；协作仍由原生运行时注入。
+        "system_prompt": _WORKBENCH_SYSTEM_PROMPT,
+        "system_prompt_id": "",
+        "max_completion_tokens": 1024,
         "model_id": model_id,
         "rerank_model_id": rerank_id,
         "access_level": "read_only",
