@@ -1,5 +1,5 @@
-# WeKnora v0.8.3 测试栈，复用现有内网模型，不部署新的 GPU 服务。
-# 端点来自 2026-09-25 现场盘点；API Key 不写入此文件。
+# WeKnora v0.9.0 测试栈声明式模型，复用已有GPU服务。
+# 普通问答经60模型池接入57/58四路24K模型；API Key不写入此文件。
 builtin_models:
   - id: wkab-qwen3-8b-awq
     type: KnowledgeQA
@@ -7,9 +7,9 @@ builtin_models:
     is_default: true
     name: Qwen/Qwen3-8B-AWQ
     parameters:
-      base_url: http://10.242.180.54:18000/v1
+      base_url: http://10.242.180.60:18098/v1
       provider: generic
-      context_window: 7936
+      context_window: 24576
       max_output_tokens: 2048
 
   - id: wkab-qwen3-embedding-0-6b
