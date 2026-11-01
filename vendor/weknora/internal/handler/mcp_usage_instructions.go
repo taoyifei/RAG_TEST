@@ -79,18 +79,7 @@ func (h *MCPServiceHandler) GenerateMCPUsageInstructions(c *gin.Context) {
 		_ = c.Error(errors.NewInternalServerError("Failed to read chat models"))
 		return
 	}
-	var selected *types.Model
-	for _, model := range models {
-		if model == nil || model.Type != types.ModelTypeKnowledgeQA || model.Status != types.ModelStatusActive {
-			continue
-		}
-		if selected == nil || model.IsDefault {
-			selected = model
-		}
-		if model.IsDefault {
-			break
-		}
-	}
+	selected := types.PickUtilityModel(models)
 	if selected == nil {
 		_ = c.Error(errors.NewBadRequestError("Configure an active chat model before generating usage instructions"))
 		return
@@ -101,7 +90,8 @@ func (h *MCPServiceHandler) GenerateMCPUsageInstructions(c *gin.Context) {
 		return
 	}
 	language := map[string]string{
-		"zh-CN": "Simplified Chinese", "en-US": "English", "ja-JP": "Japanese",
+		"zh-CN": "Simplified Chinese", "zh-TW": "Traditional Chinese",
+		"en-US": "English", "ja-JP": "Japanese",
 		"ko-KR": "Korean", "ru-RU": "Russian",
 	}[req.Language]
 	if language == "" {

@@ -2,6 +2,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { resolve, dirname } from 'node:path'
 import { existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
+import { copyPdfJsWasm } from './scripts/copy-pdfjs-wasm.mjs'
 import { createRequire } from 'node:module'
 import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -57,14 +58,34 @@ function resolveVueOfficePptxEntry(): string {
   try {
     const pkgDir = dirname(require.resolve('@vue-office/pptx/package.json'))
     const candidates = [
+      // Use ESM so setup hooks and render helpers share the application's Vue
+      // runtime. The UMD entry's require('vue') can produce a second runtime in
+      // Vite's dev optimizer, leaving template refs null and PPTX previews blank.
+      resolve(pkgDir, 'lib/v3/vue-office-pptx.mjs'),
       resolve(pkgDir, 'lib/v3/index.js'),
       resolve(pkgDir, 'lib/index.js'),
-      resolve(pkgDir, 'lib/v3/vue-office-pptx.mjs'),
     ]
     const matched = candidates.find((candidate) => existsSync(candidate))
     return matched ?? '@vue-office/pptx'
   } catch {
     return '@vue-office/pptx'
+  }
+}
+
+function pdfJsWasmAssets(): Plugin {
+  let wasmSource = ''
+  let wasmOutput = ''
+  return {
+    name: 'pdfjs-wasm-assets',
+    apply: 'build',
+    configResolved(config) {
+      const pdfjsBuild = require.resolve('pdfjs-dist/legacy/build/pdf.mjs')
+      wasmSource = resolve(dirname(pdfjsBuild), '../../wasm')
+      wasmOutput = resolve(config.root, config.build.outDir, 'pdfjs', 'wasm')
+    },
+    closeBundle() {
+      copyPdfJsWasm(wasmSource, wasmOutput)
+    },
   }
 }
 
@@ -99,7 +120,7 @@ export default defineConfig({
     },
     rollupOptions: {
       input: WANSHITONG_GATEWAY_AUTH
-        ? { main: resolve(__dirname, 'index.html') }
+        ? { main: resolve(__dirname, 'index.html'), workbench: resolve(__dirname, 'workbench.html') }
         : { main: resolve(__dirname, 'index.html'), embed: resolve(__dirname, 'embed.html') },
       output: {
         manualChunks(id) {
@@ -123,18 +144,24 @@ export default defineConfig({
     embedHtmlDevFallback(),
     {
       name: 'wanshitong-admin-brand',
-      transformIndexHtml(html) {
-        if (!WANSHITONG_GATEWAY_AUTH) return html
-        return html
-          .replace('<html lang="en">', '<html lang="zh-CN">')
-          .replace('<title>WeKnora</title>', '<title>湾小度 · 管理后台</title>')
-          .replace(/<meta name="keywords" content="[^"]*"\/>/, '<meta name="keywords" content="湾小度、知识库管理、内部知识问答"/>')
-          .replace('WeKnora是一款基于大语言模型的文档理解与语义检索框架，专为结构复杂、内容异构的文档场景而打造。', '湾小度知识库管理后台。')
-          .replaceAll('/kb/admin/favicon.ico', '/kb/admin/wanshitong.svg')
+      transformIndexHtml: {
+        // 先替换源图标，再让 Vite 按管理站 base 解析公开资源地址。
+        order: 'pre',
+        handler(html) {
+          if (!WANSHITONG_GATEWAY_AUTH) return html
+          return html
+            .replace('<html lang="en">', '<html lang="zh-CN">')
+            .replace('<title>WeKnora</title>', '<title>湾小度 · 管理后台</title>')
+            .replace(/<meta name="keywords" content="[^"]*"\/>/, '<meta name="keywords" content="湾小度、知识库管理、内部知识问答"/>')
+            .replace('WeKnora是一款基于大语言模型的文档理解与语义检索框架，专为结构复杂、内容异构的文档场景而打造。', '湾小度知识库管理后台。')
+            .replaceAll('./public/favicon.ico', '/wanshitong.svg')
+        },
       },
     },
+    pdfJsWasmAssets(),
   ],
   resolve: {
+    dedupe: ['vue', 'vue-demi'],
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
       '@vue-office/pptx': resolveVueOfficePptxEntry(),

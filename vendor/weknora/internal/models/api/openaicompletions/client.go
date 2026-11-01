@@ -84,11 +84,11 @@ func (c *Client) Chat(ctx context.Context, messages []api.Message, opts *api.Opt
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := api.ReadResponseCapped(resp.Body, 0)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-	result, err := c.parseResponse(raw)
+	result, err := c.parseResponse(raw, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (c *Client) ChatStream(
 		if dumper != nil {
 			defer dumper.Close()
 		}
-		c.processStream(ctx, resp.Body, ch, dumper)
+		c.processStream(ctx, resp.Body, ch, dumper, opts)
 	}()
 	return ch, nil
 }
@@ -191,7 +191,47 @@ func (c *Client) reasoningText(m rawMessage) string {
 	return ""
 }
 
-func (c *Client) decodeToolCalls(raws []json.RawMessage) ([]types.LLMToolCall, []api.ToolCallDelta, error) {
+// streamToolIndex gives index-less streamed tool calls a stable index.
+//
+// OpenAI numbers the calls of a response with "index". Some compatible servers
+// (Gemini's OpenAI endpoint among them) leave it out and send each parallel
+// call whole in its own chunk, which would put every call at the position it
+// has inside its chunk, index 0, and merge them into one. Without an index a
+// fragment that carries an id different from the previous call's starts a new
+// call; one without an id, or repeating the id, continues the previous call.
+type streamToolIndex struct {
+	started bool
+	lastID  string
+	last    int
+	next    int
+}
+
+func (s *streamToolIndex) resolve(explicit *int, id string) int {
+	if explicit != nil {
+		s.started, s.last = true, *explicit
+		if id != "" {
+			s.lastID = id
+		}
+		s.next = max(s.next, *explicit+1)
+		return *explicit
+	}
+	if !s.started || (id != "" && id != s.lastID) {
+		s.started = true
+		s.last = s.next
+		s.next++
+	}
+	if id != "" {
+		s.lastID = id
+	}
+	return s.last
+}
+
+// decodeToolCalls decodes the tool calls of a message or of a streamed delta.
+// For a stream, pass the stream's streamToolIndex to number index-less calls
+// across chunks; without it a missing index falls back to the position in raws.
+func (c *Client) decodeToolCalls(
+	raws []json.RawMessage, indexes *streamToolIndex,
+) ([]types.LLMToolCall, []api.ToolCallDelta, error) {
 	calls := make([]types.LLMToolCall, 0, len(raws))
 	deltas := make([]api.ToolCallDelta, 0, len(raws))
 	for i, raw := range raws {
@@ -203,7 +243,9 @@ func (c *Client) decodeToolCalls(raws []json.RawMessage) ([]types.LLMToolCall, [
 			return nil, nil, fmt.Errorf("decode tool call %d: %w", i, err)
 		}
 		idx := i
-		if tc.Index != nil {
+		if indexes != nil {
+			idx = indexes.resolve(tc.Index, tc.ID)
+		} else if tc.Index != nil {
 			idx = *tc.Index
 		}
 		call := types.LLMToolCall{
@@ -240,7 +282,7 @@ func (c *Client) extractToolCallMetadata(raw json.RawMessage) types.ToolCallMeta
 	return md
 }
 
-func (c *Client) parseResponse(raw []byte) (*types.ChatResponse, error) {
+func (c *Client) parseResponse(raw []byte, opts *api.Options) (*types.ChatResponse, error) {
 	var env rawEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
@@ -265,11 +307,22 @@ func (c *Client) parseResponse(raw []byte) (*types.ChatResponse, error) {
 		result.ReasoningMetadata = types.ProviderMetadata{metadataReasoningDetails: choice.Message.ReasoningDetails}
 	}
 	if len(choice.Message.ToolCalls) > 0 {
-		calls, _, err := c.decodeToolCalls(choice.Message.ToolCalls)
+		calls, _, err := c.decodeToolCalls(choice.Message.ToolCalls, nil)
 		if err != nil {
 			return nil, err
 		}
 		result.ToolCalls = calls
+	}
+	if result.FinishReason == "stop" || result.FinishReason == "tool_calls" {
+		if rest, dsmlCalls := extractDSMLToolCalls(result.Content, opts); len(dsmlCalls) > 0 {
+			result.Content = rest
+			// A gateway may echo a native call in content. Native calls are
+			// authoritative; recovering the echo would execute it twice.
+			if len(result.ToolCalls) == 0 {
+				result.ToolCalls = dsmlCalls
+				result.FinishReason = "tool_calls"
+			}
+		}
 	}
 	// Classify the cache status even when the vendor omitted the usage block,
 	// so "no counters at all" is still distinguishable from a real miss on the
@@ -300,17 +353,47 @@ func splitThinkTags(content string) (answer, reasoning string) {
 
 func (c *Client) processStream(
 	ctx context.Context, body io.Reader, ch chan<- types.StreamResponse, dumper *api.StreamPacketDumper,
+	opts *api.Options,
 ) {
 	assembler := api.NewStreamAssembler(ctx, c.cfg.Endpoint.Model)
 	reader := api.NewSSEReader(body)
 	var reasoningDetails []json.RawMessage
+	toolIndexes := &streamToolIndex{}
+	dsml := &dsmlFilter{options: opts}
 
-	finish := func() {
+	// flushDSML releases the held-back content and, when it carried DSML tool
+	// calls, merges them into the delta so they land before the finish chunk.
+	flushDSML := func(delta *api.Delta) {
+		reason := delta.FinishReason
+		if reason == "" {
+			reason = assembler.LastFinishReason
+		}
+		rest, calls := dsml.Flush(reason == "stop" || reason == "tool_calls")
+		delta.Content += rest
+		if len(calls) == 0 || len(delta.ToolCalls) > 0 || assembler.ToolCallCount() > 0 {
+			return
+		}
+		logger.Infof(ctx, "[LLM Stream] Recovered %d DSML tool call(s) from content", len(calls))
+		delta.ToolCalls = append(delta.ToolCalls, dsmlToolCallDeltas(calls, dsmlIndexBase+assembler.ToolCallCount())...)
+		if delta.FinishReason == "stop" {
+			delta.FinishReason = "tool_calls"
+		}
+	}
+
+	finish := func(end func(chan<- types.StreamResponse)) {
+		var tail api.Delta
+		flushDSML(&tail)
+		if tail.Content != "" || len(tail.ToolCalls) > 0 {
+			assembler.Process(ch, tail)
+			if len(tail.ToolCalls) > 0 && assembler.LastFinishReason == "stop" {
+				assembler.LastFinishReason = "tool_calls"
+			}
+		}
 		if len(reasoningDetails) > 0 {
 			merged, _ := json.Marshal(reasoningDetails)
 			assembler.ReasoningMetadata = types.ProviderMetadata{metadataReasoningDetails: merged}
 		}
-		assembler.End(ch)
+		end(ch)
 	}
 
 	for {
@@ -322,7 +405,7 @@ func (c *Client) processStream(
 		event, err := reader.ReadEvent()
 		if err != nil {
 			if err == io.EOF {
-				finish()
+				finish(assembler.EndAtEOF)
 			} else {
 				assembler.Fail(ch, err)
 			}
@@ -332,7 +415,7 @@ func (c *Client) processStream(
 			continue
 		}
 		if event.Done {
-			finish()
+			finish(assembler.End)
 			return
 		}
 		if len(event.Data) == 0 {
@@ -367,7 +450,7 @@ func (c *Client) processStream(
 		choice := env.Choices[0]
 		delta := api.Delta{
 			Reasoning:    c.reasoningText(choice.Delta),
-			Content:      choice.Delta.Content,
+			Content:      dsml.Feed(choice.Delta.Content),
 			FinishReason: choice.FinishReason,
 		}
 		if len(choice.Delta.ReasoningDetails) > 0 {
@@ -377,7 +460,7 @@ func (c *Client) processStream(
 			}
 		}
 		if len(choice.Delta.ToolCalls) > 0 {
-			_, deltas, err := c.decodeToolCalls(choice.Delta.ToolCalls)
+			_, deltas, err := c.decodeToolCalls(choice.Delta.ToolCalls, toolIndexes)
 			if err != nil {
 				assembler.Fail(ch, err)
 				return
@@ -392,6 +475,9 @@ func (c *Client) processStream(
 					assembler.SetToolCallMetadata(idx, md)
 				}
 			}
+		}
+		if delta.FinishReason != "" {
+			flushDSML(&delta)
 		}
 		assembler.Process(ch, delta)
 	}

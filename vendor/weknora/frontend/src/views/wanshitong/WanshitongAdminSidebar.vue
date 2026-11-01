@@ -6,6 +6,10 @@
     </RouterLink>
     <p class="wst-admin-nav-label">工作台</p>
     <nav>
+      <a class="wst-admin-return-chat" href="/kb/" target="_top" aria-label="返回对话" title="返回对话">
+        <t-icon name="chat" size="19px" />
+        <span>返回对话</span>
+      </a>
       <RouterLink
         v-for="item in items"
         :key="item.path"
@@ -17,6 +21,7 @@
         <t-icon :name="item.icon" size="19px" />
         <span>{{ item.label }}</span>
       </RouterLink>
+      <a href="/kb/?view=users"><t-icon name="usergroup" size="19px" /><span>用户与角色</span></a>
     </nav>
     <div class="wst-admin-sidebar-foot">
       <p>管理员设置会影响用户端的新请求。问答记录仅供复核。</p>
@@ -117,6 +122,13 @@ nav a {
   text-decoration: none;
   font-size: var(--app-text-base);
   font-weight: 500;
+}
+nav a.wst-admin-return-chat {
+  margin-bottom: 6px;
+  border: 1px solid #c7ddec;
+  color: #145a8d;
+  background: white;
+  font-weight: 650;
 }
 nav a:hover { background: #eaf1f9; }
 nav a.active { color: #125682; background: #dfeef9; font-weight: 650; }

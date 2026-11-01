@@ -1,5 +1,7 @@
 /** Matches backend types.KnowledgeProcessOverrides (snake_case JSON). */
 
+import type { ImageActionsConfig } from '@/api/knowledge-base'
+
 export interface ParserEngineRule {
   file_types: string[]
   engine: string
@@ -69,5 +71,18 @@ export interface KnowledgeProcessOverrides {
   question_generation_config?: QuestionGenerationConfigOverride
   graph_enabled?: boolean
   extract_config?: ExtractConfigOverride
+  // Per-upload override of the knowledge base's attribute-observed image
+  // pipeline switch.
+  image_attrs_enabled?: boolean
+  // Per-upload override of the image pipeline and every setting it declares.
+  // The pair travels as one unit; when image_pipeline is set the backend also
+  // derives image_attrs_enabled from it.
+  image_pipeline?: string
+  image_pipeline_params?: Record<string, unknown>
+  // Controls indexing for this document, without changing KB retrieval.
+  image_vector_enabled?: boolean
+  // Per-task attribute -> work table; merged per action key on top of the
+  // knowledge base's table.
+  image_actions?: ImageActionsConfig
   parser_engine_overrides?: Record<string, string>
 }

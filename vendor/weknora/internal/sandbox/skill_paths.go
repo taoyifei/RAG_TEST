@@ -5,18 +5,30 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/Tencent/WeKnora/internal/sandbox/workspace"
 )
 
 const (
-	// SkillsImageRoot is where installed skills live inside the snapshot image.
+	// SkillsImageRoot is where installed skills live inside the sandbox image.
 	// It is outside /workspace on purpose: /workspace is per-session scratch
 	// and is wiped before every snapshot.
-	SkillsImageRoot = "/opt/weknora/tenant/skills"
+	SkillsImageRoot = workspace.SkillsImageRoot
 
 	// SkillsManifestPath lists what the image claims to contain. It is a
 	// troubleshooting aid, never the source of truth for execution.
 	SkillsManifestPath = SkillsImageRoot + "/.manifest.json"
 )
+
+// HostSkillTargetID is the install target of Lite's local skills. It is a
+// reserved literal rather than a sandbox_configs row: the host backend has no
+// config to store, and a UUID can never collide with it.
+const HostSkillTargetID = "host"
+
+// IsHostSkillTarget reports whether configID names Lite's local skill target.
+func IsHostSkillTarget(configID string) bool {
+	return strings.TrimSpace(configID) == HostSkillTargetID
+}
 
 const skillShellArgv0 = "weknora-skill"
 
@@ -43,10 +55,19 @@ func IsValidSkillName(name string) bool {
 // is told to execute. The database id stays a row key and is not part of
 // the path.
 func SkillDirFor(skillName string) (string, error) {
+	return SkillDirUnder(SkillsImageRoot, skillName)
+}
+
+// SkillDirUnder joins one validated skill name under an absolute skills root.
+func SkillDirUnder(root, skillName string) (string, error) {
 	if !IsValidSkillName(skillName) {
 		return "", fmt.Errorf("%w %q", ErrInvalidSkillName, skillName)
 	}
-	return path.Join(SkillsImageRoot, skillName), nil
+	clean := path.Clean(strings.TrimSpace(root))
+	if clean == "." || clean == "/" || !path.IsAbs(clean) {
+		return "", fmt.Errorf("sandbox: invalid skills root %q", root)
+	}
+	return path.Join(clean, skillName), nil
 }
 
 // SkillRequirementsPath is where the installer agent writes what the skill
@@ -63,25 +84,27 @@ func SkillRequirementsPath(skillName string) string {
 	if err != nil {
 		return ""
 	}
-	return path.Join(dir, ".weknora", "requirements.json")
+	return SkillRequirementsPathIn(dir)
+}
+
+// SkillRequirementsPathIn is the declaration file inside one skill directory.
+func SkillRequirementsPathIn(skillDir string) string {
+	if strings.TrimSpace(skillDir) == "" {
+		return ""
+	}
+	return path.Join(skillDir, ".weknora", "requirements.json")
 }
 
 // RunnableWorkspaceScript reports whether scriptPath is a session-writable
 // file under /workspace that may be executed with an installed skill's
-// interpreter. /workspace/input is reserved for attachments and is excluded;
-// so are the workspace directory roots themselves.
+// interpreter. See RunnableWorkspaceScriptIn for shared machines.
 func RunnableWorkspaceScript(scriptPath string) (string, bool) {
-	clean := path.Clean(strings.TrimSpace(scriptPath))
-	if clean == SessionWorkspaceRoot || clean == SessionOutputRoot || clean == SessionInputRoot {
-		return "", false
-	}
-	if !strings.HasPrefix(clean, SessionWorkspaceRoot+"/") {
-		return "", false
-	}
-	if strings.HasPrefix(clean, SessionInputRoot+"/") {
-		return "", false
-	}
-	return clean, true
+	return workspace.RunnableScriptIn(RemoteWorkspaceLayout(), scriptPath)
+}
+
+// RunnableWorkspaceScriptIn is RunnableWorkspaceScript for an explicit layout.
+func RunnableWorkspaceScriptIn(l WorkspaceLayout, scriptPath string) (string, bool) {
+	return workspace.RunnableScriptIn(l, scriptPath)
 }
 
 // ValidatedSessionOutputDir normalises a configured artifact directory and
@@ -99,18 +122,25 @@ func RunnableWorkspaceScript(scriptPath string) (string, bool) {
 // included — and callers that compare the two (artifact collection) read
 // that as "this backend collects nothing", silently dropping every artifact.
 func ValidatedSessionOutputDir(dir string) (string, bool) {
-	clean := path.Clean(strings.TrimSpace(dir))
-	if !strings.HasPrefix(clean, SessionWorkspaceRoot+"/") {
-		return "", false
-	}
-	return clean, true
+	return workspace.ValidOutputDirIn(RemoteWorkspaceLayout(), dir)
+}
+
+// ValidatedOutputDirIn is ValidatedSessionOutputDir for an explicit layout.
+func ValidatedOutputDirIn(l WorkspaceLayout, dir string) (string, bool) {
+	return workspace.ValidOutputDirIn(l, dir)
 }
 
 // ValidatedImageSkillDir reports whether skillDir is exactly one installed
 // skill directory under SkillsImageRoot (for example /opt/weknora/tenant/skills/pdf).
 func ValidatedImageSkillDir(skillDir string) (string, bool) {
+	return ValidatedSkillDirUnder(SkillsImageRoot, skillDir)
+}
+
+// ValidatedSkillDirUnder reports whether skillDir is exactly one skill
+// directory directly under root.
+func ValidatedSkillDirUnder(root, skillDir string) (string, bool) {
 	clean := path.Clean(strings.TrimSpace(skillDir))
-	expected, err := SkillDirFor(path.Base(clean))
+	expected, err := SkillDirUnder(root, path.Base(clean))
 	if err != nil || expected != clean {
 		return "", false
 	}

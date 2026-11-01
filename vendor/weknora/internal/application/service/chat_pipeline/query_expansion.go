@@ -13,11 +13,23 @@ import (
 
 // runQueryExpansion performs query expansion when initial recall is low.
 // It generates query variants and runs concurrent retrieval across search targets.
+//
+// The variants are local rewrites of the query (stopwords dropped, words
+// reordered), so they only add recall on the keyword side: their embeddings
+// sit next to the original query's, and the vector half of each search
+// re-embedded the variant and repeated the main search. Expansion therefore
+// searches keywords only, and does nothing when keyword matching is off.
 func (p *PluginSearch) runQueryExpansion(ctx context.Context, chatManage *types.ChatManage) []*types.SearchResult {
 	pipelineInfo(ctx, "Search", "recall_low", map[string]interface{}{
 		"current":   len(chatManage.SearchResult),
 		"threshold": chatManage.EmbeddingTopK,
 	})
+	if chatManage.DisableKeywordsMatch {
+		pipelineInfo(ctx, "Search", "expansion_skip", map[string]interface{}{
+			"reason": "keyword_match_disabled",
+		})
+		return nil
+	}
 	expansions := p.expandQueries(ctx, chatManage)
 	if len(expansions) == 0 {
 		return nil
@@ -67,8 +79,7 @@ func (p *PluginSearch) runQueryExpansion(ctx context.Context, chatManage *types.
 					MatchCount:            expTopK,
 					TagIDs:                t.TagIDs,
 					ScopeTagIDs:           t.ScopeTagIDs,
-					DisableVectorMatch:    false,
-					DisableKeywordsMatch:  false,
+					DisableVectorMatch:    true,
 					SkipContextEnrichment: true, // Pipeline handles context assembly in merge stage
 				}
 				// Apply knowledge ID filter if this is a partial KB search
@@ -190,6 +201,11 @@ var stopwords = map[string]struct{}{
 // Question words in Chinese
 var questionWords = regexp.MustCompile(`^(什么是|什么|如何|怎么|怎样|为什么|为何|哪个|哪些|谁|何时|何地|请问|请告诉我|帮我|我想知道|我想了解)`)
 
+var (
+	quotedPhrasePattern = regexp.MustCompile(`["'"'「」『』]([^"'"'「」『』]+)["'"'「」『』]`)
+	delimiterPattern    = regexp.MustCompile(`[,，;；、。！？!?\s]+`)
+)
+
 func extractKeywords(text string) []string {
 	words := tokenize(text)
 	keywords := make([]string, 0, len(words))
@@ -205,8 +221,7 @@ func extractKeywords(text string) []string {
 func extractPhrases(text string) []string {
 	// Extract quoted content
 	var phrases []string
-	re := regexp.MustCompile(`["'"'「」『』]([^"'"'「」『』]+)["'"'「」『』]`)
-	matches := re.FindAllStringSubmatch(text, -1)
+	matches := quotedPhrasePattern.FindAllStringSubmatch(text, -1)
 	for _, m := range matches {
 		if len(m) > 1 && len(m[1]) > 2 {
 			phrases = append(phrases, m[1])
@@ -217,8 +232,7 @@ func extractPhrases(text string) []string {
 
 func splitByDelimiters(text string) []string {
 	// Split by common delimiters
-	re := regexp.MustCompile(`[,，;；、。！？!?\s]+`)
-	parts := re.Split(text, -1)
+	parts := delimiterPattern.Split(text, -1)
 	var result []string
 	for _, p := range parts {
 		p = strings.TrimSpace(p)

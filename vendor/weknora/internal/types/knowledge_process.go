@@ -11,7 +11,26 @@ type KnowledgeProcessOverrides struct {
 	ASRConfig                *ASRConfig                `json:"asr_config,omitempty"`
 	QuestionGenerationConfig *QuestionGenerationConfig `json:"question_generation_config,omitempty"`
 	GraphEnabled             *bool                     `json:"graph_enabled,omitempty"`
-	ExtractConfig            *ExtractConfig            `json:"extract_config,omitempty"`
+	// ImageAttrsEnabled overrides the knowledge base's attribute-observed image
+	// pipeline switch for this one document. nil keeps the knowledge base's
+	// setting.
+	ImageAttrsEnabled *bool `json:"image_attrs_enabled,omitempty"`
+	// ImagePipelineID overrides which image pipeline runs for this one
+	// document. nil keeps the knowledge base's resolved pipeline. When set,
+	// ImagePipelineParams travels with it: the params of one pipeline are
+	// meaningless to another, so the pair is replaced as a unit.
+	ImagePipelineID *ImagePipelineID `json:"image_pipeline,omitempty"`
+	// ImagePipelineParams are the overridden pipeline's private tunables. They
+	// are only applied together with ImagePipelineID.
+	ImagePipelineParams map[string]any `json:"image_pipeline_params,omitempty"`
+	// ImageVectorEnabled overrides image vector indexing for this document.
+	// It does not change the KB-wide retrieval setting or embedding model.
+	ImageVectorEnabled *bool `json:"image_vector_enabled,omitempty"`
+	// ImageActions overrides rows of the attribute->work table for this document
+	// (merged per action key on top of the knowledge base's table).
+	// nil keeps the knowledge base's setting.
+	ImageActions  *ImageActionsConfig `json:"image_actions,omitempty"`
+	ExtractConfig *ExtractConfig      `json:"extract_config,omitempty"`
 	// ParserEngineOverrides passes key-value configuration to docreader parsers
 	// (e.g. pdf_force_scanned=true). Merged with workspace-level overrides in the
 	// parse pipeline; per-upload values take priority on conflict.
@@ -27,5 +46,15 @@ type EffectiveProcessConfig struct {
 	ASRConfig                ASRConfig
 	QuestionGenerationConfig QuestionGenerationConfig
 	GraphEnabled             bool
-	ExtractConfig            ExtractConfig
+	ImageAttrsEnabled        bool
+	ImageVectorEnabled       bool
+	ImageActions             ImageActionsConfig
+	ImagePipelineID          ImagePipelineID
+	// ImagePipelineParams carries every setting that pipeline declares, each
+	// under that pipeline's slot — including the ones this layer needs to read
+	// (the page-straightening mode, the OCR fallback clause). There is no second
+	// copy of them above: a run reads this map for them, and the trace echoes
+	// the same map, so what ran and what was recorded cannot disagree.
+	ImagePipelineParams map[string]any
+	ExtractConfig       ExtractConfig
 }

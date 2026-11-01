@@ -1,6 +1,9 @@
 import { RotateCcw } from "lucide-react";
-import { useEffect, useState } from "react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import { memo, useEffect, useMemo, useState } from "react";
+import ReactMarkdown, {
+  defaultUrlTransform,
+  type Components,
+} from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { withAppBase } from "../app/basePath";
@@ -46,13 +49,59 @@ function progressHint(
   return "正在生成答复；收到内容后会实时显示。";
 }
 
-function MarkdownAnswer({
+const MarkdownAnswer = memo(function MarkdownAnswer({
   content,
   turn,
 }: {
   content: string;
   turn: PublicTurn;
 }) {
+  const components = useMemo<Components>(
+    () => ({
+      a: ({ children, href, title }) =>
+        href ? (
+          <a
+            href={href}
+            rel="noopener noreferrer"
+            target="_blank"
+            title={title}
+          >
+            {children}
+          </a>
+        ) : (
+          <span>{children}</span>
+        ),
+      img: ({ alt, src }) => {
+        if (!src) return <span>{alt}</span>;
+        if (src.startsWith("resource://")) {
+          if (!turn.traceId || turn.status !== "completed") {
+            return <span>{alt}</span>;
+          }
+          const path =
+            `/api/public/conversations/${encodeURIComponent(turn.conversationId)}` +
+            `/turns/${encodeURIComponent(turn.traceId)}/resources` +
+            `?file_path=${encodeURIComponent(src)}`;
+          return (
+            <img
+              alt={alt ?? ""}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              src={withAppBase(path)}
+            />
+          );
+        }
+        return (
+          <img
+            alt={alt ?? ""}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            src={src}
+          />
+        );
+      },
+    }),
+    [turn.conversationId, turn.traceId, turn.status],
+  );
   return (
     <div className="wst-final-answer">
       <ReactMarkdown
@@ -64,55 +113,13 @@ function MarkdownAnswer({
             ? url
             : defaultUrlTransform(url)
         }
-        components={{
-          a: ({ children, href, title }) =>
-            href ? (
-              <a
-                href={href}
-                rel="noopener noreferrer"
-                target="_blank"
-                title={title}
-              >
-                {children}
-              </a>
-            ) : (
-              <span>{children}</span>
-            ),
-          img: ({ alt, src }) => {
-            if (!src) return <span>{alt}</span>;
-            if (src.startsWith("resource://")) {
-              if (!turn.traceId || turn.status !== "completed") {
-                return <span>{alt}</span>;
-              }
-              const path =
-                `/api/public/conversations/${encodeURIComponent(turn.conversationId)}` +
-                `/turns/${encodeURIComponent(turn.traceId)}/resources` +
-                `?file_path=${encodeURIComponent(src)}`;
-              return (
-                <img
-                  alt={alt ?? ""}
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                  src={withAppBase(path)}
-                />
-              );
-            }
-            return (
-              <img
-                alt={alt ?? ""}
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                src={src}
-              />
-            );
-          },
-        }}
+        components={components}
       >
         {nativeCitationDisplay(content, turn.citations)}
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 export function PublicAnswer({
   allowFeedback = true,

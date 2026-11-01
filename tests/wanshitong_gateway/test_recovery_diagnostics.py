@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 import wanshitong_gateway.app as gateway_app
 from wanshitong_gateway.auth import GatewayAuth
 from wanshitong_gateway.engine_settings import EngineSettings
+from wanshitong_gateway.roles import UserProfile
 from wanshitong_gateway.store import GatewayStore
 from wanshitong_gateway.weknora.admin import NativeAdminClient
 from wanshitong_gateway.weknora.client import WeKnoraClient
@@ -34,6 +35,18 @@ class _FakeAuth:
     ) -> SimpleNamespace:
         del csrf
         return SimpleNamespace(user_id=request.headers.get("x-test-user", "u1"))
+
+    def require_profile(
+        self, request: Request, *, csrf: bool | None = None
+    ) -> UserProfile:
+        principal = self.require_public(request, csrf=csrf)
+        return UserProfile(
+            user_id=principal.user_id,
+            username=principal.user_id,
+            display_name=principal.user_id,
+            dept_id=None,
+            role="user",
+        )
 
     def require_admin(
         self, request: Request, *, csrf: bool | None = None

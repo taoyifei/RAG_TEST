@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -277,6 +280,25 @@ def test_native_admin_ui_routes_are_reachable(path: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("method", "path", "allowed"),
+    [
+        ("GET", "api/v1/image-pipelines", True),
+        ("POST", "api/v1/image-pipelines/validate", True),
+        ("HEAD", "api/v1/image-pipelines", False),
+        ("POST", "api/v1/image-pipelines", False),
+        ("GET", "api/v1/image-pipelines/validate", False),
+        ("PUT", "api/v1/image-pipelines/validate", False),
+        ("GET", "api/v1/image-pipelines/private-image", False),
+        ("POST", "api/v1/image-pipelines/validate/extra", False),
+    ],
+)
+def test_image_pipeline_proxy_allows_only_config_endpoints(
+    method: str, path: str, allowed: bool
+) -> None:
+    assert _allowed_admin_path(method, path) is allowed
+
+
+@pytest.mark.parametrize(
     "path",
     [
         "api/v1/auth/login",
@@ -305,6 +327,10 @@ def test_native_admin_proxy_keeps_account_and_host_boundaries(
         ("POST", "api/v1/agents"),
         ("PUT", "api/v1/agents/agent-1"),
         ("GET", "api/v1/tenants/8/api-keys"),
+        ("GET", "api/v1/assistant/config"),
+        ("POST", "api/v1/assistant/sessions"),
+        ("GET", "api/v1/automations"),
+        ("POST", "api/v1/automations/automation-1/run"),
     ],
 )
 def test_admin_proxy_denies_chat_generation_and_mutation(
@@ -313,3 +339,78 @@ def test_admin_proxy_denies_chat_generation_and_mutation(
     assert not _allowed_admin_path(method, path)
     assert _allowed_admin_path("GET", "api/v1/messages/session-1/load")
     assert _allowed_admin_path("GET", "api/v1/sessions/session-1")
+
+
+@pytest.mark.asyncio
+async def test_dynamic_key_scope_keeps_metadata_and_serializes_updates() -> (
+    None
+):
+    secret_key = "synthetic-service-key"  # noqa: S105 - 仅用于内存测试。
+    record = {
+        "id": 7,
+        "scope_type": "tenant",
+        "api_key": secret_key,
+        "name": "测试资料服务",
+        "full_access": False,
+        "knowledge_base_ids": ["public"],
+        "capabilities": ["chat", "knowledge.read"],
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+    writes: list[dict] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/auth/login":
+            return httpx.Response(
+                200, json={"success": True, "token": "admin-token"}
+            )
+        assert request.headers["authorization"] == "Bearer admin-token"
+        assert request.headers["x-tenant-id"] == "9"
+        if request.method == "GET":
+            snapshot = json.loads(json.dumps(record))
+            await asyncio.sleep(0)
+            return httpx.Response(
+                200, json={"success": True, "data": [snapshot]}
+            )
+        assert request.method == "PUT"
+        assert request.url.path == "/api/v1/tenants/9/api-keys/7"
+        body = json.loads(request.content)
+        writes.append(body)
+        record["knowledge_base_ids"] = body["knowledge_base_ids"]
+        return httpx.Response(200, json={"success": True, "data": record})
+
+    client = NativeAdminClient(
+        base_url="http://native.test:8080",
+        email="admin@example.test",
+        password="test-only",  # noqa: S106 - 测试固定密码。
+        tenant_id=9,
+        transport=httpx.MockTransport(respond),
+    )
+    fingerprint = hashlib.sha256(secret_key.encode()).digest()
+    try:
+        await asyncio.gather(
+            client.allow_key_knowledge_base(fingerprint, "personal-a"),
+            client.allow_key_knowledge_base(fingerprint, "hr-internal"),
+        )
+        await client.allow_key_knowledge_base(fingerprint, "personal-a")
+        await client.allow_key_knowledge_base(
+            fingerprint, "personal-a-new", removed_kb_id="personal-a"
+        )
+        await client.allow_key_knowledge_base(
+            fingerprint, "personal-a-new", removed_kb_id="personal-a"
+        )
+    finally:
+        await client.close()
+    assert len(writes) == 3
+    assert set(record["knowledge_base_ids"]) == {
+        "public",
+        "personal-a-new",
+        "hr-internal",
+    }
+    for body in writes:
+        assert body["full_access"] is False
+        assert body["name"] == "测试资料服务"
+        assert body["capabilities"] == ["chat", "knowledge.read"]
+        assert body["expires_at_unix"] == int(
+            datetime(2099, 1, 1, tzinfo=UTC).timestamp()
+        )
+        assert "api_key" not in body

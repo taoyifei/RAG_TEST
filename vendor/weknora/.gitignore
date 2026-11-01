@@ -4,6 +4,17 @@
 !.env.example
 !.gitignore
 !.github/
+# 固定上游源码中需要入库的工程配置；继续忽略其他本地隐藏文件。
+!/.air.toml
+!/.dockerignore
+!/.env.lite.example
+!/.gitattributes
+!/.golangci.yml
+!/docreader/.pylintrc
+!/frontend/.dockerignore
+!/helm/.helmignore
+!/internal/infrastructure/docparser/anydoc/testdata/upstream/.gitattributes
+!/packages/.gitkeep
 
 # 敏感文件
 *.pem

@@ -10,5 +10,7 @@ const css = readFileSync(join(here, 'chat-citations.less'), 'utf8')
 test('citation pills use compact baseline-aligned source styling', () => {
   assert.match(css, /border-radius:\s*(?:999px|var\(--app-radius-pill\))/)
   assert.match(css, /font-size:\s*0\.72em/)
-  assert.match(css, /box-shadow:\s*inset 0 0 0 1px/)
+  assert.match(css, /vertical-align:\s*baseline/)
+  assert.match(css, /background:\s*color-mix\(in srgb, var\(--td-text-color-primary\) 6%, transparent\)/)
+  assert.match(css, /border:\s*0;/)
 })

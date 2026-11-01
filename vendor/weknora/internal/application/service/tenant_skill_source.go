@@ -15,13 +15,26 @@ import (
 	"sync"
 	"time"
 
-	apperrors "github.com/Tencent/WeKnora/internal/errors"
+	"github.com/Tencent/WeKnora/internal/common"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 )
 
 // ErrSkillSourceInvalid marks every rejection of a registry / git / URL
 // source so the handler can map the class to 400 without matching on text.
 var ErrSkillSourceInvalid = errors.New("skill source is invalid")
+
+type skillSourceHTTPError struct {
+	statusCode int
+	message    string
+}
+
+func (e *skillSourceHTTPError) Error() string {
+	return fmt.Sprintf("%v: download returned HTTP %d: %s", ErrSkillSourceInvalid, e.statusCode, e.message)
+}
+
+func (e *skillSourceHTTPError) Unwrap() error {
+	return ErrSkillSourceInvalid
+}
 
 const (
 	defaultSkillRegistryOrigin = "https://clawhub.ai"
@@ -103,12 +116,8 @@ func (s *TenantSkillService) InstallSkillFromSource(
 	// The config is authorized before the fetch, not by InstallSkill after it.
 	// The source is a caller-supplied host, so an unknown config ID must not
 	// be able to spend an outbound request and a body-sized download first.
-	cfgEntity, err := s.configs.GetByID(ctx, tenantID, configID)
-	if err != nil {
+	if err := s.requireSkillTarget(ctx, tenantID, configID); err != nil {
 		return "", err
-	}
-	if cfgEntity == nil {
-		return "", apperrors.NewNotFoundError("sandbox config not found")
 	}
 
 	bundle, archive, err := fetchNormalizedSkillBundle(ctx, source, s.sourceHTTP)
@@ -645,6 +654,14 @@ func fetchSkillSourceBytes(
 	}
 	body, contentType, err := getSkillURL(ctx, client, target)
 	if err != nil {
+		var statusErr *skillSourceHTTPError
+		if src.Kind == skillSourceSkillsSh && errors.As(err, &statusErr) &&
+			statusErr.statusCode == http.StatusNotFound {
+			return fetchedSkillSource{}, fmt.Errorf(
+				"%w: this skills.sh listing is not available through ClawHub federation "+
+					"(HTTP 404: %s); import it using the GitHub folder URL shown by skills.sh",
+				ErrSkillSourceInvalid, statusErr.message)
+		}
 		return fetchedSkillSource{}, err
 	}
 	fetched := fetchedSkillSource{body: body, contentType: contentType, subdir: src.Subdir}
@@ -836,8 +853,10 @@ func getSkillURL(
 		if msg == "" {
 			msg = resp.Status
 		}
-		return nil, "", fmt.Errorf("%w: download returned HTTP %d: %s",
-			ErrSkillSourceInvalid, resp.StatusCode, truncateSkillError(msg))
+		return nil, "", &skillSourceHTTPError{
+			statusCode: resp.StatusCode,
+			message:    truncateSkillError(msg),
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
@@ -918,8 +937,9 @@ func looksLikeSkillMarkdown(body []byte) bool {
 
 func truncateSkillError(msg string) string {
 	msg = strings.Join(strings.Fields(msg), " ")
-	if len(msg) > 200 {
-		return msg[:200]
-	}
-	return msg
+	// Back off to a rune boundary: the body comes from a third-party host, so a
+	// Chinese error page would otherwise be split mid-rune and the 400 response
+	// this produces would carry an invalid trailing byte. Same rule as the
+	// provider error previews and common.TruncateUTF8Bytes.
+	return common.TruncateUTF8Bytes(msg, 200)
 }

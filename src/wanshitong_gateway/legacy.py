@@ -8,7 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from rag_app.product.crypto import SecretAad, SecretCipher, load_master_key
+from wanshitong_gateway.compat.product.crypto import (
+    SecretAad,
+    SecretCipher,
+    load_master_key,
+)
 
 _MAX_LIST = 100
 
@@ -103,7 +107,7 @@ class LegacyHistoryReader:
             "status": str(row["status"]),
             "duration_ms": row["duration_ms"],
             "body_available": bool(row["body_saved"]) and not expired,
-            "body_unavailable_reason": "EXPIRED" if expired else (
-                "NOT_SAVED" if not row["body_saved"] else None
-            ),
+            "body_unavailable_reason": "EXPIRED"
+            if expired
+            else ("NOT_SAVED" if not row["body_saved"] else None),
         }

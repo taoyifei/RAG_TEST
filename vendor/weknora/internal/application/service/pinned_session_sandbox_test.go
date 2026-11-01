@@ -181,7 +181,7 @@ func TestPinnedSessionSandboxVersionsWorkspaceFalseWhenHostResolved(t *testing.T
 		stubPinReader{},
 		&stubTenantSandboxResolver{mgr: &stubPinnedManager{id: "sbx-1", ok: true}},
 		nil,
-		NewHostSessionResolver(stubPinReader{}, host),
+		NewHostSessionResolver(stubPinReader{}, host, false),
 	)
 
 	require.False(t, access.VersionsWorkspace(context.Background(), "sess-1"))
@@ -212,26 +212,105 @@ func TestPinnedSessionSandboxVersionsWorkspaceFalseWhenManagerTypeIsHost(t *test
 
 func TestHostManagerForReturnsHostWhenSessionHasNoNamedConfig(t *testing.T) {
 	host := stubHostManager{}
-	r := NewHostSessionResolver(stubPinReader{}, host)
+	r := NewHostSessionResolver(stubPinReader{}, host, false)
 
 	require.Equal(t, host, r.HostManagerFor(context.Background(), "s1"))
 }
 
 func TestHostManagerForNilWhenSessionHasNamedConfig(t *testing.T) {
-	r := NewHostSessionResolver(stubPinReader{configID: "cfg-1"}, stubHostManager{})
+	r := NewHostSessionResolver(stubPinReader{configID: "cfg-1"}, stubHostManager{}, false)
 
 	require.Nil(t, r.HostManagerFor(context.Background(), "s1"))
 }
 
 func TestHostManagerForNilWhenHostMissing(t *testing.T) {
-	r := NewHostSessionResolver(stubPinReader{}, nil)
+	r := NewHostSessionResolver(stubPinReader{}, nil, false)
 
 	require.Nil(t, r.HostManagerFor(context.Background(), "s1"))
 }
 
 func TestHostManagerForTreatsGlobalDefaultAsUnnamed(t *testing.T) {
 	host := stubHostManager{}
-	r := NewHostSessionResolver(stubPinReader{configID: types.SandboxConfigIDGlobalDefault}, host)
+	r := NewHostSessionResolver(stubPinReader{configID: types.SandboxConfigIDGlobalDefault}, host, false)
 
 	require.Equal(t, host, r.HostManagerFor(context.Background(), "s1"))
+}
+
+type stubKeepAlivePinnedManager struct {
+	stubPinnedManager
+	next  time.Duration
+	calls int
+}
+
+func (m *stubKeepAlivePinnedManager) KeepAliveSession(context.Context, string) (time.Duration, error) {
+	m.calls++
+	return m.next, nil
+}
+
+func TestPinnedSessionSandboxKeepAliveSessionDelegates(t *testing.T) {
+	mgr := &stubKeepAlivePinnedManager{next: 4 * time.Minute}
+	access := NewPinnedSessionSandbox(stubPinReader{configID: "cfg-1"}, &stubTenantSandboxResolver{mgr: mgr}, nil, nil)
+	ctx := context.WithValue(context.Background(), types.TenantIDContextKey, uint64(9))
+
+	next, err := access.KeepAliveSession(ctx, "sess-1")
+
+	require.NoError(t, err)
+	require.Equal(t, 4*time.Minute, next)
+	require.Equal(t, 1, mgr.calls)
+}
+
+type stubExpectedKeepAliveManager struct {
+	stubKeepAlivePinnedManager
+	expectedID string
+	calls      int
+}
+
+func (m *stubExpectedKeepAliveManager) KeepAliveSessionExpected(
+	_ context.Context, _ string, expectedID string,
+) (time.Duration, error) {
+	m.calls++
+	m.expectedID = expectedID
+	return 3 * time.Minute, nil
+}
+
+func TestPinnedSessionSandboxKeepAliveSessionExpectedDelegates(t *testing.T) {
+	mgr := &stubExpectedKeepAliveManager{}
+	access := NewPinnedSessionSandbox(stubPinReader{configID: "cfg-1"}, &stubTenantSandboxResolver{mgr: mgr}, nil, nil)
+	ctx := context.WithValue(context.Background(), types.TenantIDContextKey, uint64(9))
+
+	next, err := access.KeepAliveSessionExpected(ctx, "sess-1", "sbx-expected")
+
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Minute, next)
+	require.Equal(t, 1, mgr.calls)
+	require.Equal(t, "sbx-expected", mgr.expectedID)
+}
+
+func TestPinnedSessionSandboxKeepAliveSessionExpectedWhenManagerLacksMethod(t *testing.T) {
+	access := NewPinnedSessionSandbox(
+		stubPinReader{configID: "cfg-1"},
+		&stubTenantSandboxResolver{mgr: &stubPinnedManager{id: "sbx-1", ok: true}},
+		nil, nil,
+	)
+	ctx := context.WithValue(context.Background(), types.TenantIDContextKey, uint64(9))
+
+	next, err := access.KeepAliveSessionExpected(ctx, "sess-1", "sbx-1")
+
+	require.NoError(t, err)
+	require.Zero(t, next)
+}
+
+func TestPinnedSessionSandboxKeepAliveSessionWhenManagerLacksMethod(t *testing.T) {
+	access := NewPinnedSessionSandbox(
+		stubPinReader{configID: "cfg-1"},
+		&stubTenantSandboxResolver{mgr: &stubPinnedManager{id: "sbx-1", ok: true}},
+		nil,
+		nil,
+	)
+	ctx := context.WithValue(context.Background(), types.TenantIDContextKey, uint64(9))
+
+	next, err := access.KeepAliveSession(ctx, "sess-1")
+
+	require.NoError(t, err)
+	require.Zero(t, next)
 }

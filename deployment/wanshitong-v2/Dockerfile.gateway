@@ -1,0 +1,16 @@
+ARG WST_GATEWAY_RUNTIME_IMAGE
+FROM ${WST_GATEWAY_RUNTIME_IMAGE}
+USER root
+WORKDIR /opt/wst
+RUN rm -rf /opt/wst/src
+COPY deployment/wanshitong-v2/build-context/wheels/ /opt/wst/wheels/
+# 现场基础运行时没有 pip；此固定纯 Python wheel 可直接展开到 site-packages。
+RUN python -c "import hashlib,pathlib,sysconfig,zipfile; p=pathlib.Path('/opt/wst/wheels/python_multipart-0.0.32-py3-none-any.whl'); assert hashlib.sha256(p.read_bytes()).hexdigest() == 'ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23'; zipfile.ZipFile(p).extractall(sysconfig.get_paths()['purelib'])" \
+    && rm -rf /opt/wst/wheels
+COPY src/wanshitong_gateway/ /opt/wst/src/wanshitong_gateway/
+RUN chmod -R a+rX /opt/wst/src && mkdir -p /data && chown -R 10001:10001 /data
+ENV PYTHONPATH=/opt/wst/src PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 10001:10001
+EXPOSE 8088
+ENTRYPOINT []
+CMD ["python", "-m", "uvicorn", "wanshitong_gateway.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8088", "--no-proxy-headers"]

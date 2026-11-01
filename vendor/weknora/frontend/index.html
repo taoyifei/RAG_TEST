@@ -11,8 +11,8 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="keywords" content="知识问答、微信对话开放平台、对话开放平台、对话平台、人工智能定制、人机对话、智能问答、人机交互、自然语言处理、自然语言理解、NLP、人工智能产品、人工智能开源、人工智能算法、语音助手"/>
     <meta name="description" content="WeKnora是一款基于大语言模型的文档理解与语义检索框架，专为结构复杂、内容异构的文档场景而打造。"/>
-    <link rel="shortcut icon" href="%BASE_URL%favicon.ico"/>
-    <link rel="apple-touch-icon" sizes="120x120" href="%BASE_URL%favicon.ico"/>
+    <link rel="shortcut icon" type="image/png" href="./public/favicon.ico"/>
+    <link rel="apple-touch-icon" sizes="120x120" type="image/png" href="./public/favicon.ico"/>
 </head>
 <body>
 <script>
@@ -56,13 +56,13 @@
   } catch (e) {}
 })();
 </script>
-<script src="%BASE_URL%config.js"></script>
+<script src="/config.js"></script>
 <!--
   离线部署兼容：提前本地加载 tdesign-icons SVG sprite，避免 tdesign-vue-next 的
   <t-icon> 运行时向 https://tdesign.gtimg.com 发起请求（见 issue #867 / #897）。
   升级 tdesign-icons-vue-next 时需同步更新 public/tdesign-icons/<version>/fonts/index.js。
 -->
-<script src="%BASE_URL%tdesign-icons/0.4.1/fonts/index.js"></script>
+<script src="/tdesign-icons/0.4.1/fonts/index.js"></script>
 <div id="app"></div>
 <script>
 (function(){

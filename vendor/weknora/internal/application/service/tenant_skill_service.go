@@ -77,6 +77,10 @@ type TenantSkillService struct {
 	streams  interfaces.StreamManager
 	messages interfaces.MessageRepository
 
+	// host is Lite's OS sandbox. The zero value keeps the standard edition on
+	// the remote-config path; Desktop plus SkillsAvailable accepts "host".
+	host HostSandboxManager
+
 	now func() time.Time
 
 	// sourceHTTP pulls remote skill archives. Nil means the package SSRF-safe
@@ -113,6 +117,17 @@ type TenantSkillService struct {
 	// nothing to cancel, and StopSkill then only rewrites the stuck row.
 	runCancelMu sync.Mutex
 	runCancels  map[string]*skillRunCancel
+
+	// placer records the maintenance session's sandbox assignment. Nil keeps
+	// today's behaviour: the session row carries the pin and no assignment.
+	placer SessionPlacer
+}
+
+// WithPlacer attaches the allocation service. Without one, maintenance
+// sessions keep today's behaviour.
+func (s *TenantSkillService) WithPlacer(p SessionPlacer) *TenantSkillService {
+	s.placer = p
+	return s
 }
 
 // NewTenantSkillService wires the repositories and runtimes the install and
@@ -131,6 +146,7 @@ func NewTenantSkillService(
 	redisClient *redis.Client,
 	streams interfaces.StreamManager,
 	messages interfaces.MessageRepository,
+	host HostSandboxManager,
 ) *TenantSkillService {
 	return &TenantSkillService{
 		skills:            skillsRepo,
@@ -145,6 +161,7 @@ func NewTenantSkillService(
 		redis:             redisClient,
 		streams:           streams,
 		messages:          messages,
+		host:              host,
 		now:               time.Now,
 		cleanupTimeout:    installCleanupTimeout,
 		snapshotRetention: skillSnapshotRetention,

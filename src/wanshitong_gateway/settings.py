@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from rag_app.wanshitong.sso_settings import SsoSettings
+from wanshitong_gateway.compat.wanshitong.sso_settings import SsoSettings
 
 _DEPLOYMENT_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 

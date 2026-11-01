@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/sandbox"
 	"github.com/Tencent/WeKnora/internal/types"
 )
 
@@ -52,14 +54,16 @@ func ServedInfoOf(row *types.TenantSkillEntity) *SkillServedInfo {
 
 // SkillCatalogView is a tenant skill definition plus its sandbox installations.
 type SkillCatalogView struct {
-	ID            string                    `json:"id"`
-	Name          string                    `json:"name"`
-	Version       string                    `json:"version,omitempty"`
-	Description   string                    `json:"description,omitempty"`
+	ID            string                    `json:"id" extensions:"x-agent=catalog_skill_id"`
+	Name          string                    `json:"name" extensions:"x-agent"`
+	Version       string                    `json:"version,omitempty" extensions:"x-agent"`
+	Description   string                    `json:"description,omitempty" extensions:"x-agent"`
 	BundleSHA256  string                    `json:"bundle_sha256,omitempty"`
 	CreatedAt     time.Time                 `json:"created_at"`
 	UpdatedAt     time.Time                 `json:"updated_at"`
 	Installations []SkillCatalogInstallView `json:"installations"`
+	// InstalledOn lists the sandbox config ids of Installations.
+	InstalledOn []string `json:"installed_on" extensions:"x-agent"`
 }
 
 // ListCatalog returns every workspace skill definition and which sandbox
@@ -94,6 +98,9 @@ func (s *TenantSkillService) ListCatalog(
 	unattached := make([]*types.TenantSkillEntity, 0)
 	for _, row := range installs {
 		if row == nil {
+			continue
+		}
+		if s.host.Desktop && !sandbox.IsHostSkillTarget(row.SandboxConfigID) {
 			continue
 		}
 		if row.CatalogID != "" {
@@ -143,6 +150,13 @@ func (s *TenantSkillService) ListCatalog(
 		}
 		out = append(out, catalogView(synthetic, []*types.TenantSkillEntity{row}, configByID))
 	}
+	for i := range out {
+		for _, install := range out[i].Installations {
+			if !slices.Contains(out[i].InstalledOn, install.SandboxConfigID) {
+				out[i].InstalledOn = append(out[i].InstalledOn, install.SandboxConfigID)
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -181,6 +195,11 @@ func installView(
 		BundleSHA256:    row.BundleSHA256,
 		Served:          ServedInfoOf(row),
 		UpdatedAt:       row.UpdatedAt,
+	}
+	if sandbox.IsHostSkillTarget(row.SandboxConfigID) {
+		v.SandboxConfigName = hostSkillTargetName
+		v.SandboxType = string(sandbox.SandboxTypeHost)
+		return v
 	}
 	if cfg := configByID[row.SandboxConfigID]; cfg != nil {
 		v.SandboxConfigName = cfg.Name

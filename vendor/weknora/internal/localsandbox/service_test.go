@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ type fakeBackend struct {
 	calls       []string
 	proc        Process
 	onSpawn     func()
+	preps       []*fakePrepared
 }
 
 func (f *fakeBackend) Name() string { return "fake" }
@@ -47,17 +49,25 @@ func (f *fakeBackend) EnsureReady(context.Context) error {
 }
 func (f *fakeBackend) TearDown(context.Context) error { return nil }
 
-type fakePrepared struct{ fp string }
+type fakePrepared struct {
+	fp     string
+	closed atomic.Bool
+}
 
-func (p fakePrepared) Fingerprint() string { return p.fp }
-func (p fakePrepared) Close() error        { return nil }
+func (p *fakePrepared) Fingerprint() string { return p.fp }
+func (p *fakePrepared) Close() error {
+	p.closed.Store(true)
+	return nil
+}
 
 func (f *fakeBackend) Prepare(_ context.Context, p Policy) (Prepared, error) {
+	prep := &fakePrepared{fp: p.Fingerprint()}
 	f.mu.Lock()
 	f.calls = append(f.calls, "prepare")
 	f.prepared = append(f.prepared, p.Fingerprint())
+	f.preps = append(f.preps, prep)
 	f.mu.Unlock()
-	return fakePrepared{fp: p.Fingerprint()}, nil
+	return prep, nil
 }
 
 func (f *fakeBackend) Spawn(_ context.Context, _ Prepared, cmd Command) (Process, error) {
@@ -513,4 +523,44 @@ func TestServiceRunAllowsConcurrentDistinctRoots(t *testing.T) {
 	close(release)
 	require.NoError(t, <-errCh)
 	require.NoError(t, <-errCh)
+}
+
+func installPolicyFixture(t *testing.T) Policy {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "skills", ".versions", "pdf-1")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	return Policy{
+		Cwd:           dir,
+		WritableRoots: []WritableRoot{{Path: dir}},
+		Network:       NetworkUnrestricted,
+	}
+}
+
+func TestServiceRunWithPolicyUsesCallerPolicy(t *testing.T) {
+	backend := &fakeBackend{stdout: "ok", exit: ExitStatus{Code: 0}}
+	svc := serviceFixture(t, backend, ModeAuto)
+	p := installPolicyFixture(t)
+
+	res, err := svc.RunWithPolicy(context.Background(), p, RunRequest{SessionID: "install-1", Command: "uv --version"})
+	require.NoError(t, err)
+	require.Equal(t, "ok", res.Stdout)
+	require.Equal(t, p.Cwd, backend.spawnCmd.Cwd)
+	require.Equal(t, []string{p.Fingerprint()}, backend.prepared)
+}
+
+func TestServiceRunWithPolicyKeepsWorkDirInsidePolicy(t *testing.T) {
+	backend := &fakeBackend{}
+	svc := serviceFixture(t, backend, ModeAuto)
+	_, err := svc.RunWithPolicy(context.Background(), installPolicyFixture(t),
+		RunRequest{Command: "ls", WorkDir: "/etc"})
+	require.ErrorIs(t, err, ErrPathDenied)
+	require.Empty(t, backend.prepared)
+}
+
+func TestServiceRunWithPolicyRejectsInvalidPolicy(t *testing.T) {
+	backend := &fakeBackend{}
+	svc := serviceFixture(t, backend, ModeAuto)
+	_, err := svc.RunWithPolicy(context.Background(), Policy{Cwd: "relative"}, RunRequest{Command: "ls"})
+	require.Error(t, err)
+	require.Empty(t, backend.prepared)
 }

@@ -20,11 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 
-from rag_app.wanshitong.public_models import (
-    PublicChatStopRequest,
-    PublicFeedbackRequest,
-)
-from rag_app.wanshitong.shortcuts import SHORTCUT_CATALOG
+from wanshitong_gateway.admin_scope import AdminScopeGuard
 from wanshitong_gateway.admission import (
     BoundedQaQueue,
     QaSlot,
@@ -33,11 +29,18 @@ from wanshitong_gateway.admission import (
     QueueWaitTimeoutError,
 )
 from wanshitong_gateway.auth import GatewayAuth, register_auth_routes
+from wanshitong_gateway.compat.product.crypto import load_master_key
+from wanshitong_gateway.compat.wanshitong.public_models import (
+    PublicChatStopRequest,
+    PublicFeedbackRequest,
+)
+from wanshitong_gateway.compat.wanshitong.shortcuts import SHORTCUT_CATALOG
 from wanshitong_gateway.engine_settings import (
     EngineSettings,
     load_server_secret,
 )
 from wanshitong_gateway.legacy import LegacyHistoryReader
+from wanshitong_gateway.library import LibraryService, register_library_routes
 from wanshitong_gateway.models import GatewayChatRequest
 from wanshitong_gateway.public_app import (
     APPLICATION_ID,
@@ -51,6 +54,7 @@ from wanshitong_gateway.public_app import (
     uses_public_scope,
     validate_binding,
 )
+from wanshitong_gateway.roles import UserProfile
 from wanshitong_gateway.settings import GatewayAuthSettings
 from wanshitong_gateway.store import GatewayStore
 from wanshitong_gateway.weknora.admin import NativeAdminClient
@@ -66,6 +70,8 @@ from wanshitong_gateway.weknora.stream import (
     BridgeStream,
     NativeSseDecoder,
 )
+from wanshitong_gateway.workbench import WorkbenchService
+from wanshitong_gateway.workbench_routes import register_workbench_routes
 
 _MAX_HISTORY_SESSIONS = 50
 _MAX_OPS_LIST_LIMIT = 1000
@@ -78,6 +84,7 @@ _MAX_ADMIN_BODY_BYTES = 50 * 1024 * 1024
 _HTTP_REDIRECT_START = 300
 _HTTP_REDIRECT_END = 400
 _HTTP_FORBIDDEN = 403
+_HTTP_UNAUTHORIZED = 401
 _HTTP_OK = 200
 _MAX_RESOURCE_HANDLE_CHARS = 4096
 _INLINE_IMAGE_TYPES = frozenset(
@@ -99,6 +106,14 @@ class _TraceExportRequest(BaseModel):
 
     include_content: bool = False
     confirm_id: str | None = None
+
+
+class _ConversationArchiveRequest(BaseModel):
+    """本人历史会话的归档状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    archived: bool
 
 
 class _FeedbackReviewRequest(BaseModel):
@@ -190,6 +205,13 @@ async def _admit_qa(request: Request, queue: BoundedQaQueue) -> QaSlot:
         raise HTTPException(status_code=408, detail="请求已断开。") from None
 
 
+def _ready_slot(slot: QaSlot | None) -> QaSlot:
+    """进入流式响应前确认队列已分配资源。"""
+    if slot is None:
+        raise RuntimeError("问答队列尚未分配资源。")
+    return slot
+
+
 def create_app(  # noqa: PLR0913, PLR0915
     *,
     auth: GatewayAuth | None = None,
@@ -199,6 +221,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     admin_native: NativeAdminClient | None = None,
     legacy: LegacyHistoryReader | None = None,
     qa_queue: BoundedQaQueue | None = None,
+    workbench: WorkbenchService | None = None,
 ) -> FastAPI:
     """构建不初始化旧 Parser、索引、检索或答案校验器的 ASGI 应用。"""
     auth = auth or GatewayAuth.from_settings(
@@ -239,9 +262,70 @@ def create_app(  # noqa: PLR0913, PLR0915
         finally:
             await native.close()
             await admin_native.close()
+            if workbench is not None:
+                await workbench.close()
 
     app = FastAPI(root_path=auth.settings.root_path, lifespan=lifespan)
-    register_auth_routes(app, auth)
+    library = LibraryService(
+        auth.settings.database_path,
+        admin_native,
+        engine.public_kb_ids,
+        native.api_key_fingerprint(),
+        public_scope=lambda: (
+            current["knowledge_base_ids"]
+            if (
+                current := store.public_app(
+                    deployment_id=auth.settings.deployment_id
+                )
+            )
+            else engine.public_kb_ids
+        ),
+    )
+    if engine.workbench_enabled and workbench is None:
+        if auth.users is None:
+            raise AssertionError("工作助手需要真实员工资料库。")
+        workbench = WorkbenchService(
+            database_path=auth.settings.database_path,
+            native_base_url=engine.base_url,
+            service_email=engine.admin_email,
+            service_password=load_server_secret(engine.admin_password_file),
+            source_tenant_id=engine.tenant_id,
+            deployment_id=auth.settings.deployment_id,
+            master_key=load_master_key(auth.settings.master_key_file).value,
+            library=library,
+            users=auth.users,
+            chat_model_override=engine.workbench_chat_model_id,
+        )
+    if workbench is None:
+        register_auth_routes(app, auth)
+    else:
+        register_auth_routes(
+            app, auth, before_role_change=workbench.before_role_change
+        )
+    register_library_routes(app, auth, library)
+    register_workbench_routes(app, auth, workbench)
+    admin_scope_guard = AdminScopeGuard(library, store)
+
+    def admin_profile(request: Request) -> UserProfile:
+        """独立控制台会话沿用管理员能力，不推断为员工超级管理员。"""
+        auth.require_admin(request)
+        try:
+            return auth.require_profile(request, csrf=False)
+        except HTTPException as error:
+            if error.status_code != _HTTP_UNAUTHORIZED:
+                raise
+            return UserProfile(
+                "console", "console", "控制台管理员", None, "admin"
+            )
+
+    def require_visible_admin_trace(trace_id: str, request: Request) -> None:
+        """人力资料的问答正文、事件及导出遵守同一访问范围。"""
+        excluded = library.restricted_kbs(admin_profile(request))
+        turn = store.get_turn(trace_id=trace_id)
+        if turn is not None and set(excluded).intersection(
+            json.loads(turn["kb_scope_json"])
+        ):
+            raise HTTPException(404, "trace not found")
 
     def page_settings() -> PageSettings:
         binding = store.public_app(deployment_id=auth.settings.deployment_id)
@@ -267,9 +351,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                 "page_settings": PageSettings().model_dump(),
             }
         try:
-            _, _, config = await validate_binding(
-                native, admin_native, binding
-            )
+            _, _, config = await validate_binding(native, admin_native, binding)
             answer = answer_from_config(config).model_dump()
             status = "ACTIVE"
         except NativeHttpError as error:
@@ -303,6 +385,8 @@ def create_app(  # noqa: PLR0913, PLR0915
         principal = auth.require_admin(request)
         try:
             kb_ids = body.kb_ids()
+            if library.hr_internal_kbs().intersection(kb_ids):
+                raise HTTPException(403, "人力内部资料不能发布到公共知识库。")
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         async with public_app_save_lock:
@@ -340,9 +424,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                 key_scope = await admin_native.public_key_scope(
                     native.api_key_fingerprint()
                 )
-                if not set(kb_ids).issubset(
-                    key_scope.knowledge_base_ids
-                ):
+                if not set(kb_ids).issubset(key_scope.knowledge_base_ids):
                     raise HTTPException(
                         status_code=422,
                         detail="public API key cannot access selected KBs",
@@ -371,8 +453,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                     )
                     if (
                         model.get("id") != model_id
-                        or model.get("tenant_id")
-                        not in {0, engine.tenant_id}
+                        or model.get("tenant_id") not in {0, engine.tenant_id}
                         or model.get("type") != model_type
                         or model.get("status") != "active"
                     ):
@@ -388,7 +469,9 @@ def create_app(  # noqa: PLR0913, PLR0915
                         "system_prompt": branded_system_prompt(
                             body.answer_settings.system_prompt
                         ),
-                        "intent_prompts": branded_intent_prompts(templates),
+                        "intent_prompts": branded_intent_prompts(
+                            templates, body.answer_settings.intent_prompts
+                        ),
                     }
                 )
                 if (
@@ -408,9 +491,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                                 f"{secrets.token_hex(4)}"
                             ),
                             "description": "湾小度公共问答应用的已发布配置",
-                            "config": answer_settings.native_config(
-                                kb_ids
-                            ),
+                            "config": answer_settings.native_config(kb_ids),
                         },
                     )
                     try:
@@ -437,6 +518,11 @@ def create_app(  # noqa: PLR0913, PLR0915
                     public_agent = await native.public_agent(agent_id)
                     if public_agent.get("config") != config:
                         raise NativeHttpError(502, "公共 Key 无法回读新应用。")
+                if workbench is not None and (
+                    current is None
+                    or set(current["knowledge_base_ids"]) != set(kb_ids)
+                ):
+                    await workbench.invalidate_scopes({"public"})
                 saved = store.save_public_app(
                     deployment_id=auth.settings.deployment_id,
                     expected_revision=revision,
@@ -515,6 +601,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     async def engine_admin_proxy(path: str, request: Request) -> Response:
         """对管理员放行有限原生路由，令牌始终留在网关内存。"""
         principal = auth.require_admin(request)
+        profile = admin_profile(request)
         binding = store.public_app(deployment_id=auth.settings.deployment_id)
         if (
             binding is not None
@@ -540,12 +627,23 @@ def create_app(  # noqa: PLR0913, PLR0915
             raise HTTPException(status_code=413, detail="body too large")
         status_code = 502
         try:
+            await admin_scope_guard.check_request(
+                profile,
+                request.method,
+                path,
+                request.url.query,
+                content,
+                request.headers,
+            )
             upstream = await admin_native.proxy(
                 method=request.method,
                 path=path,
                 query=request.url.query,
                 content=content,
                 browser_headers=request.headers,
+            )
+            upstream = await admin_scope_guard.filter_response(
+                profile, path, upstream
             )
             status_code = upstream.status_code
             if _HTTP_REDIRECT_START <= status_code < _HTTP_REDIRECT_END:
@@ -566,6 +664,9 @@ def create_app(  # noqa: PLR0913, PLR0915
                 status_code=status_code,
                 headers=upstream.headers,
             )
+        except HTTPException as error:
+            status_code = error.status_code
+            raise
         except NativeHttpError as error:
             status_code = error.status_code
             raise HTTPException(
@@ -597,6 +698,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     ) -> dict[str, Any]:
         """按本候选部署列出真实网关 Trace，不混入旧引擎。"""
         auth.require_admin(request)
+        excluded_kb_ids = library.restricted_kbs(admin_profile(request))
         if (
             not 1 <= limit <= _MAX_OPS_LIST_LIMIT
             or not 0 <= offset <= _MAX_OPS_OFFSET
@@ -612,11 +714,13 @@ def create_app(  # noqa: PLR0913, PLR0915
                 offset=offset,
                 query=query,
                 feedback_only=feedback_only,
+                excluded_kb_ids=excluded_kb_ids,
             ),
             "total": store.count_traces(
                 deployment_id=auth.settings.deployment_id,
                 query=query,
                 feedback_only=feedback_only,
+                excluded_kb_ids=excluded_kb_ids,
             ),
         }
 
@@ -627,7 +731,10 @@ def create_app(  # noqa: PLR0913, PLR0915
         return {
             "engine": "weknora",
             "qa_admission": qa_queue.snapshot(),
-            **store.ops_summary(deployment_id=auth.settings.deployment_id),
+            **store.ops_summary(
+                deployment_id=auth.settings.deployment_id,
+                excluded_kb_ids=library.restricted_kbs(admin_profile(request)),
+            ),
         }
 
     @app.get("/api/admin/ops/questions")
@@ -639,7 +746,8 @@ def create_app(  # noqa: PLR0913, PLR0915
             "window_days": 7,
             "grouping": "exact_trimmed_question",
             "items": store.frequent_questions(
-                deployment_id=auth.settings.deployment_id
+                deployment_id=auth.settings.deployment_id,
+                excluded_kb_ids=library.restricted_kbs(admin_profile(request)),
             ),
         }
 
@@ -716,7 +824,9 @@ def create_app(  # noqa: PLR0913, PLR0915
                 status_code=400, detail="deployment confirmation required"
             )
         summaries = store.list_traces(
-            deployment_id=auth.settings.deployment_id, limit=100000
+            deployment_id=auth.settings.deployment_id,
+            limit=100000,
+            excluded_kb_ids=library.restricted_kbs(admin_profile(request)),
         )
         records = (
             store.trace_export(
@@ -745,6 +855,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     def admin_trace(trace_id: str, request: Request) -> dict[str, Any]:
         """管理员查看提问人和问答；原生事件正文仍需确认导出。"""
         auth.require_admin(request)
+        require_visible_admin_trace(trace_id, request)
         record = store.trace_overview(
             trace_id=trace_id, deployment_id=auth.settings.deployment_id
         )
@@ -758,6 +869,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     ) -> dict[str, Any]:
         """复核本候选的真实用户反馈，留存人工状态与备注。"""
         principal = auth.require_admin(request)
+        require_visible_admin_trace(trace_id, request)
         record = store.trace_overview(
             trace_id=trace_id, deployment_id=auth.settings.deployment_id
         )
@@ -795,6 +907,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     ) -> Response:
         """按实际显示内容导出单轮；含正文时确认指定 Trace ID。"""
         auth.require_admin(request)
+        require_visible_admin_trace(trace_id, request)
         if body.include_content and body.confirm_id != trace_id:
             raise HTTPException(
                 status_code=400, detail="trace confirmation required"
@@ -826,6 +939,7 @@ def create_app(  # noqa: PLR0913, PLR0915
             deployment_id=auth.settings.deployment_id,
             limit=1000,
             feedback_only=True,
+            excluded_kb_ids=library.restricted_kbs(admin_profile(request)),
         )
         return {
             "engine": "weknora",
@@ -853,6 +967,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     def capabilities(request: Request) -> dict[str, Any]:
         """向保留的 React 产品壳公布真实网关协议。"""
         auth.require_public(request)
+        profile = auth.require_profile(request)
         return {
             "mode": "wanshitong",
             "stream": True,
@@ -863,6 +978,9 @@ def create_app(  # noqa: PLR0913, PLR0915
             "feedback_details": page_settings().allow_feedback,
             "page_settings": page_settings().model_dump(),
             "request_usage_context": True,
+            "search_scopes": library.available_search_scopes(profile),
+            "default_search_scopes": ["public"],
+            "workbench_enabled": workbench is not None,
             "shortcuts": [
                 {
                     "shortcut_id": item.shortcut_id,
@@ -891,7 +1009,9 @@ def create_app(  # noqa: PLR0913, PLR0915
         frequency = {
             item["question"]: item["count"]
             for item in store.frequent_questions(
-                deployment_id=auth.settings.deployment_id, limit=200
+                deployment_id=auth.settings.deployment_id,
+                limit=200,
+                excluded_kb_ids=tuple(library.hr_internal_kbs()),
             )
         }
         approved.sort(
@@ -920,7 +1040,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         }
 
     @app.post("/api/public/chat")
-    async def chat(  # noqa: PLR0915
+    async def chat(  # noqa: PLR0912, PLR0915 - 会话、范围和流状态在同一请求校验。
         body: GatewayChatRequest, request: Request
     ) -> StreamingResponse:
         """以原文向当前有效公共应用范围发起原生流式问答。"""
@@ -929,6 +1049,13 @@ def create_app(  # noqa: PLR0913, PLR0915
         conversation_id = body.conversation_id
         if user_id is None:
             raise HTTPException(status_code=401, detail="RDMS login required")
+        owner_id = _owner_id(auth, user_id)
+        if store.conversation_deleted(
+            deployment_id=auth.settings.deployment_id,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+        ):
+            raise HTTPException(404, "会话已删除，请新建对话。")
         binding = store.public_app(deployment_id=auth.settings.deployment_id)
         if binding is None:
             # 首次迁移前沿用已验收环境范围，不自动创建默认 Agent。
@@ -944,7 +1071,28 @@ def create_app(  # noqa: PLR0913, PLR0915
                     status_code=503,
                     detail=f"public app unavailable ({error.status_code})",
                 ) from None
-        owner_id = _owner_id(auth, user_id)
+        profile = auth.require_profile(request)
+        # 原生会话会携带旧轮次内容；角色降级后必须使用新的会话。
+        previous_turns = store.list_turns(
+            deployment_id=auth.settings.deployment_id,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+        )
+        library.check_history(profile, previous_turns)
+        original_scopes = store.conversation_search_scopes(
+            deployment_id=auth.settings.deployment_id,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+        ) or library.historical_search_scopes(previous_turns)
+        search_scopes = (
+            tuple(body.search_scopes)
+            if body.search_scopes is not None
+            else original_scopes or ("public",)
+        )
+        if original_scopes and search_scopes != original_scopes:
+            raise HTTPException(409, "资料范围已变化，请新建对话。")
+        kb_ids = library.search_kbs(profile, search_scopes)
+        await library.require_searchable(kb_ids, search_scopes)
         client_context = _usage_context(body.client_context)
         retry_of = client_context.get("retry_of_trace_id")
         if retry_of is not None:
@@ -962,6 +1110,12 @@ def create_app(  # noqa: PLR0913, PLR0915
         await lock.acquire()
         slot: QaSlot | None = None
         try:
+            if store.conversation_deleted(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            ):
+                raise HTTPException(404, "会话已删除，请新建对话。")
             slot = await _admit_qa(request, qa_queue)
             native_session_id = store.native_session(
                 deployment_id=auth.settings.deployment_id,
@@ -969,13 +1123,14 @@ def create_app(  # noqa: PLR0913, PLR0915
                 conversation_id=conversation_id,
             )
             if native_session_id is None:
-                created = await native.create_session(user_id)
-                native_session_id = store.bind_session(
-                    deployment_id=auth.settings.deployment_id,
-                    owner_id=owner_id,
-                    conversation_id=conversation_id,
-                    native_session_id=created,
-                )
+                native_session_id = await native.create_session(user_id)
+            native_session_id = store.bind_session(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+                native_session_id=native_session_id,
+                search_scopes=search_scopes,
+            )
             trace_id = "trace_" + secrets.token_hex(16)
             store.start_turn(
                 trace_id=trace_id,
@@ -998,12 +1153,17 @@ def create_app(  # noqa: PLR0913, PLR0915
             raise HTTPException(
                 status_code=502, detail=f"native status {error.status_code}"
             ) from None
+        except ValueError as error:
+            if slot is not None:
+                slot.release()
+            lock.release()
+            raise HTTPException(409, str(error)) from error
         except BaseException:
             if slot is not None:
                 slot.release()
             lock.release()
             raise
-        assert slot is not None
+        slot = _ready_slot(slot)
 
         bridge = BridgeStream(
             trace_id=trace_id,
@@ -1162,6 +1322,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         turn = store.get_turn(trace_id=trace_id, owner_id=owner_id)
         if turn is None or turn["conversation_id"] != body.conversation_id:
             raise HTTPException(status_code=404, detail="turn not found")
+        library.check_turn(auth.require_profile(request), turn)
         message_id = turn["native_message_id"]
         if not isinstance(message_id, str) or not message_id:
             raise HTTPException(
@@ -1183,7 +1344,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                 slot.release()
             lock.release()
             raise
-        assert slot is not None
+        slot = _ready_slot(slot)
         bridge = BridgeStream(
             trace_id=trace_id,
             session_id=str(turn["native_session_id"]),
@@ -1330,7 +1491,9 @@ def create_app(  # noqa: PLR0913, PLR0915
         return {"cancelled": cancelled}
 
     @app.get("/api/public/conversations")
-    async def conversations(request: Request) -> dict[str, Any]:
+    async def conversations(
+        request: Request, archived: bool = False
+    ) -> dict[str, Any]:
         """只列本人的新原生会话，并读取原生当前标题。"""
         principal = auth.require_public(request, csrf=True)
         user_id = _required_user(principal.user_id)
@@ -1338,9 +1501,21 @@ def create_app(  # noqa: PLR0913, PLR0915
         rows = store.list_conversations(
             deployment_id=auth.settings.deployment_id,
             owner_id=owner_id,
+            archived=archived,
         )
         items = []
         for row in rows[:_MAX_HISTORY_SESSIONS]:
+            try:
+                library.check_history(
+                    auth.require_profile(request),
+                    store.list_turns(
+                        deployment_id=auth.settings.deployment_id,
+                        owner_id=owner_id,
+                        conversation_id=row["conversation_id"],
+                    ),
+                )
+            except HTTPException:
+                continue
             try:
                 session = await native.session(
                     user_id=user_id,
@@ -1353,6 +1528,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                     "conversation_id": row["conversation_id"],
                     "title": session.get("title") or "新对话",
                     "updated_at": row["updated_at"],
+                    "archived": archived,
                 }
             )
         return {
@@ -1361,6 +1537,61 @@ def create_app(  # noqa: PLR0913, PLR0915
             "limit": _MAX_HISTORY_SESSIONS,
             "has_more": len(rows) > _MAX_HISTORY_SESSIONS,
         }
+
+    @app.post("/api/public/conversations/{conversation_id}/archive")
+    async def archive_conversation(
+        conversation_id: str,
+        body: _ConversationArchiveRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        """归档和恢复仅作用于当前登录者的历史会话。"""
+        principal = auth.require_public(request, csrf=True)
+        user_id = _required_user(principal.user_id)
+        owner_id = _owner_id(auth, user_id)
+        lock = locks.setdefault((owner_id, conversation_id), asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(409, "会话正在回答，请结束后再操作。")
+        async with lock:
+            if not store.archive_conversation(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+                archived=body.archived,
+            ):
+                raise HTTPException(404, "conversation not found")
+        return {"conversation_id": conversation_id, "archived": body.archived}
+
+    @app.delete("/api/public/conversations/{conversation_id}")
+    async def delete_conversation(
+        conversation_id: str, request: Request
+    ) -> dict[str, bool]:
+        """先删除本人原生会话，再清除本地问答、引用及反馈。"""
+        principal = auth.require_public(request, csrf=True)
+        user_id = _required_user(principal.user_id)
+        owner_id = _owner_id(auth, user_id)
+        lock = locks.setdefault((owner_id, conversation_id), asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(409, "会话正在回答，请结束后再操作。")
+        async with lock:
+            native_session_id = store.native_session(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            )
+            if native_session_id is None:
+                raise HTTPException(404, "conversation not found")
+            try:
+                await native.delete_session(
+                    user_id=user_id, session_id=native_session_id
+                )
+            except NativeHttpError:
+                raise HTTPException(502, "删除未完成，请稍后重试。") from None
+            store.delete_conversation(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            )
+        return {"deleted": True}
 
     @app.get("/api/public/legacy/history")
     def legacy_history(request: Request) -> dict[str, Any]:
@@ -1421,11 +1652,25 @@ def create_app(  # noqa: PLR0913, PLR0915
             if isinstance(item.get("id"), str)
         }
         turns = []
-        for turn in store.list_turns(
+        stored_turns = store.list_turns(
             deployment_id=auth.settings.deployment_id,
             owner_id=owner_id,
             conversation_id=conversation_id,
-        ):
+        )
+        search_scopes = (
+            store.conversation_search_scopes(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            )
+            or library.historical_search_scopes(stored_turns)
+            or ("public",)
+        )
+        for turn in stored_turns:
+            try:
+                library.check_turn(auth.require_profile(request), turn)
+            except HTTPException:
+                continue
             native_message = native_by_id.get(turn["native_message_id"])
             native_answer = (
                 native_message.get("content")
@@ -1490,6 +1735,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                     "native_request_id": turn["native_request_id"],
                     "stop_acknowledged": bool(turn["stop_acknowledged"]),
                     "created_at": turn["created_at"],
+                    "search_scopes": list(search_scopes),
                 }
             )
         return {"turns": turns}
@@ -1512,6 +1758,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         )
         if turn is None or turn["conversation_id"] != conversation_id:
             raise HTTPException(status_code=404, detail="turn not found")
+        library.check_turn(auth.require_profile(request), turn)
         reference = store.get_reference(reference_id=ref_id, trace_id=trace_id)
         if reference is None:
             raise HTTPException(status_code=404, detail="resource unavailable")
@@ -1574,6 +1821,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         )
         if turn is None or turn["conversation_id"] != conversation_id:
             raise HTTPException(status_code=404, detail="turn not found")
+        library.check_turn(auth.require_profile(request), turn)
         reference = store.get_reference(reference_id=ref_id, trace_id=trace_id)
         if reference is None:
             raise HTTPException(status_code=404, detail="resource unavailable")
@@ -1621,6 +1869,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         )
         if turn is None or turn["conversation_id"] != conversation_id:
             raise HTTPException(status_code=404, detail="turn not found")
+        library.check_turn(auth.require_profile(request), turn)
         if (
             not file_path.startswith("resource://")
             or len(file_path) > _MAX_RESOURCE_HANDLE_CHARS

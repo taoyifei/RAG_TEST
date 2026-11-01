@@ -1,0 +1,15 @@
+# 在固定Bookworm/Python3.10运行时中装入官方090的完整venv与解析源码。
+# build-context/docreader/app来自已验证压缩层及diff_id的官方amd64镜像。
+ARG WXD_DOCREADER_RUNTIME_IMAGE
+FROM ${WXD_DOCREADER_RUNTIME_IMAGE}
+USER root
+WORKDIR /app
+RUN rm -rf /app/.venv /app/docreader
+COPY deployment/wanshitong-v2/build-context/docreader/app/ /app/
+RUN /app/.venv/bin/python -c "import cv2, onnxruntime, rapidocr; from docreader import main"
+LABEL org.opencontainers.image.version="v0.9.0" \
+      org.opencontainers.image.revision="f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7" \
+      org.opencontainers.image.source="https://github.com/Tencent/WeKnora" \
+      io.wanxiaodu.runtime-kind="official-090-venv-and-source-on-locked-bookworm-runtime"
+ENTRYPOINT ["/app/.venv/bin/python", "-m", "docreader.container_entrypoint"]
+CMD ["/app/.venv/bin/python", "-m", "docreader.main"]

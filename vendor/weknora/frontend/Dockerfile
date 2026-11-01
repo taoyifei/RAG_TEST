@@ -45,9 +45,7 @@ RUN if [ -n "$NPM_REGISTRY" ]; then \
 COPY . .
 # After npm ci so a new commit hash does not bust the dependency layer.
 ARG VITE_FRONTEND_COMMIT=unknown
-ARG VITE_WANSHITONG_GATEWAY_AUTH=false
 ENV VITE_FRONTEND_COMMIT=${VITE_FRONTEND_COMMIT}
-ENV VITE_WANSHITONG_GATEWAY_AUTH=${VITE_WANSHITONG_GATEWAY_AUTH}
 RUN npm run build
 
 # ---------------------------------------------------------------------------

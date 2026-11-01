@@ -29,6 +29,10 @@ export const SETTINGS_SECTION_MIN_ROLE: Record<string, SettingsRoleKey> = {
   members: 'viewer',
   mymemory: 'viewer',
   memory: 'admin',
+  // Members read which model each feature falls back to; editing is Admin+ inside.
+  defaults: 'viewer',
+  // Everyone sets their own preferences; the workspace part is Admin+ inside.
+  assistant: 'viewer',
   // Every member fills in their own environment variables; the workspace-wide
   // values stay on the Admin+ skills page.
   envvars: 'viewer',
@@ -45,6 +49,7 @@ export const SETTINGS_MANAGEMENT_SHORTCUT_MIN_ROLE = {
 
 export const SYSTEM_ADMIN_SETTINGS_SECTIONS = new Set([
   'system-global',
+  'model-catalog',
   'runtime-queues',
   'platform-api-keys',
   'system-audit-log',

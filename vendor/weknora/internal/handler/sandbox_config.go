@@ -22,6 +22,8 @@ type sandboxConfigService interface {
 	Update(context.Context, uint64, string, service.UpdateSandboxConfigInput) (*types.TenantSandboxConfigEntity, error)
 	Delete(context.Context, uint64, string, bool) error
 	Inventory(context.Context, uint64, string) (service.SandboxInventory, error)
+	ListUserMachines(context.Context, uint64, string) ([]service.UserMachineView, error)
+	ReleaseUserMachine(context.Context, uint64, string, string) error
 	WorkspaceScriptsDisabled(context.Context, uint64) (bool, error)
 	SetWorkspaceScriptsDisabled(context.Context, uint64, bool) error
 	QueryTemplates(context.Context, uint64, service.SandboxTemplateQueryInput) (*service.SandboxTemplateCatalog, error)
@@ -42,6 +44,9 @@ type sandboxTemplateQueryRequest struct {
 // / replace_desktop rebuild it so a new spec (DNS, image) can take effect.
 // Replace requires config_id.
 func (h *SandboxConfigHandler) QueryTemplates(c *gin.Context) {
+	if h.liteHidden(c, false) {
+		return
+	}
 	var req sandboxTemplateQueryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.Error(apperrors.NewBadRequestError(err.Error()))
@@ -68,12 +73,34 @@ func (h *SandboxConfigHandler) QueryTemplates(c *gin.Context) {
 
 type SandboxConfigHandler struct {
 	service sandboxConfigService
+	desktop bool
 }
 
 func NewSandboxConfigHandler(
 	service *service.TenantSandboxConfigService,
+	host service.HostSandboxManager,
 ) *SandboxConfigHandler {
-	return &SandboxConfigHandler{service: service}
+	return &SandboxConfigHandler{service: service, desktop: host.Desktop}
+}
+
+// liteHidden answers every sandbox-config route on Lite: the desktop build has
+// no remote sandboxes. Listing succeeds empty so shared pages still load, and
+// still reports the workspace script policy, which Lite's host sandbox obeys.
+func (h *SandboxConfigHandler) liteHidden(c *gin.Context, list bool) bool {
+	if !h.desktop {
+		return false
+	}
+	if list {
+		disabled, err := h.service.WorkspaceScriptsDisabled(c.Request.Context(), sandboxConfigTenantID(c))
+		if err != nil {
+			_ = c.Error(err)
+			return true
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": []any{}, "workspace_scripts_disabled": disabled})
+		return true
+	}
+	_ = c.Error(apperrors.NewNotFoundError("sandbox configs are not available in Lite"))
+	return true
 }
 
 type sandboxConfigRequest struct {
@@ -190,7 +217,8 @@ func respondSandboxConfigRefusal(c *gin.Context, err error) bool {
 		respondSkillSnapshotBlocksTemplate(c)
 		return true
 	}
-	if stderrors.Is(err, repository.ErrSandboxConfigCordoned) {
+	if stderrors.Is(err, repository.ErrSandboxConfigCordoned) ||
+		stderrors.Is(err, service.ErrSandboxConfigCreatesInFlight) {
 		respondSandboxConfigCordoned(c)
 		return true
 	}
@@ -225,6 +253,9 @@ func respondSandboxConfigServiceError(c *gin.Context, err error) {
 // @Security     ApiKeyAuth
 // @Router       /sandbox-configs [get]
 func (h *SandboxConfigHandler) List(c *gin.Context) {
+	if h.liteHidden(c, true) {
+		return
+	}
 	ctx := c.Request.Context()
 	tenantID := sandboxConfigTenantID(c)
 	configs, err := h.service.List(ctx, tenantID)
@@ -253,6 +284,7 @@ type workspacePolicyRequest struct {
 }
 
 // SetWorkspacePolicy toggles script execution for the whole workspace.
+// It stays open on Lite: the host sandbox honours the same switch.
 func (h *SandboxConfigHandler) SetWorkspacePolicy(c *gin.Context) {
 	var req workspacePolicyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -274,13 +306,16 @@ func (h *SandboxConfigHandler) SetWorkspacePolicy(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        request  body      sandboxConfigRequest    true  "Sandbox backend config"
-// @Success      201      {object}  map[string]interface{}  "Created sandbox config"
+// @Success      201      {object}  handler.DataResponse{data=handler.sandboxConfigResponse}  "Created sandbox config"
 // @Failure      400      {object}  apperrors.AppError      "Invalid request or validation failure"
 // @Failure      401      {object}  map[string]interface{}  "Unauthorized"
 // @Security     Bearer
 // @Security     ApiKeyAuth
 // @Router       /sandbox-configs [post]
 func (h *SandboxConfigHandler) Create(c *gin.Context) {
+	if h.liteHidden(c, false) {
+		return
+	}
 	var req sandboxConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.Error(apperrors.NewBadRequestError(err.Error()))
@@ -305,13 +340,16 @@ func (h *SandboxConfigHandler) Create(c *gin.Context) {
 // @Tags         SandboxConfig
 // @Produce      json
 // @Param        id   path      string  true  "Sandbox config ID"
-// @Success      200  {object}  map[string]interface{}   "Sandbox config"
+// @Success      200  {object}  handler.DataResponse{data=handler.sandboxConfigResponse}   "Sandbox config"
 // @Failure      401  {object}  map[string]interface{}   "Unauthorized"
 // @Failure      404  {object}  apperrors.AppError       "Sandbox config not found"
 // @Security     Bearer
 // @Security     ApiKeyAuth
 // @Router       /sandbox-configs/{id} [get]
 func (h *SandboxConfigHandler) Get(c *gin.Context) {
+	if h.liteHidden(c, false) {
+		return
+	}
 	cfg, err := h.service.Get(c.Request.Context(), sandboxConfigTenantID(c), c.Param("id"))
 	if err != nil {
 		c.Error(err)
@@ -332,7 +370,7 @@ func (h *SandboxConfigHandler) Get(c *gin.Context) {
 // @Produce      json
 // @Param        id       path      string                true  "Sandbox config ID"
 // @Param        request  body      sandboxConfigRequest  true  "Updated sandbox config"
-// @Success      200      {object}  map[string]interface{}  "Updated sandbox config"
+// @Success      200      {object}  handler.DataResponse{data=handler.sandboxConfigResponse}  "Updated sandbox config"
 // @Failure      400      {object}  apperrors.AppError      "Invalid request or validation failure"
 // @Failure      401      {object}  map[string]interface{}  "Unauthorized"
 // @Failure      404      {object}  apperrors.AppError      "Sandbox config not found"
@@ -342,6 +380,9 @@ func (h *SandboxConfigHandler) Get(c *gin.Context) {
 // @Security     ApiKeyAuth
 // @Router       /sandbox-configs/{id} [put]
 func (h *SandboxConfigHandler) Update(c *gin.Context) {
+	if h.liteHidden(c, false) {
+		return
+	}
 	var req sandboxConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.Error(apperrors.NewBadRequestError(err.Error()))
@@ -374,13 +415,16 @@ func (h *SandboxConfigHandler) Update(c *gin.Context) {
 // @Produce      json
 // @Param        id     path   string  true   "Sandbox config ID"
 // @Param        force  query  bool    false  "Force delete when inventory is unverifiable"
-// @Success      200    {object}  map[string]interface{}  "Deletion success"
+// @Success      200    {object}  handler.SuccessResponse  "Deletion success"
 // @Failure      401    {object}  map[string]interface{}  "Unauthorized"
 // @Failure      409    {object}  map[string]interface{}  "Live sandboxes or unverifiable inventory"
 // @Security     Bearer
 // @Security     ApiKeyAuth
 // @Router       /sandbox-configs/{id} [delete]
 func (h *SandboxConfigHandler) Delete(c *gin.Context) {
+	if h.liteHidden(c, false) {
+		return
+	}
 	force := c.Query("force") == "true"
 	if err := h.service.Delete(c.Request.Context(), sandboxConfigTenantID(c), c.Param("id"), force); err != nil {
 		if respondSandboxConfigRefusal(c, err) {
@@ -398,16 +442,71 @@ func (h *SandboxConfigHandler) Delete(c *gin.Context) {
 // @Tags         SandboxConfig
 // @Produce      json
 // @Param        id   path      string  true  "Sandbox config ID"
-// @Success      200  {object}  map[string]interface{}  "Sandbox inventory"
+// @Success      200  {object}  handler.DataResponse{data=service.SandboxInventory}  "Sandbox inventory"
 // @Failure      401  {object}  map[string]interface{}  "Unauthorized"
 // @Security     Bearer
 // @Security     ApiKeyAuth
 // @Router       /sandbox-configs/{id}/sandboxes [get]
 func (h *SandboxConfigHandler) Inventory(c *gin.Context) {
+	if h.liteHidden(c, false) {
+		return
+	}
 	inv, err := h.service.Inventory(c.Request.Context(), sandboxConfigTenantID(c), c.Param("id"))
 	if err != nil {
 		c.Error(err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": inv})
+}
+
+// ListUserSandboxes godoc
+// @Summary      List shared user sandboxes
+// @Description  List the config's shared user machines with live session counts and the empty-retention clock.
+// @Tags         SandboxConfig
+// @Produce      json
+// @Param        id   path      string  true  "Sandbox config ID"
+// @Success      200  {object}  map[string]interface{}  "Shared user sandboxes"
+// @Failure      401  {object}  map[string]interface{}  "Unauthorized"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /sandbox-configs/{id}/user-sandboxes [get]
+func (h *SandboxConfigHandler) ListUserSandboxes(c *gin.Context) {
+	if h.liteHidden(c, false) {
+		return
+	}
+	rows, err := h.service.ListUserMachines(c.Request.Context(), sandboxConfigTenantID(c), c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": rows})
+}
+
+// ReleaseUserSandbox godoc
+// @Summary      Release a shared user sandbox
+// @Description  Delete one shared user machine now; each session gets a fresh machine on next use. Refused while busy.
+// @Tags         SandboxConfig
+// @Produce      json
+// @Param        id      path      string  true  "Sandbox config ID"
+// @Param        digest  path      string  true  "User machine digest"
+// @Success      200     {object}  map[string]interface{}  "Released"
+// @Failure      401     {object}  map[string]interface{}  "Unauthorized"
+// @Failure      409     {object}  map[string]interface{}  "User sandbox is busy"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /sandbox-configs/{id}/user-sandboxes/{digest}/release [post]
+func (h *SandboxConfigHandler) ReleaseUserSandbox(c *gin.Context) {
+	if h.liteHidden(c, false) {
+		return
+	}
+	err := h.service.ReleaseUserMachine(c.Request.Context(), sandboxConfigTenantID(c), c.Param("id"), c.Param("digest"))
+	if stderrors.Is(err, service.ErrUserSandboxBusy) {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "USER_SANDBOX_BUSY"})
+		return
+	}
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }

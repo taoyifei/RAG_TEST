@@ -240,6 +240,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useAssistantDataChange } from '@/utils/assistantDataChange'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { getCurrentUser, type TenantInfo } from '@/api/auth'
 import { deleteTenant as deleteTenantApi, updateTenant as updateTenantApi } from '@/api/tenant'
@@ -672,6 +673,8 @@ const getUsagePercentage = () => {
 }
 
 // Lifecycle
+useAssistantDataChange(() => { void loadInfo() }, { areas: ['workspace'] })
+
 onMounted(() => {
   loadInfo()
 })

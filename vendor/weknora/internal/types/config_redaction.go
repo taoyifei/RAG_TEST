@@ -33,6 +33,9 @@ func ParserEngineConfigForResponse(cfg *ParserEngineConfig, maskSecrets bool) *P
 	if out.MinerUAPIKey != "" {
 		out.MinerUAPIKey = RedactedSecretPlaceholder
 	}
+	if out.MinerUServerAPIKey != "" {
+		out.MinerUServerAPIKey = RedactedSecretPlaceholder
+	}
 	if out.PaddleOCRVLCloudToken != "" {
 		out.PaddleOCRVLCloudToken = RedactedSecretPlaceholder
 	}
@@ -167,6 +170,7 @@ func MergeParserEngineConfigForUpdate(incoming, existing *ParserEngineConfig) *P
 		prev = *existing
 	}
 	out.MinerUAPIKey = PreserveIfRedacted(out.MinerUAPIKey, prev.MinerUAPIKey)
+	out.MinerUServerAPIKey = PreserveIfRedacted(out.MinerUServerAPIKey, prev.MinerUServerAPIKey)
 	out.PaddleOCRVLCloudToken = PreserveIfRedacted(out.PaddleOCRVLCloudToken, prev.PaddleOCRVLCloudToken)
 	// Chat attachment parser rules are configured per agent; preserve any legacy
 	// tenant-level rules when the settings UI omits this field on engine updates.
@@ -391,6 +395,16 @@ func MergeSandboxConfigForUpdate(incoming, existing *TenantSandboxConfig) *Tenan
 		// explicit next_turn token when the admin switches back.
 		if strings.TrimSpace(out.SkillRollout) == "" {
 			out.SkillRollout = existing.SkillRollout
+		}
+		// The runtime form may omit the allocation policy. Only an explicit
+		// "session" switches a user config back.
+		if strings.TrimSpace(out.AllocationMode) == "" {
+			out.AllocationMode = existing.AllocationMode
+		}
+		// 0 is indistinguishable from an omitted field here, so it keeps the
+		// stored value. Returning to the default means sending 7 explicitly.
+		if out.UserSandboxEmptyRetentionDays == 0 {
+			out.UserSandboxEmptyRetentionDays = existing.UserSandboxEmptyRetentionDays
 		}
 	}
 

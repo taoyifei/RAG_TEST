@@ -421,6 +421,101 @@
                             />
                           </div>
                         </div>
+                        <div v-if="uiState.multimodalConfig.enabled" class="setting-row setting-row-vertical">
+                          <div class="setting-info">
+                            <label>{{ t('uploadConfirm.imageEmbeddingModel') }}</label>
+                            <p class="desc">{{ t('uploadConfirm.imageIndexInherited') }}</p>
+                            <p v-if="uiState.imageVectorEnabled && !embeddingTakesImages" class="warn">
+                              {{ t('knowledgeEditor.advanced.multimodal.imageVectorModelUnsupported') }}
+                            </p>
+                          </div>
+                          <div class="setting-control">
+                            <ModelSelector
+                              model-type="Embedding"
+                              :selected-model-id="kbInfo?.embedding_model_id || ''"
+                              :all-models="allModels"
+                              disabled
+                              :placeholder="t('uploadConfirm.notSet')"
+                            />
+                          </div>
+                        </div>
+                        <div v-if="uiState.multimodalConfig.enabled" class="setting-row">
+                          <div class="setting-info">
+                            <label>{{ t('uploadConfirm.imageVectorIndex') }}</label>
+                            <p class="desc">{{ t('uploadConfirm.imageVectorIndexHint') }}</p>
+                            <p v-if="!kbInfo?.indexing_strategy?.vector_enabled" class="warn">{{ t('uploadConfirm.imageVectorRequiresIndex') }}</p>
+                          </div>
+                          <div class="setting-control">
+                            <t-switch v-model="uiState.imageVectorEnabled" :disabled="!kbInfo?.indexing_strategy?.vector_enabled" size="medium" />
+                          </div>
+                        </div>
+
+                        <div v-if="uiState.multimodalConfig.enabled" class="setting-row setting-row-vertical image-panel-flush">
+                          <div class="setting-info">
+                            <label>{{ t('knowledgeEditor.advanced.multimodal.imagePipelineSectionLabel') }}</label>
+                            <p class="desc">{{ t('knowledgeEditor.advanced.multimodal.imagePipelineSectionDescription') }}</p>
+                          </div>
+                          <!-- 与知识库编辑器同款：方案与私有参数由注册表驱动，前端
+                               不写死任何方案名。选中智能模式时下方展开属性面板。 -->
+                          <ImagePipelineSettings
+                            v-model:params="uiState.imagePipelineParams"
+                            :pipeline-id="uiState.imagePipeline"
+                            @update:pipeline-id="uiState.imagePipeline = $event"
+                            @update:invalid="imagePipelineInvalid = $event"
+                          >
+                            <!-- 观察属性说明：收进面板的「附加说明」折叠区。属性字典来自后端注册表，
+                                 流水线声明不了它，所以由宿主通过插槽递进去；折叠交给面板统一负责，
+                                 这里不再套一层 details。 -->
+                            <template #notes>
+                              <div
+                                v-if="
+                                  uiState.multimodalConfig.enabled &&
+                                  uiState.imagePipeline === IMAGE_PIPELINE_SMARTOCR
+                                "
+                                class="image-attr-block"
+                              >
+                                <div class="image-attr-heading">
+                                  <label>{{ t('knowledgeEditor.advanced.multimodal.imageAttrsSchemaLabel') }}</label>
+                                  <p class="desc">{{ t('knowledgeEditor.advanced.multimodal.imageAttrsSchemaDescription') }}</p>
+                                </div>
+                                <ul v-if="imageAttrDisplays.length" class="image-attr-list">
+                                  <li v-for="attr in imageAttrDisplays" :key="attr.name" class="image-attr-row">
+                                    <div class="image-attr-head">
+                                      <span class="image-attr-label">{{ attr.label }}</span>
+                                      <code class="image-attr-name">{{ attr.name }}</code>
+                                    </div>
+                                    <p v-if="attr.description" class="image-attr-desc">{{ attr.description }}</p>
+                                    <ul class="image-attr-value-list">
+                                      <li v-for="v in attr.values" :key="v.value" class="image-attr-value">
+                                        <code>{{ v.value }}</code>
+                                        <span class="image-attr-value-label">{{ v.label }}</span>
+                                      </li>
+                                    </ul>
+                                  </li>
+                                </ul>
+                                <div class="image-attr-section">
+                                  <div class="setting-info">
+                                    <label>{{ t('knowledgeEditor.advanced.multimodal.imageAttrsOcrConditions') }}</label>
+                                    <p class="desc">{{ t('knowledgeEditor.advanced.multimodal.imageAttrsOcrConditionsDesc') }}</p>
+                                  </div>
+                                  <ul class="image-attr-condition-list">
+                                    <li v-for="(cond, i) in imageAttrConditionDisplays" :key="i" class="image-attr-condition">
+                                      <span class="image-attr-condition-label">{{ cond.label }}</span>
+                                      <code class="image-attr-condition-raw">{{ cond.raw }}</code>
+                                    </li>
+                                  </ul>
+                                </div>
+                              </div>
+                            </template>
+                          </ImagePipelineSettings>
+                        </div>
+                        <div
+                          v-if="uiState.multimodalConfig.enabled && uiState.imagePipeline === IMAGE_PIPELINE_SMARTOCR"
+                          class="image-pipeline-kb-note"
+                        >
+                          {{ t('knowledgeEditor.advanced.multimodal.imagePipelineKbNote') }}
+                        </div>
+
                       </div>
                     </div>
                   </div>
@@ -581,8 +676,17 @@ import { useEditorResourcesStore } from '@/stores/editorResources'
 import { useUIStore } from '@/stores/ui'
 import { formatFileSize, getFileIcon } from '@/utils/files'
 import { getUploadFileKey } from '../utils/uploadSources'
-import { listKnowledgeTags } from '@/api/knowledge-base'
+import { listKnowledgeTags, mergeImageActions, fetchImageAttrSchema, FALLBACK_IMAGE_ATTR_SCHEMA, type ImageActionsConfig, type ImageAttrSchema } from '@/api/knowledge-base'
+import { imageAttrDisplay, imageAttrConditionDisplay } from '@/utils/imageAttrDisplay'
 import KbUploadSourceDropdown from './KbUploadSourceDropdown.vue'
+import ImagePipelineSettings from '../ImagePipelineSettings.vue'
+import {
+  buildPipelineFields,
+  resolveImagePipelineFromKb,
+  normalizeImagePipelineId,
+  IMAGE_PIPELINE_DEFAULT,
+  IMAGE_PIPELINE_SMARTOCR,
+} from '@/utils/imageProcessingConfig'
 import FolderPickerMenu, { type FolderOption } from './FolderPickerMenu.vue'
 import { folderOptionFromPath, sortFolderOptions } from '../folderTree'
 import type { KnowledgeProcessOverrides } from '@/types/knowledgeProcess'
@@ -595,6 +699,20 @@ import type {
 
 const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']
 const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'flac', 'ogg']
+
+// The image-attribute registry, fetched from the backend (single source of
+// truth). Falls back to the static registry until the endpoint answers.
+const imageAttrSchema = ref<ImageAttrSchema | null>(null)
+const displaySchema = computed<ImageAttrSchema>(
+  () => imageAttrSchema.value ?? FALLBACK_IMAGE_ATTR_SCHEMA,
+)
+async function loadImageAttrSchema(kbId: string) {
+  try {
+    imageAttrSchema.value = await fetchImageAttrSchema(kbId)
+  } catch {
+    imageAttrSchema.value = null
+  }
+}
 
 type ConfigSectionKey = 'tags' | 'parser' | 'chunking' | 'multimodal' | 'asr' | 'summary' | 'question' | 'graph'
 type IssueSectionKey = 'multimodal' | 'asr'
@@ -621,6 +739,13 @@ interface UploadUIState {
   summaryEnabled: boolean
   chunkingConfig: ChunkingUIConfig
   multimodalConfig: { enabled: boolean; vllmModelId: string; descriptionLanguage?: string; customInstructions?: string }
+  // The image pipeline pick and its private tunables. The pick decides the
+  // legacy image_attrs_enabled switch (only smartocr turns it on), which is
+  // derived at write time rather than stored.
+  imagePipeline: string
+  imagePipelineParams: Record<string, unknown>
+  imageVectorEnabled: boolean
+  imageActions: ImageActionsConfig
   asrConfig: { enabled: boolean; modelId: string; language: string }
   questionGenerationConfig: { enabled: boolean; questionCount: number; customInstructions?: string }
   nodeExtractConfig: {
@@ -670,12 +795,31 @@ const emit = defineEmits<{
   cancel: []
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
+
+// The attribute panel and the OCR conditions are rendered from the registry in
+// the operator's language: the registry supplies the wording, the i18n overlay
+// translates it, so a new backend attribute needs no change here.
+const imageAttrDisplays = computed(() =>
+  displaySchema.value.attributes.map((attr) => imageAttrDisplay(attr, t, te)),
+)
+// The conditions this upload actually runs with: a list customised through the
+// API is shown as is, otherwise mergeImageActions filled in the default.
+const imageAttrConditionDisplays = computed(() =>
+  uiState.value.imageActions.ocr.on.map((cond) =>
+    imageAttrConditionDisplay(cond, displaySchema.value, t, te),
+  ),
+)
 const chatResources = useChatResourcesStore()
 const editorResources = useEditorResourcesStore()
 const uiStore = useUIStore()
 
 const allModels = ref<any[]>([])
+const embeddingTakesImages = computed(() => {
+  const model = allModels.value.find(m => m.id === props.kbInfo?.embedding_model_id)
+  // A shared model may be absent from the model list; the backend resolves it.
+  return !model || !!model.capabilities?.input?.includes('image')
+})
 const localFiles = ref<File[]>([])
 const localUrls = ref<string[]>([])
 const availableTags = ref<Array<{ id: string; name: string }>>([])
@@ -1097,6 +1241,10 @@ function createDefaultUIState(): UploadUIState {
       tableMetadataInstructions: '',
     },
     multimodalConfig: { enabled: false, vllmModelId: '', descriptionLanguage: '', customInstructions: '' },
+    imagePipeline: IMAGE_PIPELINE_DEFAULT,
+    imagePipelineParams: {},
+    imageVectorEnabled: false,
+    imageActions: mergeImageActions(),
     asrConfig: { enabled: false, modelId: '', language: '' },
     questionGenerationConfig: { enabled: true, questionCount: 3, customInstructions: '' },
     nodeExtractConfig: {
@@ -1122,7 +1270,7 @@ function initFromKbInfo(kb: any) {
     summaryEnabled: true,
     chunkingConfig: {
       chunkSize: kb.chunking_config?.chunk_size || 512,
-      chunkOverlap: kb.chunking_config?.chunk_overlap || 80,
+      chunkOverlap: kb.chunking_config?.chunk_overlap ?? 80,
       separators: kb.chunking_config?.separators || ['\n\n', '\n', '。', '！', '？', ';', '；'],
       parserEngineRules: kb.chunking_config?.parser_engine_rules || undefined,
       enableParentChild: kb.chunking_config?.enable_parent_child ?? false,
@@ -1139,6 +1287,14 @@ function initFromKbInfo(kb: any) {
       descriptionLanguage: kb.vlm_config?.description_language || '',
       customInstructions: kb.vlm_config?.custom_instructions || '',
     },
+    // 默认跟随知识库的图片解析方案；用户可对本次任务单独覆盖。旧库（没有
+    // image_pipeline 的）按与后端一致的规则解析出一个具体方案。方案的设置就
+    // 存在它自己的槽位里，原样带过来即可：面板读槽位，运行时也读槽位。
+    imagePipeline: resolveImagePipelineFromKb(kb),
+    imagePipelineParams:
+      (kb.image_processing_config?.image_pipeline_params as Record<string, unknown>) ?? {},
+    imageVectorEnabled: !!kb.image_processing_config?.image_vector_enabled,
+    imageActions: mergeImageActions(kb.image_processing_config?.image_actions),
     asrConfig: {
       enabled: !!kb.asr_config?.enabled,
       modelId: kb.asr_config?.model_id || '',
@@ -1163,6 +1319,8 @@ function initFromKbInfo(kb: any) {
     graphEnabled: kb.indexing_strategy?.graph_enabled ?? false,
     pdfForceScanned: false,
   }
+  // 拉取后端属性注册表，驱动属性面板的动态渲染（已有 kbId）。
+  if (kb.id) loadImageAttrSchema(kb.id)
 }
 
 function buildProcessOverrides(): KnowledgeProcessOverrides {
@@ -1185,6 +1343,20 @@ function buildProcessOverrides(): KnowledgeProcessOverrides {
       table_metadata_instructions: chunking.tableMetadataInstructions,
     },
     enable_multimodel: state.multimodalConfig.enabled,
+    // 旧观察开关跟随选中的方案（只有智能模式点亮它），与后端
+    // EffectiveProcessConfig 的派生规则一致；方案的显式选择随行下发。
+    image_attrs_enabled: state.imagePipeline === IMAGE_PIPELINE_SMARTOCR,
+    image_vector_enabled: state.imageVectorEnabled,
+    image_actions: {
+      ocr: {
+        // The KB's own conditions (mergeImageActions keeps a custom list), so
+        // an upload never swaps an API-customised table for the default one.
+        // The table is the conditions and nothing else: what to do about an
+        // unobserved image is a setting of the pipeline, and it travels in
+        // image_pipeline_params with the rest of that pipeline's settings.
+        on: state.imageActions.ocr.on,
+      },
+    },
     vlm_config: {
       enabled: state.multimodalConfig.enabled,
       model_id: state.multimodalConfig.vllmModelId,
@@ -1211,6 +1383,20 @@ function buildProcessOverrides(): KnowledgeProcessOverrides {
       custom_instructions: state.nodeExtractConfig.customInstructions,
     },
   }
+
+  // 方案的显式选择与私有参数由共享助手产出：没选方案、没有可调参数、或多模态
+  // 关着（此时本节的控件整个不显示，用户没得选）时整段不下发。
+  //
+  // 多模态关着时必须不下发：后端 EffectiveProcessConfig 一见到 image_pipeline
+  // 就会用方案 id 反推 ImageAttrsEnabled，那会把这里显式发的 false 顶回去，
+  // 于是「关掉多模态」对属性观察失去作用。这与知识库编辑器的写法规律一致。
+  Object.assign(
+    overrides,
+    buildPipelineFields(
+      state.multimodalConfig.enabled ? state.imagePipeline : '',
+      state.imagePipelineParams,
+    ),
+  )
 
   if (state.pdfForceScanned) {
     overrides.parser_engine_overrides = {
@@ -1241,6 +1427,19 @@ function applyOverridesToState(o?: KnowledgeProcessOverrides | null) {
   }
   if (o.parser_engine_rules) s.chunkingConfig.parserEngineRules = o.parser_engine_rules
   if (o.enable_multimodel != null) s.multimodalConfig.enabled = o.enable_multimodel
+  if (o.image_pipeline != null) {
+    // 存量覆盖里可能是更名前的 caption_ocr / ob_cap_ocr，交给共享助手归一。
+    s.imagePipeline = normalizeImagePipelineId(o.image_pipeline) || IMAGE_PIPELINE_DEFAULT
+    // 与后端 ResolveProcessConfig 一致：显式方案和参数整体替换，缺省参数使用方案默认值。
+    s.imagePipelineParams = o.image_pipeline_params ?? {}
+  } else if (o.image_attrs_enabled != null) {
+    // 旧版观察开关只在切换方案时丢弃原参数；同一方案继续继承知识库设置。
+    const pipeline = o.image_attrs_enabled ? IMAGE_PIPELINE_SMARTOCR : IMAGE_PIPELINE_DEFAULT
+    if (pipeline !== s.imagePipeline) s.imagePipelineParams = {}
+    s.imagePipeline = pipeline
+  }
+  if (o.image_vector_enabled != null) s.imageVectorEnabled = o.image_vector_enabled
+  if (o.image_actions) s.imageActions = mergeImageActions(o.image_actions)
   if (o.vlm_config) {
     if (o.vlm_config.enabled != null) s.multimodalConfig.enabled = o.vlm_config.enabled
     if (o.vlm_config.model_id != null) s.multimodalConfig.vllmModelId = o.vlm_config.model_id
@@ -1441,12 +1640,19 @@ const handleCancel = () => {
   emit('update:visible', false)
 }
 
+// 面板报上来的「选中的方案一个动作都没开」；多模态开启时阻止确认。
+const imagePipelineInvalid = ref(false)
+
 const handleConfirm = () => {
   if (props.mode === 'file' && batchItemCount.value === 0) {
     MessagePlugin.warning(t('uploadConfirm.noItems'))
     return
   }
   if (!validateBeforeConfirm()) return
+  if (uiState.value.multimodalConfig.enabled && imagePipelineInvalid.value) {
+    MessagePlugin.warning(t('imagePipeline.errors.noActionEnabled'))
+    return
+  }
 
   const processConfig = buildProcessOverrides()
   if (props.mode === 'manual' && props.manualPreview) {
@@ -1473,6 +1679,133 @@ const handleConfirm = () => {
 </script>
 
 <style lang="less" scoped>
+// 图片属性面板（可观察属性 / OCR 触发条件 / 观察失败兜底）
+// 文案全部来自后端属性注册表（人话名 + 每个取值的含义），前端只做翻译覆盖，
+// 因此新增属性无需改这里。与知识库编辑器同款：铺在所在设置区里、不套独立底色块。
+// 第三段（观察属性说明）与上方开关区之间的分割线：分段之间才画线。
+// 属性字典与流水线自己的说明同处一个折叠区，只留间距不画线：分割线只用在
+// 段落之间（面板自己画），段内不画。
+.image-attr-block {
+  margin-top: 16px;
+}
+
+// .setting-row 自带下边框；图片流水线面板里分段之间才画线，段内不留线（与知识库
+// 编辑器同款）。② / ③ 之间的那条线就是上面 .image-attr-block 的上边框。
+.setting-row.image-panel-flush {
+  border-bottom: none;
+}
+// 折叠标题：收起时仍读得到这一段是什么。
+// 属性字典的小标题。它现在活在面板的「附加说明」折叠区里，自己不再折叠，
+// 所以没有指针与展开语义 —— 折叠由面板统一负责。
+.image-attr-heading {
+  label {
+    font-weight: 500;
+    color: var(--td-text-color-primary);
+  }
+
+  .desc {
+    margin: 2px 0 0;
+    font-size: var(--app-text-sm);
+    line-height: 20px;
+    color: var(--td-text-color-secondary);
+  }
+}
+.image-attr-list,
+.image-attr-value-list,
+.image-attr-condition-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+// 属性之间只留间距，不画线。
+.image-attr-row + .image-attr-row {
+  margin-top: 12px;
+}
+.image-attr-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.image-attr-label {
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+// 原始属性名缩小并加括号，便于与处理轨迹里的字段对上，又不干扰阅读
+.image-attr-name {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--app-text-xs);
+  color: var(--td-text-color-placeholder);
+
+  &::before {
+    content: '(';
+  }
+
+  &::after {
+    content: ')';
+  }
+}
+.image-attr-desc {
+  margin: 2px 0 0;
+  font-size: var(--app-text-sm);
+  line-height: 20px;
+  color: var(--td-text-color-secondary);
+}
+// 每个取值一行：值（等宽，左列对齐）+ 冒号 + 人话解释
+.image-attr-value-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 2px;
+  row-gap: 2px;
+  margin-top: 6px;
+  font-size: var(--app-text-sm);
+}
+// display: contents 让值与解释分别落进上面两列，取值因此左对齐成列
+.image-attr-value {
+  display: contents;
+
+  code {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    color: var(--td-text-color-primary);
+
+    // 冒号紧跟取值，不留空隙：none: 没有文字
+    &::after {
+      content: ':';
+    }
+  }
+}
+.image-attr-value-label {
+  color: var(--td-text-color-secondary);
+}
+.image-attr-section {
+  margin-top: 14px;
+}
+// 一条 OCR 条件两行：人话在上，原始 property = value 在下
+.image-attr-condition-list {
+  margin-top: 6px;
+  font-size: var(--app-text-sm);
+}
+.image-attr-condition + .image-attr-condition {
+  margin-top: 6px;
+}
+.image-attr-condition-label {
+  display: block;
+  color: var(--td-text-color-primary);
+}
+.image-attr-condition-raw {
+  display: block;
+  margin-top: 1px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--app-text-xs);
+  color: var(--td-text-color-placeholder);
+}
+
+.image-pipeline-kb-note {
+  margin-top: 4px;
+  font-size: var(--app-text-sm);
+  color: var(--td-text-color-placeholder);
+}
+
 .upload-confirm-overlay {
   position: fixed;
   inset: 0;
@@ -2114,6 +2447,9 @@ const handleConfirm = () => {
 
 .setting-row-vertical {
   flex-direction: column;
+  // stretch 而非继承的 flex-start：竖排行的子块（如图片解析方案面板）必须
+  // 占满整行，内部控件才能与其它行的开关一样靠右对齐（与知识库编辑器一致）。
+  align-items: stretch;
   gap: 12px;
 
   .setting-info,

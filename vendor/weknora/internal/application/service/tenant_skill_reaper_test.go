@@ -634,7 +634,7 @@ func TestSnapshotBelongsToOtherConfig(t *testing.T) {
 }
 
 func TestTenantSkillServiceStartIsIdempotent(t *testing.T) {
-	svc := NewTenantSkillService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewTenantSkillService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, HostSandboxManager{})
 
 	require.NoError(t, svc.Start(context.Background()))
 	require.NoError(t, svc.Start(context.Background()),
@@ -680,7 +680,7 @@ func newReaperFixture(t *testing.T) *reaperFixture {
 	resolver := &reaperSandboxResolver{provider: provider}
 	svc := NewTenantSkillService(
 		skills, configs, nil, resolver,
-		nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, HostSandboxManager{},
 	)
 	svc.now = func() time.Time { return now }
 	return &reaperFixture{
@@ -1017,6 +1017,14 @@ func (r *reaperConfigStore) SetCordon(context.Context, uint64, string, time.Time
 
 func (r *reaperConfigStore) ClearCordon(context.Context, uint64, string) error {
 	panic("ClearCordon is outside the reaper surface")
+}
+
+func (r *reaperConfigStore) RefreshCordon(context.Context, uint64, string, time.Time, time.Time) error {
+	panic("RefreshCordon is outside the reaper surface")
+}
+
+func (r *reaperConfigStore) ClearCordonIf(context.Context, uint64, string, time.Time) error {
+	panic("ClearCordonIf is outside the reaper surface")
 }
 
 type reaperSandboxResolver struct {

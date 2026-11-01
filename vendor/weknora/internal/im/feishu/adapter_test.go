@@ -1,12 +1,16 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Tencent/WeKnora/internal/im"
+	"github.com/gin-gonic/gin"
 )
 
 func TestFeishuThreadID_ThreadedReply(t *testing.T) {
@@ -59,6 +63,84 @@ func TestFeishuMessageStruct_JSONFields(t *testing.T) {
 	}
 }
 
+func TestParseCallbackGroupMentionGate(t *testing.T) {
+	useTestHTTPClient(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 0, "tenant_access_token": "test-token", "expire": 7200,
+			})
+		case "/open-apis/bot/v3/info":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 0, "msg": "ok",
+				"bot": map[string]any{"open_id": "ou_this_bot"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	adapter, err := NewAdapter(testRegion(srv.URL), "app", "secret", "", "", "")
+	if err != nil {
+		t.Fatalf("NewAdapter: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name     string
+		mentions string
+		wantNil  bool
+	}{
+		{
+			name:     "no mention",
+			mentions: `[]`,
+			wantNil:  true,
+		},
+		{
+			name:     "mentions a different bot",
+			mentions: `[{"key":"@_user_1","mentioned_type":"bot","id":{"open_id":"ou_other_bot"}}]`,
+			wantNil:  true,
+		},
+		{
+			name:     "mentions this bot",
+			mentions: `[{"key":"@_user_1","mentioned_type":"bot","id":{"open_id":"ou_this_bot"}}]`,
+			wantNil:  false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := `{"header":{"event_type":"im.message.receive_v1"},"event":{"message":{` +
+				`"message_id":"om_1","message_type":"text","chat_type":"group","chat_id":"oc_group",` +
+				`"content":"{\"text\":\"@_user_1 hello\"}","mentions":` + test.mentions + `}}}`
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+
+			got, err := adapter.ParseCallback(ctx)
+			if err != nil {
+				t.Fatalf("ParseCallback: %v", err)
+			}
+			if test.wantNil && got != nil {
+				t.Fatalf("ParseCallback() = %+v, want nil", got)
+			}
+			if !test.wantNil {
+				if got == nil {
+					t.Fatal("ParseCallback() returned nil, want message mentioning this bot")
+				}
+				if got.ChatType != im.ChatTypeGroup || got.Content != "hello" {
+					t.Fatalf("ParseCallback() = %+v, want group message with content \"hello\"", got)
+				}
+			}
+		})
+	}
+}
+
 func TestImageCacheKey_StripsQuery(t *testing.T) {
 	cases := map[string]string{
 		"https://host/a.png?sig=1&t=2": "https://host/a.png",
@@ -90,6 +172,61 @@ func TestResolveMarkdownImages_FallbackToLinkOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(got, "[diagram](http://127.0.0.1/x.png)") {
 		t.Errorf("expected link fallback with alt text, got: %q", got)
+	}
+}
+
+func TestResolveMarkdownImages_InternalHandleFallsBackToPlainText(t *testing.T) {
+	a := &Adapter{region: RegionFeishu}
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "resource handle",
+			in:   "see ![diagram](resource://Zb2IrqfTdlCFkbUqFtmS5A) here",
+			want: "see diagram here",
+		},
+		{
+			name: "local scheme",
+			in:   "see ![shot](local://10000/exports/a.png) here",
+			want: "see shot here",
+		},
+		{
+			name: "empty alt uses region label",
+			in:   "![](resource://Zb2IrqfTdlCFkbUqFtmS5A)",
+			want: "图片",
+		},
+		{
+			name: "mixed internal and failed http",
+			in:   "![diagram](resource://Zb2IrqfTdlCFkbUqFtmS5A) and ![x](http://127.0.0.1/x.png)",
+			want: "diagram and [x](http://127.0.0.1/x.png)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := a.resolveMarkdownImages(context.Background(), "tok", tt.in)
+			if got != tt.want {
+				t.Errorf("fallback = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(got, "![") {
+				t.Errorf("failed image should not remain as image markdown: %q", got)
+			}
+			if strings.Contains(got, "resource://") || strings.Contains(got, "local://") {
+				t.Errorf("internal scheme must not remain in card markdown: %q", got)
+			}
+		})
+	}
+}
+
+func TestResolveMarkdownImages_UppercaseHTTPSchemeStillUploads(t *testing.T) {
+	a := &Adapter{region: RegionFeishu}
+	// IM rewrite may emit HTTPS://; loopback still fails SSRF and must degrade
+	// to a link rather than being treated as a non-HTTP handle.
+	got := a.resolveMarkdownImages(context.Background(), "tok", "![](HTTPS://127.0.0.1/x.png)")
+	want := "[图片](HTTPS://127.0.0.1/x.png)"
+	if got != want {
+		t.Errorf("uppercase scheme fallback = %q, want %q", got, want)
 	}
 }
 
@@ -387,6 +524,11 @@ func TestCardSummaryPreview(t *testing.T) {
 	}{
 		{name: "collapse whitespace", in: "  最终\n回答\t✅  ", want: "最终 回答 ✅"},
 		{name: "image keeps alt only", in: "![架构图](https://cdn.example/a.png?sig=secret) 说明", want: "架构图 说明"},
+		{
+			name: "resource image keeps alt only",
+			in:   "![diagram](resource://Zb2IrqfTdlCFkbUqFtmS5A) 说明",
+			want: "diagram 说明",
+		},
 		{name: "link keeps text only", in: "见 [文档](https://cdn.example/a.png?sig=secret) 说明", want: "见 文档 说明"},
 		{name: "unicode limit", in: strings.Repeat("界", 121), want: strings.Repeat("界", 120)},
 		{name: "empty", in: " \n\t ", want: ""},

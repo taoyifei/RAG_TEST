@@ -5,6 +5,10 @@ import type { PublicCitation } from "./publicSse";
 export interface PublicSessionUser {
   userId: string;
   displayName: string;
+  username?: string;
+  role?: "admin" | "hr" | "user";
+  isSuperAdmin?: boolean;
+  deptId?: string | null;
 }
 
 export interface PublicSession {
@@ -22,6 +26,17 @@ export interface PublicShortcut {
   revision: number;
 }
 
+export type PublicSearchScope =
+  | "public"
+  | "hr_public"
+  | "personal"
+  | "hr_internal";
+
+export interface PublicSearchScopeOption {
+  id: PublicSearchScope;
+  label: string;
+}
+
 export interface PublicCapabilities {
   mode: "wanshitong";
   stream: true;
@@ -35,6 +50,15 @@ export interface PublicCapabilities {
   request_usage_context?: boolean;
   shortcuts: PublicShortcut[];
   page_settings?: Partial<PublicPageSettings>;
+  search_scopes?: PublicSearchScopeOption[];
+  default_search_scopes?: PublicSearchScope[];
+  workbench_enabled?: boolean;
+}
+
+export interface PublicWorkbench {
+  workspace_id: string;
+  search_scopes: PublicSearchScope[];
+  scope_label: string;
 }
 
 export interface PublicPageSettings {
@@ -130,12 +154,14 @@ export interface PublicNaturalHistoryTurn {
   finish_reason?: string | null;
   native_message_id?: string | null;
   native_request_id?: string | null;
+  search_scopes?: PublicSearchScope[];
 }
 
 export interface PublicNaturalSession {
   conversation_id: string;
   title: string;
   updated_at: string;
+  archived?: boolean;
 }
 
 async function readError(response: Response): Promise<PublicApiError> {
@@ -148,7 +174,11 @@ async function readError(response: Response): Promise<PublicApiError> {
   const code =
     typeof body.error?.code === "string" ? body.error.code : undefined;
   const serverMessage =
-    typeof body.error?.message === "string" ? body.error.message : undefined;
+    typeof body.error?.message === "string"
+      ? body.error.message
+      : typeof body.detail === "string"
+        ? body.detail
+        : undefined;
   const retryAfter = Number.parseInt(
     response.headers.get("Retry-After") ?? "",
     10,
@@ -166,6 +196,38 @@ async function requireJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+/** 工作助手只接受当前员工有权选择的范围，最终权限由服务端校验。 */
+export async function bootstrapPublicWorkbench(
+  searchScopes: readonly PublicSearchScope[],
+  csrfToken: string,
+  signal?: AbortSignal,
+): Promise<PublicWorkbench> {
+  const response = await fetch(withAppBase("/api/public/workbench/bootstrap"), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify({ search_scopes: searchScopes }),
+    signal,
+  });
+  const workspace = await requireJson<PublicWorkbench>(response);
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      workspace.workspace_id,
+    ) ||
+    !Array.isArray(workspace.search_scopes) ||
+    workspace.search_scopes.length !== searchScopes.length ||
+    new Set(workspace.search_scopes).size !== searchScopes.length ||
+    workspace.search_scopes.some((scope) => !searchScopes.includes(scope)) ||
+    typeof workspace.scope_label !== "string"
+  ) {
+    throw new Error("工作区响应不完整，请重试。");
+  }
+  return workspace;
+}
+
 export async function createPublicSession(
   signal?: AbortSignal,
 ): Promise<PublicSession> {
@@ -180,7 +242,14 @@ export async function createPublicSession(
     csrf_token: string;
     expires_in: number;
     deployment_id?: string;
-    user?: { user_id: string; display_name: string };
+    user?: {
+      user_id: string;
+      display_name: string;
+      username?: string;
+      role?: "admin" | "hr" | "user";
+      is_super_admin?: boolean;
+      dept_id?: string | null;
+    };
   }>(response);
   return {
     sessionId: body.session_id,
@@ -191,6 +260,10 @@ export async function createPublicSession(
       ? {
           userId: body.user.user_id,
           displayName: body.user.display_name,
+          username: body.user.username,
+          role: body.user.role ?? "user",
+          isSuperAdmin: body.user.is_super_admin ?? false,
+          deptId: body.user.dept_id,
         }
       : undefined,
   };
@@ -225,6 +298,7 @@ export async function openPublicChat(options: {
   signal: AbortSignal;
   clientContext?: PublicUsageContext;
   naturalProtocol?: "wanshitong-natural-sse-v1" | "wanshitong-weknora-sse-v1";
+  searchScopes?: PublicSearchScope[];
 }): Promise<Response> {
   const response = await fetch(withAppBase(PUBLIC_CHAT_PATH), {
     method: "POST",
@@ -240,6 +314,7 @@ export async function openPublicChat(options: {
     body: JSON.stringify({
       conversation_id: options.conversationId,
       query: options.question,
+      search_scopes: options.searchScopes ?? ["public"],
       ...(options.clientContext
         ? { client_context: options.clientContext }
         : {}),
@@ -320,12 +395,14 @@ export async function getPublicNaturalHistory(options: {
 export async function getPublicNaturalSessions(options: {
   csrfToken: string;
   signal?: AbortSignal;
+  archived?: boolean;
 }): Promise<{
   items: PublicNaturalSession[];
   has_more: boolean;
   total: number;
 }> {
-  const response = await fetch(withAppBase("/api/public/conversations"), {
+  const path = `/api/public/conversations${options.archived ? "?archived=true" : ""}`;
+  const response = await fetch(withAppBase(path), {
     credentials: "same-origin",
     headers: {
       Accept: "application/json",
@@ -343,6 +420,37 @@ export async function getPublicNaturalSessions(options: {
     has_more: body.has_more === true,
     total: body.total ?? body.items.length,
   };
+}
+
+export async function archivePublicNaturalConversation(options: {
+  conversationId: string;
+  archived: boolean;
+  csrfToken: string;
+}): Promise<void> {
+  const path = `/api/public/conversations/${encodeURIComponent(options.conversationId)}/archive`;
+  const response = await fetch(withAppBase(path), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": options.csrfToken,
+    },
+    body: JSON.stringify({ archived: options.archived }),
+  });
+  await requireJson<{ conversation_id: string; archived: boolean }>(response);
+}
+
+export async function deletePublicNaturalConversation(options: {
+  conversationId: string;
+  csrfToken: string;
+}): Promise<void> {
+  const path = `/api/public/conversations/${encodeURIComponent(options.conversationId)}`;
+  const response = await fetch(withAppBase(path), {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": options.csrfToken },
+  });
+  await requireJson<{ deleted: boolean }>(response);
 }
 
 export async function getPublicNaturalSource(options: {
@@ -426,8 +534,18 @@ export function publicErrorMessage(error: unknown): string {
     if (error.status === 429 || error.code === "RATE_LIMITED") {
       return "当前使用人数较多，请稍后再试。";
     }
-    if (error.status === 401 || error.status === 403) {
+    if (error.status === 401) {
       return "会话已过期，请重新尝试。";
+    }
+    if (error.status === 403) {
+      return error.message === "公共服务请求失败。"
+        ? "当前角色没有访问所选资料的权限，请切换资料范围或新建对话。"
+        : error.message;
+    }
+    if (error.status === 409) {
+      return error.message === "公共服务请求失败。"
+        ? "资料范围已变化，请新建对话后再试。"
+        : error.message;
     }
     if (error.status === 503 || error.code === "QUEUE_LIMIT_EXCEEDED") {
       return "当前服务较忙或尚未就绪，请稍后再试。";

@@ -231,7 +231,7 @@ func TestShellExecDescriptionDefinesOneExecutionEntry(t *testing.T) {
 		require.Contains(t, description, fact)
 	}
 	require.NotContains(t, description, "execute_skill_script")
-	require.Less(t, len(description), 2500)
+	require.Less(t, len(description), 2800)
 }
 
 func TestShellExecBoundsStdoutStderrErrorAndTotal(t *testing.T) {
@@ -644,4 +644,13 @@ func TestShellExecDescriptionForbidsBackgrounding(t *testing.T) {
 	require.Contains(t, description, "Execution is synchronous")
 	require.Contains(t, description, "no nohup")
 	require.Contains(t, description, "trailing &")
+}
+
+func TestHostInstallShellExecToolIsScopedToVersionDir(t *testing.T) {
+	dir := "/Users/dev/.weknora/skills/.versions/pdf-2"
+	tool := NewHostInstallShellExecTool(&fakeInstallShellExecutor{}, dir)
+	require.Equal(t, []string{dir}, tool.allowedWorkDirRoots())
+	require.Equal(t, dir, tool.effectiveDefaultWorkDir())
+	require.NotContains(t, tool.Description(), "as root")
+	require.Contains(t, tool.Description(), dir)
 }

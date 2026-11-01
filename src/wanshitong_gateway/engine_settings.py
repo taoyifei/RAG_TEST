@@ -24,6 +24,8 @@ class EngineSettings:
     external_signing_key_file: Path
     admin_email: str
     admin_password_file: Path
+    workbench_enabled: bool = False
+    workbench_chat_model_id: str | None = None
 
     @classmethod
     def from_environment(
@@ -88,6 +90,14 @@ class EngineSettings:
             external_signing_key_file=signing_key_file,
             admin_email=admin_email,
             admin_password_file=admin_password_file,
+            workbench_enabled=source.get(
+                "WXD_WORKBENCH_ENABLED", "false"
+            ).lower()
+            == "true",
+            workbench_chat_model_id=source.get(
+                "WXD_WORKBENCH_CHAT_MODEL_ID", ""
+            ).strip()
+            or None,
         )
 
 

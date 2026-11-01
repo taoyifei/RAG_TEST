@@ -126,6 +126,7 @@ class NativeAdminClient:
         self._tenant_id = tenant_id
         self._token: str | None = None
         self._login_lock = asyncio.Lock()
+        self._key_scope_lock = asyncio.Lock()
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=_TIMEOUT,
@@ -283,9 +284,7 @@ class NativeAdminClient:
             path=path,
             query="",
             content=(
-                json.dumps(body).encode("utf-8")
-                if body is not None
-                else b""
+                json.dumps(body).encode("utf-8") if body is not None else b""
             ),
             browser_headers={"Content-Type": "application/json"},
             allow_public_agent_create=(
@@ -383,6 +382,60 @@ class NativeAdminClient:
             raise NativeHttpError(403, "当前公共 Key 不在候选租户。")
         raise NativeHttpError(502, "公共 Key 授权不可用。")
 
+    async def allow_key_knowledge_base(
+        self,
+        fingerprint: bytes,
+        kb_id: str,
+        *,
+        removed_kb_id: str | None = None,
+    ) -> None:
+        """为动态资料库扩展服务端 Key 范围，保留原有授权和有效期。
+
+        同一原生客户端的所有资料操作共用锁，避免不同用户同时创建资料库时
+        发生读改写覆盖。removed_kb_id 只接收调用方已从原生确认不存在的旧库。
+        此方法不经过浏览器代理，也不向调用方返回 Key。
+        """
+        async with self._key_scope_lock:
+            for attempt in range(_MAX_RELOGIN + 1):
+                token = await self._access_token()
+                path = f"/api/v1/tenants/{self._tenant_id}/api-keys"
+                try:
+                    response = await self._http.get(
+                        path, headers=self._headers(token)
+                    )
+                    if (
+                        response.status_code == _HTTP_UNAUTHORIZED
+                        and attempt < _MAX_RELOGIN
+                    ):
+                        await self._invalidate(token)
+                        continue
+                    rows = self._json_success(response).get("data")
+                    row = _matching_api_key(rows, fingerprint)
+                    update = _extended_key_scope(
+                        row, kb_id, removed_kb_id=removed_kb_id
+                    )
+                    if update is None:
+                        return
+                    key_id, body = update
+                    response = await self._http.put(
+                        f"{path}/{key_id}",
+                        headers=self._headers(token),
+                        json=body,
+                    )
+                except httpx.RequestError as error:
+                    raise NativeHttpError(
+                        502, "资料库 Key 范围更新失败。"
+                    ) from error
+                if (
+                    response.status_code == _HTTP_UNAUTHORIZED
+                    and attempt < _MAX_RELOGIN
+                ):
+                    await self._invalidate(token)
+                    continue
+                self._json_success(response)
+                return
+        raise NativeHttpError(502, "资料库 Key 范围更新不可用。")
+
     async def _access_token(self) -> str:
         if self._token is not None:
             return self._token
@@ -432,6 +485,68 @@ class NativeAdminClient:
         return payload
 
 
+def _matching_api_key(rows: object, fingerprint: bytes) -> dict[str, Any]:
+    """在服务端按摘要定位当前 Key，不产生含 Key 的日志或响应。"""
+    if not isinstance(rows, list):
+        raise NativeHttpError(502, "公共 Key 授权响应无效。")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise NativeHttpError(502, "公共 Key 授权响应无效。")
+        candidate = row.get("api_key")
+        if isinstance(candidate, str) and hmac.compare_digest(
+            hashlib.sha256(candidate.encode("utf-8")).digest(), fingerprint
+        ):
+            return row
+    raise NativeHttpError(403, "当前公共 Key 不在候选租户。")
+
+
+def _extended_key_scope(
+    row: dict[str, Any],
+    kb_id: str,
+    *,
+    removed_kb_id: str | None = None,
+) -> tuple[int, dict[str, Any]] | None:
+    """构造资料范围并集，使用上游更新接口的时间字段。"""
+    if row.get("scope_type") != "tenant" or row.get("full_access") is not False:
+        raise NativeHttpError(403, "公共 Key 必须使用限定资料范围。")
+    key_id = row.get("id")
+    name = row.get("name")
+    capabilities = row.get("capabilities")
+    kb_ids = row.get("knowledge_base_ids")
+    if (
+        not isinstance(key_id, int)
+        or key_id <= 0
+        or not isinstance(name, str)
+        or not isinstance(capabilities, list)
+        or any(not isinstance(item, str) for item in capabilities)
+        or not isinstance(kb_ids, list)
+        or any(not isinstance(item, str) for item in kb_ids)
+    ):
+        raise NativeHttpError(502, "公共 Key 授权响应无效。")
+    updated_kb_ids = (set(kb_ids) - {removed_kb_id}) | {kb_id}
+    if updated_kb_ids == set(kb_ids):
+        return None
+    expiry = row.get("expires_at")
+    expires_at_unix = None
+    if expiry:
+        try:
+            expires_at = datetime.fromisoformat(
+                str(expiry).replace("Z", "+00:00")
+            )
+        except ValueError as error:
+            raise NativeHttpError(502, "公共 Key 过期时间无效。") from error
+        if expires_at.tzinfo is None or expires_at <= datetime.now(UTC):
+            raise NativeHttpError(403, "公共 Key 已过期。")
+        expires_at_unix = int(expires_at.timestamp())
+    return key_id, {
+        "name": name,
+        "full_access": False,
+        "knowledge_base_ids": sorted(updated_kb_ids),
+        "capabilities": capabilities,
+        "expires_at_unix": expires_at_unix,
+    }
+
+
 def _allowed_admin_path(  # noqa: PLR0911, PLR0912 - 权限矩阵逐项拒绝。
     method: str, path: str, *, allow_public_agent_create: bool = False
 ) -> bool:
@@ -448,12 +563,21 @@ def _allowed_admin_path(  # noqa: PLR0911, PLR0912 - 权限矩阵逐项拒绝。
     if segments[:2] != ["api", "v1"] or len(segments) < _MIN_API_SEGMENTS:
         return False
     category = segments[2]
+    if category == "image-pipelines":
+        # 两个端点仅返回全局配置说明或校验参数，不放行该类别的其他路径。
+        return (
+            method == "GET" and segments[3:] == []
+        ) or (
+            method == "POST" and segments[3:] == ["validate"]
+        )
     if category == "tenants" and segments[4:5] == ["api-keys"]:
         return False
     if category == "agents" and method not in {"GET", "HEAD"}:
-        return allow_public_agent_create and segments == [
-            "api", "v1", "agents"
-        ] and method == "POST"
+        return (
+            allow_public_agent_create
+            and segments == ["api", "v1", "agents"]
+            and method == "POST"
+        )
     # 管理壳只读查看记录，不能借原生代理新建或继续一条生成。
     if category in {"knowledge-chat", "agent-chat"}:
         return False

@@ -1,7 +1,13 @@
-import { Plus } from "lucide-react";
+/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- 独立对话滚动区须可聚焦，供键盘滚动。 */
+import { ArrowDown } from "lucide-react";
+import { memo } from "react";
 
+import { useChatScroll } from "./useChatScroll";
 import { PublicAnswer } from "./PublicAnswer";
-import { PublicChatComposer } from "./PublicChatComposer";
+import {
+  PublicChatComposer,
+  type PublicSearchSelectionProps,
+} from "./PublicChatComposer";
 import { PublicQuestionTabs } from "./PublicQuestionTabs";
 import type { SuggestedQuestion } from "./suggestedQuestions";
 import type {
@@ -11,30 +17,7 @@ import type {
 } from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
 
-export function WanshitongChat({
-  busy,
-  conversationId,
-  feedbackDetailsEnabled,
-  allowFeedback,
-  allowSourceDownload,
-  placeholder,
-  showRecommendations,
-  initialQuestion,
-  onFeedback,
-  onFeedbackLogin,
-  onDownloadReference,
-  onNewTopic,
-  onPopularQuestionSubmit,
-  onRefresh,
-  onRetry,
-  onRecover,
-  onStop,
-  onSubmit,
-  onSuggestedQuestionSubmit,
-  questions,
-  popular,
-  turns,
-}: {
+type ChatProps = PublicSearchSelectionProps & {
   busy: boolean;
   conversationId: string;
   feedbackDetailsEnabled: boolean;
@@ -56,7 +39,6 @@ export function WanshitongChat({
     documentName: string,
     original?: boolean,
   ) => Promise<void>;
-  onNewTopic: () => void;
   onPopularQuestionSubmit: (question: PublicPopularQuestion) => void;
   onRefresh: () => void;
   onRetry: (turnId: string, question: string, conversationId: string) => void;
@@ -71,86 +53,164 @@ export function WanshitongChat({
   questions: readonly SuggestedQuestion[];
   popular: PublicPopularQuestions;
   turns: PublicTurn[];
-}) {
+};
+
+const ChatTurn = memo(function ChatTurn({
+  turn,
+  allowFeedback,
+  allowSourceDownload,
+  feedbackDetailsEnabled,
+  onFeedback,
+  onFeedbackLogin,
+  onDownloadReference,
+  onRetry,
+  onRecover,
+}: Pick<
+  ChatProps,
+  | "allowFeedback"
+  | "allowSourceDownload"
+  | "feedbackDetailsEnabled"
+  | "onFeedback"
+  | "onFeedbackLogin"
+  | "onDownloadReference"
+  | "onRetry"
+  | "onRecover"
+> & { turn: PublicTurn }) {
+  return (
+    <article className="wst-turn">
+      <div className="wst-question">
+        <span className="sr-only">你问：</span>
+        {turn.question}
+      </div>
+      <PublicAnswer
+        allowFeedback={allowFeedback}
+        allowSourceDownload={allowSourceDownload}
+        feedbackDetailsEnabled={feedbackDetailsEnabled}
+        onFeedback={(feedback) => {
+          if (turn.traceId) onFeedback(turn.id, turn.traceId, feedback);
+        }}
+        onFeedbackLogin={onFeedbackLogin}
+        onDownloadReference={
+          turn.traceId && onDownloadReference
+            ? (referenceId, documentName, original) =>
+                onDownloadReference(
+                  turn.conversationId,
+                  turn.traceId!,
+                  referenceId,
+                  documentName,
+                  original,
+                )
+            : undefined
+        }
+        onRetry={() => onRetry(turn.id, turn.question, turn.conversationId)}
+        onRecover={
+          onRecover
+            ? () => onRecover(turn.id, turn.question, turn.conversationId)
+            : undefined
+        }
+        turn={turn}
+      />
+    </article>
+  );
+});
+
+export function WanshitongChat({
+  busy,
+  conversationId,
+  feedbackDetailsEnabled,
+  allowFeedback,
+  allowSourceDownload,
+  placeholder,
+  searchScopes,
+  searchScopeOptions,
+  scopeNotice,
+  onSearchScopesChange,
+  showRecommendations,
+  initialQuestion,
+  onFeedback,
+  onFeedbackLogin,
+  onDownloadReference,
+  onPopularQuestionSubmit,
+  onRefresh,
+  onRetry,
+  onRecover,
+  onStop,
+  onSubmit,
+  onSuggestedQuestionSubmit,
+  questions,
+  popular,
+  turns,
+}: ChatProps) {
+  const { scrollRef, contentRef, onScroll, awayFromLatest, jumpToLatest } =
+    useChatScroll(conversationId, turns.length);
   return (
     <div className="wst-chat-shell">
-      <header className="wst-chat-header">
-        <strong>湾小度</strong>
-        <button
-          className="wst-new-topic-button"
-          disabled={busy}
-          onClick={onNewTopic}
-          type="button"
-        >
-          <Plus aria-hidden="true" size={17} />
-          新问题
-        </button>
-      </header>
       <main className="wst-chat" id="main-content">
-        <div className="wst-turns">
-          {turns.map((turn) => (
-            <article className="wst-turn" key={turn.id}>
-              <div className="wst-question">
-                <span className="sr-only">你问：</span>
-                {turn.question}
-              </div>
-              <PublicAnswer
-                allowFeedback={allowFeedback}
-                allowSourceDownload={allowSourceDownload}
-                feedbackDetailsEnabled={feedbackDetailsEnabled}
-                onFeedback={(feedback) => {
-                  if (turn.traceId) onFeedback(turn.id, turn.traceId, feedback);
-                }}
-                onFeedbackLogin={onFeedbackLogin}
-                onDownloadReference={
-                  turn.traceId && onDownloadReference
-                    ? (referenceId, documentName, original) =>
-                        onDownloadReference(
-                          turn.conversationId,
-                          turn.traceId!,
-                          referenceId,
-                          documentName,
-                          original,
-                        )
-                    : undefined
-                }
-                onRetry={() =>
-                  onRetry(turn.id, turn.question, turn.conversationId)
-                }
-                onRecover={
-                  onRecover
-                    ? () =>
-                        onRecover(turn.id, turn.question, turn.conversationId)
-                    : undefined
-                }
-                turn={turn}
-              />
-            </article>
-          ))}
-        </div>
-        {showRecommendations &&
-          !busy &&
-          turns.at(-1)?.status !== "submitting" &&
-          turns.at(-1)?.status !== "streaming" && (
-            <div className="wst-chat-suggestions">
-              <PublicQuestionTabs
-                busy={busy}
-                compact
-                heading="换个话题"
-                onPopularSubmit={onPopularQuestionSubmit}
-                onRefresh={onRefresh}
-                onSuggestedSubmit={onSuggestedQuestionSubmit}
-                popular={popular}
-                suggestions={questions}
-              />
+        <div
+          className="wst-chat-scroll"
+          ref={scrollRef}
+          onScroll={onScroll}
+          role="region"
+          aria-label="对话内容"
+          tabIndex={0}
+        >
+          <div className="wst-chat-scroll-content" ref={contentRef}>
+            <div className="wst-turns">
+              {turns.map((turn) => (
+                <ChatTurn
+                  key={turn.id}
+                  turn={turn}
+                  allowFeedback={allowFeedback}
+                  allowSourceDownload={allowSourceDownload}
+                  feedbackDetailsEnabled={feedbackDetailsEnabled}
+                  onFeedback={onFeedback}
+                  onFeedbackLogin={onFeedbackLogin}
+                  onDownloadReference={onDownloadReference}
+                  onRetry={onRetry}
+                  onRecover={onRecover}
+                />
+              ))}
             </div>
-          )}
+            {showRecommendations &&
+              !busy &&
+              turns.at(-1)?.status !== "submitting" &&
+              turns.at(-1)?.status !== "streaming" && (
+                <div className="wst-chat-suggestions">
+                  <PublicQuestionTabs
+                    busy={busy}
+                    compact
+                    heading="换个话题"
+                    onPopularSubmit={onPopularQuestionSubmit}
+                    onRefresh={onRefresh}
+                    onSuggestedSubmit={onSuggestedQuestionSubmit}
+                    popular={popular}
+                    suggestions={questions}
+                  />
+                </div>
+              )}
+          </div>
+        </div>
         <div className="wst-chat-composer">
+          {awayFromLatest && (
+            <button
+              className="wst-jump-latest"
+              type="button"
+              onClick={jumpToLatest}
+              aria-label="回到最新回答"
+            >
+              <ArrowDown size={16} aria-hidden="true" />
+              回到最新
+            </button>
+          )}
           <PublicChatComposer
             busy={busy}
             compact
             initialQuestion={initialQuestion}
             placeholder={placeholder}
+            searchScopes={searchScopes}
+            searchScopeOptions={searchScopeOptions}
+            scopeNotice={scopeNotice}
+            onSearchScopesChange={onSearchScopesChange}
             key={conversationId}
             onStop={onStop}
             onSubmit={onSubmit}

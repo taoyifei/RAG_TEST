@@ -1,4 +1,7 @@
-import { PublicChatComposer } from "./PublicChatComposer";
+import {
+  PublicChatComposer,
+  type PublicSearchSelectionProps,
+} from "./PublicChatComposer";
 import { PublicQuestionTabs } from "./PublicQuestionTabs";
 import type {
   PublicPopularQuestion,
@@ -11,6 +14,10 @@ export function WanshitongHome({
   conversationId,
   initialQuestion,
   placeholder,
+  searchScopes,
+  searchScopeOptions,
+  scopeNotice,
+  onSearchScopesChange,
   welcomeText,
   showRecommendations,
   onRefresh,
@@ -20,7 +27,7 @@ export function WanshitongHome({
   onSubmit,
   questions,
   popular,
-}: {
+}: PublicSearchSelectionProps & {
   busy: boolean;
   conversationId: string;
   initialQuestion?: string;
@@ -46,6 +53,10 @@ export function WanshitongHome({
           busy={busy}
           initialQuestion={initialQuestion}
           placeholder={placeholder}
+          searchScopes={searchScopes}
+          searchScopeOptions={searchScopeOptions}
+          scopeNotice={scopeNotice}
+          onSearchScopesChange={onSearchScopesChange}
           key={conversationId}
           onStop={onStop}
           onSubmit={onSubmit}

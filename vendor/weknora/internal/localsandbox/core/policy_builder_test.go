@@ -1,6 +1,7 @@
 package core
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -25,7 +26,7 @@ func TestBuildAutoModeMakesWorkspaceWritable(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, ws.Root, p.Cwd)
-	require.Equal(t, NetworkDenied, p.Network)
+	require.Equal(t, NetworkUnrestricted, p.Network)
 
 	var roots []string
 	for _, r := range p.WritableRoots {
@@ -49,6 +50,32 @@ func TestBuildProtectsGitWhenWorkspaceAsksForIt(t *testing.T) {
 	t.Fatal("workspace root missing from policy")
 }
 
+// Submodules and nested repositories carry hooks too, and a .GIT created
+// before git init is the same directory to git on APFS.
+func TestBuildProtectsEveryGitDirInAProject(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	home := filepath.Join(base, "home")
+	ws := Workspace{Kind: WorkspaceProject, Root: filepath.Join(home, "proj"), ProtectGit: true}
+	require.NoError(t, os.MkdirAll(ws.Root, 0o755))
+	b := NewPolicyBuilder(home, filepath.Join(home, "AppData"))
+
+	p, err := b.Build(ModeAuto, ws)
+	require.NoError(t, err)
+	require.True(t, p.WritableRoots[0].ProtectGitDirs)
+
+	guard := NewPathGuard(p)
+	for _, path := range []string{
+		filepath.Join(ws.Root, "vendor", "lib", ".git", "hooks", "pre-commit"),
+		filepath.Join(ws.Root, ".GIT", "config"),
+	} {
+		_, err = guard.CheckWrite(path)
+		require.ErrorIs(t, err, ErrPathDenied, path)
+	}
+	_, err = guard.CheckWrite(filepath.Join(ws.Root, "vendor", "lib", "main.go"))
+	require.NoError(t, err)
+}
+
 // A session workspace's .git belongs to the agent, so it is not protected.
 func TestBuildDoesNotProtectGitForSessionWorkspace(t *testing.T) {
 	b, ws := builderFixture(t)
@@ -59,6 +86,7 @@ func TestBuildDoesNotProtectGitForSessionWorkspace(t *testing.T) {
 	require.NoError(t, err)
 	for _, r := range p.WritableRoots {
 		require.Empty(t, r.ReadOnlySubpaths)
+		require.False(t, r.ProtectGitDirs)
 	}
 }
 
@@ -71,6 +99,7 @@ func TestBuildAskModeKeepsWorkspaceReadableButNotWritable(t *testing.T) {
 	require.Contains(t, p.ReadableRoots, ws.Root)
 	require.Empty(t, p.WritableRoots)
 	require.Equal(t, ws.Root, p.Cwd)
+	require.Equal(t, NetworkDenied, p.Network)
 }
 
 // Full access has no policy at all; representing it as a very wide policy
@@ -187,22 +216,52 @@ func TestBuildIncludesPlatformRuntimeReadRoots(t *testing.T) {
 	require.Contains(t, p.ReadableRoots, "/usr/lib")
 }
 
-func TestRelaxAddsWritePathAndNetwork(t *testing.T) {
+func TestRelaxAddsWritableRoot(t *testing.T) {
 	b, ws := builderFixture(t)
 	base, err := b.Build(ModeAuto, ws)
 	require.NoError(t, err)
 
 	extra := filepath.Join(b.homeDir, "Other Dir")
-	relaxed, err := b.Relax(base, Grant{WritePath: extra, AllowNetwork: true})
+	require.NoError(t, os.MkdirAll(extra, 0o755))
+	relaxed, err := b.Relax(base, Grant{Path: extra, Access: AccessWrite})
 	require.NoError(t, err)
 
+	resolved, err := filepath.EvalSymlinks(extra)
+	require.NoError(t, err)
 	var roots []string
 	for _, r := range relaxed.WritableRoots {
 		roots = append(roots, r.Path)
 	}
-	require.Contains(t, roots, extra)
-	require.Equal(t, NetworkUnrestricted, relaxed.Network)
+	require.Contains(t, roots, resolved)
+	require.NotContains(t, relaxed.ReadableRoots, extra)
+	require.Len(t, base.WritableRoots, 1, "Relax must not mutate the base policy")
 	require.NotEqual(t, base.Fingerprint(), relaxed.Fingerprint())
+}
+
+func TestRelaxAddsReadableRootOnly(t *testing.T) {
+	b, ws := builderFixture(t)
+	base, err := b.Build(ModeAuto, ws)
+	require.NoError(t, err)
+
+	extra := filepath.Join(b.homeDir, "Other Dir")
+	require.NoError(t, os.MkdirAll(extra, 0o755))
+	relaxed, err := b.Relax(base, Grant{Path: extra, Access: AccessRead})
+	require.NoError(t, err)
+
+	resolved, err := filepath.EvalSymlinks(extra)
+	require.NoError(t, err)
+	require.Contains(t, relaxed.ReadableRoots, resolved)
+	require.NotContains(t, base.ReadableRoots, extra, "Relax must not mutate the base policy")
+	require.Len(t, relaxed.WritableRoots, len(base.WritableRoots))
+}
+
+func TestRelaxRefusesUnknownAccess(t *testing.T) {
+	b, ws := builderFixture(t)
+	base, err := b.Build(ModeAuto, ws)
+	require.NoError(t, err)
+
+	_, err = b.Relax(base, Grant{Path: filepath.Join(b.homeDir, "Other Dir")})
+	require.Error(t, err)
 }
 
 // Relaxation must never be able to unlock a denied credential directory.
@@ -211,8 +270,15 @@ func TestRelaxRefusesToGrantDeniedPath(t *testing.T) {
 	base, err := b.Build(ModeAuto, ws)
 	require.NoError(t, err)
 
-	_, err = b.Relax(base, Grant{WritePath: filepath.Join(b.homeDir, ".ssh")})
-	require.Error(t, err)
+	for _, access := range []Access{AccessRead, AccessWrite} {
+		_, err = b.Relax(base, Grant{Path: filepath.Join(b.homeDir, ".ssh"), Access: access})
+		require.Error(t, err, access)
+	}
+}
+
+func TestPolicyBuilderReportsHomeDir(t *testing.T) {
+	b, _ := builderFixture(t)
+	require.Equal(t, b.homeDir, b.HomeDir())
 }
 
 func TestBuildRefusesHomeAsWorkspace(t *testing.T) {
@@ -252,15 +318,21 @@ func TestBuildMakesOtherUsersAndVolumesPrivate(t *testing.T) {
 	}
 }
 
-func TestBuildMakesTempDirsPrivate(t *testing.T) {
+func TestBuildKeepsVarPrivateAndLeavesTmpOpen(t *testing.T) {
 	b, ws := builderFixture(t)
 	p, err := b.Build(ModeAuto, ws)
 	require.NoError(t, err)
-	for _, root := range []string{"/tmp", "/private/tmp", "/var", "/private/var"} {
+	for _, root := range []string{"/var", "/private/var"} {
 		if !filepath.IsAbs(root) {
 			continue
 		}
 		require.Contains(t, p.PrivateRoots, filepath.Clean(root), root)
+	}
+	for _, root := range []string{"/tmp", "/private/tmp"} {
+		if !filepath.IsAbs(root) {
+			continue
+		}
+		require.NotContains(t, p.PrivateRoots, filepath.Clean(root), root)
 	}
 }
 
@@ -303,7 +375,7 @@ func TestRelaxRefusesHomeWriteGrant(t *testing.T) {
 	base, err := b.Build(ModeAuto, ws)
 	require.NoError(t, err)
 
-	_, err = b.Relax(base, Grant{WritePath: b.homeDir})
+	_, err = b.Relax(base, Grant{Path: b.homeDir, Access: AccessWrite})
 	require.ErrorIs(t, err, ErrWorkspaceTooBroad)
 }
 
@@ -312,7 +384,10 @@ func TestRelaxRefusesHomeLibraryDescendant(t *testing.T) {
 	base, err := b.Build(ModeAuto, ws)
 	require.NoError(t, err)
 
-	_, err = b.Relax(base, Grant{WritePath: filepath.Join(b.homeDir, "Library", "Application Support")})
+	_, err = b.Relax(base, Grant{
+		Path:   filepath.Join(b.homeDir, "Library", "Application Support"),
+		Access: AccessWrite,
+	})
 	require.ErrorIs(t, err, ErrWorkspaceTooBroad)
 }
 
@@ -331,6 +406,71 @@ func TestRelaxRefusesToGrantAppData(t *testing.T) {
 	base, err := b.Build(ModeAuto, ws)
 	require.NoError(t, err)
 
-	_, err = b.Relax(base, Grant{WritePath: b.appDataDir})
+	_, err = b.Relax(base, Grant{Path: b.appDataDir, Access: AccessRead})
 	require.Error(t, err)
+}
+
+func skillsBuilder(t *testing.T) (*PolicyBuilder, string) {
+	t.Helper()
+	b, _ := builderFixture(t)
+	root := filepath.Join(b.homeDir, ".weknora", "skills")
+	return b.WithSkillsRoot(root), root
+}
+
+func TestBuildAutoModeReadsButDoesNotWriteSkillsRoot(t *testing.T) {
+	b, root := skillsBuilder(t)
+	_, ws := builderFixture(t)
+	ws.Root = filepath.Join(b.homeDir, "My Project")
+	p, err := b.Build(ModeAuto, ws)
+	require.NoError(t, err)
+	require.Contains(t, p.ReadableRoots, root)
+	for _, w := range p.WritableRoots {
+		require.False(t, PathUnder(w.Path, root) || PathUnder(root, w.Path), w.Path)
+	}
+	require.Equal(t, NetworkUnrestricted, p.Network)
+}
+
+func TestBuildInstallConfinesWritesToVersionDir(t *testing.T) {
+	b, root := skillsBuilder(t)
+	dir := filepath.Join(root, ".versions", "pdf-1")
+	p, err := b.BuildInstall(dir)
+	require.NoError(t, err)
+	require.Equal(t, dir, p.Cwd)
+	require.Equal(t, NetworkUnrestricted, p.Network)
+	require.Equal(t, []WritableRoot{{Path: dir}}, p.WritableRoots)
+	require.Equal(t, b.denyRead(), p.DenyRead)
+	require.Contains(t, p.DenyRead, filepath.Join(b.homeDir, ".ssh"))
+	require.Contains(t, p.DenyRead, b.appDataDir)
+	for _, root := range []string{"/tmp", "/private/tmp"} {
+		if filepath.IsAbs(root) {
+			require.NotContains(t, p.PrivateRoots, filepath.Clean(root), root)
+		}
+	}
+}
+
+func TestBuildInstallRejectsDirOutsideSkillsRoot(t *testing.T) {
+	b, root := skillsBuilder(t)
+	for _, dir := range []string{root, filepath.Join(b.homeDir, "My Project"), "/tmp/pdf-1", "relative"} {
+		_, err := b.BuildInstall(dir)
+		require.ErrorIs(t, err, ErrInstallDirOutsideSkillsRoot, dir)
+	}
+}
+
+func TestBuildInstallRequiresASkillsRoot(t *testing.T) {
+	b, _ := builderFixture(t)
+	_, err := b.BuildInstall(filepath.Join(b.homeDir, ".weknora", "skills", ".versions", "pdf-1"))
+	require.ErrorIs(t, err, ErrInstallDirOutsideSkillsRoot)
+}
+
+func TestJobsDirectoryCannotBecomeAWorkspace(t *testing.T) {
+	home := "/Users/local-test"
+	jobs := filepath.Join(home, ".weknora", "jobs")
+	b := NewPolicyBuilder(home, filepath.Join(home, "Library", "Application Support", "WeKnora Lite"))
+	for _, root := range []string{filepath.Dir(jobs), jobs, filepath.Join(jobs, "sj_0123")} {
+		_, err := b.Build(ModeAuto, Workspace{Root: root})
+		require.Error(t, err, root)
+	}
+	p, err := b.Build(ModeAuto, Workspace{Root: filepath.Join(home, "project")})
+	require.NoError(t, err)
+	require.Contains(t, p.DenyRead, jobs)
 }

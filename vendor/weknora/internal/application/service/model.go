@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -132,7 +134,87 @@ func (s *modelService) CreateModel(ctx context.Context, model *types.Model) erro
 		return err
 	}
 
-	// Start asynchronous model download
+	s.downloadModelAsync(ctx, model)
+
+	logger.Infof(ctx, "Model creation initiated successfully: %s", model.ID)
+	return nil
+}
+
+// CopyModel clones a tenant-owned model. The stored name stays the upstream
+// model identifier. displayName is the label chosen by the caller. Credentials
+// are copied from the source row because list responses never include them.
+// An active local model is already present, so the copy does not download it
+// again. A local model that is still downloading or failed starts a pull.
+func (s *modelService) CopyModel(ctx context.Context, sourceID, displayName string) (*types.Model, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return nil, apperrors.NewBadRequestError("model ID cannot be empty")
+	}
+	displayName = strings.TrimSpace(utils.SanitizeForLog(displayName))
+	if displayName == "" {
+		return nil, apperrors.NewBadRequestError("display name is required")
+	}
+	if utf8.RuneCountInString(displayName) > types.ModelDisplayNameMaxLen {
+		return nil, apperrors.NewBadRequestError("display name is too long")
+	}
+
+	tenantID := types.MustTenantIDFromContext(ctx)
+	source, err := s.repo.GetByID(ctx, tenantID, sourceID)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"model_id": sourceID,
+		})
+		return nil, err
+	}
+	if source == nil {
+		return nil, ErrModelNotFound
+	}
+	if source.IsBuiltin {
+		return nil, apperrors.NewBadRequestError("builtin models cannot be copied")
+	}
+
+	params, err := cloneModelParameters(source.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	model := &types.Model{
+		TenantID:    tenantID,
+		Name:        source.Name,
+		DisplayName: displayName,
+		Type:        source.Type,
+		Source:      source.Source,
+		Description: source.Description,
+		Parameters:  params,
+	}
+	logger.Infof(ctx, "Copying model %s as %q", source.ID, displayName)
+
+	// Remote rows, and local rows that already finished downloading, are
+	// configuration copies. Only a local row that is not active needs a pull.
+	if model.Source != types.ModelSourceLocal || source.Status == types.ModelStatusActive {
+		model.Status = types.ModelStatusActive
+		if err := s.repo.Create(ctx, model); err != nil {
+			logger.ErrorWithFields(ctx, err, map[string]interface{}{
+				"model_id":   source.ID,
+				"model_name": model.Name,
+			})
+			return nil, err
+		}
+		return model, nil
+	}
+
+	model.Status = types.ModelStatusDownloading
+	if err := s.repo.Create(ctx, model); err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"model_id":   source.ID,
+			"model_name": model.Name,
+		})
+		return nil, err
+	}
+	s.downloadModelAsync(ctx, model)
+	return model, nil
+}
+
+func (s *modelService) downloadModelAsync(ctx context.Context, model *types.Model) {
 	logger.Infof(ctx, "Starting background download for model: %s", model.Name)
 	newCtx := logger.CloneContext(ctx)
 	go func() {
@@ -150,9 +232,18 @@ func (s *modelService) CreateModel(ctx context.Context, model *types.Model) erro
 		logger.Infof(newCtx, "Updating model status to: %s", model.Status)
 		s.repo.Update(newCtx, model)
 	}()
+}
 
-	logger.Infof(ctx, "Model creation initiated successfully: %s", model.ID)
-	return nil
+func cloneModelParameters(params types.ModelParameters) (types.ModelParameters, error) {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return types.ModelParameters{}, err
+	}
+	var cloned types.ModelParameters
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return types.ModelParameters{}, err
+	}
+	return cloned, nil
 }
 
 // GetModelByID retrieves a model by its ID
@@ -218,9 +309,30 @@ func (s *modelService) ListModels(ctx context.Context) ([]*types.Model, error) {
 		})
 		return nil, err
 	}
+	// GetModelByID is left alone: its result is written back by UpdateModel,
+	// and this overlay must never be persisted.
+	if settings := s.workspaceDefaultSettings(ctx, tenantID); settings != nil {
+		settings.ApplyModelDefaults(models)
+	}
 
 	logger.Infof(ctx, "Retrieved %d models successfully", len(models))
 	return models, nil
+}
+
+// workspaceDefaultSettings prefers the tenant the request already loaded and
+// reads it from storage for background contexts that carry only the ID.
+func (s *modelService) workspaceDefaultSettings(ctx context.Context, tenantID uint64) *types.DefaultSettings {
+	if tenant, ok := types.TenantInfoFromContext(ctx); ok && tenant.ID == tenantID {
+		return tenant.DefaultSettings
+	}
+	if s.tenantService == nil {
+		return nil
+	}
+	tenant, err := s.tenantService.GetTenantByID(ctx, tenantID)
+	if err != nil || tenant == nil {
+		return nil
+	}
+	return tenant.DefaultSettings
 }
 
 // UpdateModel updates an existing model in the repository
@@ -664,9 +776,6 @@ func (s *modelService) GetVLMModel(ctx context.Context, modelId string) (vlm.VLM
 
 	return vlmModel, nil
 }
-
-// Note: default model selection logic has been removed; models no longer
-// maintain a per-type default flag at the service layer.
 
 // GetASRModel retrieves and initializes an automatic speech recognition model instance.
 func (s *modelService) GetASRModel(ctx context.Context, modelId string) (asr.ASR, error) {

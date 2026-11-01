@@ -15,6 +15,47 @@ from wanshitong_gateway.weknora.principal import ExternalPrincipalSigner
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 404, 403, 503])
+async def test_delete_session_uses_owner_and_requires_native_success(
+    status: int,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status, json={"success": status == 200})
+
+    signer = ExternalPrincipalSigner(
+        secret="test-only",  # noqa: S106
+        tenant_id=9,
+        deployment_id="candidate",
+        clock=lambda: 1000.0,
+    )
+    client = WeKnoraClient(
+        base_url="http://native.test:8080",
+        api_key="test-only-key",
+        signer=signer,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        if status in {200, 404}:
+            await client.delete_session(user_id="u1", session_id="native-s1")
+        else:
+            with pytest.raises(NativeHttpError):
+                await client.delete_session(
+                    user_id="u1", session_id="native-s1"
+                )
+    finally:
+        await client.close()
+    assert len(requests) == 1
+    assert requests[0].method == "DELETE"
+    assert requests[0].url.path == "/api/v1/sessions/native-s1"
+    assert requests[0].headers["x-api-key"] == "test-only-key"
+    token = requests[0].headers["x-external-user-token"]
+    assert token == signer.sign("u1")
+
+
+@pytest.mark.asyncio
 async def test_session_and_chat_use_native_api_without_rewriting() -> None:
     requests: list[httpx.Request] = []
 
@@ -152,8 +193,11 @@ async def test_messages_do_not_skip_shared_timestamp_at_page_boundary() -> None:
     ]
     for index in range(118, 123):
         messages[index]["created_at"] = "2026-09-26T00:01:58Z"
+    requested_limits: list[int] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
+        limit = int(request.url.params["limit"])
+        requested_limits.append(limit)
         before = request.url.params.get("before_time")
         eligible = [
             item
@@ -164,7 +208,7 @@ async def test_messages_do_not_skip_shared_timestamp_at_page_boundary() -> None:
             200,
             json={
                 "success": True,
-                "data": eligible[-int(request.url.params["limit"]) :],
+                "data": eligible[-min(limit, 200) :],
             },
         )
 
@@ -174,6 +218,74 @@ async def test_messages_do_not_skip_shared_timestamp_at_page_boundary() -> None:
     finally:
         await client.close()
     assert {item["id"] for item in result} == {item["id"] for item in messages}
+    assert max(requested_limits) <= 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared_count", [101, 199])
+async def test_messages_expand_within_native_page_cap(
+    shared_count: int,
+) -> None:
+    """整页同刻时只扩到200，仍补齐更早消息。"""
+    messages = [
+        {"id": f"old-{index}", "created_at": f"2026-10-01T00:00:0{index}Z"}
+        for index in range(5)
+    ] + [
+        {"id": f"shared-{index}", "created_at": "2026-10-01T00:00:10Z"}
+        for index in range(shared_count)
+    ]
+    requested_limits: list[int] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        before = request.url.params.get("before_time")
+        limit = int(request.url.params["limit"])
+        requested_limits.append(limit)
+        eligible = [
+            item
+            for item in messages
+            if before is None or item["created_at"] < before
+        ]
+        return httpx.Response(
+            200, json={"success": True, "data": eligible[-min(limit, 200) :]}
+        )
+
+    client = _message_client(respond)
+    try:
+        result = await client.messages(user_id="user-1", session_id="native-s1")
+    finally:
+        await client.close()
+    assert {item["id"] for item in result} == {item["id"] for item in messages}
+    assert len(result) == len(messages)
+    assert 200 in requested_limits
+    assert max(requested_limits) <= 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [200, 201])
+async def test_messages_fail_when_timestamp_group_fills_native_cap(
+    count: int,
+) -> None:
+    """仅有时间游标时无法证明同刻整组完整，必须明确失败。"""
+    messages = [
+        {"id": f"m-{index}", "created_at": "2026-10-01T00:00:00Z"}
+        for index in range(count)
+    ]
+    requested_limits: list[int] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        limit = int(request.url.params["limit"])
+        requested_limits.append(limit)
+        return httpx.Response(
+            200, json={"success": True, "data": messages[-min(limit, 200) :]}
+        )
+
+    client = _message_client(respond)
+    try:
+        with pytest.raises(NativeHttpError, match="无法安全分页"):
+            await client.messages(user_id="user-1", session_id="native-s1")
+    finally:
+        await client.close()
+    assert requested_limits == [101, 200]
 
 
 @pytest.mark.asyncio

@@ -72,6 +72,242 @@ export function listKnowledgeBases(params?: {
 //                       (deleted row, registry miss, transient infra
 //                       failure). Operators recover via the global
 //                       Vector Stores settings page.
+// ---------------------------------------------------------------------------
+// Image attribute observation (route 3). Mirrors backend types in
+// internal/types/image_attrs.go. The backend registry is the single source of
+// truth; the frontend fetches it from GET /image-attrs/schema and renders the
+// attribute panel dynamically. The types/constants below mirror the v1 shape
+// so the UI still compiles and can render a fallback before the schema loads.
+// ---------------------------------------------------------------------------
+
+// One allowed value of an image attribute.
+//
+// Display text is split for the same reasons the gallery splits it: `label` is
+// what fits on a checkbox or a table cell, `description` is the sentence that
+// explains the value where there is room. `value` stays the raw machine value.
+export interface ImageAttrValue {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+// One observable image attribute, as returned by the schema endpoint. The
+// registry is authoritative for both the behaviour and the wording: label,
+// description and the per-value texts are what the settings panel shows to an
+// operator who does not read identifiers like "contain.text".
+export interface ImageAttrSpec {
+  name: string;
+  type: 'extent' | 'presence';
+  values?: ImageAttrValue[];
+  question: string;
+  label: string;
+  description?: string;
+  consumers?: string[];
+}
+
+// One attribute match: attribute `prop` equals `is`.
+export interface ImageAttrCondition {
+  prop: string;
+  is: string;
+}
+
+// The OCR clause of the attribute -> work policy: the attribute conditions that
+// turn OCR on. What to do about an image whose attributes were NOT observed is
+// not part of this table — it is a setting of the pipeline that schedules OCR
+// (its own ocr_on_unobserved), so an on_unobserved left here by an older client
+// is ignored rather than honoured from two places.
+export interface ImageOCRAction {
+  on: ImageAttrCondition[];
+}
+
+// The attribute -> work policy sent back to the API (snake_case JSON).
+export interface ImageActionsConfig {
+  ocr: ImageOCRAction;
+}
+
+// Canonical registry + built-in actions returned by GET /image-attrs/schema.
+export interface ImageAttrSchema {
+  version: string;
+  prompt: string;
+  attributes: ImageAttrSpec[];
+  default_actions: ImageActionsConfig;
+}
+
+// Mirrors backend types.DefaultImageActions. The schema endpoint returns the
+// authoritative copy; this is the fallback used before the schema loads (e.g.
+// in create mode, where no knowledge base id exists yet to query).
+export const DEFAULT_IMAGE_ACTIONS: ImageActionsConfig = {
+  ocr: {
+    on: [
+      { prop: 'contain.text', is: 'block' },
+      { prop: 'contain.data_visual', is: 'true' },
+    ],
+  },
+};
+
+// Display-only fallback used before a KB exists (create mode) so the panel can
+// render without a network call. It mirrors the registry for layout and wording
+// only; the endpoint response is authoritative whenever it loads.
+export const FALLBACK_IMAGE_ATTR_SCHEMA: ImageAttrSchema = {
+  version: 'attrs/2',
+  prompt: 'observe/1',
+  attributes: [
+    {
+      name: 'contain.text',
+      type: 'extent',
+      values: [
+        { value: 'none', label: 'None', description: 'no text at all' },
+        { value: 'sparse', label: 'Sparse', description: 'a few words — a logo, a road sign, a single label' },
+        { value: 'block', label: 'Block', description: 'a block of body text — a screenshot, a table, a document page' },
+      ],
+      question: '',
+      label: 'Text in the image',
+      description: 'How much body text the picture itself carries.',
+      consumers: ['ocr'],
+    },
+    {
+      name: 'contain.data_visual',
+      type: 'presence',
+      values: [
+        { value: 'true', label: 'Yes', description: 'a chart, graph or diagram with plotted values' },
+        { value: 'false', label: 'No', description: 'a photo, drawing, icon or decoration' },
+      ],
+      question: '',
+      label: 'Data visual',
+      description: 'Whether the picture conveys data as a chart, graph, diagram or infographic.',
+      consumers: ['ocr'],
+    },
+  ],
+  default_actions: DEFAULT_IMAGE_ACTIONS,
+};
+
+// Mirrors backend types.MergeImageActions: a custom OCR.On replaces the default
+// OCR.On wholesale (the "on" list is a unit); anything else the custom table
+// does not mention keeps the default. The result is what the form seeds with and
+// what makes an empty custom table safe to open.
+export function mergeImageActions(
+  custom?: ImageActionsConfig | null,
+): ImageActionsConfig {
+  if (custom && custom.ocr && custom.ocr.on && custom.ocr.on.length > 0) {
+    return { ocr: { on: custom.ocr.on } };
+  }
+  return { ocr: { on: DEFAULT_IMAGE_ACTIONS.ocr.on.map((c) => ({ ...c })) } };
+}
+
+// Fetch the canonical image-attribute registry + default actions from the
+// backend. The registry drives the attribute panel; the default actions seed
+// the OCR-condition display.
+export async function fetchImageAttrSchema(kbId: string): Promise<ImageAttrSchema> {
+  // The registry is global, not per-KB. The backend exposes it at a top-level
+  // route, the same shape as the other read-only KB-editor helpers
+  // (GET /api/v1/chunker/preview, GET /api/v1/system/parser-engines). kbId is
+  // kept in the signature for callers that pass KB context.
+  void kbId;
+  const res = await get<{ success: boolean; data: ImageAttrSchema }>(
+    `/api/v1/image-attrs/schema`,
+  );
+  return res.data;
+}
+
+// Mirrors backend types.ImageProcessingConfig (snake_case JSON). The UI edits
+// the attribute-observation switch, the pipeline pick and the image-vector
+// switch; saving sends the snapshot back with those fields updated so API-side
+// settings survive a UI edit.
+export interface ImageProcessingConfig {
+  model_id?: string;
+  image_actions?: ImageActionsConfig;
+  image_attrs_enabled?: boolean;
+  /** Which image pipeline runs for this base; empty means "follow the switch". */
+  image_pipeline?: string;
+  /**
+   * Every setting the picked pipeline declares, each under that pipeline's slot
+   * ("<pipeline>.<field key>"). The panel writes and reads this map, and it is
+   * where the run reads those settings from too.
+   */
+  image_pipeline_params?: Record<string, unknown>;
+  // Index and recall images by their own vectors. Off unless the knowledge
+  // base opts in, and only takes effect with an embedding model that takes
+  // images.
+  image_vector_enabled?: boolean;
+}
+
+// Mirrors types.ImagePipelineSpec and types.ImageFieldDef.
+//
+// A field is private to the pipeline that declared it, which is why two
+// pipelines may both own a field called "enable_ocr". The knowledge base stores
+// them per pipeline rather than in one flat map, and the panel renders one
+// control per field without naming any pipeline.
+export interface ImagePipelineField {
+  key: string;
+  /**
+   * 'note' carries no value: it is explanation text the pipeline declares
+   * alongside the switches it explains.
+   */
+  type: 'bool' | 'string' | 'enum' | 'note';
+  label: string;
+  description: string;
+  default: unknown;
+  options: string[] | null;
+  /**
+   * Which run of the panel the field belongs to: 'switch' (standing, shown
+   * outright), 'advanced' or 'note' (both folded away). Absent or empty means
+   * 'switch', so a pipeline only mentions the group for fields it folds.
+   */
+  group?: 'switch' | 'advanced' | 'note';
+  /** Whether this field turns an action on or off, as opposed to tuning one. */
+  decides_action?: boolean;
+}
+
+/** One condition the chosen pipeline places on its own tunables. The backend
+ * owns the rules — including the wording each one triggers — so the panel never
+ * decides on its own what a set of settings may or may not be. */
+export interface ImagePipelineRule {
+  at_least_one: string[];
+  /** i18n key of this rule's own message, translated at render time. */
+  message_key: string;
+  /** Which control to point at; defaults to the first of at_least_one. */
+  field?: string;
+}
+
+export interface ImagePipelineSpec {
+  id: string;
+  name: string;
+  /** How the pipeline works, shown under the pick; i18n overlays on top. */
+  description: string;
+  fields: ImagePipelineField[];
+  /** Conditions over those fields. Empty means the pipeline accepts any of it. */
+  rules?: ImagePipelineRule[];
+}
+
+export interface ImagePipelineViolation {
+  message_key: string;
+  field?: string;
+}
+
+/** POST /api/v1/image-pipelines/validate: every rule of the named pipeline that
+ * the given tunables break, translated by the caller rather than sent as prose.
+ * `valid: true` means the backend found none. */
+export async function validateImagePipelines(
+  pipelineId: string,
+  params: Record<string, unknown>,
+): Promise<{ valid: boolean; violations: ImagePipelineViolation[] }> {
+  const res = await post<{
+    success: boolean;
+    data: { valid: boolean; violations: ImagePipelineViolation[] };
+  }>(`/api/v1/image-pipelines/validate`, { pipeline_id: pipelineId, params });
+  return res.data;
+}
+
+// Fetch every registered image pipeline. The backend owns the list, so a
+// pipeline added there shows up here as an option with no frontend change. The
+// registry is global, not per-KB, hence the top-level route.
+export async function fetchImagePipelines(): Promise<ImagePipelineSpec[]> {
+  const res = await get<{ success: boolean; data: ImagePipelineSpec[] }>(
+    `/api/v1/image-pipelines`,
+  );
+  return res.data;
+}
+
 export type VectorStoreSource = 'env' | 'user' | 'shared' | 'unavailable';
 export type VectorStoreStatus = 'available' | 'unavailable';
 
@@ -88,6 +324,7 @@ export function createKnowledgeBase(data: {
   description?: string;
   type?: 'document' | 'faq';
   chunking_config?: any;
+  image_processing_config?: ImageProcessingConfig;
   embedding_model_id?: string;
   summary_model_id?: string;
   auto_tag_config?: { enabled: boolean; model_id?: string; max_tags?: number; skip_if_tagged?: boolean };
@@ -144,7 +381,7 @@ export function updateKnowledgeBase(id: string, data: {
   description?: string;
   config?: {
     chunking_config?: any;
-    image_processing_config?: any;
+    image_processing_config?: ImageProcessingConfig;
     faq_config?: any;
     wiki_config?: {
       synthesis_model_id?: string;

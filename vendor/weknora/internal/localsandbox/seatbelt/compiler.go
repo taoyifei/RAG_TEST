@@ -83,6 +83,18 @@ func compileSeatbelt(p core.Policy) (seatbeltProgram, error) {
 			denies = append(denies, fmt.Sprintf(
 				`(deny file-write-unlink (require-all (literal (param %q)) (vnode-type DIRECTORY)))`,
 				subParam))
+			// require-not above only narrows this root's own allow. Another
+			// writable root that covers the carve-out would reopen it.
+			denies = append(denies,
+				fmt.Sprintf("(deny file-write* (subpath (param %q)))", subParam),
+				fmt.Sprintf("(deny file-write* (literal (param %q)))", subParam),
+			)
+		}
+		if root.ProtectGitDirs {
+			// The regex is a constant, so no path is inlined into the profile.
+			denies = append(denies, fmt.Sprintf(
+				`(deny file-write* (require-all (subpath (param %q)) (regex #"/\.[Gg][Ii][Tt](/|$)")))`,
+				rootParam))
 		}
 	}
 
@@ -104,6 +116,15 @@ func compileSeatbelt(p core.Policy) (seatbeltProgram, error) {
 			fmt.Sprintf("(allow file-read* (subpath (param %q)))", param),
 			fmt.Sprintf("(allow file-read* (literal (param %q)))", param),
 		)
+	}
+
+	if len(p.WritableRoots) > 0 {
+		// Host temp opens with the first writable root, for chat and install
+		// alike. A policy with none (Ask mode before approval) must not write
+		// anywhere. /tmp is a symlink of /private/tmp and Seatbelt matches the
+		// resolved vnode, so both names are required. /var/folders stays closed.
+		writeAllows = append(writeAllows,
+			`(allow file-write* (subpath "/tmp") (subpath "/private/tmp"))`)
 	}
 
 	networkRules, err := seatbeltNetworkRules(p)
