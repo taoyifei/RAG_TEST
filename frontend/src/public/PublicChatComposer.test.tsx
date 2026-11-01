@@ -25,6 +25,32 @@ function ScopeComposer() {
 }
 
 describe("湾事通提问输入框", () => {
+  it("范围 fieldset 直接挂在主题根节点，仍保留分组与多选语义", async () => {
+    const user = userEvent.setup();
+    const view = render(
+      <div className="wst-root" data-theme="dark">
+        <div style={{ overflow: "hidden" }}>
+          <ScopeComposer />
+        </div>
+      </div>,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "资料范围：公共知识库" }),
+    );
+    const options = screen.getByRole("group", { name: "选择问答资料范围" });
+    expect(options.tagName).toBe("FIELDSET");
+    expect(options.parentElement).toBe(
+      view.container.querySelector(".wst-root"),
+    );
+    expect(options.closest("[data-theme]")).toHaveAttribute(
+      "data-theme",
+      "dark",
+    );
+    await user.click(screen.getByRole("checkbox", { name: "我的资料" }));
+    expect(options).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "我的资料" })).toBeChecked();
+  });
+
   it("生成中可以写草稿，Enter 不会发送，结束后只发送一次", async () => {
     const onSubmit = vi.fn();
     const onStop = vi.fn();
@@ -164,13 +190,19 @@ describe("湾事通提问输入框", () => {
   it("直接选公开人力制度缩小默认公共范围，组合保留本人资料", async () => {
     const user = userEvent.setup();
     render(<ScopeComposer />);
-    await user.click(screen.getByRole("button", { name: "资料范围：公共知识库" }));
+    await user.click(
+      screen.getByRole("button", { name: "资料范围：公共知识库" }),
+    );
     await user.click(screen.getByRole("checkbox", { name: "公开人力制度" }));
     expect(
       screen.getByRole("button", { name: "资料范围：公开人力制度" }),
     ).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: "公共知识库" })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "公开人力制度" })).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: "公共知识库" }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "公开人力制度" }),
+    ).toBeDisabled();
     await user.click(screen.getByRole("checkbox", { name: "我的资料" }));
     expect(
       screen.getByRole("button", { name: "资料范围：公开人力制度 + 我的资料" }),
@@ -179,7 +211,9 @@ describe("湾事通提问输入框", () => {
     expect(
       screen.getByRole("button", { name: "资料范围：公共知识库 + 我的资料" }),
     ).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: "公开人力制度" })).not.toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "公开人力制度" }),
+    ).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "我的资料" })).toBeChecked();
   });
 

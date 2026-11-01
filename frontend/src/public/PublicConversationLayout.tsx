@@ -1,7 +1,6 @@
 import {
   Archive,
   ArchiveRestore,
-  MessageCircle,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
@@ -24,7 +23,7 @@ import {
 
 import { redirectToSso } from "./authNavigation";
 import { PublicApiError, type PublicNaturalSession } from "./publicApi";
-import { useDismissiblePopover } from "./useDismissiblePopover";
+import { AnchoredPopover } from "./AnchoredPopover";
 
 const COMPACT_QUERY = "(max-width: 900px)";
 const COLLAPSED_KEY = "wanshitong-sidebar-collapsed";
@@ -75,6 +74,7 @@ const ConversationItem = memo(function ConversationItem({
   onArchive,
   onDelete,
   archived,
+  active,
 }: {
   item: PublicNaturalSession;
   selected: boolean;
@@ -84,19 +84,20 @@ const ConversationItem = memo(function ConversationItem({
   onArchive?: (item: PublicNaturalSession) => void;
   onDelete?: (item: PublicNaturalSession) => void;
   archived: boolean;
+  active: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const [above, setAbove] = useState(false);
+  const [menu, setMenu] = useState({ active, open: false });
+  // 保留列表节点和滚动位置，但收起侧栏时重置菜单，重新展开不会弹回旧菜单。
+  if (menu.active !== active) setMenu({ active, open: false });
+  const open = active && menu.open;
   const trigger = useRef<HTMLButtonElement>(null);
-  const dismiss = useCallback(() => setOpen(false), []);
-  const container = useDismissiblePopover<HTMLDivElement>(
-    open,
-    dismiss,
-    trigger,
+  const dismiss = useCallback(
+    () => setMenu((value) => (value.open ? { ...value, open: false } : value)),
+    [],
   );
   const id = useId();
   return (
-    <div className="wst-sidebar-session-row" ref={container}>
+    <div className="wst-sidebar-session-row">
       <button
         aria-current={selected ? "page" : undefined}
         aria-label={item.title}
@@ -108,7 +109,6 @@ const ConversationItem = memo(function ConversationItem({
         title={item.title}
         type="button"
       >
-        <MessageCircle aria-hidden="true" size={15} />
         <span>{item.title}</span>
         {opening && <small role="status">打开中…</small>}
       </button>
@@ -120,57 +120,49 @@ const ConversationItem = memo(function ConversationItem({
             aria-expanded={open}
             className="wst-sidebar-session-actions wst-sidebar-icon"
             disabled={disabled}
-            onClick={() => {
-              const bottom =
-                container.current
-                  ?.closest(".wst-sidebar-history")
-                  ?.getBoundingClientRect().bottom ?? window.innerHeight;
-              setAbove(
-                (trigger.current?.getBoundingClientRect().bottom ?? 0) + 92 >
-                  bottom,
-              );
-              setOpen((value) => !value);
-            }}
+            onClick={() => setMenu((value) => ({ active, open: !value.open }))}
             ref={trigger}
             title="会话操作"
             type="button"
           >
             <MoreHorizontal aria-hidden="true" size={17} />
           </button>
-          {open && (
-            <div
-              aria-label={`操作：${item.title}`}
-              className={`wst-sidebar-session-popover${above ? " is-above" : ""}`}
-              id={id}
-              role="group"
+          <AnchoredPopover
+            open={active && open}
+            onDismiss={dismiss}
+            triggerRef={trigger}
+            label={`操作：${item.title}`}
+            className="wst-sidebar-session-popover"
+            id={id}
+            role="group"
+            width={176}
+          >
+            <button
+              onClick={() => {
+                dismiss();
+                onArchive(item);
+              }}
+              type="button"
             >
-              <button
-                onClick={() => {
-                  dismiss();
-                  onArchive(item);
-                }}
-                type="button"
-              >
-                {archived ? (
-                  <ArchiveRestore aria-hidden="true" size={15} />
-                ) : (
-                  <Archive aria-hidden="true" size={15} />
-                )}
-                {archived ? "恢复会话" : "归档会话"}
-              </button>
-              <button
-                className="is-destructive"
-                onClick={() => {
-                  dismiss();
-                  onDelete(item);
-                }}
-                type="button"
-              >
-                <Trash2 aria-hidden="true" size={15} />
-                删除会话
-              </button>
-            </div>
-          )}
+              {archived ? (
+                <ArchiveRestore aria-hidden="true" size={15} />
+              ) : (
+                <Archive aria-hidden="true" size={15} />
+              )}
+              {archived ? "恢复会话" : "归档会话"}
+            </button>
+            <button
+              className="is-destructive"
+              onClick={() => {
+                dismiss();
+                onDelete(item);
+              }}
+              type="button"
+            >
+              <Trash2 aria-hidden="true" size={15} />
+              删除会话
+            </button>
+          </AnchoredPopover>
         </>
       )}
     </div>
@@ -246,6 +238,13 @@ export function PublicConversationLayout({
   const focusComposerOnCloseRef = useRef(false);
   const sidebarId = useId();
   const expanded = compact ? drawerOpen : !collapsed;
+  const previouslyExpanded = useRef(expanded);
+  useEffect(() => {
+    if (previouslyExpanded.current && !expanded && !compact) {
+      triggerRef.current?.focus();
+    }
+    previouslyExpanded.current = expanded;
+  }, [compact, expanded]);
   const keyword = query.trim().toLocaleLowerCase();
   const { groups, count } = useMemo(() => {
     const today = new Date();
@@ -486,8 +485,9 @@ export function PublicConversationLayout({
     <div
       className={`wst-app-layout${!expanded ? " is-sidebar-collapsed" : ""}${compact ? " is-compact" : ""}`}
     >
-      {compact && expanded && (
+      {compact && (
         <button
+          aria-hidden={!expanded}
           aria-label="关闭会话侧栏遮罩"
           className="wst-sidebar-backdrop"
           onClick={() => changeExpanded(false)}
@@ -495,191 +495,184 @@ export function PublicConversationLayout({
           type="button"
         />
       )}
-      {expanded && (
-        <aside
-          aria-label="会话侧栏"
-          aria-modal={compact ? true : undefined}
-          className="wst-conversation-sidebar"
-          id={sidebarId}
-          ref={panelRef}
-          role={compact ? "dialog" : undefined}
-        >
-          <div className="wst-sidebar-heading">
-            <span className="wst-sidebar-brand">
-              <span aria-hidden="true">湾</span>湾小度
-            </span>
-            <button
-              aria-label="关闭侧栏"
-              className="wst-sidebar-icon"
-              onClick={() => changeExpanded(false)}
-              ref={closeRef}
-              title="收起侧栏"
-              type="button"
-            >
-              <PanelLeftClose aria-hidden="true" size={19} />
-            </button>
-          </div>
+      <aside
+        aria-label="会话侧栏"
+        aria-hidden={!expanded}
+        aria-modal={compact && expanded ? true : undefined}
+        inert={!expanded ? true : undefined}
+        className="wst-conversation-sidebar"
+        id={sidebarId}
+        ref={panelRef}
+        role={compact ? "dialog" : undefined}
+      >
+        <div className="wst-sidebar-heading">
+          <span className="wst-sidebar-brand">
+            <span aria-hidden="true">湾</span>湾小度
+          </span>
           <button
-            className="wst-sidebar-new"
-            disabled={busy || historyActionBusy || !!actionId}
-            onClick={newTopic}
+            aria-label={compact ? "关闭侧栏" : "收起会话侧栏"}
+            className="wst-sidebar-icon"
+            onClick={() => changeExpanded(false)}
+            ref={closeRef}
+            title="收起侧栏"
             type="button"
           >
-            <Plus aria-hidden="true" size={18} />
-            新对话
+            <PanelLeftClose aria-hidden="true" size={19} />
           </button>
-          {navigation.length > 0 && (
-            <nav aria-label="工作区导航" className="wst-sidebar-navigation">
-              {navigation.map((item) =>
-                item.href ? (
-                  <a
-                    key={item.label}
-                    href={item.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {item.icon}
-                    <span>{item.label}</span>
-                  </a>
-                ) : (
-                  <button
-                    key={item.label}
-                    type="button"
-                    aria-current={item.active ? "page" : undefined}
-                    disabled={item.disabled}
-                    onClick={() => {
-                      item.onSelect?.();
-                      if (compact) changeExpanded(false);
-                    }}
-                  >
-                    {item.icon}
-                    <span>{item.label}</span>
-                  </button>
-                ),
+        </div>
+        <button
+          className="wst-sidebar-new"
+          disabled={busy || historyActionBusy || !!actionId}
+          onClick={newTopic}
+          type="button"
+        >
+          <Plus aria-hidden="true" size={18} />
+          新对话
+        </button>
+        {navigation.length > 0 && (
+          <nav aria-label="工作区导航" className="wst-sidebar-navigation">
+            {navigation.map((item) =>
+              item.href ? (
+                <a
+                  key={item.label}
+                  href={item.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                </a>
+              ) : (
+                <button
+                  key={item.label}
+                  type="button"
+                  aria-current={item.active ? "page" : undefined}
+                  disabled={item.disabled}
+                  onClick={() => {
+                    item.onSelect?.();
+                    if (compact) changeExpanded(false);
+                  }}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                </button>
+              ),
+            )}
+          </nav>
+        )}
+        {historyEnabled && (
+          <>
+            <div className="wst-sidebar-search">
+              <Search aria-hidden="true" size={16} />
+              <input
+                aria-label="搜索历史会话"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索会话标题"
+                type="search"
+                value={query}
+              />
+              {query && (
+                <button
+                  aria-label="清空会话搜索"
+                  className="wst-sidebar-icon"
+                  onClick={() => setQuery("")}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={15} />
+                </button>
+              )}
+            </div>
+            <div className="wst-sidebar-history-heading">
+              <h2 className="wst-sidebar-label">
+                {historyArchived ? "已归档" : "历史会话"}
+              </h2>
+              {onHistoryViewChange && (
+                <button
+                  aria-label={
+                    historyArchived ? "返回历史会话" : "查看已归档会话"
+                  }
+                  aria-pressed={historyArchived}
+                  className="wst-sidebar-archive-toggle"
+                  disabled={historyActionBusy || !!actionId || !!openingId}
+                  onClick={() => {
+                    void changeHistoryView();
+                  }}
+                  ref={historyToggleRef}
+                  type="button"
+                >
+                  <Archive aria-hidden="true" size={14} />
+                  {historyArchived ? "返回历史" : "已归档"}
+                </button>
+              )}
+            </div>
+            {(error || historyError) && (
+              <p className="wst-sidebar-error" role="alert">
+                {error ?? historyError}
+              </p>
+            )}
+            {notice && (
+              <p className="wst-sidebar-footnote" role="status">
+                {notice}
+              </p>
+            )}
+            {(historyActionBusy || actionId) && (
+              <p className="wst-sidebar-footnote" role="status">
+                正在更新会话…
+              </p>
+            )}
+            <nav
+              aria-label="历史会话"
+              aria-busy={
+                !!openingId || historyLoading || historyActionBusy || !!actionId
+              }
+              className="wst-sidebar-history"
+            >
+              {historyLoading ? (
+                <p className="wst-sidebar-empty" role="status">
+                  正在加载会话…
+                </p>
+              ) : count === 0 ? (
+                <p className="wst-sidebar-empty">
+                  {keyword
+                    ? "没有匹配的会话，试试其他关键词。"
+                    : historyArchived
+                      ? "还没有归档的会话。"
+                      : "还没有历史会话，开始一次新对话吧。"}
+                </p>
+              ) : (
+                [...groups].map(([label, items]) => (
+                  <section className="wst-sidebar-group" key={label}>
+                    <h3>{label}</h3>
+                    {items.map((item) => (
+                      <ConversationItem
+                        item={item}
+                        archived={historyArchived}
+                        active={expanded}
+                        selected={item.conversation_id === conversationId}
+                        opening={openingId === item.conversation_id}
+                        disabled={
+                          busy || !!openingId || historyActionBusy || !!actionId
+                        }
+                        key={item.conversation_id}
+                        onSelect={selectSession}
+                        onArchive={onArchive ? archiveConversation : undefined}
+                        onDelete={onDelete ? deleteConversation : undefined}
+                      />
+                    ))}
+                  </section>
+                ))
               )}
             </nav>
-          )}
-          {historyEnabled && (
-            <>
-              <div className="wst-sidebar-search">
-                <Search aria-hidden="true" size={16} />
-                <input
-                  aria-label="搜索历史会话"
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="搜索会话标题"
-                  type="search"
-                  value={query}
-                />
-                {query && (
-                  <button
-                    aria-label="清空会话搜索"
-                    className="wst-sidebar-icon"
-                    onClick={() => setQuery("")}
-                    type="button"
-                  >
-                    <X aria-hidden="true" size={15} />
-                  </button>
-                )}
-              </div>
-              <div className="wst-sidebar-history-heading">
-                <h2 className="wst-sidebar-label">
-                  {historyArchived ? "已归档" : "历史会话"}
-                </h2>
-                {onHistoryViewChange && (
-                  <button
-                    aria-label={
-                      historyArchived ? "返回历史会话" : "查看已归档会话"
-                    }
-                    aria-pressed={historyArchived}
-                    className="wst-sidebar-archive-toggle"
-                    disabled={historyActionBusy || !!actionId || !!openingId}
-                    onClick={() => {
-                      void changeHistoryView();
-                    }}
-                    ref={historyToggleRef}
-                    type="button"
-                  >
-                    <Archive aria-hidden="true" size={14} />
-                    {historyArchived ? "返回历史" : "已归档"}
-                  </button>
-                )}
-              </div>
-              {(error || historyError) && (
-                <p className="wst-sidebar-error" role="alert">
-                  {error ?? historyError}
-                </p>
-              )}
-              {notice && (
-                <p className="wst-sidebar-footnote" role="status">
-                  {notice}
-                </p>
-              )}
-              {(historyActionBusy || actionId) && (
-                <p className="wst-sidebar-footnote" role="status">
-                  正在更新会话…
-                </p>
-              )}
-              <nav
-                aria-label="历史会话"
-                aria-busy={
-                  !!openingId ||
-                  historyLoading ||
-                  historyActionBusy ||
-                  !!actionId
-                }
-                className="wst-sidebar-history"
-              >
-                {historyLoading ? (
-                  <p className="wst-sidebar-empty" role="status">
-                    正在加载会话…
-                  </p>
-                ) : count === 0 ? (
-                  <p className="wst-sidebar-empty">
-                    {keyword
-                      ? "没有匹配的会话，试试其他关键词。"
-                      : historyArchived
-                        ? "还没有归档的会话。"
-                        : "还没有历史会话，开始一次新对话吧。"}
-                  </p>
-                ) : (
-                  [...groups].map(([label, items]) => (
-                    <section className="wst-sidebar-group" key={label}>
-                      <h3>{label}</h3>
-                      {items.map((item) => (
-                        <ConversationItem
-                          item={item}
-                          archived={historyArchived}
-                          selected={item.conversation_id === conversationId}
-                          opening={openingId === item.conversation_id}
-                          disabled={
-                            busy ||
-                            !!openingId ||
-                            historyActionBusy ||
-                            !!actionId
-                          }
-                          key={item.conversation_id}
-                          onSelect={selectSession}
-                          onArchive={
-                            onArchive ? archiveConversation : undefined
-                          }
-                          onDelete={onDelete ? deleteConversation : undefined}
-                        />
-                      ))}
-                    </section>
-                  ))
-                )}
-              </nav>
-              <p className="wst-sidebar-footnote">
-                {moreCount > 0
-                  ? `当前显示最近 ${sessions.length} 个会话，另有 ${moreCount} 个较早会话；搜索仅限当前列表。`
-                  : historyArchived
-                    ? "归档不会删除问答，仍可打开继续追问。"
-                    : "选择会话，即可继续追问。"}
-              </p>
-            </>
-          )}
-        </aside>
-      )}
+            <p className="wst-sidebar-footnote">
+              {moreCount > 0
+                ? `当前显示最近 ${sessions.length} 个会话，另有 ${moreCount} 个较早会话；搜索仅限当前列表。`
+                : historyArchived
+                  ? "归档不会删除问答，仍可打开继续追问。"
+                  : "选择会话，即可继续追问。"}
+            </p>
+          </>
+        )}
+      </aside>
       <div
         aria-hidden={compact && expanded ? true : undefined}
         aria-busy={historyActionBusy || !!actionId}
@@ -697,15 +690,12 @@ export function PublicConversationLayout({
               aria-expanded={expanded}
               aria-label={expanded ? "收起会话侧栏" : "展开会话侧栏"}
               className="wst-sidebar-icon"
+              hidden={expanded}
               onClick={() => changeExpanded(!expanded)}
               ref={triggerRef}
               type="button"
             >
-              {expanded ? (
-                <PanelLeftClose aria-hidden="true" size={20} />
-              ) : (
-                <PanelLeftOpen aria-hidden="true" size={20} />
-              )}
+              <PanelLeftOpen aria-hidden="true" size={20} />
             </button>
             {!expanded && (
               <button
