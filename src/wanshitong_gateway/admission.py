@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -35,15 +36,21 @@ class QaSlot:
 
 
 class BoundedQaQueue:
-    """单网关进程中最多四条问答流运行、八条等待。"""
+    """单进程默认四条问答流运行、八条等待，运行容量可显式配置。"""
 
     def __init__(
         self,
         *,
-        max_active: int = 4,
+        max_active: int | None = None,
         max_waiting: int = 8,
         wait_timeout_seconds: float = 300,
     ) -> None:
+        """显式运行容量优先，否则读取环境变量；未配置时保持四条。"""
+        if max_active is None:
+            try:
+                max_active = int(os.environ.get("WXD_QA_MAX_ACTIVE", "4"))
+            except ValueError as error:
+                raise ValueError("WXD_QA_MAX_ACTIVE 必须是正整数。") from error
         if max_active < 1 or max_waiting < 0 or wait_timeout_seconds <= 0:
             raise ValueError("问答队列容量与等待时间必须有效。")
         self.max_active = max_active
