@@ -313,6 +313,33 @@ async def test_shared_pdf_keeps_builtin_override_without_changing_other_uploads(
 
 
 @pytest.mark.asyncio
+async def test_hr_public_qa_read_does_not_grant_maintenance(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    uploaded = await service.upload("hr_public", _HR, "policy.md", b"policy")
+    identifier = uploaded["id"]
+    kb_id = native.documents[identifier]["knowledge_base_id"]
+
+    assert service.search_kbs(_ALICE, ("hr_public",)) == (kb_id,)
+    document, scope = await service.document(identifier, _ALICE)
+    assert document["id"] == identifier
+    assert scope["scope"] == "hr_public"
+    assert (await service.download(identifier, _ALICE)).content == b"policy"
+
+    for operation in (
+        lambda: service.list_documents("hr_public", _ALICE),
+        lambda: service.upload("hr_public", _ALICE, "new.md", b"new-policy"),
+        lambda: service.document(identifier, _ALICE, write=True),
+        lambda: service.delete(identifier, _ALICE),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await operation()
+        assert denied.value.status_code == 403
+    assert identifier in native.documents
+
+
+@pytest.mark.asyncio
 async def test_hr_internal_access_and_downgraded_history(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:

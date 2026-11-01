@@ -44,6 +44,8 @@ class _Library:
         if "hr_internal" in scopes and not can_access_hr_internal(profile):
             raise HTTPException(403, "禁止人力内部资料。")
         ids = list(self.public) if "public" in scopes else []
+        if "hr_public" in scopes:
+            ids.append("hr-public-kb")
         if "personal" in scopes:
             ids.append("personal-" + profile.user_id)
         if "hr_internal" in scopes:
@@ -454,6 +456,25 @@ async def test_bootstrap_uses_dedicated_viewer_and_never_returns_credentials(
             )
         ]
     assert not set(columns).intersection({"password", "token", "refresh_token"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identifier", ["138", "139", "140", "325"])
+async def test_hr_public_workspace_is_narrow_and_available_to_all_roles(
+    setup_workbench: _Setup,
+    identifier: str,
+) -> None:
+    service, native, users, _, _ = setup_workbench
+    profile = _profile(users, identifier)
+    narrow = await service.bootstrap(profile, ("hr_public",))
+    assert narrow["search_scopes"] == ["hr_public"]
+    assert narrow["scope_label"] == "公开人力制度"
+    assert narrow["knowledge_base_ids"] == ["hr-public-kb"]
+    assert next(iter(native.shares.values())) == {"hr-public-kb"}
+    public = await service.bootstrap(profile, ("hr_public", "public"))
+    assert public["search_scopes"] == ["public"]
+    assert set(public["knowledge_base_ids"]) == {"public-kb", "hr-public-kb"}
+    assert public == await service.bootstrap(profile, ("public",))
 
 
 @pytest.mark.asyncio

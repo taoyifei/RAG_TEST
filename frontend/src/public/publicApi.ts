@@ -26,7 +26,11 @@ export interface PublicShortcut {
   revision: number;
 }
 
-export type PublicSearchScope = "public" | "personal" | "hr_internal";
+export type PublicSearchScope =
+  | "public"
+  | "hr_public"
+  | "personal"
+  | "hr_internal";
 
 export interface PublicSearchScopeOption {
   id: PublicSearchScope;

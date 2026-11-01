@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SearchScope = Literal["public", "personal", "hr_internal"]
+SearchScope = Literal["public", "hr_public", "personal", "hr_internal"]
 SEARCH_SCOPE_ORDER: tuple[SearchScope, ...] = (
     "public",
+    "hr_public",
     "personal",
     "hr_internal",
 )
+
+
+def normalize_search_scopes(values: Iterable[str]) -> tuple[SearchScope, ...]:
+    """规范逻辑资料范围，公共范围已覆盖的公开人力项不重复保留。"""
+    selected = set(values)
+    if not selected or not selected.issubset(SEARCH_SCOPE_ORDER):
+        raise ValueError("请选择有效的资料范围。")
+    if "public" in selected:
+        selected.discard("hr_public")
+    return tuple(scope for scope in SEARCH_SCOPE_ORDER if scope in selected)
 
 
 class GatewayChatRequest(BaseModel):
@@ -27,7 +39,7 @@ class GatewayChatRequest(BaseModel):
     )
     client_context: object | None = None
     search_scopes: list[SearchScope] | None = Field(
-        default=None, min_length=1, max_length=3
+        default=None, min_length=1, max_length=len(SEARCH_SCOPE_ORDER)
     )
 
     @field_validator("search_scopes")
@@ -37,7 +49,7 @@ class GatewayChatRequest(BaseModel):
     ) -> list[SearchScope] | None:
         if value is None:
             return None
-        return [scope for scope in SEARCH_SCOPE_ORDER if scope in value]
+        return list(normalize_search_scopes(value))
 
     @field_validator("query")
     @classmethod

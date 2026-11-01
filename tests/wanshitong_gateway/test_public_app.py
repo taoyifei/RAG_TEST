@@ -349,14 +349,26 @@ def _scope_browser(
 
 
 @pytest.mark.parametrize(
-    ("scopes", "expected"),
+    ("scopes", "expected", "expected_scopes"),
     [
-        (None, {"kb-old", "shared", "hr-public"}),
-        (["public"], {"kb-old", "shared", "hr-public"}),
-        (["personal"], {"own-private"}),
+        (None, {"kb-old", "shared", "hr-public"}, ["public"]),
+        (["public"], {"kb-old", "shared", "hr-public"}, ["public"]),
+        (["hr_public"], {"hr-public"}, ["hr_public"]),
+        (["personal"], {"own-private"}, ["personal"]),
         (
             ["personal", "public"],
             {"kb-old", "shared", "hr-public", "own-private"},
+            ["public", "personal"],
+        ),
+        (
+            ["personal", "hr_public"],
+            {"hr-public", "own-private"},
+            ["hr_public", "personal"],
+        ),
+        (
+            ["hr_public", "public"],
+            {"kb-old", "shared", "hr-public"},
+            ["public"],
         ),
     ],
 )
@@ -365,6 +377,7 @@ def test_selected_scopes_are_the_actual_native_request_targets(
     monkeypatch: pytest.MonkeyPatch,
     scopes: list[str] | None,
     expected: set[str],
+    expected_scopes: list[str],
 ) -> None:
     browser, state, store = _scope_browser(
         tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
@@ -381,18 +394,13 @@ def test_selected_scopes_are_the_actual_native_request_targets(
             if request.url.path.startswith("/api/v1/knowledge-chat/")
         ]
         assert len(requests) == 1
-        assert (
-            set(json.loads(requests[0].content)["knowledge_base_ids"])
-            == expected
-        )
+        targets = json.loads(requests[0].content)["knowledge_base_ids"]
+        assert set(targets) == expected
+        assert len(targets) == len(expected)
         turn = store.get_turn(trace_id=response.headers["X-Trace-Id"])
         assert set(json.loads(turn["kb_scope_json"])) == expected
         history = browser.get("/kb/api/public/conversations/scope-test").json()
-        assert history["turns"][0]["search_scopes"] == (
-            ["public", "personal"]
-            if scopes and len(scopes) == 2
-            else scopes or ["public"]
-        )
+        assert history["turns"][0]["search_scopes"] == expected_scopes
 
 
 @pytest.mark.parametrize(
@@ -404,18 +412,32 @@ def test_selected_scopes_are_the_actual_native_request_targets(
         ("admin", True, 200),
     ],
 )
-def test_hr_internal_selection_requires_hr_or_super_admin(
+@pytest.mark.parametrize(
+    ("scopes", "expected_targets"),
+    [
+        (["hr_internal"], {"hr-secret"}),
+        (["hr_public", "hr_internal"], {"hr-public", "hr-secret"}),
+        (
+            ["hr_internal", "personal", "hr_public", "public"],
+            {"kb-old", "shared", "hr-public", "own-private", "hr-secret"},
+        ),
+    ],
+)
+def test_hr_internal_selection_requires_hr_or_super_admin(  # noqa: PLR0913, PLR0917 - 角色和范围矩阵显式参数化。
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     role: str,
     is_super: bool,
     expected_status: int,
+    scopes: list[str],
+    expected_targets: set[str],
 ) -> None:
     profile = UserProfile("u1", "u1", "甲", None, cast(Any, role), is_super)
     browser, state, _ = _scope_browser(tmp_path, monkeypatch, profile)
     with browser:
         capabilities = browser.get("/kb/api/public/capabilities").json()
         available = {item["id"] for item in capabilities["search_scopes"]}
+        assert "hr_public" in available
         assert ("hr_internal" in available) == (expected_status == 200)
         assert capabilities["default_search_scopes"] == ["public"]
         response = browser.post(
@@ -423,7 +445,7 @@ def test_hr_internal_selection_requires_hr_or_super_admin(
             json={
                 "conversation_id": "hr-scope",
                 "query": "查询人力内部资料",
-                "search_scopes": ["hr_internal"],
+                "search_scopes": scopes,
             },
         )
         assert response.status_code == expected_status, response.text
@@ -433,9 +455,9 @@ def test_hr_internal_selection_requires_hr_or_super_admin(
             if request.url.path.startswith("/api/v1/knowledge-chat/")
         ]
         if expected_status == 200:
-            assert json.loads(requests[0].content)["knowledge_base_ids"] == [
-                "hr-secret"
-            ]
+            targets = json.loads(requests[0].content)["knowledge_base_ids"]
+            assert set(targets) == expected_targets
+            assert len(targets) == len(expected_targets)
         else:
             assert requests == []
 
@@ -484,9 +506,66 @@ def test_scope_change_needs_new_native_conversation(
         assert state.session_count == 2
 
 
-def test_private_scope_waits_for_parsing_without_public_fallback(
+def test_hr_public_history_keeps_narrow_scope_until_new_conversation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser, state, store = _scope_browser(
+        tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
+    )
+    with browser:
+        first = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "hr-public-chat",
+                "query": "只查公开人力制度",
+                "search_scopes": ["hr_public"],
+            },
+        )
+        assert first.status_code == 200
+        continued = browser.post(
+            "/kb/api/public/chat",
+            json={"conversation_id": "hr-public-chat", "query": "继续问"},
+        )
+        assert continued.status_code == 200
+        assert state.session_count == 1
+        assert store.conversation_search_scopes(
+            deployment_id="candidate",
+            owner_id="rdms:candidate:u1",
+            conversation_id="hr-public-chat",
+        ) == ("hr_public",)
+        history = browser.get(
+            "/kb/api/public/conversations/hr-public-chat"
+        ).json()
+        assert all(
+            turn["search_scopes"] == ["hr_public"] for turn in history["turns"]
+        )
+        rejected = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "hr-public-chat",
+                "query": "改查全部公共",
+                "search_scopes": ["public", "hr_public"],
+            },
+        )
+        assert rejected.status_code == 409
+        requests = [
+            request
+            for request in state.requests
+            if request.url.path.startswith("/api/v1/knowledge-chat/")
+        ]
+        assert len(requests) == 2
+        assert all(
+            json.loads(request.content)["knowledge_base_ids"] == ["hr-public"]
+            for request in requests
+        )
+
+
+@pytest.mark.parametrize("scope", ["personal", "hr_public"])
+def test_narrow_scope_waits_for_parsing_without_public_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str,
 ) -> None:
     browser, state, _ = _scope_browser(
         tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
@@ -498,12 +577,38 @@ def test_private_scope_waits_for_parsing_without_public_fallback(
             json={
                 "conversation_id": "pending-private",
                 "query": "找个人文档",
-                "search_scopes": ["personal"],
+                "search_scopes": [scope],
             },
         )
         assert response.status_code == 409
         assert "解析" in response.json()["detail"]
         assert state.session_count == 0
+
+
+def test_hr_public_without_registered_library_has_no_public_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser, state, _ = _scope_browser(
+        tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
+    )
+    with sqlite3.connect(tmp_path / "gateway.sqlite3") as connection:
+        connection.execute("DELETE FROM library_kbs WHERE scope='hr_public'")
+    with browser:
+        response = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "empty-hr-public",
+                "query": "公开人力制度",
+                "search_scopes": ["hr_public"],
+            },
+        )
+        assert response.status_code == 409
+        assert state.session_count == 0
+        assert not any(
+            request.url.path.startswith("/api/v1/knowledge-chat/")
+            for request in state.requests
+        )
 
 
 @pytest.mark.parametrize("scopes", [[], ["other-private"], ["all"]])
@@ -575,6 +680,62 @@ def test_legacy_conversation_preserves_scope_and_refuses_narrowed_context(
             owner_id=owner_id,
             conversation_id="legacy",
         ) == ("public", "personal")
+
+
+def test_legacy_hr_public_hit_still_means_original_public_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser, state, store = _scope_browser(
+        tmp_path, monkeypatch, UserProfile("u1", "u1", "甲", None, "user")
+    )
+    owner_id = "rdms:candidate:u1"
+    store.bind_session(
+        deployment_id="candidate",
+        owner_id=owner_id,
+        conversation_id="legacy-hr",
+        native_session_id="legacy-native-hr",
+    )
+    store.start_turn(
+        trace_id="legacy-hr-turn",
+        deployment_id="candidate",
+        owner_id=owner_id,
+        conversation_id="legacy-hr",
+        native_session_id="legacy-native-hr",
+        question="原公共问答仅命中人力制度",
+        kb_scope=("hr-public",),
+    )
+    with browser:
+        narrowed = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": "legacy-hr",
+                "query": "改为只查人力",
+                "search_scopes": ["hr_public"],
+            },
+        )
+        assert narrowed.status_code == 409
+        continued = browser.post(
+            "/kb/api/public/chat",
+            json={"conversation_id": "legacy-hr", "query": "沿用原公共范围"},
+        )
+        assert continued.status_code == 200
+        assert store.conversation_search_scopes(
+            deployment_id="candidate",
+            owner_id=owner_id,
+            conversation_id="legacy-hr",
+        ) == ("public",)
+        requests = [
+            request
+            for request in state.requests
+            if request.url.path.startswith("/api/v1/knowledge-chat/")
+        ]
+        assert len(requests) == 1
+        assert set(json.loads(requests[0].content)["knowledge_base_ids"]) == {
+            "kb-old",
+            "shared",
+            "hr-public",
+        }
 
 
 @pytest.mark.parametrize("super_admin", [False, True])

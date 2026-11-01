@@ -9,6 +9,7 @@ import {
   type PublicSearchScopeOption,
   type PublicWorkbench,
 } from "./publicApi";
+import { orderedSearchScopes, toggleSearchScope } from "./searchScopes";
 import "./workspace.css";
 
 interface Props {
@@ -77,16 +78,12 @@ export function WorkbenchWorkspace({
     // 先卸载旧工作区，再请求新范围；晚到的旧响应由 AbortController 丢弃。
     setWorkspace(undefined);
     setError(undefined);
-    const next = scopeOptions
-      .filter((option) => selected.includes(option.id))
-      .map((option) => option.id);
+    const next = orderedSearchScopes(selected, scopeOptions);
     setSelected(next);
     setRequested(next);
     setAttempt((value) => value + 1);
   };
-  const selectedScopes = scopeOptions
-    .filter((option) => selected.includes(option.id))
-    .map((option) => option.id);
+  const selectedScopes = orderedSearchScopes(selected, scopeOptions);
   const changed = selectedScopes.join(",") !== requested.join(",");
 
   return (
@@ -111,15 +108,7 @@ export function WorkbenchWorkspace({
                   checked={selected.includes(option.id)}
                   onChange={() =>
                     setSelected((scopes) =>
-                      scopes.includes(option.id)
-                        ? scopes.filter((scope) => scope !== option.id)
-                        : scopeOptions
-                            .filter(
-                              (item) =>
-                                item.id === option.id ||
-                                scopes.includes(item.id),
-                            )
-                            .map((item) => item.id),
+                      toggleSearchScope(scopes, option.id, scopeOptions),
                     )
                   }
                 />

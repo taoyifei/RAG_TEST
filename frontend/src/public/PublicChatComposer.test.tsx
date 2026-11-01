@@ -17,6 +17,7 @@ function ScopeComposer() {
       onSearchScopesChange={setScopes}
       searchScopeOptions={[
         { id: "public", label: "公共知识库" },
+        { id: "hr_public", label: "公开人力制度" },
         { id: "personal", label: "我的资料" },
       ]}
     />
@@ -158,6 +159,28 @@ describe("湾事通提问输入框", () => {
     expect(
       screen.queryByRole("checkbox", { name: "人力内部资料" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("直接选公开人力制度缩小默认公共范围，组合保留本人资料", async () => {
+    const user = userEvent.setup();
+    render(<ScopeComposer />);
+    await user.click(screen.getByRole("button", { name: "资料范围：公共知识库" }));
+    await user.click(screen.getByRole("checkbox", { name: "公开人力制度" }));
+    expect(
+      screen.getByRole("button", { name: "资料范围：公开人力制度" }),
+    ).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "公共知识库" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "公开人力制度" })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "我的资料" }));
+    expect(
+      screen.getByRole("button", { name: "资料范围：公开人力制度 + 我的资料" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("checkbox", { name: "公共知识库" }));
+    expect(
+      screen.getByRole("button", { name: "资料范围：公共知识库 + 我的资料" }),
+    ).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "公开人力制度" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "我的资料" })).toBeChecked();
   });
 
   it("Shift+Enter 换行，Enter 发送完整多行问题", async () => {

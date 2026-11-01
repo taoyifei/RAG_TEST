@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { availableSearchScopes, orderedSearchScopes } from "./searchScopes";
+import {
+  availableSearchScopes,
+  orderedSearchScopes,
+  toggleSearchScope,
+} from "./searchScopes";
 import type { PublicSessionUser } from "./publicApi";
 
 describe("问答资料范围权限", () => {
-  it.each(["user", "admin"] as const)("%s 仅提供公共和本人资料", (role) => {
+  it.each(["user", "admin"] as const)("%s 可选择公共、人力公开和本人资料", (role) => {
     const user: PublicSessionUser = { userId: "1", displayName: "测试", role };
     expect(availableSearchScopes(user).map((item) => item.id)).toEqual([
       "public",
+      "hr_public",
       "personal",
     ]);
     expect(
@@ -25,6 +30,7 @@ describe("问答资料范围权限", () => {
   ])("人力或超管能选择内部资料，仍遵循服务端公开的选项", (user) => {
     expect(availableSearchScopes(user).map((item) => item.id)).toEqual([
       "public",
+      "hr_public",
       "personal",
       "hr_internal",
     ]);
@@ -41,5 +47,20 @@ describe("问答资料范围权限", () => {
         availableSearchScopes(),
       ),
     ).toEqual(["public", "personal"]);
+  });
+  it("公共范围覆盖公开人力制度，窄范围和本人资料组合不扩大权限", () => {
+    const available = availableSearchScopes();
+    expect(
+      orderedSearchScopes(["personal", "hr_public", "public"], available),
+    ).toEqual(["public", "personal"]);
+    expect(
+      toggleSearchScope(["public", "personal"], "hr_public", available),
+    ).toEqual(["hr_public", "personal"]);
+    expect(
+      toggleSearchScope(["hr_public", "personal"], "public", available),
+    ).toEqual(["public", "personal"]);
+    expect(
+      orderedSearchScopes(["hr_public", "hr_internal"], available),
+    ).toEqual(["hr_public"]);
   });
 });

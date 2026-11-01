@@ -18,6 +18,7 @@ import httpx
 from fastapi import HTTPException
 
 from wanshitong_gateway.library import LibraryService
+from wanshitong_gateway.models import normalize_search_scopes
 from wanshitong_gateway.roles import (
     Role,
     UserProfile,
@@ -52,6 +53,7 @@ _WORKBENCH_SYSTEM_PROMPT = (
 )
 _SCOPE_LABELS = {
     "public": "公共知识库",
+    "hr_public": "公开人力制度",
     "personal": "我的资料",
     "hr_internal": "人力内部资料",
 }
@@ -844,7 +846,7 @@ class _WorkbenchStream(NativeAdminStream):
 def _scopes(values: tuple[str, ...]) -> tuple[str, ...]:
     if not values or not set(values).issubset(_SCOPE_LABELS):
         raise HTTPException(422, "请选择有效的资料范围。")
-    return tuple(key for key in _SCOPE_LABELS if key in values)
+    return normalize_search_scopes(values)
 
 
 def _string_id(value: dict[str, Any]) -> str:

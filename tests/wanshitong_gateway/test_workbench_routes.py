@@ -118,6 +118,29 @@ def test_bootstrap_is_employee_only_and_defaults_to_public(
 
 
 @pytest.mark.parametrize(
+    ("scopes", "normalized"),
+    [
+        (["hr_public"], ("hr_public",)),
+        (["hr_public", "personal"], ("hr_public", "personal")),
+        (["hr_public", "public"], ("public",)),
+    ],
+)
+def test_bootstrap_accepts_hr_public_and_collapses_covered_scope(
+    endpoint: tuple[TestClient, _Service],
+    scopes: list[str],
+    normalized: tuple[str, ...],
+) -> None:
+    client, service = endpoint
+    response = client.post(
+        "/kb/api/public/workbench/bootstrap",
+        json={"search_scopes": scopes},
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200
+    assert service.calls == [("138", normalized)]
+
+
+@pytest.mark.parametrize(
     "body",
     [
         {"search_scopes": []},

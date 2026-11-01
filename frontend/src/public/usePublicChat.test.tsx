@@ -180,6 +180,7 @@ function installScopeFetch(
           shortcuts: [],
           search_scopes: [
             { id: "public", label: "公共知识库" },
+            { id: "hr_public", label: "公开人力制度" },
             { id: "personal", label: "我的资料" },
             { id: "hr_internal", label: "人力内部资料" },
           ],
@@ -213,6 +214,7 @@ describe("问答范围选择与会话隔离", () => {
     expect(result.current.searchScopes).toEqual(["public"]);
     expect(result.current.searchScopeOptions.map((item) => item.id)).toEqual([
       "public",
+      "hr_public",
       "personal",
     ]);
     act(() => result.current.submit("公共问题"));
@@ -248,8 +250,8 @@ describe("问答范围选择与会话隔离", () => {
     expect(result.current.scopeNotice).toBeUndefined();
   });
 
-  it("刷新历史恢复原范围，重试保留原范围，空的旧会话改为新对话", async () => {
-    const originalId = "saved-personal";
+  it.each(["personal", "hr_public"] as const)("刷新%s历史和重试保留范围，空会话恢复公共", async (scope) => {
+    const originalId = `saved-${scope}`;
     window.sessionStorage.setItem(
       "wst-natural-conversation:candidate_8289:1001",
       originalId,
@@ -266,7 +268,7 @@ describe("问答范围选择与会话隔离", () => {
                 status: "completed",
                 citations: [],
                 created_at: "2026-10-30T01:00:00Z",
-                search_scopes: ["personal"],
+                search_scopes: [scope],
                 native_message_id: "message-old",
               },
             ]
@@ -275,12 +277,12 @@ describe("问答范围选择与会话隔离", () => {
     const { result } = renderHook(() => usePublicChat());
     await waitFor(() => expect(result.current.sessionReady).toBe(true));
     expect(result.current.conversationId).toBe(originalId);
-    expect(result.current.searchScopes).toEqual(["personal"]);
+    expect(result.current.searchScopes).toEqual([scope]);
     act(() => result.current.retry("old-turn", "私人资料", originalId));
     await waitFor(() =>
       expect(result.current.turns.at(-1)?.status).toBe("completed"),
     );
-    expect(chatBodies(fetchMock)[0].search_scopes).toEqual(["personal"]);
+    expect(chatBodies(fetchMock)[0].search_scopes).toEqual([scope]);
     await act(async () => result.current.openHistory("no-access-history"));
     expect(result.current.conversationId).not.toBe("no-access-history");
     expect(result.current.turns).toEqual([]);

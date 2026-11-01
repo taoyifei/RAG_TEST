@@ -7,11 +7,15 @@ from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.background import BackgroundTask
 
 from wanshitong_gateway.auth import GatewayAuth
-from wanshitong_gateway.models import SearchScope
+from wanshitong_gateway.models import (
+    SEARCH_SCOPE_ORDER,
+    SearchScope,
+    normalize_search_scopes,
+)
 from wanshitong_gateway.weknora.client import NativeHttpError
 from wanshitong_gateway.workbench import WorkbenchService
 
@@ -28,8 +32,17 @@ class _BootstrapRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     search_scopes: list[SearchScope] = Field(
-        default_factory=_default_scopes, min_length=1, max_length=3
+        default_factory=_default_scopes,
+        min_length=1,
+        max_length=len(SEARCH_SCOPE_ORDER),
     )
+
+    @field_validator("search_scopes")
+    @classmethod
+    def _normalize_search_scopes(
+        cls, value: list[SearchScope]
+    ) -> list[SearchScope]:
+        return list(normalize_search_scopes(value))
 
 
 def _require_service(service: WorkbenchService | None) -> WorkbenchService:

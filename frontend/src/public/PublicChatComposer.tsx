@@ -8,6 +8,7 @@ import {
 } from "react";
 
 import type { PublicSearchScope, PublicSearchScopeOption } from "./publicApi";
+import { toggleSearchScope } from "./searchScopes";
 import { useDismissiblePopover } from "./useDismissiblePopover";
 
 export interface PublicSearchSelectionProps {
@@ -125,13 +126,11 @@ export function PublicChatComposer({
                       checked={checked}
                       disabled={busy || (checked && searchScopes.length === 1)}
                       onChange={() => {
-                        const next = searchScopeOptions
-                          .filter((item) =>
-                            item.id === option.id
-                              ? !checked
-                              : searchScopes.includes(item.id),
-                          )
-                          .map((item) => item.id);
+                        const next = toggleSearchScope(
+                          searchScopes,
+                          option.id,
+                          searchScopeOptions,
+                        );
                         if (next.length) onSearchScopesChange?.(next);
                       }}
                       type="checkbox"
@@ -141,6 +140,9 @@ export function PublicChatComposer({
                 );
               })}
               <p>至少选择一项；切换范围会开启新对话。</p>
+              {searchScopeOptions.some((option) => option.id === "hr_public") && (
+                <p>公共知识库包含公开人力制度，也可单独选择制度缩小检索范围。</p>
+              )}
             </fieldset>
           )}
         </div>

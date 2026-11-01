@@ -158,6 +158,7 @@ class LibraryService:
         """只公布当前账号可以选择的资料区，不接受浏览器传入库ID。"""
         scopes = [
             {"id": "public", "label": "公共知识库"},
+            {"id": "hr_public", "label": "公开人力制度"},
             {"id": "personal", "label": "我的资料"},
         ]
         if can_access_hr_internal(profile):
@@ -177,6 +178,7 @@ class LibraryService:
             kind = row["scope"]
             if (
                 (kind in {"public", "hr_public"} and "public" in scopes)
+                or (kind == "hr_public" and "hr_public" in scopes)
                 or (
                     kind == "personal"
                     and "personal" in scopes
