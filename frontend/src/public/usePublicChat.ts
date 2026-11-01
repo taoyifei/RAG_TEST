@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createFrameBatch } from "./frameBatch";
 
 import {
+  archivePublicNaturalConversation,
   continuePublicNaturalChat,
   createPublicSession,
+  deletePublicNaturalConversation,
   getPublicNaturalHistory,
   getPublicNaturalSessions,
   getPublicNaturalSource,
@@ -296,6 +298,13 @@ export function usePublicChat() {
     PublicNaturalSession[]
   >([]);
   const [historyMoreCount, setHistoryMoreCount] = useState(0);
+  const [historyArchived, setHistoryArchived] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyActionBusy, setHistoryActionBusy] = useState(false);
+  const [historyError, setHistoryError] = useState<string>();
+  const historyArchivedRef = useRef(false);
+  const historyRequestRef = useRef(0);
+  const historyActionRef = useRef(false);
   const [conversationId, setConversationId] = useState(() => randomId("wst"));
   const csrfRef = useRef<string | undefined>(undefined);
   const conversationRef = useRef(conversationId);
@@ -335,6 +344,13 @@ export function usePublicChat() {
     setTurns([]);
     setHistorySessions([]);
     setHistoryMoreCount(0);
+    historyRequestRef.current += 1;
+    historyArchivedRef.current = false;
+    historyActionRef.current = false;
+    setHistoryArchived(false);
+    setHistoryLoading(false);
+    setHistoryActionBusy(false);
+    setHistoryError(undefined);
     setSessionReady(false);
     setSessionError(undefined);
     setLogoutError(undefined);
@@ -353,7 +369,8 @@ export function usePublicChat() {
   }, []);
 
   const resetConversationState = useCallback((): string | undefined => {
-    if (busyRef.current || !sessionReady) return undefined;
+    if (busyRef.current || historyActionRef.current || !sessionReady)
+      return undefined;
     requestIdRef.current += 1;
     streamControllerRef.current?.abort();
     streamControllerRef.current = undefined;
@@ -388,108 +405,149 @@ export function usePublicChat() {
     [],
   );
 
-  const initializeSession = useCallback(async (signal: AbortSignal) => {
-    const session = await createPublicSession(signal);
-    const capabilities = await getPublicCapabilities(signal);
-    csrfRef.current = session.csrfToken;
-    setUser(session.user);
-    const availableScopes = availableSearchScopes(
-      session.user,
-      capabilities.search_scopes,
-    );
-    setSearchScopeOptions(availableScopes);
-    searchScopesRef.current = ["public"];
-    setSearchScopes(["public"]);
-    setScopeNotice(undefined);
-    setDeploymentId(session.deploymentId);
-    setFeedbackDetailsEnabled(capabilities.feedback_details === true);
-    setWorkbenchEnabled(capabilities.workbench_enabled === true);
-    const effectivePageSettings = normalizePageSettings(
-      capabilities.page_settings,
-      capabilities.feedback,
-    );
-    setPageSettings(effectivePageSettings);
-    setUsageContextEnabled(capabilities.request_usage_context === true);
-    setNaturalProtocol(
-      capabilities.natural_stream_protocol ??
-        (capabilities.stream_protocol === WEKNORA_STREAM_PROTOCOL
-          ? WEKNORA_STREAM_PROTOCOL
-          : undefined),
-    );
-    setLoggedOut(false);
-    if (session.deploymentId && session.user) {
-      identityChangedRef.current = recordPublicIdentity(
-        session.deploymentId,
-        session.user.userId,
-      );
-    }
-    if (
-      capabilities.natural_stream_protocol ||
-      capabilities.stream_protocol === WEKNORA_STREAM_PROTOCOL
-    ) {
-      const identity = session.user?.userId ?? session.sessionId;
-      const key = `wst-natural-conversation:${session.deploymentId ?? "local"}:${identity}`;
-      historyKeyRef.current = key;
+  const loadHistorySessions = useCallback(
+    async (archived: boolean, csrfToken: string, signal?: AbortSignal) => {
+      const requestId = ++historyRequestRef.current;
+      setHistoryLoading(true);
+      setHistoryError(undefined);
       try {
-        const saved = window.sessionStorage.getItem(key);
-        const restored =
-          saved && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(saved)
-            ? saved
-            : conversationRef.current;
-        window.sessionStorage.setItem(key, restored);
-        conversationRef.current = restored;
-        setConversationId(restored);
-        const history = await getPublicNaturalHistory({
-          conversationId: restored,
-          csrfToken: session.csrfToken,
+        const sessions = await getPublicNaturalSessions({
+          archived,
+          csrfToken,
           signal,
         });
-        const historyScopes = history.at(-1)?.search_scopes ?? ["public"];
-        const restoredScopes = orderedSearchScopes(
-          historyScopes,
-          availableScopes,
+        if (requestId !== historyRequestRef.current || signal?.aborted) return;
+        setHistorySessions(sessions.items);
+        setHistoryMoreCount(
+          sessions.has_more ? sessions.total - sessions.items.length : 0,
         );
-        if (
-          (saved && history.length === 0) ||
-          restoredScopes.length !== new Set(historyScopes).size
-        ) {
-          const nextId = randomId("wst");
-          conversationRef.current = nextId;
-          setConversationId(nextId);
-          window.sessionStorage.setItem(key, nextId);
-          setTurns([]);
-        } else {
-          searchScopesRef.current = restoredScopes;
-          setSearchScopes(restoredScopes);
-          setTurns(
-            history.map((item) =>
-              restoreNaturalTurn(
-                restored,
-                item,
-                (capabilities.natural_stream_protocol ??
-                  capabilities.stream_protocol) === WEKNORA_STREAM_PROTOCOL,
-              ),
-            ),
-          );
-        }
-        if (effectivePageSettings.show_history) {
-          const sessions = await getPublicNaturalSessions({
+      } catch (error) {
+        if (requestId === historyRequestRef.current && !signal?.aborted)
+          setHistoryError("暂时无法加载会话，请重试。");
+        throw error;
+      } finally {
+        if (requestId === historyRequestRef.current) setHistoryLoading(false);
+      }
+    },
+    [],
+  );
+
+  const initializeSession = useCallback(
+    async (signal: AbortSignal) => {
+      const session = await createPublicSession(signal);
+      const capabilities = await getPublicCapabilities(signal);
+      csrfRef.current = session.csrfToken;
+      setUser(session.user);
+      const availableScopes = availableSearchScopes(
+        session.user,
+        capabilities.search_scopes,
+      );
+      setSearchScopeOptions(availableScopes);
+      searchScopesRef.current = ["public"];
+      setSearchScopes(["public"]);
+      setScopeNotice(undefined);
+      setDeploymentId(session.deploymentId);
+      setFeedbackDetailsEnabled(capabilities.feedback_details === true);
+      setWorkbenchEnabled(capabilities.workbench_enabled === true);
+      const effectivePageSettings = normalizePageSettings(
+        capabilities.page_settings,
+        capabilities.feedback,
+      );
+      setPageSettings(effectivePageSettings);
+      setUsageContextEnabled(capabilities.request_usage_context === true);
+      setNaturalProtocol(
+        capabilities.natural_stream_protocol ??
+          (capabilities.stream_protocol === WEKNORA_STREAM_PROTOCOL
+            ? WEKNORA_STREAM_PROTOCOL
+            : undefined),
+      );
+      setLoggedOut(false);
+      if (session.deploymentId && session.user) {
+        identityChangedRef.current = recordPublicIdentity(
+          session.deploymentId,
+          session.user.userId,
+        );
+      }
+      if (
+        capabilities.natural_stream_protocol ||
+        capabilities.stream_protocol === WEKNORA_STREAM_PROTOCOL
+      ) {
+        const identity = session.user?.userId ?? session.sessionId;
+        const key = `wst-natural-conversation:${session.deploymentId ?? "local"}:${identity}`;
+        historyKeyRef.current = key;
+        try {
+          const saved = window.sessionStorage.getItem(key);
+          const restored =
+            saved && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(saved)
+              ? saved
+              : conversationRef.current;
+          window.sessionStorage.setItem(key, restored);
+          conversationRef.current = restored;
+          setConversationId(restored);
+          const history = await getPublicNaturalHistory({
+            conversationId: restored,
             csrfToken: session.csrfToken,
             signal,
           });
-          setHistorySessions(sessions.items);
-          setHistoryMoreCount(
-            sessions.has_more ? sessions.total - sessions.items.length : 0,
+          const historyScopes = history.at(-1)?.search_scopes ?? ["public"];
+          const restoredScopes = orderedSearchScopes(
+            historyScopes,
+            availableScopes,
           );
+          if (
+            (saved && history.length === 0) ||
+            restoredScopes.length !== new Set(historyScopes).size
+          ) {
+            const nextId = randomId("wst");
+            conversationRef.current = nextId;
+            setConversationId(nextId);
+            window.sessionStorage.setItem(key, nextId);
+            setTurns([]);
+          } else {
+            searchScopesRef.current = restoredScopes;
+            setSearchScopes(restoredScopes);
+            setTurns(
+              history.map((item) =>
+                restoreNaturalTurn(
+                  restored,
+                  item,
+                  (capabilities.natural_stream_protocol ??
+                    capabilities.stream_protocol) === WEKNORA_STREAM_PROTOCOL,
+                ),
+              ),
+            );
+          }
+          if (effectivePageSettings.show_history) {
+            await loadHistorySessions(false, session.csrfToken, signal);
+          }
+        } catch (error) {
+          if (
+            error instanceof PublicApiError &&
+            [403, 404].includes(error.status)
+          ) {
+            // 其他标签页可能已删除该会话；刷新后不能继续提交已删除的旧ID。
+            const nextId = randomId("wst");
+            conversationRef.current = nextId;
+            setConversationId(nextId);
+            setTurns([]);
+            try {
+              window.sessionStorage.setItem(key, nextId);
+            } catch {
+              /* 本页仍使用新ID。 */
+            }
+            if (effectivePageSettings.show_history)
+              await loadHistorySessions(false, session.csrfToken, signal).catch(
+                () => undefined,
+              );
+          }
         }
-      } catch {
-        // 历史恢复失败时保留当前页面会话，后续请求仍由服务端鉴权。
       }
-    }
-    setSessionReady(true);
-    setSessionError(undefined);
-    return session.csrfToken;
-  }, []);
+      setSessionReady(true);
+      setSessionError(undefined);
+      return session.csrfToken;
+    },
+    [loadHistorySessions],
+  );
 
   const startSession = useCallback(() => {
     sessionControllerRef.current?.abort();
@@ -561,7 +619,7 @@ export function usePublicChat() {
       recoverOriginal?: PublicTurn,
       selectedScopes?: PublicSearchScope[],
     ) => {
-      if (busyRef.current || !sessionReady) return;
+      if (busyRef.current || historyActionRef.current || !sessionReady) return;
       const turnScopes = [...(selectedScopes ?? searchScopesRef.current)];
       busyRef.current = true;
       activeTurnRef.current = turnId;
@@ -888,14 +946,9 @@ export function usePublicChat() {
           throw new TypeError("public stream disconnected before terminal");
         }
         if (naturalProtocol && pageSettings.show_history && isCurrent()) {
-          void getPublicNaturalSessions({ csrfToken })
-            .then((sessions) => {
-              setHistorySessions(sessions.items);
-              setHistoryMoreCount(
-                sessions.has_more ? sessions.total - sessions.items.length : 0,
-              );
-            })
-            .catch(() => undefined);
+          void loadHistorySessions(historyArchivedRef.current, csrfToken).catch(
+            () => undefined,
+          );
         }
       } catch (error) {
         batch.flush();
@@ -947,6 +1000,7 @@ export function usePublicChat() {
       clearLocalSession,
       naturalProtocol,
       pageSettings.show_history,
+      loadHistorySessions,
       sessionReady,
       updateTurn,
       usageContextEnabled,
@@ -971,7 +1025,7 @@ export function usePublicChat() {
 
   const changeSearchScopes = useCallback(
     (selected: PublicSearchScope[]) => {
-      if (busyRef.current || !sessionReady) return;
+      if (busyRef.current || historyActionRef.current || !sessionReady) return;
       const next = orderedSearchScopes(selected, searchScopeOptions);
       if (!next.length || next.join() === searchScopesRef.current.join())
         return;
@@ -990,6 +1044,7 @@ export function usePublicChat() {
     async (selectedConversationId: string) => {
       if (
         busyRef.current ||
+        historyActionRef.current ||
         !sessionReady ||
         !naturalProtocol ||
         !pageSettings.show_history
@@ -1052,6 +1107,86 @@ export function usePublicChat() {
       searchScopeOptions,
       sessionReady,
     ],
+  );
+
+  const changeHistoryView = useCallback(
+    async (archived: boolean) => {
+      const csrfToken = csrfRef.current;
+      if (!csrfToken || historyActionRef.current || !pageSettings.show_history)
+        return;
+      historyArchivedRef.current = archived;
+      setHistoryArchived(archived);
+      setHistorySessions([]);
+      setHistoryMoreCount(0);
+      await loadHistorySessions(archived, csrfToken);
+    },
+    [loadHistorySessions, pageSettings.show_history],
+  );
+
+  const updateHistoryConversation = useCallback(
+    async (selectedConversationId: string, archived?: boolean) => {
+      const csrfToken = csrfRef.current;
+      if (!csrfToken || !sessionReady || !pageSettings.show_history) return;
+      if (busyRef.current || historyActionRef.current)
+        throw new PublicApiError("请等待当前操作完成。", { status: 409 });
+      historyActionRef.current = true;
+      setHistoryActionBusy(true);
+      const identity = csrfToken;
+      try {
+        if (archived === undefined) {
+          await deletePublicNaturalConversation({
+            conversationId: selectedConversationId,
+            csrfToken,
+          });
+        } else {
+          await archivePublicNaturalConversation({
+            conversationId: selectedConversationId,
+            archived,
+            csrfToken,
+          });
+        }
+        if (csrfRef.current !== identity) return;
+        setHistorySessions((items) =>
+          items.filter(
+            (item) => item.conversation_id !== selectedConversationId,
+          ),
+        );
+        historyActionRef.current = false;
+        if (
+          archived === undefined &&
+          conversationRef.current === selectedConversationId
+        ) {
+          if (resetConversationState()) {
+            searchScopesRef.current = ["public"];
+            setSearchScopes(["public"]);
+          }
+        }
+        // 修改已经完成；刷新失败显示独立提示，不把成功的归档/删除误报成失败。
+        void loadHistorySessions(historyArchivedRef.current, csrfToken).catch(
+          () => undefined,
+        );
+      } finally {
+        if (csrfRef.current === identity) {
+          historyActionRef.current = false;
+          setHistoryActionBusy(false);
+        }
+      }
+    },
+    [
+      loadHistorySessions,
+      pageSettings.show_history,
+      resetConversationState,
+      sessionReady,
+    ],
+  );
+
+  const archiveHistory = useCallback(
+    (id: string, archived: boolean) => updateHistoryConversation(id, archived),
+    [updateHistoryConversation],
+  );
+  const deleteHistory = useCallback(
+    (id: string) => updateHistoryConversation(id),
+    [updateHistoryConversation],
   );
 
   const submitRecommendation = useCallback(
@@ -1287,6 +1422,13 @@ export function usePublicChat() {
     pageSettings,
     historySessions,
     historyMoreCount,
+    historyArchived,
+    historyLoading,
+    historyActionBusy,
+    historyError,
+    changeHistoryView,
+    archiveHistory,
+    deleteHistory,
     loggedOut,
     login,
     logout,

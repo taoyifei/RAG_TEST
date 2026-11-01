@@ -157,6 +157,7 @@ export interface PublicNaturalSession {
   conversation_id: string;
   title: string;
   updated_at: string;
+  archived?: boolean;
 }
 
 async function readError(response: Response): Promise<PublicApiError> {
@@ -390,12 +391,14 @@ export async function getPublicNaturalHistory(options: {
 export async function getPublicNaturalSessions(options: {
   csrfToken: string;
   signal?: AbortSignal;
+  archived?: boolean;
 }): Promise<{
   items: PublicNaturalSession[];
   has_more: boolean;
   total: number;
 }> {
-  const response = await fetch(withAppBase("/api/public/conversations"), {
+  const path = `/api/public/conversations${options.archived ? "?archived=true" : ""}`;
+  const response = await fetch(withAppBase(path), {
     credentials: "same-origin",
     headers: {
       Accept: "application/json",
@@ -413,6 +416,37 @@ export async function getPublicNaturalSessions(options: {
     has_more: body.has_more === true,
     total: body.total ?? body.items.length,
   };
+}
+
+export async function archivePublicNaturalConversation(options: {
+  conversationId: string;
+  archived: boolean;
+  csrfToken: string;
+}): Promise<void> {
+  const path = `/api/public/conversations/${encodeURIComponent(options.conversationId)}/archive`;
+  const response = await fetch(withAppBase(path), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": options.csrfToken,
+    },
+    body: JSON.stringify({ archived: options.archived }),
+  });
+  await requireJson<{ conversation_id: string; archived: boolean }>(response);
+}
+
+export async function deletePublicNaturalConversation(options: {
+  conversationId: string;
+  csrfToken: string;
+}): Promise<void> {
+  const path = `/api/public/conversations/${encodeURIComponent(options.conversationId)}`;
+  const response = await fetch(withAppBase(path), {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": options.csrfToken },
+  });
+  await requireJson<{ deleted: boolean }>(response);
 }
 
 export async function getPublicNaturalSource(options: {

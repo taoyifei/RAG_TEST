@@ -254,6 +254,13 @@ export function WanshitongApp() {
         historyEnabled={chat.pageSettings.show_history}
         sessions={chat.historySessions}
         moreCount={chat.historyMoreCount}
+        historyArchived={chat.historyArchived}
+        historyLoading={chat.historyLoading}
+        historyActionBusy={chat.historyActionBusy}
+        historyError={chat.historyError}
+        onHistoryViewChange={chat.changeHistoryView}
+        onArchive={chat.archiveHistory}
+        onDelete={chat.deleteHistory}
         onNewTopic={newConversation}
         onSelect={selectConversation}
         viewLabel={

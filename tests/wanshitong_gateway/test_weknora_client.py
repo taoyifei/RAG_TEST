@@ -15,6 +15,47 @@ from wanshitong_gateway.weknora.principal import ExternalPrincipalSigner
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 404, 403, 503])
+async def test_delete_session_uses_owner_and_requires_native_success(
+    status: int,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status, json={"success": status == 200})
+
+    signer = ExternalPrincipalSigner(
+        secret="test-only",  # noqa: S106
+        tenant_id=9,
+        deployment_id="candidate",
+        clock=lambda: 1000.0,
+    )
+    client = WeKnoraClient(
+        base_url="http://native.test:8080",
+        api_key="test-only-key",
+        signer=signer,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        if status in {200, 404}:
+            await client.delete_session(user_id="u1", session_id="native-s1")
+        else:
+            with pytest.raises(NativeHttpError):
+                await client.delete_session(
+                    user_id="u1", session_id="native-s1"
+                )
+    finally:
+        await client.close()
+    assert len(requests) == 1
+    assert requests[0].method == "DELETE"
+    assert requests[0].url.path == "/api/v1/sessions/native-s1"
+    assert requests[0].headers["x-api-key"] == "test-only-key"
+    token = requests[0].headers["x-external-user-token"]
+    assert token == signer.sign("u1")
+
+
+@pytest.mark.asyncio
 async def test_session_and_chat_use_native_api_without_rewriting() -> None:
     requests: list[httpx.Request] = []
 

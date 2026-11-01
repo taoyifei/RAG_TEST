@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS gateway_conversations (
     conversation_id TEXT NOT NULL,
     native_session_id TEXT NOT NULL,
     search_scopes_json TEXT,
+    archived_at TEXT,
+    deleted_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (deployment_id, owner_id, conversation_id),
@@ -184,6 +186,12 @@ class GatewayStore:
                     "ALTER TABLE gateway_conversations "
                     "ADD COLUMN search_scopes_json TEXT"
                 )
+            for name in ("archived_at", "deleted_at"):
+                if name not in conversation_columns:
+                    connection.execute(
+                        "ALTER TABLE gateway_conversations "
+                        f"ADD COLUMN {name} TEXT"
+                    )
             columns = {
                 row["name"]
                 for row in connection.execute(
@@ -249,7 +257,8 @@ class GatewayStore:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT native_session_id FROM gateway_conversations "
-                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=? "
+                "AND deleted_at IS NULL",
                 (deployment_id, owner_id, conversation_id),
             ).fetchone()
         return str(row["native_session_id"]) if row else None
@@ -340,6 +349,13 @@ class GatewayStore:
         """唯一绑定外部会话；并发竞争时返回已存在的权威映射。"""
         now = _now()
         with self._connect() as connection:
+            deleted = connection.execute(
+                "SELECT deleted_at FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+            if deleted is not None and deleted["deleted_at"] is not None:
+                raise ValueError("会话已删除，请新建对话。")
             connection.execute(
                 "INSERT OR IGNORE INTO gateway_conversations "
                 "(deployment_id,owner_id,conversation_id,native_session_id,"
@@ -405,17 +421,91 @@ class GatewayStore:
         )
 
     def list_conversations(
-        self, *, deployment_id: str, owner_id: str
+        self, *, deployment_id: str, owner_id: str, archived: bool = False
     ) -> list[dict[str, str]]:
-        """列出当前用户自己的新引擎会话。"""
+        """按归档状态列出本人有效会话，不展示已删除的映射墓碑。"""
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT conversation_id,native_session_id,updated_at "
                 "FROM gateway_conversations WHERE deployment_id=? "
-                "AND owner_id=? ORDER BY updated_at DESC",
-                (deployment_id, owner_id),
+                "AND owner_id=? AND deleted_at IS NULL "
+                "AND (archived_at IS NOT NULL)=? ORDER BY updated_at DESC",
+                (deployment_id, owner_id, archived),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def conversation_deleted(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> bool:
+        """只核对本人的删除墓碑，阻止旧浏览器用同一ID重新生成。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT deleted_at FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+        return row is not None and row["deleted_at"] is not None
+
+    def archive_conversation(
+        self,
+        *,
+        deployment_id: str,
+        owner_id: str,
+        conversation_id: str,
+        archived: bool,
+    ) -> bool:
+        """归档或恢复本人会话，不改变原生历史、资料范围或对话更新时间。"""
+        with self._connect() as connection:
+            result = connection.execute(
+                "UPDATE gateway_conversations SET archived_at=? "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=? "
+                "AND deleted_at IS NULL",
+                (
+                    _now() if archived else None,
+                    deployment_id,
+                    owner_id,
+                    conversation_id,
+                ),
+            )
+        return result.rowcount == 1
+
+    def delete_conversation(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> bool:
+        """原生删除确认后事务清除问答及其子记录，仅保留会话ID墓碑。"""
+        scope = (deployment_id, owner_id, conversation_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT deleted_at FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                scope,
+            ).fetchone()
+            if row is None:
+                return False
+            for table in (
+                "gateway_feedback_reviews",
+                "gateway_feedback",
+                "gateway_references",
+                "gateway_events",
+            ):
+                connection.execute(
+                    f"DELETE FROM {table} WHERE trace_id IN "  # noqa: S608 - 表及条件均为内部固定常量，值参数化。
+                    "(SELECT trace_id FROM gateway_turns WHERE deployment_id=? "
+                    "AND owner_id=? AND conversation_id=?)",
+                    scope,
+                )
+            connection.execute(
+                "DELETE FROM gateway_turns WHERE deployment_id=? "
+                "AND owner_id=? AND conversation_id=?",
+                scope,
+            )
+            connection.execute(
+                "UPDATE gateway_conversations SET archived_at=NULL, "
+                "deleted_at=coalesce(deleted_at,?),updated_at=? "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (_now(), _now(), *scope),
+            )
+        return True
 
     def start_turn(  # noqa: PLR0913 - 持久化边界显式接收全部归属键。
         self,

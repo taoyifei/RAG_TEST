@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -74,6 +78,229 @@ class _FakeAuth:
     ) -> SimpleNamespace:
         del request, csrf
         return SimpleNamespace(audit_actor="admin_session:synthetic")
+
+
+@pytest.fixture
+def managed_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[
+    tuple[TestClient, GatewayStore, list[httpx.Request], dict[str, int]]
+]:
+    """提供两用户权限边界和可控原生删除失败的真实HTTP客户端合同。"""
+    requests: list[httpx.Request] = []
+    status = {"delete": 200}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "DELETE":
+            return httpx.Response(
+                status["delete"], json={"success": status["delete"] == 200}
+            )
+        if request.url.path == "/api/v1/sessions/native-1":
+            return httpx.Response(
+                200,
+                json={"success": True, "data": {"title": "历史管理验收"}},
+            )
+        if request.url.path == "/api/v1/messages/native-1/load":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "message-1",
+                            "content": "保留原有历史",
+                            "created_at": "2026-11-01T00:00:00Z",
+                            "is_completed": True,
+                        }
+                    ],
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    auth = _FakeAuth(tmp_path / "gateway.sqlite3")
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda _app, _auth: None
+    )
+    native = WeKnoraClient(
+        base_url="http://native.test:8080",
+        api_key="test-only-key",
+        signer=ExternalPrincipalSigner(
+            secret="test-signing",  # noqa: S106
+            tenant_id=_ADMIN_TENANT,
+            deployment_id="candidate",
+        ),
+        transport=httpx.MockTransport(respond),
+    )
+    admin = NativeAdminClient(
+        base_url="http://native.test:8080",
+        email="candidate@example.test",
+        password="test-only-password",  # noqa: S106
+        tenant_id=_ADMIN_TENANT,
+        transport=httpx.MockTransport(respond),
+    )
+    engine = EngineSettings(
+        base_url="http://native.test:8080",
+        tenant_id=_ADMIN_TENANT,
+        public_kb_ids=("kb-public",),
+        api_key_file=tmp_path / "unused-key",
+        external_signing_key_file=tmp_path / "unused-signing",
+        admin_email="candidate@example.test",
+        admin_password_file=tmp_path / "unused-password",
+    )
+    scope = {"deployment_id": "candidate", "owner_id": "rdms:candidate:u1"}
+    store.bind_session(
+        **scope, conversation_id="c-1", native_session_id="native-1"
+    )
+    store.start_turn(
+        **scope,
+        trace_id="trace-history",
+        conversation_id="c-1",
+        native_session_id="native-1",
+        question="历史问题",
+    )
+    store.finish_turn(
+        trace_id="trace-history",
+        status="completed",
+        answer="保留原有历史",
+        references=(),
+        native_message_id="message-1",
+        native_request_id="req-1",
+        truncated=False,
+        finish_reason="stop",
+    )
+    app = gateway_app.create_app(
+        auth=cast(GatewayAuth, auth),
+        store=store,
+        engine=engine,
+        native=native,
+        admin_native=admin,
+    )
+    with TestClient(app, base_url="http://candidate.test") as browser:
+        yield browser, store, requests, status
+
+
+def test_archive_restore_keeps_history_and_owner_boundary(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+) -> None:
+    browser, store, requests, _status = managed_history
+    base = "/kb/api/public/conversations"
+    before = browser.get(base + "/c-1").json()
+    assert (
+        browser.post(
+            base + "/c-1/archive",
+            json={"archived": True},
+            headers={"x-test-user": "u2"},
+        ).status_code
+        == 404
+    )
+    assert (
+        browser.delete(base + "/c-1", headers={"x-test-user": "u2"}).status_code
+        == 404
+    )
+    assert all(request.method != "DELETE" for request in requests)
+    assert browser.post(
+        base + "/c-1/archive", json={"archived": True}
+    ).json() == {"conversation_id": "c-1", "archived": True}
+    assert browser.get(base).json()["items"] == []
+    archived = browser.get(base + "?archived=true").json()["items"]
+    assert archived[0]["conversation_id"] == "c-1"
+    assert archived[0]["archived"] is True
+    assert browser.get(base + "/c-1").json() == before
+    assert (
+        store.native_session(
+            deployment_id="candidate",
+            owner_id="rdms:candidate:u1",
+            conversation_id="c-1",
+        )
+        == "native-1"
+    )
+    assert (
+        browser.get(
+            base + "?archived=true", headers={"x-test-user": "u2"}
+        ).json()["items"]
+        == []
+    )
+    assert (
+        browser.post(
+            base + "/c-1/archive", json={"archived": False}
+        ).status_code
+        == 200
+    )
+    assert browser.get(base).json()["items"][0]["archived"] is False
+    assert browser.get(base + "?archived=true").json()["items"] == []
+
+
+@pytest.mark.parametrize("native_status", [200, 404])
+def test_delete_requires_native_success_and_rejects_old_conversation_id(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    native_status: int,
+) -> None:
+    browser, store, requests, status = managed_history
+    base = "/kb/api/public/conversations/c-1"
+    status["delete"] = 503
+    assert browser.delete(base).status_code == 502
+    assert store.get_turn(trace_id="trace-history") is not None
+    assert browser.get(base).json()["turns"][0]["answer"] == "保留原有历史"
+    status["delete"] = native_status
+    assert browser.delete(base).json() == {"deleted": True}
+    assert store.get_turn(trace_id="trace-history") is None
+    assert browser.get(base).json() == {"turns": []}
+    assert browser.get("/kb/api/public/conversations").json()["items"] == []
+    assert (
+        browser.post(base + "/archive", json={"archived": False}).status_code
+        == 404
+    )
+    before = len(requests)
+    assert (
+        browser.post(
+            "/kb/api/public/chat",
+            json={"conversation_id": "c-1", "query": "继续"},
+        ).status_code
+        == 404
+    )
+    assert len(requests) == before
+
+
+def test_busy_conversation_rejects_overlapping_history_mutations(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser, _store, _requests, _status = managed_history
+    started = Event()
+    release = Event()
+    original = WeKnoraClient.delete_session
+
+    async def wait_for_release(
+        client: WeKnoraClient, *, user_id: str, session_id: str
+    ) -> None:
+        started.set()
+        assert await asyncio.to_thread(release.wait, 5)
+        await original(client, user_id=user_id, session_id=session_id)
+
+    monkeypatch.setattr(WeKnoraClient, "delete_session", wait_for_release)
+    base = "/kb/api/public/conversations/c-1"
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(browser.delete, base)
+        try:
+            assert started.wait(3)
+            assert (
+                browser.post(
+                    base + "/archive", json={"archived": True}
+                ).status_code
+                == 409
+            )
+            assert browser.delete(base).status_code == 409
+        finally:
+            release.set()
+        assert pending.result(timeout=3).json() == {"deleted": True}
 
 
 def _events(body: str) -> list[dict[str, Any]]:

@@ -108,6 +108,14 @@ class _TraceExportRequest(BaseModel):
     confirm_id: str | None = None
 
 
+class _ConversationArchiveRequest(BaseModel):
+    """本人历史会话的归档状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    archived: bool
+
+
 class _FeedbackReviewRequest(BaseModel):
     """管理员人工复核，不修改原生问答结果。"""
 
@@ -1041,6 +1049,13 @@ def create_app(  # noqa: PLR0913, PLR0915
         conversation_id = body.conversation_id
         if user_id is None:
             raise HTTPException(status_code=401, detail="RDMS login required")
+        owner_id = _owner_id(auth, user_id)
+        if store.conversation_deleted(
+            deployment_id=auth.settings.deployment_id,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+        ):
+            raise HTTPException(404, "会话已删除，请新建对话。")
         binding = store.public_app(deployment_id=auth.settings.deployment_id)
         if binding is None:
             # 首次迁移前沿用已验收环境范围，不自动创建默认 Agent。
@@ -1057,7 +1072,6 @@ def create_app(  # noqa: PLR0913, PLR0915
                     detail=f"public app unavailable ({error.status_code})",
                 ) from None
         profile = auth.require_profile(request)
-        owner_id = _owner_id(auth, user_id)
         # 原生会话会携带旧轮次内容；角色降级后必须使用新的会话。
         previous_turns = store.list_turns(
             deployment_id=auth.settings.deployment_id,
@@ -1096,6 +1110,12 @@ def create_app(  # noqa: PLR0913, PLR0915
         await lock.acquire()
         slot: QaSlot | None = None
         try:
+            if store.conversation_deleted(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            ):
+                raise HTTPException(404, "会话已删除，请新建对话。")
             slot = await _admit_qa(request, qa_queue)
             native_session_id = store.native_session(
                 deployment_id=auth.settings.deployment_id,
@@ -1471,7 +1491,9 @@ def create_app(  # noqa: PLR0913, PLR0915
         return {"cancelled": cancelled}
 
     @app.get("/api/public/conversations")
-    async def conversations(request: Request) -> dict[str, Any]:
+    async def conversations(
+        request: Request, archived: bool = False
+    ) -> dict[str, Any]:
         """只列本人的新原生会话，并读取原生当前标题。"""
         principal = auth.require_public(request, csrf=True)
         user_id = _required_user(principal.user_id)
@@ -1479,6 +1501,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         rows = store.list_conversations(
             deployment_id=auth.settings.deployment_id,
             owner_id=owner_id,
+            archived=archived,
         )
         items = []
         for row in rows[:_MAX_HISTORY_SESSIONS]:
@@ -1505,6 +1528,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                     "conversation_id": row["conversation_id"],
                     "title": session.get("title") or "新对话",
                     "updated_at": row["updated_at"],
+                    "archived": archived,
                 }
             )
         return {
@@ -1513,6 +1537,61 @@ def create_app(  # noqa: PLR0913, PLR0915
             "limit": _MAX_HISTORY_SESSIONS,
             "has_more": len(rows) > _MAX_HISTORY_SESSIONS,
         }
+
+    @app.post("/api/public/conversations/{conversation_id}/archive")
+    async def archive_conversation(
+        conversation_id: str,
+        body: _ConversationArchiveRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        """归档和恢复仅作用于当前登录者的历史会话。"""
+        principal = auth.require_public(request, csrf=True)
+        user_id = _required_user(principal.user_id)
+        owner_id = _owner_id(auth, user_id)
+        lock = locks.setdefault((owner_id, conversation_id), asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(409, "会话正在回答，请结束后再操作。")
+        async with lock:
+            if not store.archive_conversation(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+                archived=body.archived,
+            ):
+                raise HTTPException(404, "conversation not found")
+        return {"conversation_id": conversation_id, "archived": body.archived}
+
+    @app.delete("/api/public/conversations/{conversation_id}")
+    async def delete_conversation(
+        conversation_id: str, request: Request
+    ) -> dict[str, bool]:
+        """先删除本人原生会话，再清除本地问答、引用及反馈。"""
+        principal = auth.require_public(request, csrf=True)
+        user_id = _required_user(principal.user_id)
+        owner_id = _owner_id(auth, user_id)
+        lock = locks.setdefault((owner_id, conversation_id), asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(409, "会话正在回答，请结束后再操作。")
+        async with lock:
+            native_session_id = store.native_session(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            )
+            if native_session_id is None:
+                raise HTTPException(404, "conversation not found")
+            try:
+                await native.delete_session(
+                    user_id=user_id, session_id=native_session_id
+                )
+            except NativeHttpError:
+                raise HTTPException(502, "删除未完成，请稍后重试。") from None
+            store.delete_conversation(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            )
+        return {"deleted": True}
 
     @app.get("/api/public/legacy/history")
     def legacy_history(request: Request) -> dict[str, Any]:

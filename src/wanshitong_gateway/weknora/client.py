@@ -13,6 +13,7 @@ from wanshitong_gateway.weknora.principal import ExternalPrincipalSigner
 _TIMEOUT = httpx.Timeout(connect=5.0, read=180.0, write=30.0, pool=10.0)
 _HTTP_OK = 200
 _HTTP_BAD_REQUEST = 400
+_HTTP_NOT_FOUND = 404
 _HTTP_BAD_GATEWAY = 502
 _HTTP_TOO_MANY_REQUESTS = 429
 _MESSAGE_PAGE_SIZE = 100
@@ -241,6 +242,21 @@ class WeKnoraClient:
         if not isinstance(data, dict):
             raise NativeHttpError(502, "原生会话响应格式无效。")
         return data
+
+    async def delete_session(self, *, user_id: str, session_id: str) -> None:
+        """沿本人签名身份删除原生会话；已删除时允许重试完成本地清理。"""
+        try:
+            response = await self._http.delete(
+                f"/api/v1/sessions/{session_id}",
+                headers=self._headers(user_id),
+            )
+        except httpx.RequestError as error:
+            raise NativeHttpError(502, "原生会话删除连接失败。") from error
+        if response.status_code == _HTTP_NOT_FOUND:
+            return
+        payload = _require_success(response)
+        if payload.get("success") is not True:
+            raise NativeHttpError(502, "原生会话删除尚未确认。")
 
     async def message_resource(
         self,

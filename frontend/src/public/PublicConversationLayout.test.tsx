@@ -59,11 +59,117 @@ function props() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   window.localStorage.clear();
   vi.unstubAllGlobals();
 });
 
 describe("历史会话侧栏", () => {
+  it("会话菜单不打开会话，支持归档、恢复及点外部收起", async () => {
+    const user = userEvent.setup();
+    const parameters = props();
+    const onArchive = vi.fn().mockResolvedValue(undefined);
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+    const onHistoryViewChange = vi.fn().mockResolvedValue(undefined);
+    const view = render(
+      <PublicConversationLayout
+        {...parameters}
+        onArchive={onArchive}
+        onDelete={onDelete}
+        onHistoryViewChange={onHistoryViewChange}
+      />,
+    );
+    const trigger = screen.getByRole("button", {
+      name: `会话操作：${sessions[0].title}`,
+    });
+    await user.click(trigger);
+    expect(parameters.onSelect).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("button", { name: "归档会话" }),
+    ).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "归档会话" }));
+    expect(onArchive).toHaveBeenCalledExactlyOnceWith("history-1", true);
+    expect(
+      await screen.findByText("会话已归档，可在“已归档”中恢复。"),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "查看已归档会话" }));
+    expect(onHistoryViewChange).toHaveBeenCalledExactlyOnceWith(true);
+    view.rerender(
+      <PublicConversationLayout
+        {...parameters}
+        historyArchived
+        onArchive={onArchive}
+        onDelete={onDelete}
+        onHistoryViewChange={onHistoryViewChange}
+      />,
+    );
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "恢复会话" }));
+    expect(onArchive).toHaveBeenLastCalledWith("history-1", false);
+    await user.click(trigger);
+    await user.click(screen.getByRole("heading", { name: "已归档" }));
+    expect(
+      screen.queryByRole("button", { name: "恢复会话" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("删除先确认，取消保留会话，活动会话错误可见", async () => {
+    const user = userEvent.setup();
+    const confirm = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    const onDelete = vi
+      .fn()
+      .mockRejectedValue(new PublicApiError("正在生成", { status: 409 }));
+    render(
+      <PublicConversationLayout
+        {...props()}
+        onArchive={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+    const trigger = screen.getByRole("button", {
+      name: `会话操作：${sessions[1].title}`,
+    });
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "删除会话" }));
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining("删除后无法恢复"),
+    );
+    expect(onDelete).not.toHaveBeenCalled();
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "删除会话" }));
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith("history-2");
+    expect(await screen.findByRole("alert")).toHaveTextContent("会话正在回答");
+    expect(
+      screen.getByRole("button", { name: sessions[1].title }),
+    ).toHaveAttribute("aria-current", "page");
+  });
+
+  it("会话操作中不允许换会话，主区域暂时不可操作但内容保留", () => {
+    render(
+      <PublicConversationLayout
+        {...props()}
+        historyActionBusy
+        onArchive={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "新对话" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: `会话操作：${sessions[0].title}` }),
+    ).toBeDisabled();
+    expect(
+      screen
+        .getByRole("textbox", { name: "向湾小度提问" })
+        .closest(".wst-main-pane"),
+    ).toHaveAttribute("inert");
+    expect(screen.getByText("正在更新会话…")).toBeVisible();
+  });
   it("桌面默认常驻，按日期分组并高亮当前会话，点选后保留侧栏", async () => {
     const user = userEvent.setup();
     const parameters = props();
