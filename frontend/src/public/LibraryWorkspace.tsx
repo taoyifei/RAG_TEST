@@ -296,8 +296,8 @@ function LibraryListing({
       </div>
       {data?.can_manage && (
         <p className="wst-document-meta">
-          支持 DOCX、PDF、XLSX、PPTX、TXT 和 MD。PDF 支持文字版；扫描件需 OCR
-          识别。
+          支持 Word、Excel、PowerPoint、PDF 和文本文件；PDF
+          建议使用可选中文字的版本。
         </p>
       )}
       {error && (

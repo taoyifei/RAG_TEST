@@ -320,7 +320,6 @@ export function answerClipboardText(
     (reference) =>
       `〔${reference.number}〕${reference.title}` +
       (reference.detail ? `\n${reference.detail}` : "") +
-      (reference.quote ? `\n${reference.quote}` : "") +
       (reference.unavailable ? "\n原文暂不可用。" : ""),
   );
   return [
@@ -330,6 +329,7 @@ export function answerClipboardText(
     answer + notice,
     "参考来源",
     ...(sources.length ? sources : ["本次回答未附参考来源。"]),
+    ...(sources.length ? ["完整引用原文可在湾小度的“引用依据”中查看。"] : []),
   ].join("\n\n");
 }
 

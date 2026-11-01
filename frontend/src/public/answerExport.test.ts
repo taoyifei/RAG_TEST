@@ -50,6 +50,9 @@ describe("完成回答导出模型", () => {
     expect(text).toContain("图片：菜单示意（请在湾小度原回答中查看）");
     expect(text).toContain("系统入口（https://rdms.example/index）");
     expect(text).toContain("〔1〕线上委托单操作指引");
+    expect(text).toContain("第2页");
+    expect(text).not.toContain("供应链管理 → 订单管理 → 新增。");
+    expect(text).toContain("完整引用原文可在湾小度的“引用依据”中查看。");
     expect(text).toContain("提问时间：2026/11/01 16:00（北京时间）");
     expect(text).toContain("资料范围：公共知识库、我的资料");
     expect(text).not.toMatch(

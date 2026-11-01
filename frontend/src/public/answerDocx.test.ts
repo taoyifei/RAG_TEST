@@ -54,6 +54,13 @@ it("真正OOXML包保留中文原生标题、列表、可编辑表格和编号�
   expect(doc.documentElement.textContent).toContain(
     "〔1〕线上委托单操作指引.docx",
   );
+  expect(doc.documentElement.textContent).toContain("第2页");
+  expect(doc.documentElement.textContent).not.toContain(
+    "选择订单管理，点击新增。",
+  );
+  expect(doc.documentElement.textContent).toContain(
+    "完整引用原文可在湾小度的“引用依据”中查看。",
+  );
   expect(doc.documentElement.textContent).toContain(
     "提问时间：2026/11/01 16:00",
   );

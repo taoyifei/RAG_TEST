@@ -8,6 +8,7 @@ import {
 } from "react";
 
 import { ReadingOverlay } from "./ReadingOverlay";
+import { SourceText, sourceDisplayText } from "./SourceText";
 import type { PublicCitation } from "./publicSse";
 
 const COMPACT_READING = "(max-width: 1100px)";
@@ -25,16 +26,71 @@ function compactSnapshot() {
 type SourceResult =
   | { status: "loading" }
   | { status: "ready"; text: string }
-  | { status: "error" };
+  | { status: "error" }
+  | { status: "unavailable" };
+
+function ReferenceContent({
+  quote,
+  result,
+  onRetry,
+}: {
+  quote?: string;
+  result: SourceResult;
+  onRetry?: () => void;
+}) {
+  const sameText =
+    result.status === "ready" &&
+    Boolean(quote?.trim()) &&
+    quote?.trim() === result.text.trim();
+  return (
+    <>
+      {quote?.trim() && !sameText && (
+        <section aria-label="本次引用片段" className="wst-reference-excerpt">
+          <h3>本次引用片段</h3>
+          <blockquote>
+            <SourceText text={quote} />
+          </blockquote>
+        </section>
+      )}
+      <section aria-label="引用原文" className="wst-reference-source">
+        <h3>引用原文</h3>
+        {result.status === "loading" && <p role="status">正在读取引用原文…</p>}
+        {result.status === "error" && (
+          <div className="wst-reading-error" role="alert">
+            <p>原文暂时读不到，资料可能已更新或访问权限已变化。</p>
+            <button onClick={onRetry} type="button">
+              重新读取
+            </button>
+          </div>
+        )}
+        {result.status === "ready" &&
+          (result.text.trim() ? (
+            <SourceText text={result.text} />
+          ) : (
+            <p className="wst-reading-muted">
+              这条引用暂未提供更多原文，可以先参考上方片段。
+            </p>
+          ))}
+        {result.status === "unavailable" && (
+          <p className="wst-reading-muted">
+            这条引用没有可读取的原文，可以先参考本次片段。
+          </p>
+        )}
+      </section>
+    </>
+  );
+}
 
 function ReferenceText({
   referenceId,
   reader,
   onRetry,
+  quote,
 }: {
   referenceId: string;
   reader: (referenceId: string) => Promise<string>;
   onRetry: () => void;
+  quote?: string;
 }) {
   const [result, setResult] = useState<SourceResult>({ status: "loading" });
   const readerRef = useRef(reader);
@@ -56,26 +112,7 @@ function ReferenceText({
     };
   }, [referenceId]);
 
-  if (result.status === "loading") {
-    return <p role="status">正在读取引用原文…</p>;
-  }
-  if (result.status === "error") {
-    return (
-      <div className="wst-reading-error" role="alert">
-        <p>原文暂时读不到，资料可能已更新或访问权限已变化。</p>
-        <button onClick={onRetry} type="button">
-          重新读取
-        </button>
-      </div>
-    );
-  }
-  return result.text.trim() ? (
-    <div className="wst-reference-text">{result.text}</div>
-  ) : (
-    <p className="wst-reading-muted">
-      这条引用暂未提供更多原文，可以先参考上方片段。
-    </p>
-  );
+  return <ReferenceContent quote={quote} result={result} onRetry={onRetry} />;
 }
 
 /** 只展示本次引用的实际定位与受保护来源，不把片段冒充整份文档。 */
@@ -96,7 +133,9 @@ export function ReferenceDrawer({
     () => false,
   );
   const [attempt, setAttempt] = useState(0);
-  const title = citation.document_title?.trim() || citation.document_name;
+  const title = sourceDisplayText(
+    citation.document_title?.trim() || citation.document_name,
+  );
   const readable =
     citation.source_available !== false &&
     citation.reference_id &&
@@ -125,29 +164,24 @@ export function ReferenceDrawer({
       </header>
       <div className="wst-reading-body">
         {citation.locator && (
-          <p className="wst-reading-location">{citation.locator}</p>
+          <p className="wst-reading-location">
+            {sourceDisplayText(citation.locator)}
+          </p>
         )}
-        {citation.quote && (
-          <section aria-label="本次引用片段" className="wst-reference-excerpt">
-            <h3>本次引用片段</h3>
-            <blockquote>{citation.quote}</blockquote>
-          </section>
+        {readable && citation.reference_id && onReadReference ? (
+          <ReferenceText
+            key={`${citation.reference_id}:${attempt}`}
+            onRetry={() => setAttempt((value) => value + 1)}
+            reader={onReadReference}
+            referenceId={citation.reference_id}
+            quote={citation.quote}
+          />
+        ) : (
+          <ReferenceContent
+            quote={citation.quote}
+            result={{ status: "unavailable" }}
+          />
         )}
-        <section aria-label="引用原文" className="wst-reference-source">
-          <h3>引用原文</h3>
-          {readable && citation.reference_id && onReadReference ? (
-            <ReferenceText
-              key={`${citation.reference_id}:${attempt}`}
-              onRetry={() => setAttempt((value) => value + 1)}
-              reader={onReadReference}
-              referenceId={citation.reference_id}
-            />
-          ) : (
-            <p className="wst-reading-muted">
-              这条引用没有可读取的原文，可以先参考本次片段。
-            </p>
-          )}
-        </section>
       </div>
     </ReadingOverlay>
   );

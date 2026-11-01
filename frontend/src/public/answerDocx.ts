@@ -259,7 +259,7 @@ export function createAnswerWordDocument(
             bold: true,
           }),
         ],
-        keepNext: Boolean(reference.detail || reference.quote),
+        keepNext: Boolean(reference.detail),
         spacing: { before: 100, after: 60 },
       }),
     );
@@ -267,18 +267,18 @@ export function createAnswerWordDocument(
       children.push(
         new Paragraph({ text: reference.detail, style: "ExportMetadata" }),
       );
-    if (reference.quote)
-      children.push(
-        new Paragraph({
-          text: reference.quote,
-          spacing: { after: 140, line: 320 },
-        }),
-      );
     if (reference.unavailable)
       children.push(
         new Paragraph({ text: "原文暂不可用。", style: "ExportMetadata" }),
       );
   }
+  if (content.references.length)
+    children.push(
+      new Paragraph({
+        text: "完整引用原文可在湾小度的“引用依据”中查看。",
+        style: "ExportMetadata",
+      }),
+    );
   return new Document({
     creator: "湾小度",
     lastModifiedBy: "湾小度",

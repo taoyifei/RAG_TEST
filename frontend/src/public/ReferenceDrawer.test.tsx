@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -64,10 +65,10 @@ afterEach(() => {
   document.body.style.overflow = "";
 });
 
-it("保留真实文档名、定位和引文，原文只以文本显示且不展示内部句柄", async () => {
+it("保留真实文档名、定位和引文，原文格式可读且不执行HTML或展示内部句柄", async () => {
   const user = userEvent.setup();
   const raw =
-    '<script>不要执行</script>\n<img src="https://example.test/extra.png">';
+    '## 办理步骤\n\n这里是**原文重点**。\n\n![图示](resource://hidden-source-image)\n\n<script>不要执行</script>\n<img src="https://example.test/extra.png">';
   const reader = vi.fn().mockResolvedValue(raw);
   render(<Harness reader={reader} />);
   await user.click(screen.getByRole("button", { name: "阅读这条来源" }));
@@ -82,13 +83,78 @@ it("保留真实文档名、定位和引文，原文只以文本显示且不展�
   ).toBeVisible();
   expect(within(dialog).getByText(citation.locator!)).toBeVisible();
   expect(within(dialog).getByText(citation.quote!)).toBeVisible();
-  await waitFor(() => expect(dialog.textContent).toContain(raw));
+  expect(
+    await within(dialog).findByRole("heading", { name: "办理步骤" }),
+  ).toBeVisible();
+  expect(within(dialog).getByText("原文重点").tagName).toBe("STRONG");
+  expect(dialog.textContent).toContain("图片请在原回答或原件中查看");
+  expect(dialog.textContent).not.toMatch(
+    /resource:\/\/|hidden-source-image|##|\*\*/,
+  );
   expect(dialog.querySelector("script, img")).toBeNull();
   expect(dialog.textContent).not.toContain(citation.reference_id);
   expect(reader).toHaveBeenCalledExactlyOnceWith(citation.reference_id);
   expect(screen.getByText("已有回答保持可见")).toBeVisible();
   expect(dialog).not.toHaveAttribute("aria-modal");
   expect(screen.getByTestId("background")).not.toHaveAttribute("inert");
+});
+
+it("引用片段与读到原文trim相同时只呈现一份引用原文", async () => {
+  const text = "## 办公账号\n\n使用**网页端**办理。";
+  const user = userEvent.setup();
+  render(
+    <Harness
+      source={{ ...citation, quote: `  ${text}\n` }}
+      reader={() => Promise.resolve(text)}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "阅读这条来源" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("region", { name: "本次引用片段" }),
+    ).not.toBeInTheDocument(),
+  );
+  const source = screen.getByRole("region", { name: "引用原文" });
+  expect(
+    within(source).getByRole("heading", { name: "办公账号" }),
+  ).toBeVisible();
+  expect(screen.getAllByText("网页端")).toHaveLength(1);
+});
+
+it("不同片段仍保留上下文；切换来源后忽略旧请求的迟到正文", async () => {
+  let finishOld: (value: string) => void = () => undefined;
+  const reader = vi.fn((referenceId: string) =>
+    referenceId === citation.reference_id
+      ? new Promise<string>((resolve) => {
+          finishOld = resolve;
+        })
+      : Promise.resolve("## 新来源正文\n\n这是当前原文。"),
+  );
+  const user = userEvent.setup();
+  const view = render(<Harness reader={reader} />);
+  await user.click(screen.getByRole("button", { name: "阅读这条来源" }));
+  await waitFor(() => expect(reader).toHaveBeenCalledOnce());
+  view.rerender(
+    <Harness
+      reader={reader}
+      source={{
+        ...citation,
+        reference_id: "second-reference",
+        quote: "新的实际引用片段。",
+      }}
+    />,
+  );
+  expect(
+    await screen.findByRole("heading", { name: "新来源正文" }),
+  ).toBeVisible();
+  await act(async () => {
+    finishOld("不应出现的旧原文");
+    await Promise.resolve();
+  });
+  expect(screen.getByText("新的实际引用片段。")).toBeVisible();
+  expect(screen.getByRole("region", { name: "本次引用片段" })).toBeVisible();
+  expect(screen.queryByText("不应出现的旧原文")).not.toBeInTheDocument();
+  expect(reader).toHaveBeenCalledTimes(2);
 });
 
 it("加载和失败期间仍显示来源上下文，明确提示后可以重试", async () => {
