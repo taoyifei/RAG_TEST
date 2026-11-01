@@ -2,7 +2,7 @@ name: Wanxiaodu V2
 
 on:
   push:
-    branches: ["codex/wxd-v2-weknora-083", "codex/wxd-v2-weknora-090"]
+    branches: ["codex/wxd-v2-weknora-083", "codex/wxd-v2-weknora-090", "wanshitong-stable"]
   pull_request:
   workflow_dispatch:
 
