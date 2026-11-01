@@ -35,9 +35,11 @@ docker build --pull=false --network=none -f deployment/wanshitong-v2/Dockerfile.
 
 ## 模型与图片
 
-复用现有模型API，不新建GPU服务。LLM地址为 `http://10.242.180.54:18000/v1`，embedding为Docker宿主8091，rerank经独立adapter转到宿主8092。模型白名单必须包含54。
+复用现有模型API，不新建GPU服务。当前生产与测试的LLM均通过 `http://10.242.180.60:18098/v1` 模型池，转发54:18000及57/58各8000、8001共五路现有Qwen3-8B；每路24576上下文、2个执行槽。embedding为Docker宿主8091，rerank经独立adapter转到宿主8092。网关各8条问答运行、8条等待，共享模型10个执行槽；模型白名单须覆盖实际模型池地址。
 
 OCR通过本目录 `ocr_relay.py` 复用现有OCR VLM，不部署新GPU模型。090 relay仅监听宿主内部 `172.17.0.1:18097`；上游通过只读inspect核对。仅更新候选自己的OCR模型地址为 `http://host.docker.internal:18097/v1`，不改生产18096或旧测试18095。
+
+Go原生layout解析需要完整PaddleX服务的 `/layout-parsing`，不能把OpenAI `/v1` VLM端点当成该服务。若现有资料配置使用 `http://paddleocr-vl:8080`，可在核对旧provider的地址与网络后叠加 `compose.layout-ocr.yaml`：填写 `WXD_LAYOUT_RELAY_IMAGE` 为现场已有固定Nginx镜像ID，`WXD_LAYOUT_OCR_NETWORK` 为provider网络，与主Compose一起生成现场配置。`layout-ocr-relay.conf` 当前转发60上已核对的 `192.168.16.7:8080`；迁移机器前须重新核对。只有relay连接旧OCR网络，app仅保留本栈网络，避免误连旧docreader。relay不发布宿主端口，不新建GPU模型；健康检查通过只证明链路，不代表实际layout解析质量。
 
 DOCX解析器会抽取并保存嵌入图片；Go ImageResolver保存资源发生在OCR异步任务之前。图片抽取/显示不依赖OCR，检索仅存在于图片中的文字仍需要OCR。不能因为文档文本可检索便认定图片已正确显示，部署验收还须检查具体图片资源和回答引用。
 
@@ -54,7 +56,7 @@ DOCX解析器会抽取并保存嵌入图片；Go ImageResolver保存资源发生
 - `WXD_NATIVE_BOOTSTRAP_ADMIN_EMAIL` 使用测试服务账号邮箱；这是服务端创建原生普通用户和独立空间的权限，不能把人类管理员直接设置为原生平台管理员。网关不开放平台管理接口。
 - `WXD_NATIVE_WORKBENCH_PROVISIONING=true` 仅供服务端创建空间；浏览器不能创建或切换任意tenant。按规模设置 `WXD_NATIVE_MAX_OWNED_WORKSPACES`，本次测试为1000。
 - `WXD_WORKBENCH_CHAT_MODEL_ID` 可显式选择已授权且可供独立空间使用的模型。未填时选择原生可用KnowledgeQA模型；现有模型仍由现场固定配置管理。
-- 运行模型必须支持 `tool_choice=auto`。54共享vLLM已按用户明确授权启用自动工具选择和hermes解析器，模型工具调用及8288实际问答通过；但真实原生助手仍超出8192上下文。用户已明确选择保持8192、暂不启用助手和定时任务；24576方案不执行，`WXD_WORKBENCH_ENABLED`保持false，不继续重启或虚增原生模型元数据。
+- 运行模型必须支持 `tool_choice=auto`。54/57/58五路模型现已支持自动工具选择，且按后续授权统一24576上下文；真实助手仍存在跨文档阅读与部分工具使用质量问题，因此 `WXD_WORKBENCH_ENABLED` 保持false，协作与定时任务也不启用。不能把上下文扩窗或普通问答通过当作助手质量验收。
 - 构建Vue时须保留两个HTML入口，edge同时发布React、管理端和工作助手产物；Nginx将 `/kb/workbench/{id}/` 映射到工作助手HTML，API仍经Cookie/CSRF网关。
 - 工作助手按“研发用户 + 资料范围 + 代次”隔离，SQLite和原生PG需一起备份。不得只删SQLite工作区表或恢复旧表后继续运行原生定时任务。
 

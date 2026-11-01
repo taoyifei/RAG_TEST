@@ -1,0 +1,35 @@
+# 可选叠加：只让转发器连接旧OCR网络，app仍使用本栈的docreader等服务。
+services:
+  app:
+    depends_on:
+      layout-ocr-relay:
+        condition: service_healthy
+  layout-ocr-relay:
+    image: ${WXD_LAYOUT_RELAY_IMAGE:?必须填写现场已有的固定Nginx镜像ID}
+    pull_policy: never
+    entrypoint: [nginx]
+    command: [-g, "daemon off;"]
+    volumes:
+      - ./layout-ocr-relay.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      engine:
+        aliases: [paddleocr-vl]
+      ocr-provider: {}
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/health]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  ocr-provider:
+    external: true
+    name: ${WXD_LAYOUT_OCR_NETWORK:-wst_weknora_candidate_20260925_engine}
