@@ -18,6 +18,7 @@ _HTTP_BAD_GATEWAY = 502
 _HTTP_TOO_MANY_REQUESTS = 429
 _MESSAGE_PAGE_SIZE = 100
 _MAX_MESSAGE_PAGE_SIZE = 200
+_SESSION_PAGE_SIZE = 1000
 
 
 class NativeHttpError(Exception):
@@ -230,6 +231,53 @@ class WeKnoraClient:
             if next_cursor == before_time:
                 raise NativeHttpError(502, "原生历史分页没有前进。")
             before_time = next_cursor
+
+    async def list_sessions(
+        self, *, user_id: str, keyword: str = ""
+    ) -> list[dict[str, Any]]:
+        """按本人签名批量读取原生标题，关键词由原生跨全部会话匹配。
+
+        不传来源筛选，避免触发租户级渠道视图；调用方仍须与网关的本人
+        映射及当前资料权限求交，不能直接公开原生列表或总数。
+        """
+        sessions: dict[str, dict[str, Any]] = {}
+        page = 1
+        while True:
+            try:
+                response = await self._http.get(
+                    "/api/v1/sessions",
+                    params={
+                        "page": page,
+                        "page_size": _SESSION_PAGE_SIZE,
+                        "keyword": keyword,
+                    },
+                    headers=self._headers(user_id),
+                )
+            except httpx.RequestError as error:
+                raise NativeHttpError(502, "历史会话暂时无法读取。") from error
+            payload = _require_success(response)
+            batch = payload.get("data")
+            total = payload.get("total")
+            if (
+                not isinstance(batch, list)
+                or not isinstance(total, int)
+                or isinstance(total, bool)
+                or total < 0
+                or any(
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("id"), str)
+                    or not item["id"]
+                    for item in batch
+                )
+            ):
+                raise NativeHttpError(502, "原生会话列表响应格式无效。")
+            before = len(sessions)
+            sessions.update((item["id"], item) for item in batch)
+            if len(sessions) >= total:
+                return list(sessions.values())
+            if len(sessions) == before:
+                raise NativeHttpError(502, "原生会话列表分页没有前进。")
+            page += 1
 
     async def session(self, *, user_id: str, session_id: str) -> dict[str, Any]:
         """读取原生会话标题及所属身份。"""

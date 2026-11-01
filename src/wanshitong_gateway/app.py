@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hmac
 import json
 import os
 import re
@@ -15,7 +18,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
@@ -74,6 +77,11 @@ from wanshitong_gateway.workbench import WorkbenchService
 from wanshitong_gateway.workbench_routes import register_workbench_routes
 
 _MAX_HISTORY_SESSIONS = 50
+_DEFAULT_HISTORY_LIMIT = 30
+_MAX_HISTORY_QUERY_CHARS = 200
+_MAX_HISTORY_CURSOR_CHARS = 4096
+_HISTORY_CURSOR_SIGNATURE_BYTES = 32
+_HISTORY_CURSOR_FIELD_COUNT = 3
 _MAX_OPS_LIST_LIMIT = 1000
 _MAX_OPS_OFFSET = 1_000_000
 _MAX_OPS_QUERY_CHARS = 200
@@ -97,6 +105,51 @@ _INLINE_IMAGE_TYPES = frozenset(
         "image/bmp",
     }
 )
+
+
+def _history_cursor(key: bytes, context: str, after: tuple[str, str]) -> str:
+    """签发绑定本人、归档组及搜索词的稳定键集游标。"""
+    payload = json.dumps(
+        [context, *after], ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    signature = hmac.digest(
+        key, b"wxd-history-cursor-v1\x00" + payload, "sha256"
+    )
+    return base64.urlsafe_b64encode(payload + signature).rstrip(b"=").decode()
+
+
+def _history_cursor_after(
+    cursor: str | None, key: bytes, context: str
+) -> tuple[str, str] | None:
+    """验证游标归属及完整性，不接受客户端提供的明文偏移。"""
+    if cursor is None:
+        return None
+    try:
+        decoded = base64.b64decode(
+            cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True
+        )
+        payload = decoded[:-_HISTORY_CURSOR_SIGNATURE_BYTES]
+        signature = decoded[-_HISTORY_CURSOR_SIGNATURE_BYTES:]
+        expected = hmac.digest(
+            key, b"wxd-history-cursor-v1\x00" + payload, "sha256"
+        )
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("游标签名无效。")
+        values = json.loads(payload)
+        if (
+            not isinstance(values, list)
+            or len(values) != _HISTORY_CURSOR_FIELD_COUNT
+            or any(not isinstance(value, str) for value in values)
+            or values[0] != context
+            or not values[1]
+            or not values[2]
+        ):
+            raise ValueError("游标不属于当前历史列表。")
+        return values[1], values[2]
+    except (ValueError, binascii.Error, UnicodeError):
+        raise HTTPException(
+            422, "历史列表已变化，请重新搜索或刷新列表。"
+        ) from None
 
 
 class _TraceExportRequest(BaseModel):
@@ -1492,22 +1545,53 @@ def create_app(  # noqa: PLR0913, PLR0915
 
     @app.get("/api/public/conversations")
     async def conversations(
-        request: Request, archived: bool = False
+        request: Request,
+        archived: bool = False,
+        query: str = Query(default="", max_length=_MAX_HISTORY_QUERY_CHARS),
+        limit: int = Query(
+            default=_DEFAULT_HISTORY_LIMIT, ge=1, le=_MAX_HISTORY_SESSIONS
+        ),
+        cursor: str | None = Query(
+            default=None, min_length=1, max_length=_MAX_HISTORY_CURSOR_CHARS
+        ),
     ) -> dict[str, Any]:
-        """只列本人的新原生会话，并读取原生当前标题。"""
+        """搜索并分页列出本人当前仍有权读取的原生会话标题。"""
         principal = auth.require_public(request, csrf=True)
         user_id = _required_user(principal.user_id)
         owner_id = _owner_id(auth, user_id)
+        profile = auth.require_profile(request)
+        keyword = query.strip()
+        context = json.dumps(
+            [auth.settings.deployment_id, owner_id, archived, keyword],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        cursor_key = native.api_key_fingerprint()
+        after = _history_cursor_after(cursor, cursor_key, context)
         rows = store.list_conversations(
             deployment_id=auth.settings.deployment_id,
             owner_id=owner_id,
             archived=archived,
         )
-        items = []
-        for row in rows[:_MAX_HISTORY_SESSIONS]:
+        # 原生列表可包含兼容旧版的空主体记录；先取本人映射交集，不公开原生总数。
+        try:
+            sessions = (
+                await native.list_sessions(user_id=user_id, keyword=keyword)
+                if rows
+                else []
+            )
+        except NativeHttpError:
+            raise HTTPException(
+                502, "历史会话暂时无法读取，请稍后重试。"
+            ) from None
+        titles = {session["id"]: session.get("title") for session in sessions}
+        visible: list[dict[str, Any]] = []
+        for row in rows:
+            if row["native_session_id"] not in titles:
+                continue
             try:
                 library.check_history(
-                    auth.require_profile(request),
+                    profile,
                     store.list_turns(
                         deployment_id=auth.settings.deployment_id,
                         owner_id=owner_id,
@@ -1516,26 +1600,37 @@ def create_app(  # noqa: PLR0913, PLR0915
                 )
             except HTTPException:
                 continue
-            try:
-                session = await native.session(
-                    user_id=user_id,
-                    session_id=row["native_session_id"],
-                )
-            except NativeHttpError:
-                continue
-            items.append(
+            title = titles[row["native_session_id"]]
+            visible.append(
                 {
                     "conversation_id": row["conversation_id"],
-                    "title": session.get("title") or "新对话",
+                    "title": title
+                    if isinstance(title, str) and title
+                    else "新对话",
                     "updated_at": row["updated_at"],
                     "archived": archived,
                 }
             )
+        remaining = [
+            item
+            for item in visible
+            if after is None
+            or (item["updated_at"], item["conversation_id"]) < after
+        ]
+        items = remaining[:limit]
+        has_more = len(remaining) > limit
         return {
             "items": items,
-            "total": len(rows),
-            "limit": _MAX_HISTORY_SESSIONS,
-            "has_more": len(rows) > _MAX_HISTORY_SESSIONS,
+            "total": len(visible),
+            "limit": limit,
+            "has_more": has_more,
+            "next_cursor": _history_cursor(
+                cursor_key,
+                context,
+                (items[-1]["updated_at"], items[-1]["conversation_id"]),
+            )
+            if has_more
+            else None,
         }
 
     @app.post("/api/public/conversations/{conversation_id}/archive")

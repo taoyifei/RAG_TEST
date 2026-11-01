@@ -22,6 +22,7 @@ function installHistory(
     pendingArchive?: Promise<Response>;
     pendingList?: Promise<Response>;
     historyStatus?: number;
+    list?: (url: URL) => Response | Promise<Response>;
   } = {},
 ) {
   const active = [
@@ -60,6 +61,7 @@ function installHistory(
           shortcuts: [],
         });
       if (url.pathname === "/api/public/conversations") {
+        if (options.list) return options.list(url);
         if (url.searchParams.get("archived") === "true" && options.pendingList)
           return options.pendingList;
         const items =
@@ -119,6 +121,201 @@ afterEach(() => {
 });
 
 describe("个人历史会话操作", () => {
+  it("历史分页追加且去重，标题搜索可以返回尚未加载的旧会话", async () => {
+    let resolvePage!: (response: Response) => void;
+    const pendingPage = new Promise<Response>((done) => {
+      resolvePage = done;
+    });
+    const recent = {
+      conversation_id: originalId,
+      title: "最近一次提问",
+      updated_at: turn.created_at,
+      archived: false,
+    };
+    const older = {
+      ...recent,
+      conversation_id: "older-history",
+      title: "半年以前的委托单",
+    };
+    const lists: URL[] = [];
+    installHistory({
+      list: (url) => {
+        lists.push(url);
+        if (url.searchParams.has("cursor")) return pendingPage;
+        const searching = url.searchParams.get("query") === "委托单";
+        return Response.json({
+          items: searching ? [older] : [recent],
+          has_more: !searching,
+          next_cursor: searching ? null : "next-history-page",
+          total: searching ? 1 : 2,
+        });
+      },
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.historyHasMore).toBe(true));
+    let nextPage!: Promise<void>;
+    act(() => {
+      nextPage = result.current.loadMoreHistory();
+    });
+    expect(result.current.historyLoadingMore).toBe(true);
+    expect(result.current.historyLoading).toBe(false);
+    expect(result.current.historySessions).toEqual([recent]);
+    await act(async () => {
+      resolvePage(
+        Response.json({
+          items: [recent, older],
+          has_more: false,
+          next_cursor: null,
+          total: 2,
+        }),
+      );
+      await nextPage;
+    });
+    expect(result.current.historySessions).toEqual([recent, older]);
+    expect(result.current.historyHasMore).toBe(false);
+    expect(lists[1].searchParams.get("cursor")).toBe("next-history-page");
+    await act(async () => result.current.searchHistory(" 委托单 "));
+    expect(result.current.historySessions).toEqual([older]);
+    expect(lists.at(-1)?.searchParams.get("query")).toBe("委托单");
+    expect(lists.at(-1)?.searchParams.has("cursor")).toBe(false);
+  });
+
+  it("新关键词覆盖迟到的搜索结果，失败可重试且归档不沿用搜索条件", async () => {
+    let resolveOlder!: (response: Response) => void;
+    const pendingOlder = new Promise<Response>((done) => {
+      resolveOlder = done;
+    });
+    let attempts = 0;
+    const lists: URL[] = [];
+    installHistory({
+      list: (url) => {
+        lists.push(url);
+        const query = url.searchParams.get("query");
+        if (query === "旧关键词") return pendingOlder;
+        if (query === "新关键词" && attempts++ === 0)
+          return Response.json({}, { status: 502 });
+        return Response.json({
+          items: query
+            ? [
+                {
+                  conversation_id: "new-match",
+                  title: "新关键词匹配",
+                  updated_at: turn.created_at,
+                },
+              ]
+            : [],
+          total: query ? 1 : 0,
+          has_more: false,
+          next_cursor: null,
+        });
+      },
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    let oldRequest!: Promise<void>;
+    act(() => {
+      oldRequest = result.current.searchHistory("旧关键词");
+    });
+    await act(async () => {
+      await expect(
+        result.current.searchHistory("新关键词"),
+      ).rejects.toMatchObject({ status: 502 });
+    });
+    expect(result.current.historyError).toBeTruthy();
+    await act(async () => result.current.retryHistory());
+    expect(result.current.historySessions[0].title).toBe("新关键词匹配");
+    await act(async () => {
+      resolveOlder(Response.json({ items: [], total: 0, has_more: false }));
+      await oldRequest;
+    });
+    expect(result.current.historySessions[0].title).toBe("新关键词匹配");
+    expect(result.current.historyError).toBeUndefined();
+    await act(async () => result.current.changeHistoryView(true));
+    expect(lists.at(-1)?.searchParams.get("archived")).toBe("true");
+    expect(lists.at(-1)?.searchParams.has("query")).toBe(false);
+  });
+
+  it("复制和导出前重新检查当前会话访问权限", async () => {
+    window.sessionStorage.setItem(storageKey, originalId);
+    const fetchMock = installHistory();
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.turns).toHaveLength(1));
+    const displayed = result.current.turns[0];
+    await act(async () => result.current.ensureTurnAccess(displayed));
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(Response.json({}, { status: 403 })),
+    );
+    await expect(
+      result.current.ensureTurnAccess(displayed),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(result.current.turns[0].answer).toBe("原回答");
+  });
+
+  it("分页失败重试保留已加载内容，过期分页错误不干扰新搜索", async () => {
+    let rejectPage!: (error: Error) => void;
+    const oldPage = new Promise<Response>((_, reject) => {
+      rejectPage = reject;
+    });
+    let pageAttempts = 0;
+    const recent = {
+      conversation_id: originalId,
+      title: "最近提问",
+      updated_at: turn.created_at,
+    };
+    const older = { ...recent, conversation_id: "older", title: "较早提问" };
+    installHistory({
+      list: (url) => {
+        if (url.searchParams.has("query"))
+          return Response.json({
+            items: [older],
+            total: 1,
+            has_more: false,
+            next_cursor: null,
+          });
+        if (url.searchParams.has("cursor")) {
+          pageAttempts += 1;
+          if (pageAttempts === 1) return Response.json({}, { status: 502 });
+          if (pageAttempts === 2)
+            return Response.json({
+              items: [older],
+              total: 3,
+              has_more: true,
+              next_cursor: "third-page",
+            });
+          return oldPage;
+        }
+        return Response.json({
+          items: [recent],
+          total: 3,
+          has_more: true,
+          next_cursor: "second-page",
+        });
+      },
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.historyHasMore).toBe(true));
+    await act(async () => {
+      await expect(result.current.loadMoreHistory()).rejects.toMatchObject({
+        status: 502,
+      });
+    });
+    expect(result.current.historySessions).toEqual([recent]);
+    await act(async () => result.current.retryHistory());
+    expect(result.current.historySessions).toEqual([recent, older]);
+    let stale!: Promise<void>;
+    act(() => {
+      stale = result.current.loadMoreHistory();
+    });
+    await act(async () => result.current.searchHistory("较早"));
+    await act(async () => {
+      rejectPage(new Error("迟到的分页错误"));
+      await expect(stale).resolves.toBeUndefined();
+    });
+    expect(result.current.historySessions).toEqual([older]);
+    expect(result.current.historyError).toBeUndefined();
+    expect(result.current.historyLoadingMore).toBe(false);
+  });
+
   it("刷新时原会话已经被删除，使用新ID并正常加载历史列表", async () => {
     window.sessionStorage.setItem(storageKey, originalId);
     installHistory({ historyStatus: 404 });

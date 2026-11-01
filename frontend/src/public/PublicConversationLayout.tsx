@@ -188,9 +188,14 @@ export function PublicConversationLayout({
   onSelect,
   historyArchived = false,
   historyLoading = false,
+  historyLoadingMore = false,
+  historyHasMore = false,
   historyActionBusy = false,
   historyError,
   onHistoryViewChange,
+  onHistorySearch,
+  onLoadMoreHistory,
+  onRetryHistory,
   onArchive,
   onDelete,
   toolbar,
@@ -207,9 +212,14 @@ export function PublicConversationLayout({
   onSelect: (conversationId: string) => Promise<void>;
   historyArchived?: boolean;
   historyLoading?: boolean;
+  historyLoadingMore?: boolean;
+  historyHasMore?: boolean;
   historyActionBusy?: boolean;
   historyError?: string;
   onHistoryViewChange?: (archived: boolean) => Promise<void>;
+  onHistorySearch?: (query: string) => Promise<void>;
+  onLoadMoreHistory?: () => Promise<void>;
+  onRetryHistory?: () => Promise<void>;
   onArchive?: (id: string, archived: boolean) => Promise<void>;
   onDelete?: (id: string) => Promise<void>;
   toolbar: ReactNode;
@@ -246,12 +256,35 @@ export function PublicConversationLayout({
     previouslyExpanded.current = expanded;
   }, [compact, expanded]);
   const keyword = query.trim().toLocaleLowerCase();
+  const lastSearchRef = useRef("");
+  useEffect(() => {
+    if (!onHistorySearch || historyActionBusy || actionId) return;
+    const next = query.trim();
+    if (next === lastSearchRef.current) return;
+    let current = true;
+    const timer = window.setTimeout(() => {
+      lastSearchRef.current = next;
+      setError(undefined);
+      void onHistorySearch(next).catch((failure: unknown) => {
+        if (!current) return;
+        if (failure instanceof PublicApiError && failure.status === 401)
+          redirectToSso();
+        else setError("暂时无法搜索历史对话，请稍后重试。");
+      });
+    }, 300);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [onHistorySearch, query, historyActionBusy, actionId]);
   const { groups, count } = useMemo(() => {
     const today = new Date();
     const groups = new Map<string, PublicNaturalSession[]>();
-    const filtered = sessions.filter((item) =>
-      item.title.toLocaleLowerCase().includes(keyword),
-    );
+    const filtered = onHistorySearch
+      ? sessions
+      : sessions.filter((item) =>
+          item.title.toLocaleLowerCase().includes(keyword),
+        );
     for (const item of [...filtered].sort(
       (a, b) =>
         (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0),
@@ -262,7 +295,7 @@ export function PublicConversationLayout({
       groups.set(group, items);
     }
     return { groups, count: filtered.length };
-  }, [sessions, keyword]);
+  }, [sessions, keyword, onHistorySearch]);
 
   const focusComposer = useCallback(() => {
     if (focusFrameRef.current !== undefined)
@@ -401,6 +434,7 @@ export function PublicConversationLayout({
     const requestId = ++requestRef.current;
     setError(undefined);
     setNotice(undefined);
+    lastSearchRef.current = "";
     setQuery("");
     try {
       await onHistoryViewChange(!historyArchived);
@@ -566,14 +600,17 @@ export function PublicConversationLayout({
               <Search aria-hidden="true" size={16} />
               <input
                 aria-label="搜索历史会话"
+                disabled={historyActionBusy || !!actionId}
+                maxLength={200}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索会话标题"
+                placeholder="搜索历史对话"
                 type="search"
                 value={query}
               />
               {query && (
                 <button
                   aria-label="清空会话搜索"
+                  disabled={historyActionBusy || !!actionId}
                   className="wst-sidebar-icon"
                   onClick={() => setQuery("")}
                   type="button"
@@ -608,6 +645,20 @@ export function PublicConversationLayout({
             {(error || historyError) && (
               <p className="wst-sidebar-error" role="alert">
                 {error ?? historyError}
+                {onRetryHistory && (
+                  <button
+                    type="button"
+                    disabled={historyLoading || historyLoadingMore}
+                    onClick={() => {
+                      setError(undefined);
+                      void onRetryHistory().catch(() =>
+                        setError("暂时无法加载历史对话，请稍后再试。"),
+                      );
+                    }}
+                  >
+                    重试
+                  </button>
+                )}
               </p>
             )}
             {notice && (
@@ -629,7 +680,7 @@ export function PublicConversationLayout({
             >
               {historyLoading ? (
                 <p className="wst-sidebar-empty" role="status">
-                  正在加载会话…
+                  {keyword ? "正在搜索历史对话…" : "正在加载会话…"}
                 </p>
               ) : count === 0 ? (
                 <p className="wst-sidebar-empty">
@@ -662,13 +713,41 @@ export function PublicConversationLayout({
                   </section>
                 ))
               )}
+              {onLoadMoreHistory && !historyLoading && historyHasMore && (
+                <button
+                  className="wst-sidebar-load-more"
+                  type="button"
+                  disabled={
+                    historyLoadingMore || historyActionBusy || !!actionId
+                  }
+                  onClick={() => {
+                    setError(undefined);
+                    void onLoadMoreHistory().catch((failure: unknown) => {
+                      if (
+                        failure instanceof PublicApiError &&
+                        failure.status === 401
+                      )
+                        redirectToSso();
+                      else setError("暂时无法加载更多对话，请再试一次。");
+                    });
+                  }}
+                >
+                  {historyLoadingMore ? "正在加载…" : "加载更多对话"}
+                </button>
+              )}
             </nav>
             <p className="wst-sidebar-footnote">
-              {moreCount > 0
-                ? `当前显示最近 ${sessions.length} 个会话，另有 ${moreCount} 个较早会话；搜索仅限当前列表。`
-                : historyArchived
-                  ? "归档不会删除问答，仍可打开继续追问。"
-                  : "选择会话，即可继续追问。"}
+              {onHistorySearch
+                ? keyword
+                  ? `正在查看“${query.trim()}”的历史对话`
+                  : historyArchived
+                    ? "归档的对话仍可打开继续追问。"
+                    : "可搜索全部历史对话，或向下加载更多。"
+                : moreCount > 0
+                  ? `当前显示最近 ${sessions.length} 个会话，另有 ${moreCount} 个较早会话；搜索仅限当前列表。`
+                  : historyArchived
+                    ? "归档不会删除问答，仍可打开继续追问。"
+                    : "选择会话，即可继续追问。"}
             </p>
           </>
         )}

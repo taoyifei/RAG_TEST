@@ -429,7 +429,8 @@ class GatewayStore:
                 "SELECT conversation_id,native_session_id,updated_at "
                 "FROM gateway_conversations WHERE deployment_id=? "
                 "AND owner_id=? AND deleted_at IS NULL "
-                "AND (archived_at IS NOT NULL)=? ORDER BY updated_at DESC",
+                "AND (archived_at IS NOT NULL)=? "
+                "ORDER BY updated_at DESC,conversation_id DESC",
                 (deployment_id, owner_id, archived),
             ).fetchall()
         return [dict(row) for row in rows]

@@ -467,7 +467,12 @@ describe("湾事通公共应用", () => {
     const user = userEvent.setup();
     await user.click(screen.getByText("引用依据（1段）"));
     await user.click(screen.getByText("办事指南.docx"));
-    expect(screen.getByText("本段引用依据。")).toBeInTheDocument();
+    const sourceReader = screen.getByRole("dialog", {
+      name: "来源阅读：办事指南.docx",
+    });
+    expect(
+      within(sourceReader).getByText("本段引用依据。"),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "查看引用片段" }),
     ).toBeInTheDocument();

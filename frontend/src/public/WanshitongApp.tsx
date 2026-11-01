@@ -256,6 +256,11 @@ export function WanshitongApp() {
         moreCount={chat.historyMoreCount}
         historyArchived={chat.historyArchived}
         historyLoading={chat.historyLoading}
+        historyLoadingMore={chat.historyLoadingMore}
+        historyHasMore={chat.historyHasMore}
+        onHistorySearch={chat.searchHistory}
+        onLoadMoreHistory={chat.loadMoreHistory}
+        onRetryHistory={chat.retryHistory}
         historyActionBusy={chat.historyActionBusy}
         historyError={chat.historyError}
         onHistoryViewChange={chat.changeHistoryView}
@@ -358,6 +363,8 @@ export function WanshitongApp() {
             onFeedback={chat.submitFeedback}
             onFeedbackLogin={chat.login}
             onDownloadReference={chat.downloadReference}
+            onReadReference={chat.readReference}
+            beforeExport={chat.ensureTurnAccess}
             onPopularQuestionSubmit={submitPopularQuestion}
             onRefresh={suggestions.refresh}
             onRetry={chat.retry}

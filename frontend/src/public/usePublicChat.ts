@@ -300,11 +300,21 @@ export function usePublicChat() {
   const [historyMoreCount, setHistoryMoreCount] = useState(0);
   const [historyArchived, setHistoryArchived] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyActionBusy, setHistoryActionBusy] = useState(false);
   const [historyError, setHistoryError] = useState<string>();
   const historyArchivedRef = useRef(false);
   const historyRequestRef = useRef(0);
   const historyActionRef = useRef(false);
+  const historyQueryRef = useRef("");
+  const historyNextCursorRef = useRef<string | null>(null);
+  const historyFetchBusyRef = useRef(false);
+  const historyRetryAppendRef = useRef(false);
+  const historySessionsRef = useRef(historySessions);
+  useEffect(() => {
+    historySessionsRef.current = historySessions;
+  }, [historySessions]);
   const [conversationId, setConversationId] = useState(() => randomId("wst"));
   const csrfRef = useRef<string | undefined>(undefined);
   const conversationRef = useRef(conversationId);
@@ -349,6 +359,13 @@ export function usePublicChat() {
     historyActionRef.current = false;
     setHistoryArchived(false);
     setHistoryLoading(false);
+    setHistoryLoadingMore(false);
+    setHistoryHasMore(false);
+    historyQueryRef.current = "";
+    historyNextCursorRef.current = null;
+    historyFetchBusyRef.current = false;
+    historyRetryAppendRef.current = false;
+    historySessionsRef.current = [];
     setHistoryActionBusy(false);
     setHistoryError(undefined);
     setSessionReady(false);
@@ -406,27 +423,55 @@ export function usePublicChat() {
   );
 
   const loadHistorySessions = useCallback(
-    async (archived: boolean, csrfToken: string, signal?: AbortSignal) => {
+    async (
+      archived: boolean,
+      csrfToken: string,
+      signal?: AbortSignal,
+      append = false,
+    ) => {
       const requestId = ++historyRequestRef.current;
-      setHistoryLoading(true);
+      const cursor = append ? historyNextCursorRef.current : undefined;
+      historyFetchBusyRef.current = true;
+      historyRetryAppendRef.current = false;
+      setHistoryLoading(!append);
+      setHistoryLoadingMore(append);
       setHistoryError(undefined);
       try {
         const sessions = await getPublicNaturalSessions({
           archived,
           csrfToken,
           signal,
+          query: historyQueryRef.current,
+          ...(cursor ? { cursor } : {}),
         });
         if (requestId !== historyRequestRef.current || signal?.aborted) return;
-        setHistorySessions(sessions.items);
+        const items = append
+          ? Array.from(
+              new Map(
+                [...historySessionsRef.current, ...sessions.items].map(
+                  (item) => [item.conversation_id, item],
+                ),
+              ).values(),
+            )
+          : sessions.items;
+        historySessionsRef.current = items;
+        setHistorySessions(items);
+        historyNextCursorRef.current = sessions.next_cursor;
+        setHistoryHasMore(sessions.has_more && !!sessions.next_cursor);
         setHistoryMoreCount(
-          sessions.has_more ? sessions.total - sessions.items.length : 0,
+          sessions.has_more ? Math.max(0, sessions.total - items.length) : 0,
         );
       } catch (error) {
-        if (requestId === historyRequestRef.current && !signal?.aborted)
-          setHistoryError("暂时无法加载会话，请重试。");
+        if (requestId !== historyRequestRef.current || signal?.aborted) return;
+        historyRetryAppendRef.current = append;
+        setHistoryError("暂时无法加载会话，请重试。");
         throw error;
       } finally {
-        if (requestId === historyRequestRef.current) setHistoryLoading(false);
+        if (requestId === historyRequestRef.current) {
+          setHistoryLoading(false);
+          setHistoryLoadingMore(false);
+          historyFetchBusyRef.current = false;
+        }
       }
     },
     [],
@@ -1115,13 +1160,65 @@ export function usePublicChat() {
       if (!csrfToken || historyActionRef.current || !pageSettings.show_history)
         return;
       historyArchivedRef.current = archived;
+      historyQueryRef.current = "";
+      historyNextCursorRef.current = null;
       setHistoryArchived(archived);
       setHistorySessions([]);
       setHistoryMoreCount(0);
+      setHistoryHasMore(false);
       await loadHistorySessions(archived, csrfToken);
     },
     [loadHistorySessions, pageSettings.show_history],
   );
+
+  const searchHistory = useCallback(
+    async (query: string) => {
+      const normalized = query.trim();
+      const csrfToken = csrfRef.current;
+      if (
+        !csrfToken ||
+        !pageSettings.show_history ||
+        historyActionRef.current ||
+        normalized === historyQueryRef.current
+      )
+        return;
+      historyQueryRef.current = normalized;
+      historyNextCursorRef.current = null;
+      setHistoryHasMore(false);
+      await loadHistorySessions(historyArchivedRef.current, csrfToken);
+    },
+    [loadHistorySessions, pageSettings.show_history],
+  );
+
+  const loadMoreHistory = useCallback(async () => {
+    const csrfToken = csrfRef.current;
+    if (
+      !csrfToken ||
+      !pageSettings.show_history ||
+      historyActionRef.current ||
+      historyFetchBusyRef.current ||
+      !historyNextCursorRef.current
+    )
+      return;
+    await loadHistorySessions(
+      historyArchivedRef.current,
+      csrfToken,
+      undefined,
+      true,
+    );
+  }, [loadHistorySessions, pageSettings.show_history]);
+
+  const retryHistory = useCallback(async () => {
+    const csrfToken = csrfRef.current;
+    if (!csrfToken || historyFetchBusyRef.current || historyActionRef.current)
+      return;
+    await loadHistorySessions(
+      historyArchivedRef.current,
+      csrfToken,
+      undefined,
+      historyRetryAppendRef.current && !!historyNextCursorRef.current,
+    );
+  }, [loadHistorySessions]);
 
   const updateHistoryConversation = useCallback(
     async (selectedConversationId: string, archived?: boolean) => {
@@ -1377,6 +1474,48 @@ export function usePublicChat() {
     [pageSettings.allow_source_download],
   );
 
+  const readReference = useCallback(
+    async (
+      turnConversationId: string,
+      traceId: string,
+      referenceId: string,
+    ): Promise<string> => {
+      const csrfToken = csrfRef.current;
+      if (!csrfToken) throw new Error("登录已过期，请重新登录后查看来源。");
+      const blob = await getPublicNaturalSource({
+        conversationId: turnConversationId,
+        traceId,
+        referenceId,
+        csrfToken,
+      });
+      if (!blob.type.startsWith("text/"))
+        throw new Error("这份来源暂不支持在线预览，请下载原件查看。");
+      return blob.text();
+    },
+    [],
+  );
+
+  const ensureTurnAccess = useCallback(
+    async (turn: PublicTurn): Promise<void> => {
+      const csrfToken = csrfRef.current;
+      if (!csrfToken || !turn.traceId)
+        throw new Error("请重新打开这条回答后再试。");
+      const history = await getPublicNaturalHistory({
+        conversationId: turn.conversationId,
+        csrfToken,
+      });
+      const current = history.find((item) => item.trace_id === turn.traceId);
+      if (
+        !current ||
+        current.status !== "completed" ||
+        !current.answer?.trim()
+      ) {
+        throw new Error("这条回答尚未完成或已不可访问，请刷新后再试。");
+      }
+    },
+    [],
+  );
+
   const logout = useCallback(() => {
     const csrfToken = csrfRef.current;
     if (!csrfToken || !user) return;
@@ -1417,6 +1556,8 @@ export function usePublicChat() {
     conversationId,
     deploymentId,
     downloadReference,
+    readReference,
+    ensureTurnAccess,
     feedbackDetailsEnabled,
     workbenchEnabled,
     pageSettings,
@@ -1424,9 +1565,14 @@ export function usePublicChat() {
     historyMoreCount,
     historyArchived,
     historyLoading,
+    historyLoadingMore,
+    historyHasMore,
     historyActionBusy,
     historyError,
     changeHistoryView,
+    searchHistory,
+    loadMoreHistory,
+    retryHistory,
     archiveHistory,
     deleteHistory,
     loggedOut,

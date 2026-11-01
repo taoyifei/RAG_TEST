@@ -396,12 +396,23 @@ export async function getPublicNaturalSessions(options: {
   csrfToken: string;
   signal?: AbortSignal;
   archived?: boolean;
+  query?: string;
+  cursor?: string;
+  limit?: number;
 }): Promise<{
   items: PublicNaturalSession[];
   has_more: boolean;
   total: number;
+  next_cursor: string | null;
 }> {
-  const path = `/api/public/conversations${options.archived ? "?archived=true" : ""}`;
+  const parameters = new URLSearchParams();
+  if (options.archived) parameters.set("archived", "true");
+  if (options.query?.trim()) parameters.set("query", options.query.trim());
+  if (options.cursor) parameters.set("cursor", options.cursor);
+  if (options.limit !== undefined)
+    parameters.set("limit", String(options.limit));
+  const suffix = parameters.size ? `?${parameters}` : "";
+  const path = `/api/public/conversations${suffix}`;
   const response = await fetch(withAppBase(path), {
     credentials: "same-origin",
     headers: {
@@ -414,11 +425,13 @@ export async function getPublicNaturalSessions(options: {
     items: PublicNaturalSession[];
     has_more?: boolean;
     total?: number;
+    next_cursor?: string | null;
   }>(response);
   return {
     items: body.items,
     has_more: body.has_more === true,
     total: body.total ?? body.items.length,
+    next_cursor: body.next_cursor ?? null,
   };
 }
 

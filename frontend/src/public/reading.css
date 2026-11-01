@@ -1,0 +1,234 @@
+/* 仅作用于引用阅读和图片预览，颜色沿用当前问答主题。 */
+.wst-root {
+  --wst-reference-width: min(440px, 40vw);
+}
+.wst-reading-layer {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  pointer-events: none;
+}
+.wst-reading-panel {
+  position: absolute;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  color: inherit;
+  background: var(--wst-panel, #1d1f20);
+  pointer-events: auto;
+}
+.wst-reading-panel:focus-visible {
+  outline: 2px solid var(--wst-accent, #31d7b3);
+  outline-offset: -3px;
+}
+.wst-reading-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: rgb(0 0 0 / 58%);
+  pointer-events: auto;
+}
+.wst-reference-panel {
+  inset: 56px 0 0 auto;
+  width: var(--wst-reference-width, 440px);
+  border-left: 1px solid var(--wst-border, #555);
+  box-shadow: -10px 0 36px rgb(0 0 0 / 10%);
+  animation: wst-reading-slide 180ms ease-out;
+}
+.wst-reading-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--wst-border, #555);
+}
+.wst-reading-header > div {
+  min-width: 0;
+}
+.wst-reading-eyebrow {
+  margin: 0 0 5px;
+  color: var(--wst-muted, #a3aaa8);
+  font-size: 12px;
+}
+.wst-reading-header h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 17px;
+  line-height: 1.5;
+}
+.wst-reading-close {
+  display: inline-flex;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  color: inherit;
+  background: transparent;
+}
+.wst-reading-close:hover {
+  background: var(--wst-sidebar-active, rgb(128 150 140 / 18%));
+}
+.wst-reading-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px;
+  scrollbar-gutter: stable;
+  line-height: 1.8;
+}
+.wst-reading-location,
+.wst-reading-muted {
+  color: var(--wst-muted, #a3aaa8);
+  font-size: 13px;
+}
+.wst-reading-location {
+  margin: 0 0 18px;
+}
+.wst-reading-body h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.wst-reference-excerpt {
+  margin-bottom: 24px;
+}
+.wst-reference-excerpt blockquote {
+  margin: 0;
+  padding: 12px 14px;
+  border-left: 3px solid var(--wst-accent, #31d7b3);
+  border-radius: 0 10px 10px 0;
+  background: var(--wst-panel-raised, #222526);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+.wst-reference-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+.wst-reading-error {
+  padding: 14px;
+  border: 1px solid var(--wst-border, #555);
+  border-radius: 12px;
+}
+.wst-reading-error p {
+  margin: 0 0 10px;
+}
+.wst-reading-error button {
+  min-height: 38px;
+  padding: 7px 12px;
+  border: 1px solid var(--wst-border, #555);
+  border-radius: 8px;
+  color: inherit;
+  background: var(--wst-panel-raised, #222526);
+}
+.wst-citation-document-open {
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.wst-citation-document-open:hover {
+  color: var(--wst-accent, #31d7b3);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.wst-answer-image-button {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: zoom-in;
+}
+.wst-image-panel {
+  inset: max(18px, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom))
+    max(24px, env(safe-area-inset-left));
+  border: 1px solid var(--wst-border, #555);
+  border-radius: 16px;
+  box-shadow: 0 20px 80px rgb(0 0 0 / 35%);
+}
+.wst-image-canvas {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 18px;
+}
+.wst-image-canvas img {
+  display: block;
+  max-width: 100%;
+  min-height: 0;
+  max-height: 100%;
+  object-fit: contain;
+}
+.wst-image-canvas img.is-unavailable {
+  display: none;
+}
+.wst-reading-close:focus-visible,
+.wst-citation-document-open:focus-visible,
+.wst-answer-image-button:focus-visible,
+.wst-reading-error button:focus-visible {
+  outline: 2px solid var(--wst-accent, #31d7b3);
+  outline-offset: 3px;
+}
+@media (min-width: 1101px) {
+  .wst-root:has(> .wst-reference-reading-layer) .wst-app-layout {
+    padding-right: var(--wst-reference-width);
+  }
+}
+@media (max-width: 1100px) {
+  .wst-reference-panel {
+    inset: max(10px, env(safe-area-inset-top)) 10px
+      max(10px, env(safe-area-inset-bottom));
+    width: auto;
+    border: 1px solid var(--wst-border, #555);
+    border-radius: 14px;
+  }
+  .wst-image-panel {
+    inset: max(10px, env(safe-area-inset-top)) 10px
+      max(10px, env(safe-area-inset-bottom));
+  }
+  .wst-reading-header,
+  .wst-reading-body {
+    padding: 16px;
+  }
+}
+@keyframes wst-reading-slide {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wst-reference-panel {
+    animation: none;
+  }
+}

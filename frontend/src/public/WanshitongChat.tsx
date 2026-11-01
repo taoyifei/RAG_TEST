@@ -39,6 +39,12 @@ type ChatProps = PublicSearchSelectionProps & {
     documentName: string,
     original?: boolean,
   ) => Promise<void>;
+  onReadReference?: (
+    conversationId: string,
+    traceId: string,
+    referenceId: string,
+  ) => Promise<string>;
+  beforeExport?: (turn: PublicTurn) => Promise<void>;
   onPopularQuestionSubmit: (question: PublicPopularQuestion) => void;
   onRefresh: () => void;
   onRetry: (turnId: string, question: string, conversationId: string) => void;
@@ -63,6 +69,8 @@ const ChatTurn = memo(function ChatTurn({
   onFeedback,
   onFeedbackLogin,
   onDownloadReference,
+  onReadReference,
+  beforeExport,
   onRetry,
   onRecover,
 }: Pick<
@@ -73,6 +81,8 @@ const ChatTurn = memo(function ChatTurn({
   | "onFeedback"
   | "onFeedbackLogin"
   | "onDownloadReference"
+  | "onReadReference"
+  | "beforeExport"
   | "onRetry"
   | "onRecover"
 > & { turn: PublicTurn }) {
@@ -102,6 +112,13 @@ const ChatTurn = memo(function ChatTurn({
                 )
             : undefined
         }
+        onReadReference={
+          turn.traceId && onReadReference
+            ? (referenceId) =>
+                onReadReference(turn.conversationId, turn.traceId!, referenceId)
+            : undefined
+        }
+        beforeExport={beforeExport ? () => beforeExport(turn) : undefined}
         onRetry={() => onRetry(turn.id, turn.question, turn.conversationId)}
         onRecover={
           onRecover
@@ -130,6 +147,8 @@ export function WanshitongChat({
   onFeedback,
   onFeedbackLogin,
   onDownloadReference,
+  onReadReference,
+  beforeExport,
   onPopularQuestionSubmit,
   onRefresh,
   onRetry,
@@ -166,6 +185,8 @@ export function WanshitongChat({
                   onFeedback={onFeedback}
                   onFeedbackLogin={onFeedbackLogin}
                   onDownloadReference={onDownloadReference}
+                  onReadReference={onReadReference}
+                  beforeExport={beforeExport}
                   onRetry={onRetry}
                   onRecover={onRecover}
                 />

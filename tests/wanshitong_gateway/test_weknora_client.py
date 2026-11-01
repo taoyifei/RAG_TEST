@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -12,6 +13,97 @@ from wanshitong_gateway.weknora.client import (
     WeKnoraClient,
 )
 from wanshitong_gateway.weknora.principal import ExternalPrincipalSigner
+
+
+@pytest.mark.asyncio
+async def test_session_search_reads_all_native_pages_with_signed_owner() -> (
+    None
+):
+    """一次完整标题搜索使用批量列表，不逐个读取会话或请求管理来源视图。"""
+    sessions = [
+        {"id": f"s-{index}", "title": "审批标题"} for index in range(1001)
+    ]
+    requests: list[httpx.Request] = []
+    signer = ExternalPrincipalSigner(
+        secret="test-signing",  # noqa: S106
+        tenant_id=9,
+        deployment_id="candidate",
+        clock=lambda: 1000.0,
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/sessions"
+        assert request.headers["X-API-Key"] == "test-only-key"
+        assert request.headers["X-External-User-Token"] == signer.sign("user-1")
+        assert request.url.params["keyword"] == "审批"
+        assert "source" not in request.url.params
+        page = int(request.url.params["page"])
+        size = int(request.url.params["page_size"])
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": sessions[(page - 1) * size : page * size],
+                "total": len(sessions),
+            },
+        )
+
+    client = WeKnoraClient(
+        base_url="http://native.test:8080",
+        api_key="test-only-key",
+        signer=signer,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        assert (
+            await client.list_sessions(user_id="user-1", keyword="审批")
+            == sessions
+        )
+    finally:
+        await client.close()
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,payload",
+    [
+        (403, {"success": False}),
+        (503, {"success": False}),
+        (200, {"success": True, "data": {}, "total": 1}),
+        (200, {"success": True, "data": [{"title": "无ID"}], "total": 1}),
+        (200, {"success": True, "data": [], "total": True}),
+        (200, {"success": True, "data": [], "total": -1}),
+    ],
+)
+async def test_session_search_does_not_hide_native_error_or_invalid_shape(
+    status: int, payload: dict[str, Any]
+) -> None:
+    client = _message_client(
+        lambda _request: httpx.Response(status, json=payload)
+    )
+    try:
+        with pytest.raises(NativeHttpError):
+            await client.list_sessions(user_id="user-1")
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_search_rejects_native_page_without_progress() -> None:
+    batch = [{"id": f"s-{index}", "title": "标题"} for index in range(1000)]
+    client = _message_client(
+        lambda _request: httpx.Response(
+            200, json={"success": True, "data": batch, "total": 1001}
+        )
+    )
+    try:
+        with pytest.raises(NativeHttpError, match="没有前进"):
+            await client.list_sessions(user_id="user-1")
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
