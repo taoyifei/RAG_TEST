@@ -9,11 +9,13 @@ export function ImagePreview({
   alt,
   onClose,
   returnFocusTo,
+  returnFocusFallback,
 }: {
   src: string;
   alt: string;
   onClose: () => void;
   returnFocusTo?: HTMLElement | null;
+  returnFocusFallback?: () => HTMLElement | null;
 }) {
   const [attempt, setAttempt] = useState(0);
   const [status, setStatus] = useState<"loading" | "ready" | "error">(
@@ -26,6 +28,7 @@ export function ImagePreview({
       modal
       onClose={onClose}
       returnFocusTo={returnFocusTo}
+      returnFocusFallback={returnFocusFallback}
     >
       <header className="wst-reading-header">
         <div>
@@ -45,7 +48,9 @@ export function ImagePreview({
         {status === "loading" && <p role="status">正在显示图片…</p>}
         {status === "error" && (
           <div className="wst-reading-error" role="alert">
-            <p>图片暂时无法显示，可以重新加载；访问权限变化后请重新提问。</p>
+            <p>
+              图片暂时无法显示，可以重新加载；若资料或权限已变化，请刷新页面。
+            </p>
             <button
               onClick={() => {
                 setStatus("loading");

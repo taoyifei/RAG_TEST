@@ -30,6 +30,8 @@ export function ReadingOverlay({
   modal,
   onClose,
   returnFocusTo,
+  returnFocusFallback,
+  suspended = false,
 }: {
   children: ReactNode;
   kind: "reference" | "image";
@@ -37,6 +39,8 @@ export function ReadingOverlay({
   modal: boolean;
   onClose: () => void;
   returnFocusTo?: HTMLElement | null;
+  returnFocusFallback?: () => HTMLElement | null;
+  suspended?: boolean;
 }) {
   const [host] = useState(() =>
     typeof document === "undefined"
@@ -49,12 +53,16 @@ export function ReadingOverlay({
   const panelRef = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
   const modalRef = useRef(modal);
+  const suspendedRef = useRef(suspended);
   const restoreFocus = useRef(true);
+  const fallbackFocusRef = useRef(returnFocusFallback);
 
   useLayoutEffect(() => {
     closeRef.current = onClose;
     modalRef.current = modal;
-  }, [onClose, modal]);
+    suspendedRef.current = suspended;
+    fallbackFocusRef.current = returnFocusFallback;
+  }, [onClose, modal, suspended, returnFocusFallback]);
   useEffect(() => {
     if (!host) return;
     const panel = panelRef.current;
@@ -63,6 +71,7 @@ export function ReadingOverlay({
     const focusFirst = () => (controlsWithin(panel)[0] ?? panel).focus();
     focusFirst();
     const outside = (event: Event) => {
+      if (suspendedRef.current) return;
       if (!(event.target instanceof Node) || panel.contains(event.target))
         return;
       if (modalRef.current) return;
@@ -70,7 +79,7 @@ export function ReadingOverlay({
       closeRef.current();
     };
     const handleKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || suspendedRef.current) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -107,6 +116,7 @@ export function ReadingOverlay({
       }
     };
     const handleFocus = (event: FocusEvent) => {
+      if (suspendedRef.current) return;
       if (
         modalRef.current &&
         event.target instanceof Node &&
@@ -125,10 +135,16 @@ export function ReadingOverlay({
       document.removeEventListener("focusin", handleFocus, true);
       document.removeEventListener("keydown", handleKey, true);
       // 等其他清理恢复 inert 后再还焦点；外部点击继续完成自己的动作。
-      if (restoreFocus.current && previous instanceof HTMLElement) {
+      if (restoreFocus.current) {
         queueMicrotask(() => {
-          if (previous.isConnected && !previous.closest("[inert]")) {
-            previous.focus({ preventScroll: true });
+          const target =
+            previous instanceof HTMLElement &&
+            previous.isConnected &&
+            !previous.closest("[inert]")
+              ? previous
+              : fallbackFocusRef.current?.();
+          if (target?.isConnected && !target.closest("[inert]")) {
+            target.focus({ preventScroll: true });
           }
         });
       }
@@ -136,7 +152,8 @@ export function ReadingOverlay({
   }, [host, returnFocusTo]);
 
   useEffect(() => {
-    if (!host || !modal) return;
+    // 查看大图时，来源层暂停隔离和键盘处理；由图片层独占一次滚动/焦点锁。
+    if (!host || !modal || suspended) return;
     const previousOverflow = document.body.style.overflow;
     const siblings = [...host.children].filter(
       (element): element is HTMLElement =>
@@ -153,7 +170,7 @@ export function ReadingOverlay({
         if (!priorInert[index]) element.removeAttribute("inert");
       });
     };
-  }, [host, modal]);
+  }, [host, modal, suspended]);
 
   if (!host) return null;
   return createPortal(
@@ -172,10 +189,12 @@ export function ReadingOverlay({
       )}
       <section
         aria-label={label}
-        aria-modal={modal || undefined}
+        aria-modal={(!suspended && modal) || undefined}
+        aria-hidden={suspended || undefined}
         className={`wst-reading-panel wst-${kind}-panel`}
         ref={panelRef}
         role="dialog"
+        inert={suspended || undefined}
         tabIndex={-1}
       >
         {children}

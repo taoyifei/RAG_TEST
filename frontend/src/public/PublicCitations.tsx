@@ -2,6 +2,7 @@ import type { PublicCitation } from "./publicSse";
 import { useCallback, useState } from "react";
 
 import { ReferenceDrawer } from "./ReferenceDrawer";
+import type { PublicNaturalImageContext } from "./publicApi";
 
 interface CitationGroup {
   key: string;
@@ -59,6 +60,7 @@ export function PublicCitations({
   citations,
   onDownloadReference,
   onReadReference,
+  imageContext,
 }: {
   allowSourceDownload?: boolean;
   citations: PublicCitation[];
@@ -68,6 +70,7 @@ export function PublicCitations({
     original?: boolean,
   ) => Promise<void>;
   onReadReference?: (referenceId: string) => Promise<string>;
+  imageContext?: PublicNaturalImageContext;
 }) {
   const [downloadError, setDownloadError] = useState<string>();
   const [reading, setReading] = useState<{
@@ -233,6 +236,7 @@ export function PublicCitations({
           key={`${reading.citation.reference_id ?? reading.citation.document_name}:${reading.citation.locator ?? ""}`}
           onClose={closeReading}
           onReadReference={onReadReference}
+          imageContext={imageContext}
           returnFocusTo={reading.trigger}
         />
       )}

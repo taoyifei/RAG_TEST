@@ -8,6 +8,9 @@
   inset: 0;
   pointer-events: none;
 }
+.wst-image-reading-layer {
+  z-index: 130;
+}
 .wst-reading-panel {
   position: absolute;
   display: flex;
@@ -181,6 +184,48 @@
 .wst-source-image-hint {
   color: var(--wst-muted, #a3aaa8);
   font-size: 13px;
+}
+.wst-source-image {
+  display: block;
+  margin: 12px 0;
+}
+.wst-source-image-button {
+  display: block;
+  max-width: 100%;
+  margin-bottom: 5px;
+  padding: 0;
+  border: 1px solid var(--wst-border, #555);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--wst-panel-raised, #222526);
+  cursor: zoom-in;
+}
+.wst-source-image-button img {
+  display: block;
+  max-width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+}
+.wst-source-image-button:focus-visible,
+.wst-source-image-error button:focus-visible {
+  outline: 2px solid var(--wst-accent, #31d7b3);
+  outline-offset: 3px;
+}
+.wst-source-image-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--wst-muted, #a3aaa8);
+  font-size: 13px;
+}
+.wst-source-image-error button {
+  min-height: 34px;
+  padding: 5px 10px;
+  border: 1px solid var(--wst-border, #555);
+  border-radius: 7px;
+  color: inherit;
+  background: var(--wst-panel-raised, #222526);
 }
 .wst-source-table-scroll {
   max-width: 100%;

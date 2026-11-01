@@ -327,6 +327,52 @@ it("答案把来源读取回调透传到阅读抽屉", async () => {
   expect(reader).toHaveBeenCalledExactlyOnceWith("ref-1");
 });
 
+it("回答没有配图时，引用独有图片仍透传本条会话身份并可放大", async () => {
+  const user = userEvent.setup();
+  const reader = vi
+    .fn()
+    .mockResolvedValue("![引用独有示意图](resource://citation-only-figure)");
+  render(
+    <PublicAnswer
+      onFeedback={vi.fn()}
+      onRetry={vi.fn()}
+      onReadReference={reader}
+      turn={{
+        ...completedTurn("请按指引操作。"),
+        conversationId: "citation-session",
+        traceId: "citation-trace",
+        citations: [
+          {
+            document_name: "操作说明",
+            reference_id: "source-reference",
+            source_available: true,
+            source_kind: "weknora",
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByRole("button", { name: "阅读来源：操作说明" }));
+  const source = screen.getByRole("dialog", { name: "来源阅读：操作说明" });
+  const thumb = await within(source).findByRole("img", {
+    name: "引用独有示意图",
+  });
+  const url =
+    "/api/public/conversations/citation-session/turns/citation-trace/resources?file_path=resource%3A%2F%2Fcitation-only-figure";
+  expect(thumb).toHaveAttribute("src", url);
+  await user.click(
+    within(source).getByRole("button", { name: "放大图片：引用独有示意图" }),
+  );
+  expect(
+    within(screen.getByRole("dialog", { name: "图片预览" })).getByRole("img"),
+  ).toHaveAttribute("src", url);
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog")).toBe(source);
+  expect(reader).toHaveBeenCalledExactlyOnceWith("source-reference");
+});
+
 it("完成答案的静态渲染不挂载浮层或启动原文读取", () => {
   const reader = vi.fn().mockResolvedValue("不应读取");
   const html = renderToString(

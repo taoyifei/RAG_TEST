@@ -6,7 +6,6 @@ import ReactMarkdown, {
 } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { withAppBase } from "../app/basePath";
 import { PublicCitations } from "./PublicCitations";
 import { AnswerActions } from "./AnswerActions";
 import { ImagePreview } from "./ImagePreview";
@@ -14,7 +13,10 @@ import { PublicFeedback } from "./PublicFeedback";
 import { PublicProcess } from "./PublicProcess";
 import { nativeCitationDisplay } from "./nativeCitationDisplay";
 import { PUBLIC_STAGE_LABELS } from "./publicSse";
-import type { PublicFeedbackSubmission } from "./publicApi";
+import {
+  publicNaturalImageUrl,
+  type PublicFeedbackSubmission,
+} from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
 
 const PROGRESS_STAGES = [
@@ -101,12 +103,10 @@ const MarkdownAnswer = memo(function MarkdownAnswer({
           if (!turn.traceId || turn.status !== "completed") {
             return <span>{alt}</span>;
           }
-          const path =
-            `/api/public/conversations/${encodeURIComponent(turn.conversationId)}` +
-            `/turns/${encodeURIComponent(turn.traceId)}/resources` +
-            `?file_path=${encodeURIComponent(src)}`;
-          imageSource =
-            typeof window === "undefined" ? path : withAppBase(path);
+          imageSource = publicNaturalImageUrl(
+            { conversationId: turn.conversationId, traceId: turn.traceId },
+            src,
+          );
         }
         return (
           <button
@@ -336,6 +336,14 @@ export function PublicAnswer({
               citations={turn.citations}
               onDownloadReference={onDownloadReference}
               onReadReference={onReadReference}
+              imageContext={
+                turn.traceId && turn.status === "completed"
+                  ? {
+                      conversationId: turn.conversationId,
+                      traceId: turn.traceId,
+                    }
+                  : undefined
+              }
             />
           </>
         )}

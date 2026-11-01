@@ -164,6 +164,23 @@ export interface PublicNaturalSession {
   archived?: boolean;
 }
 
+export interface PublicNaturalImageContext {
+  conversationId: string;
+  traceId: string;
+}
+
+/** 回答与引用配图共用本人会话的资源接口，服务端再次核对资料权限。 */
+export function publicNaturalImageUrl(
+  context: PublicNaturalImageContext,
+  resource: string,
+): string {
+  const path =
+    `/api/public/conversations/${encodeURIComponent(context.conversationId)}` +
+    `/turns/${encodeURIComponent(context.traceId)}/resources` +
+    `?file_path=${encodeURIComponent(resource)}`;
+  return typeof window === "undefined" ? path : withAppBase(path);
+}
+
 async function readError(response: Response): Promise<PublicApiError> {
   let body: PublicErrorBody = {};
   try {

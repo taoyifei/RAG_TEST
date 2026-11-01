@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -8,7 +9,10 @@ import {
 } from "react";
 
 import { ReadingOverlay } from "./ReadingOverlay";
+import { ImagePreview } from "./ImagePreview";
 import { SourceText, sourceDisplayText } from "./SourceText";
+import type { SourceImagePreview } from "./SourceText";
+import type { PublicNaturalImageContext } from "./publicApi";
 import type { PublicCitation } from "./publicSse";
 
 const COMPACT_READING = "(max-width: 1100px)";
@@ -33,10 +37,14 @@ function ReferenceContent({
   quote,
   result,
   onRetry,
+  imageContext,
+  onPreviewImage,
 }: {
   quote?: string;
   result: SourceResult;
   onRetry?: () => void;
+  imageContext?: PublicNaturalImageContext;
+  onPreviewImage: (image: SourceImagePreview) => void;
 }) {
   const sameText =
     result.status === "ready" &&
@@ -48,7 +56,11 @@ function ReferenceContent({
         <section aria-label="本次引用片段" className="wst-reference-excerpt">
           <h3>本次引用片段</h3>
           <blockquote>
-            <SourceText text={quote} />
+            <SourceText
+              text={quote}
+              imageContext={imageContext}
+              onPreviewImage={onPreviewImage}
+            />
           </blockquote>
         </section>
       )}
@@ -65,7 +77,11 @@ function ReferenceContent({
         )}
         {result.status === "ready" &&
           (result.text.trim() ? (
-            <SourceText text={result.text} />
+            <SourceText
+              text={result.text}
+              imageContext={imageContext}
+              onPreviewImage={onPreviewImage}
+            />
           ) : (
             <p className="wst-reading-muted">
               这条引用暂未提供更多原文，可以先参考上方片段。
@@ -86,11 +102,15 @@ function ReferenceText({
   reader,
   onRetry,
   quote,
+  imageContext,
+  onPreviewImage,
 }: {
   referenceId: string;
   reader: (referenceId: string) => Promise<string>;
   onRetry: () => void;
   quote?: string;
+  imageContext?: PublicNaturalImageContext;
+  onPreviewImage: (image: SourceImagePreview) => void;
 }) {
   const [result, setResult] = useState<SourceResult>({ status: "loading" });
   const readerRef = useRef(reader);
@@ -112,7 +132,15 @@ function ReferenceText({
     };
   }, [referenceId]);
 
-  return <ReferenceContent quote={quote} result={result} onRetry={onRetry} />;
+  return (
+    <ReferenceContent
+      quote={quote}
+      result={result}
+      onRetry={onRetry}
+      imageContext={imageContext}
+      onPreviewImage={onPreviewImage}
+    />
+  );
 }
 
 /** 只展示本次引用的实际定位与受保护来源，不把片段冒充整份文档。 */
@@ -121,11 +149,13 @@ export function ReferenceDrawer({
   onClose,
   onReadReference,
   returnFocusTo,
+  imageContext,
 }: {
   citation: PublicCitation;
   onClose: () => void;
   onReadReference?: (referenceId: string) => Promise<string>;
   returnFocusTo?: HTMLElement | null;
+  imageContext?: PublicNaturalImageContext;
 }) {
   const compact = useSyncExternalStore(
     subscribeViewport,
@@ -133,6 +163,22 @@ export function ReferenceDrawer({
     () => false,
   );
   const [attempt, setAttempt] = useState(0);
+  const [preview, setPreview] = useState<SourceImagePreview>();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const returnToSource = useCallback(() => {
+    const close = closeButtonRef.current;
+    const panel = close?.closest(".wst-reference-panel");
+    // 原文完成加载或缩略图读取失败时，原按钮可能已被替换。
+    const matching = panel?.querySelectorAll<HTMLButtonElement>(
+      ".wst-source-image-button",
+    );
+    return (
+      [...(matching ?? [])].find(
+        (button) =>
+          button.querySelector("img")?.getAttribute("src") === preview?.src,
+      ) ?? close
+    );
+  }, [preview?.src]);
   const title = sourceDisplayText(
     citation.document_title?.trim() || citation.document_name,
   );
@@ -141,48 +187,65 @@ export function ReferenceDrawer({
     citation.reference_id &&
     onReadReference;
   return (
-    <ReadingOverlay
-      kind="reference"
-      label={`来源阅读：${title}`}
-      modal={compact}
-      onClose={onClose}
-      returnFocusTo={returnFocusTo}
-    >
-      <header className="wst-reading-header">
-        <div>
-          <p className="wst-reading-eyebrow">来源阅读</p>
-          <h2>{title}</h2>
+    <>
+      <ReadingOverlay
+        kind="reference"
+        label={`来源阅读：${title}`}
+        modal={compact}
+        onClose={onClose}
+        returnFocusTo={returnFocusTo}
+        suspended={Boolean(preview)}
+      >
+        <header className="wst-reading-header">
+          <div>
+            <p className="wst-reading-eyebrow">来源阅读</p>
+            <h2>{title}</h2>
+          </div>
+          <button
+            aria-label="关闭来源阅读"
+            className="wst-reading-close"
+            ref={closeButtonRef}
+            onClick={onClose}
+            type="button"
+          >
+            <X aria-hidden="true" size={20} />
+          </button>
+        </header>
+        <div className="wst-reading-body">
+          {citation.locator && (
+            <p className="wst-reading-location">
+              {sourceDisplayText(citation.locator)}
+            </p>
+          )}
+          {readable && citation.reference_id && onReadReference ? (
+            <ReferenceText
+              key={`${citation.reference_id}:${attempt}`}
+              onRetry={() => setAttempt((value) => value + 1)}
+              reader={onReadReference}
+              referenceId={citation.reference_id}
+              quote={citation.quote}
+              imageContext={imageContext}
+              onPreviewImage={setPreview}
+            />
+          ) : (
+            <ReferenceContent
+              quote={citation.quote}
+              result={{ status: "unavailable" }}
+              imageContext={imageContext}
+              onPreviewImage={setPreview}
+            />
+          )}
         </div>
-        <button
-          aria-label="关闭来源阅读"
-          className="wst-reading-close"
-          onClick={onClose}
-          type="button"
-        >
-          <X aria-hidden="true" size={20} />
-        </button>
-      </header>
-      <div className="wst-reading-body">
-        {citation.locator && (
-          <p className="wst-reading-location">
-            {sourceDisplayText(citation.locator)}
-          </p>
-        )}
-        {readable && citation.reference_id && onReadReference ? (
-          <ReferenceText
-            key={`${citation.reference_id}:${attempt}`}
-            onRetry={() => setAttempt((value) => value + 1)}
-            reader={onReadReference}
-            referenceId={citation.reference_id}
-            quote={citation.quote}
-          />
-        ) : (
-          <ReferenceContent
-            quote={citation.quote}
-            result={{ status: "unavailable" }}
-          />
-        )}
-      </div>
-    </ReadingOverlay>
+      </ReadingOverlay>
+      {preview && (
+        <ImagePreview
+          src={preview.src}
+          alt={preview.alt}
+          onClose={() => setPreview(undefined)}
+          returnFocusTo={preview.trigger}
+          returnFocusFallback={returnToSource}
+        />
+      )}
+    </>
   );
 }

@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -26,10 +27,12 @@ function Harness({
   reader,
   source = citation,
   onOutside = vi.fn(),
+  images = false,
 }: {
   reader: (referenceId: string) => Promise<string>;
   source?: PublicCitation;
   onOutside?: () => void;
+  images?: boolean;
 }) {
   const [trigger, setTrigger] = useState<HTMLElement>();
   return (
@@ -52,6 +55,11 @@ function Harness({
           onClose={() => setTrigger(undefined)}
           onReadReference={reader}
           returnFocusTo={trigger}
+          imageContext={
+            images
+              ? { conversationId: "reading-session", traceId: "reading-trace" }
+              : undefined
+          }
         />
       )}
     </div>
@@ -260,4 +268,184 @@ it("窄屏隔离背景和锁定滚动，Tab与Esc关闭后恢复原焦点和滚�
   expect(screen.getByTestId("background")).not.toHaveAttribute("inert");
   expect(document.body.style.overflow).toBe("scroll");
   await waitFor(() => expect(trigger).toHaveFocus());
+});
+
+it.each([false, true])(
+  "来源上打开大图后只关闭最顶层并恢复原文位置（窄屏=%s）",
+  async (compact) => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: compact,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    document.body.style.overflow = "scroll";
+    const user = userEvent.setup();
+    render(
+      <Harness
+        reader={() =>
+          Promise.resolve("![菜单图](resource://figures/guide.png)")
+        }
+        images
+      />,
+    );
+    const entry = screen.getByRole("button", { name: "阅读这条来源" });
+    await user.click(entry);
+    const source = screen.getByRole("dialog", {
+      name: "来源阅读：委托单操作指引.docx",
+    });
+    const scroll = source.querySelector<HTMLElement>(".wst-reading-body")!;
+    scroll.scrollTop = 140;
+    const imageButton = await screen.findByRole("button", {
+      name: "放大图片：菜单图",
+    });
+    await user.click(imageButton);
+    const large = screen.getByRole("dialog", { name: "图片预览" });
+    expect(source).toBeInTheDocument();
+    expect(source).toHaveAttribute("aria-hidden", "true");
+    expect(source).toHaveAttribute("inert");
+    expect(within(large).getByRole("img")).toHaveAttribute(
+      "src",
+      expect.stringContaining(
+        "/conversations/reading-session/turns/reading-trace/resources?",
+      ),
+    );
+    expect(screen.getByRole("button", { name: "关闭图片预览" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "关闭图片预览" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("dialog", { name: "图片预览" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBe(source);
+    expect(source).not.toHaveAttribute("inert");
+    expect(scroll.scrollTop).toBe(140);
+    await waitFor(() => expect(imageButton).toHaveFocus());
+    expect(document.body.style.overflow).toBe(compact ? "hidden" : "scroll");
+    expect(screen.getByTestId("background").hasAttribute("inert")).toBe(
+      compact,
+    );
+    await user.click(imageButton);
+    await user.pointer({
+      keys: "[TouchA]",
+      target: screen.getByRole("button", { name: "关闭图片预览遮罩" }),
+    });
+    expect(screen.getByRole("dialog")).toBe(source);
+    await waitFor(() => expect(imageButton).toHaveFocus());
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("scroll");
+    expect(screen.getByTestId("background")).not.toHaveAttribute("inert");
+    await waitFor(() => expect(entry).toHaveFocus());
+  },
+);
+
+it("看大图时跨屏幕尺寸或整段卸载，不留下焦点隔离与滚动锁", async () => {
+  let compact = true;
+  const listeners = new Set<() => void>();
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      get matches() {
+        return compact;
+      },
+      addEventListener: (_: string, listener: () => void) =>
+        listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) =>
+        listeners.delete(listener),
+    })),
+  );
+  document.body.style.overflow = "scroll";
+  const user = userEvent.setup();
+  const view = render(
+    <Harness
+      reader={() => Promise.resolve("![菜单图](resource://guide)")}
+      images
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "阅读这条来源" }));
+  const trigger = await screen.findByRole("button", {
+    name: "放大图片：菜单图",
+  });
+  await user.click(trigger);
+  act(() => {
+    compact = false;
+    listeners.forEach((listener) => listener());
+  });
+  expect(screen.getByRole("button", { name: "关闭图片预览" })).toHaveFocus();
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog")).not.toHaveAttribute("aria-modal");
+  expect(document.body.style.overflow).toBe("scroll");
+  expect(screen.getByTestId("background")).not.toHaveAttribute("inert");
+  act(() => {
+    compact = true;
+    listeners.forEach((listener) => listener());
+  });
+  await user.click(trigger);
+  const background = screen.getByTestId("background");
+  expect(document.body.style.overflow).toBe("hidden");
+  view.unmount();
+  expect(document.body.style.overflow).toBe("scroll");
+  expect(background).not.toHaveAttribute("inert");
+});
+
+it("看图时原文返回并合并同一片段，关闭后焦点回到新的对应图片按钮", async () => {
+  let finish!: (value: string) => void;
+  const pending = new Promise<string>((resolve) => {
+    finish = resolve;
+  });
+  const text = "![正在核对的图片](resource://loading-reference)";
+  const user = userEvent.setup();
+  render(
+    <Harness
+      reader={() => pending}
+      source={{ ...citation, quote: text }}
+      images
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "阅读这条来源" }));
+  const original = screen.getByRole("button", {
+    name: "放大图片：正在核对的图片",
+  });
+  await user.click(original);
+  await act(async () => {
+    finish(text);
+    await pending;
+  });
+  expect(original).not.toBeInTheDocument();
+  await user.keyboard("{Escape}");
+  const replacement = screen.getByRole("button", {
+    name: "放大图片：正在核对的图片",
+  });
+  expect(screen.getByRole("dialog")).toHaveAccessibleName(
+    "来源阅读：委托单操作指引.docx",
+  );
+  await waitFor(() => expect(replacement).toHaveFocus());
+});
+
+it("放大期间缩略图失效，关闭大图后仍回到来源中的有效操作", async () => {
+  const user = userEvent.setup();
+  render(
+    <Harness
+      reader={() => Promise.resolve("![稍后失效的图片](resource://expired)")}
+      images
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "阅读这条来源" }));
+  const source = screen.getByRole("dialog", {
+    name: "来源阅读：委托单操作指引.docx",
+  });
+  const trigger = await within(source).findByRole("button", {
+    name: "放大图片：稍后失效的图片",
+  });
+  const thumb = within(source).getByRole("img");
+  await user.click(trigger);
+  fireEvent.error(thumb);
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog")).toBe(source);
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "关闭来源阅读" })).toHaveFocus(),
+  );
 });
