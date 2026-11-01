@@ -105,6 +105,9 @@ class GatewayAuth:
         """认证和业务用户共用当前网关的独立数据库。"""
         if self.users is None:
             self.users = UserStore(self.settings.database_path)
+        self.users.backfill_usage_users(
+            deployment_id=self.settings.deployment_id
+        )
 
     def profile_for_principal(
         self, principal: PublicSessionPrincipal

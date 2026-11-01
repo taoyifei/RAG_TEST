@@ -67,7 +67,7 @@ export function UserRolesWorkspace({
           </button>
           <h1>用户与角色</h1>
           <p>
-            同事首次登录后会出现在这里。管理员可调整普通、人力角色；管理员任免由超级管理员处理。
+            包含已登录用户及旧版问答历史中的用户。管理员可调整普通、人力角色；管理员任免由超级管理员处理。
           </p>
         </div>
         <button
@@ -145,8 +145,12 @@ function UserRoleRow({
       <td>
         <strong>{user.display_name || user.username}</strong>
         <div className="wst-document-meta">
-          {user.username} · {user.user_id}
+          {user.username !== user.user_id ? `${user.username} · ` : ""}
+          用户 ID：{user.user_id}
         </div>
+        {user.username === user.user_id && (
+          <div className="wst-document-meta">登录账号待本人下次登录同步</div>
+        )}
       </td>
       <td>{user.dept_id ? `部门 ID：${user.dept_id}` : "登录系统暂未提供"}</td>
       <td>

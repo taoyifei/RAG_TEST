@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -19,6 +20,7 @@ from wanshitong_gateway.compat.wanshitong.sso_session import (
 )
 from wanshitong_gateway.roles import Role, UserProfile
 from wanshitong_gateway.settings import GatewayAuthSettings
+from wanshitong_gateway.store import GatewayStore
 from wanshitong_gateway.weknora.client import NativeHttpError
 
 _ORIGIN = "http://candidate.test:8289"
@@ -294,6 +296,90 @@ def test_taoyifei_sso_admin_uses_console_and_keeps_department(
         == 204
     )
     assert browser.get("/kb/api/v1/console/session").status_code == 401
+
+
+def test_startup_backfills_history_users_for_role_api_and_sso_enrichment(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_auth, _original_browser = gateway
+    database = original_auth.settings.database_path
+    GatewayStore(database)
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            "INSERT INTO gateway_turns "
+            "(trace_id,deployment_id,owner_id,asker_name,created_at,"
+            "conversation_id,native_session_id,question,status) "
+            "VALUES (?,'candidate_8289',?,?,'2026-10-01',"
+            "'history','native','合成旧问题','completed')",
+            (
+                ("old-" + uid, "rdms:candidate_8289:" + uid, "历史用户" + uid)
+                for uid in ("1001", "201", "202")
+            ),
+        )
+    assert original_auth.users is not None
+    assert original_auth.users.get("1001") is None
+    auth = GatewayAuth.from_settings(original_auth.settings)
+    assert auth.users is not None
+    assert auth.users.get("1001") is not None
+    app = FastAPI(root_path="/kb")
+    register_auth_routes(app, auth)
+    with TestClient(app, base_url=_ORIGIN) as owner_browser:
+        owner = _login_public(
+            owner_browser, monkeypatch, username="taoyifei", user_id="325"
+        )
+        headers = {"Origin": _ORIGIN, "X-CSRF-Token": owner["csrf_token"]}
+        listed = owner_browser.get("/kb/api/ops/users")
+        assert listed.status_code == 200
+        rows = {row["user_id"]: row for row in listed.json()["items"]}
+        assert rows["1001"]["username"] == "1001"
+        assert rows["1001"]["display_name"] == "历史用户1001"
+        assert rows["1001"]["dept_id"] is None
+        for user_id, role in (
+            ("1001", "hr"),
+            ("201", "admin"),
+            ("202", "admin"),
+        ):
+            assert (
+                owner_browser.patch(
+                    "/kb/api/ops/users/" + user_id,
+                    json={"role": role},
+                    headers=headers,
+                ).status_code
+                == 200
+            )
+        with TestClient(app, base_url=_ORIGIN) as staff_browser:
+            staff = _login_public(
+                staff_browser,
+                monkeypatch,
+                username="real_staff",
+                user_id="1001",
+                dept_id="42",
+            )
+            assert staff["user"]["username"] == "real_staff"
+            assert staff["user"]["dept_id"] == "42"
+            assert staff["user"]["role"] == "hr"
+        with TestClient(app, base_url=_ORIGIN) as admin_browser:
+            admin = _login_public(
+                admin_browser, monkeypatch, username="real_admin", user_id="201"
+            )
+            admin_headers = {
+                "Origin": _ORIGIN,
+                "X-CSRF-Token": admin["csrf_token"],
+            }
+            for target, role in (
+                ("202", "user"),
+                ("325", "user"),
+                ("201", "user"),
+                ("1001", "admin"),
+            ):
+                assert (
+                    admin_browser.patch(
+                        "/kb/api/ops/users/" + target,
+                        json={"role": role},
+                        headers=admin_headers,
+                    ).status_code
+                    == 403
+                )
 
 
 def test_local_role_change_applies_to_existing_sso_session(

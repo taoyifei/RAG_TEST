@@ -143,7 +143,10 @@ describe("用户资料和角色", () => {
     expect(screen.getByRole("button", { name: "人力内部资料" })).toBeVisible();
   });
 
-  it("管理员选择并保存角色，传给后台真实用户 ID", async () => {
+  it.each([
+    { label: "已登录用户", username: "staff", deptId: "42" },
+    { label: "旧版历史用户", username: "1001", deptId: null },
+  ])("$label 可按真实用户 ID 保存角色", async ({ username, deptId }) => {
     let role = "user";
     const fetch = vi
       .spyOn(globalThis, "fetch")
@@ -157,9 +160,9 @@ describe("用户资料和角色", () => {
             items: [
               {
                 user_id: "1001",
-                username: "staff",
+                username,
                 display_name: "测试同事",
-                dept_id: "42",
+                dept_id: deptId,
                 role,
                 is_super_admin: false,
                 editable_roles: ["user", "hr"],
@@ -177,7 +180,13 @@ describe("用户资料和角色", () => {
       />,
     );
     await screen.findByText("测试同事");
-    expect(screen.getByText("部门 ID：42")).toBeVisible();
+    expect(screen.getByText("用户 ID：1001", { exact: false })).toBeVisible();
+    if (deptId) {
+      expect(screen.getByText("部门 ID：42")).toBeVisible();
+    } else {
+      expect(screen.getByText("登录账号待本人下次登录同步")).toBeVisible();
+      expect(screen.getByText("登录系统暂未提供")).toBeVisible();
+    }
     await user.selectOptions(
       screen.getByRole("combobox", { name: "测试同事的角色" }),
       "hr",

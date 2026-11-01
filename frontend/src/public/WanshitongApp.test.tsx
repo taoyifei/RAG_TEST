@@ -287,49 +287,57 @@ describe("湾事通公共应用", () => {
     expect(screen.queryByText("这里是原会话回答")).not.toBeInTheDocument();
   });
 
-  it("管理员后台使用新标签打开并保留当前对话", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-      const path = pathOf(input);
-      if (path === "/api/public/session") {
-        return Promise.resolve(
-          Response.json({
-            ...sessionBody,
-            user: {
-              user_id: "325",
-              display_name: "陶逸非",
-              role: "admin",
-            },
-          }),
-        );
-      }
-      if (path === "/api/public/capabilities") {
-        return Promise.resolve(Response.json(capabilitiesBody));
-      }
-      if (path === "/api/public/popular-questions") {
-        return Promise.resolve(Response.json(emptyRecommendations));
-      }
-      if (path === "/api/public/chat") {
-        return Promise.resolve(
-          streamResponse([
-            event("final", 0, {
-              answer: "这条对话仍保留。",
-              citations: [],
+  it.each([
+    { pathname: "/", prefix: "" },
+    { pathname: "/kb/", prefix: "/kb" },
+  ])(
+    "$pathname 管理后台同源打开概览并保留当前对话",
+    async ({ pathname, prefix }) => {
+      window.history.replaceState({}, "", pathname);
+      vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+        const path = pathOf(input);
+        if (path === `${prefix}/api/public/session`) {
+          return Promise.resolve(
+            Response.json({
+              ...sessionBody,
+              user: {
+                user_id: "325",
+                display_name: "陶逸非",
+                role: "admin",
+              },
             }),
-          ]),
-        );
-      }
-      return Promise.resolve(new Response(null, { status: 404 }));
-    });
-    await openHome();
-    await ask();
-    await screen.findByText("这条对话仍保留。");
+          );
+        }
+        if (path === `${prefix}/api/public/capabilities`) {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === `${prefix}/api/public/popular-questions`) {
+          return Promise.resolve(Response.json(emptyRecommendations));
+        }
+        if (path === `${prefix}/api/public/chat`) {
+          return Promise.resolve(
+            streamResponse([
+              event("final", 0, {
+                answer: "这条对话仍保留。",
+                citations: [],
+              }),
+            ]),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+      await openHome();
+      await ask();
+      await screen.findByText("这条对话仍保留。");
 
-    const admin = screen.getByRole("link", { name: "管理后台" });
-    expect(admin).toHaveAttribute("href", "/admin/");
-    expect(admin).toHaveAttribute("target", "_blank");
-    expect(admin).toHaveAttribute("rel", "noopener noreferrer");
-    expect(screen.getByText("这条对话仍保留。")).toBeVisible();
-  });
+      const admin = screen.getByRole("link", { name: "管理后台" });
+      expect(admin).toHaveAttribute("href", `${prefix}/admin/overview`);
+      expect((admin as HTMLAnchorElement).origin).toBe(window.location.origin);
+      expect(admin).toHaveAttribute("target", "_blank");
+      expect(admin).toHaveAttribute("rel", "noopener noreferrer");
+      expect(screen.getByText("这条对话仍保留。")).toBeVisible();
+    },
+  );
 
   it("账号菜单中的外观切换跨首问保持", async () => {
     installFetch(
@@ -378,9 +386,9 @@ describe("湾事通公共应用", () => {
     await openHome();
 
     expect(
-      within(
-        screen.getByRole("complementary", { name: "会话侧栏" }),
-      ).getByText("湾小度"),
+      within(screen.getByRole("complementary", { name: "会话侧栏" })).getByText(
+        "湾小度",
+      ),
     ).toBeInTheDocument();
     expect(
       within(screen.getByRole("main")).getByRole("heading", { level: 1 }),

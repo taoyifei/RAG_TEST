@@ -71,6 +71,22 @@ def editable_roles(actor: UserProfile, target: UserProfile) -> tuple[Role, ...]:
     return ("user", "hr")
 
 
+def _history_user_id(owner_id: object, deployment_id: str) -> str | None:
+    """仅接受当前部署的完整RDMS主体，不把额外分隔符或空白当用户ID。"""
+    prefix = f"rdms:{deployment_id}:"
+    if not isinstance(owner_id, str) or not owner_id.startswith(prefix):
+        return None
+    user_id = owner_id[len(prefix) :]
+    if (
+        not user_id
+        or ":" in user_id
+        or not user_id.isprintable()
+        or any(character.isspace() for character in user_id)
+    ):
+        return None
+    return user_id
+
+
 class UserStore:
     """按可信 RDMS userId 保存角色，不采用 IdP 的角色或权限列表。"""
 
@@ -158,6 +174,79 @@ class UserStore:
         if row is None:
             raise AssertionError("用户信息写入后不存在。")
         return self._profile(row)
+
+    def backfill_usage_users(self, *, deployment_id: str) -> int:
+        """补登记当前部署历史使用者，不覆盖已有身份字段或管理员分配的角色。
+
+        Args:
+            deployment_id: 当前网关已验证的部署标识，不能混用其他环境的历史。
+
+        Returns:
+            本次新增的用户数。历史没有真实登录名或部门时，分别使用用户ID和空值。
+
+        """
+        if not deployment_id:
+            raise ValueError("补登记历史用户必须指定当前部署。")
+        with self._connections.transaction(write=True) as connection:
+            tables = {
+                row["name"]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            users: dict[str, str] = {}
+            for table in ("gateway_conversations", "gateway_turns"):
+                if table not in tables:
+                    continue
+                rows = connection.execute(
+                    f"SELECT DISTINCT owner_id FROM {table} "  # noqa: S608 - 表名仅取上面的两个固定值。
+                    "WHERE deployment_id=?",
+                    (deployment_id,),
+                )
+                for row in rows:
+                    user_id = _history_user_id(row["owner_id"], deployment_id)
+                    if user_id is not None:
+                        users[user_id] = user_id
+            if "gateway_turns" in tables:
+                columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(gateway_turns)"
+                    )
+                }
+                if "asker_name" in columns:
+                    named: set[str] = set()
+                    rows = connection.execute(
+                        "SELECT owner_id,asker_name FROM gateway_turns "
+                        "WHERE deployment_id=? "
+                        "ORDER BY created_at DESC,trace_id DESC",
+                        (deployment_id,),
+                    )
+                    for row in rows:
+                        user_id = _history_user_id(
+                            row["owner_id"], deployment_id
+                        )
+                        name = row["asker_name"]
+                        if (
+                            user_id is not None
+                            and user_id not in named
+                            and isinstance(name, str)
+                            and name.strip()
+                        ):
+                            users[user_id] = name.strip()
+                            named.add(user_id)
+            inserted = 0
+            for user_id, display_name in users.items():
+                # 历史昵称不授予角色；受保护的超管仍只由_profile读取服务端配置。
+                result = connection.execute(
+                    "INSERT INTO user_profiles "
+                    "(user_id,username,display_name,dept_id,role) "
+                    "VALUES (?,?,?,NULL,'user') "
+                    "ON CONFLICT(user_id) DO NOTHING",
+                    (user_id, user_id, display_name),
+                )
+                inserted += result.rowcount
+        return inserted
 
     def get(self, user_id: str) -> UserProfile | None:
         """读取当前角色，角色变更无需重新登录。"""

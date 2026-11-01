@@ -171,7 +171,7 @@ export function WanshitongApp() {
           {
             label: "管理后台",
             icon: <Files size={17} aria-hidden="true" />,
-            href: withAppBase("/admin/"),
+            href: withAppBase("/admin/overview"),
           },
         ]
       : []),
