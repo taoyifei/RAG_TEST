@@ -54,7 +54,7 @@ DOCX解析器会抽取并保存嵌入图片；Go ImageResolver保存资源发生
 - `WXD_NATIVE_BOOTSTRAP_ADMIN_EMAIL` 使用测试服务账号邮箱；这是服务端创建原生普通用户和独立空间的权限，不能把人类管理员直接设置为原生平台管理员。网关不开放平台管理接口。
 - `WXD_NATIVE_WORKBENCH_PROVISIONING=true` 仅供服务端创建空间；浏览器不能创建或切换任意tenant。按规模设置 `WXD_NATIVE_MAX_OWNED_WORKSPACES`，本次测试为1000。
 - `WXD_WORKBENCH_CHAT_MODEL_ID` 可显式选择已授权且可供独立空间使用的模型。未填时选择原生可用KnowledgeQA模型；现有模型仍由现场固定配置管理。
-- 运行模型必须支持 `tool_choice=auto`。54共享vLLM已按用户明确授权启用自动工具选择和hermes解析器，模型工具调用及8288实际问答通过；但真实原生助手仍超出8192上下文。24576方案已完成只读容量和配置核对，尚待额外维护授权；不能只把原生模型元数据写大来掩盖真实服务上限。
+- 运行模型必须支持 `tool_choice=auto`。54共享vLLM已按用户明确授权启用自动工具选择和hermes解析器，模型工具调用及8288实际问答通过；但真实原生助手仍超出8192上下文。用户已明确选择保持8192、暂不启用助手和定时任务；24576方案不执行，`WXD_WORKBENCH_ENABLED`保持false，不继续重启或虚增原生模型元数据。
 - 构建Vue时须保留两个HTML入口，edge同时发布React、管理端和工作助手产物；Nginx将 `/kb/workbench/{id}/` 映射到工作助手HTML，API仍经Cookie/CSRF网关。
 - 工作助手按“研发用户 + 资料范围 + 代次”隔离，SQLite和原生PG需一起备份。不得只删SQLite工作区表或恢复旧表后继续运行原生定时任务。
 
