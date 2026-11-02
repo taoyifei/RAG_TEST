@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 import secrets
 import time
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from wanshitong_gateway.compat.adapters.stores.sqlite_connection import (
     SqliteConnectionFactory,
@@ -165,6 +166,22 @@ def _completed_redirect(
     return response
 
 
+def _handoff_page(destination: str) -> HTMLResponse:
+    """使用浏览器导航，避开公网前置代理对绝对Location的改写。"""
+    escaped = html.escape(destination, quote=True)
+    return HTMLResponse(
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta http-equiv="refresh" content="0;url=' + escaped + '">'
+        "<title>进入管理后台</title></head><body>"
+        "<p>正在进入管理后台…</p>"
+        '<p>如果没有自动跳转，请<a href="'
+        + escaped
+        + '">点击进入管理后台</a>。</p></body></html>',
+        status_code=200,
+        headers=_PRIVATE_HEADERS,
+    )
+
+
 def register_admin_entry_routes(app: FastAPI, auth: GatewayAuth) -> None:
     """注册管理员内网导航及60秒单次交接，不接受控制台独立身份代替员工。"""
     if not auth.settings.sso.enabled:
@@ -207,13 +224,11 @@ def register_admin_entry_routes(app: FastAPI, auth: GatewayAuth) -> None:
             target_origin=target.origin,
             expires_at=expires_at,
         )
-        return RedirectResponse(
+        return _handoff_page(
             target.origin
             + auth.settings.root_path
             + "/api/admin/entry/complete?ticket="
-            + ticket,
-            status_code=302,
-            headers=_PRIVATE_HEADERS,
+            + ticket
         )
 
     @app.get("/api/admin/entry/complete")

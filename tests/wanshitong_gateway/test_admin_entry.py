@@ -6,6 +6,7 @@ import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
@@ -166,16 +167,82 @@ def _rows(gateway: _Gateway) -> list[dict[str, Any]]:
         ]
 
 
+class _HandoffDocument(HTMLParser):
+    """按浏览器属性解码规则读取刷新目标及兜底链接。"""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.refreshes: list[str] = []
+        self.links: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        values = dict(attrs)
+        if (
+            tag == "meta"
+            and (values.get("http-equiv") or "").casefold() == "refresh"
+            and (content := values.get("content")) is not None
+        ):
+            self.refreshes.append(content)
+        if tag == "a" and (href := values.get("href")) is not None:
+            self.links.append(href)
+
+
+def _handoff_url(response: httpx.Response) -> str:
+    assert response.status_code == 200
+    assert "location" not in response.headers
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    document = _HandoffDocument()
+    document.feed(response.text)
+    assert len(document.refreshes) == 1
+    assert document.refreshes[0].startswith("0;url=")
+    destination = document.refreshes[0].removeprefix("0;url=")
+    assert document.links == [destination]
+    return destination
+
+
 def _ticket(response: httpx.Response) -> str:
-    assert response.status_code == 302
-    parameters = parse_qs(urlsplit(response.headers["location"]).query)
+    parameters = parse_qs(urlsplit(_handoff_url(response)).query)
     assert set(parameters) == {"ticket"}
+    assert admin_entry._TICKET_PATTERN.fullmatch(parameters["ticket"][0])
     return parameters["ticket"][0]
 
 
 def _private_response(response: httpx.Response) -> None:
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_handoff_avoids_proxy_location_rewrite_and_escapes_html(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    gateway = _gateway(tmp_path, monkeypatch)
+    issue = _issue(gateway, "325", "admin")
+    with TestClient(gateway.app, base_url=_PUBLIC) as browser:
+        _set_user(browser, gateway, issue, _PUBLIC)
+        response = browser.get("/kb/api/admin/entry", follow_redirects=False)
+        destination = _handoff_url(response)
+        assert destination == (
+            _INTERNAL
+            + "/kb/api/admin/entry/complete?ticket="
+            + _ticket(response)
+        )
+        assert "正在进入管理后台…" in response.text
+        assert '<meta charset="utf-8">' in response.text
+        assert ":21000" not in response.text
+        _private_response(response)
+
+    # 固定URL以外的字符也必须作为属性值呈现，不能构造第二个标签或导航。
+    escaped_destination = destination + '&label="内网<入口>"'
+    rendered = admin_entry._handoff_page(escaped_destination)
+    escaped_response = httpx.Response(
+        rendered.status_code, headers=rendered.headers, content=rendered.body
+    )
+    assert _handoff_url(escaped_response) == escaped_destination
+    assert "&amp;label=&quot;内网&lt;入口&gt;&quot;" in escaped_response.text
+    assert "内网<入口>" not in escaped_response.text
+    _private_response(escaped_response)
 
 
 @pytest.mark.parametrize("user_id", ["325", "201"])
@@ -189,10 +256,10 @@ def test_admin_handoff_preserves_identity_cookie_session_and_remaining_ttl(
         gateway.clock[0] += 10
         start = browser.get("/kb/api/admin/entry", follow_redirects=False)
         ticket = _ticket(start)
-        assert start.headers["location"].startswith(
+        assert _handoff_url(start).startswith(
             _INTERNAL + "/kb/api/admin/entry/complete?ticket="
         )
-        assert issue.cookie_value not in start.headers["location"]
+        assert issue.cookie_value not in start.text
         row = _rows(gateway)[0]
         assert row["ticket_hash"] == hashlib.sha256(ticket.encode()).hexdigest()
         assert row["cookie_value"] == issue.cookie_value
@@ -201,9 +268,7 @@ def test_admin_handoff_preserves_identity_cookie_session_and_remaining_ttl(
         assert row["target_origin"] == _INTERNAL
         _private_response(start)
         gateway.clock[0] += 7
-        complete = browser.get(
-            start.headers["location"], follow_redirects=False
-        )
+        complete = browser.get(_handoff_url(start), follow_redirects=False)
         assert complete.status_code == 303
         assert complete.headers["location"] == _INTERNAL + "/kb/admin/overview"
         _private_response(complete)
@@ -305,9 +370,7 @@ def test_role_demotion_between_issue_and_consume_denies_and_burns_ticket(
         response = browser.get("/kb/api/admin/entry", follow_redirects=False)
         assert gateway.auth.users is not None
         gateway.auth.users.set_role("201", "user", actor_user_id="325")
-        denied = browser.get(
-            response.headers["location"], follow_redirects=False
-        )
+        denied = browser.get(_handoff_url(response), follow_redirects=False)
         assert denied.status_code == 403
         _private_response(denied)
         assert "set-cookie" not in denied.headers
@@ -315,7 +378,7 @@ def test_role_demotion_between_issue_and_consume_denies_and_burns_ticket(
         gateway.auth.users.set_role("201", "admin", actor_user_id="325")
         assert (
             browser.get(
-                response.headers["location"], follow_redirects=False
+                _handoff_url(response), follow_redirects=False
             ).status_code
             == 401
         )
@@ -331,7 +394,7 @@ def test_expired_and_replayed_tickets_never_set_identity(
         first = browser.get("/kb/api/admin/entry", follow_redirects=False)
         ticket = _ticket(first)
         gateway.clock[0] += 60
-        expired = browser.get(first.headers["location"], follow_redirects=False)
+        expired = browser.get(_handoff_url(first), follow_redirects=False)
         assert expired.status_code == 401
         assert ticket not in expired.text
         assert "set-cookie" not in expired.headers
@@ -341,13 +404,11 @@ def test_expired_and_replayed_tickets_never_set_identity(
         )
         assert (
             browser.get(
-                next_start.headers["location"], follow_redirects=False
+                _handoff_url(next_start), follow_redirects=False
             ).status_code
             == 303
         )
-        replay = browser.get(
-            next_start.headers["location"], follow_redirects=False
-        )
+        replay = browser.get(_handoff_url(next_start), follow_redirects=False)
         assert replay.status_code == 401
         assert "set-cookie" not in replay.headers
 
@@ -363,9 +424,7 @@ def test_ticket_and_target_cookie_do_not_extend_nearly_expired_session(
         start = browser.get("/kb/api/admin/entry", follow_redirects=False)
         assert _rows(gateway)[0]["expires_at"] == issue.principal.expires_at
         gateway.clock[0] += 5
-        completed = browser.get(
-            start.headers["location"], follow_redirects=False
-        )
+        completed = browser.get(_handoff_url(start), follow_redirects=False)
         assert completed.status_code == 303
         cookie = SimpleCookie()
         for value in completed.headers.get_list("set-cookie"):
@@ -387,15 +446,13 @@ def test_handoff_requires_target_origin_and_keeps_ticket_for_correct_origin(
     with TestClient(gateway.app, base_url=_PUBLIC) as browser:
         _set_user(browser, gateway, issue, _PUBLIC)
         start = browser.get("/kb/api/admin/entry", follow_redirects=False)
-        wrong_url = start.headers["location"].replace(_INTERNAL, _PUBLIC)
+        wrong_url = _handoff_url(start).replace(_INTERNAL, _PUBLIC)
         denied = browser.get(wrong_url, follow_redirects=False)
         assert denied.status_code == 403
         _private_response(denied)
         assert len(_rows(gateway)) == 1
         assert (
-            browser.get(
-                start.headers["location"], follow_redirects=False
-            ).status_code
+            browser.get(_handoff_url(start), follow_redirects=False).status_code
             == 303
         )
 
@@ -410,15 +467,13 @@ def test_complete_accepts_exactly_one_ticket_parameter(
         _set_user(browser, gateway, issue, _PUBLIC)
         start = browser.get("/kb/api/admin/entry", follow_redirects=False)
         invalid = browser.get(
-            start.headers["location"] + extra, follow_redirects=False
+            _handoff_url(start) + extra, follow_redirects=False
         )
         assert invalid.status_code == 400
         _private_response(invalid)
         assert len(_rows(gateway)) == 1
         assert (
-            browser.get(
-                start.headers["location"], follow_redirects=False
-            ).status_code
+            browser.get(_handoff_url(start), follow_redirects=False).status_code
             == 303
         )
 
@@ -438,13 +493,11 @@ def test_cross_deployment_cannot_consume_another_deployments_ticket(
     ):
         _set_user(browser, gateway, issue, _PUBLIC)
         start = browser.get("/kb/api/admin/entry", follow_redirects=False)
-        denied = outsider.get(start.headers["location"], follow_redirects=False)
+        denied = outsider.get(_handoff_url(start), follow_redirects=False)
         assert denied.status_code == 401
         assert len(_rows(gateway)) == 1
         assert (
-            browser.get(
-                start.headers["location"], follow_redirects=False
-            ).status_code
+            browser.get(_handoff_url(start), follow_redirects=False).status_code
             == 303
         )
 
@@ -461,7 +514,7 @@ def test_simultaneous_consumers_only_one_can_restore_the_session(
     def consume() -> int:
         with TestClient(gateway.app) as browser:
             return browser.get(
-                start.headers["location"], follow_redirects=False
+                _handoff_url(start), follow_redirects=False
             ).status_code
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -471,7 +524,7 @@ def test_simultaneous_consumers_only_one_can_restore_the_session(
 
 
 @pytest.mark.parametrize(
-    "peer,expected", [("203.0.113.8", 302), ("203.0.113.9", 403)]
+    "peer,expected", [("203.0.113.8", 200), ("203.0.113.9", 403)]
 )
 def test_only_trusted_proxy_can_restore_registered_public_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, peer: str, expected: int
