@@ -291,7 +291,7 @@ describe("湾事通公共应用", () => {
     { pathname: "/", prefix: "" },
     { pathname: "/kb/", prefix: "/kb" },
   ])(
-    "$pathname 管理后台同源打开概览并保留当前对话",
+    "$pathname 经服务端进入内网后台并保留当前对话",
     async ({ pathname, prefix }) => {
       window.history.replaceState({}, "", pathname);
       vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
@@ -331,7 +331,7 @@ describe("湾事通公共应用", () => {
       await screen.findByText("这条对话仍保留。");
 
       const admin = screen.getByRole("link", { name: "管理后台" });
-      expect(admin).toHaveAttribute("href", `${prefix}/admin/overview`);
+      expect(admin).toHaveAttribute("href", `${prefix}/api/admin/entry`);
       expect((admin as HTMLAnchorElement).origin).toBe(window.location.origin);
       expect(admin).toHaveAttribute("target", "_blank");
       expect(admin).toHaveAttribute("rel", "noopener noreferrer");
