@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from wanshitong_gateway.admin_entry import register_admin_entry_routes
 from wanshitong_gateway.compat.adapters.stores.sqlite_connection import (
     SqliteConnectionFactory,
 )
@@ -290,6 +291,8 @@ def register_auth_routes(
                 auth.users.record_identity if auth.users is not None else None
             ),
         )
+
+    register_admin_entry_routes(app, auth)
 
     @app.post("/api/public/session", response_model=PublicSessionResponse)
     def public_session(

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -22,7 +24,7 @@ from wanshitong_gateway.engine_settings import EngineSettings
 from wanshitong_gateway.roles import UserProfile
 from wanshitong_gateway.store import GatewayStore
 from wanshitong_gateway.weknora.admin import NativeAdminClient
-from wanshitong_gateway.weknora.client import WeKnoraClient
+from wanshitong_gateway.weknora.client import NativeHttpError, WeKnoraClient
 from wanshitong_gateway.weknora.principal import ExternalPrincipalSigner
 
 _ADMIN_TENANT = 8
@@ -95,6 +97,17 @@ def managed_history(
         if request.method == "DELETE":
             return httpx.Response(
                 status["delete"], json={"success": status["delete"] == 200}
+            )
+        if request.url.path == "/api/v1/sessions":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": [{"id": "native-1", "title": "历史管理验收"}],
+                    "total": 1,
+                    "page": 1,
+                    "page_size": 1000,
+                },
             )
         if request.url.path == "/api/v1/sessions/native-1":
             return httpx.Response(
@@ -301,6 +314,257 @@ def test_busy_conversation_rejects_overlapping_history_mutations(
         finally:
             release.set()
         assert pending.result(timeout=3).json() == {"deleted": True}
+
+
+def _bind_test_history(
+    store: GatewayStore,
+    conversation_id: str,
+    *,
+    owner: str = "u1",
+    archived: bool = False,
+    kb_scope: tuple[str, ...] = ("kb-public",),
+) -> str:
+    """创建一条测试本人映射，原生列表由独立可控状态提供。"""
+    native_id = "native-" + conversation_id
+    scope = {
+        "deployment_id": "candidate",
+        "owner_id": "rdms:candidate:" + owner,
+    }
+    store.bind_session(
+        **scope, conversation_id=conversation_id, native_session_id=native_id
+    )
+    store.start_turn(
+        **scope,
+        trace_id="trace-" + conversation_id,
+        conversation_id=conversation_id,
+        native_session_id=native_id,
+        question="完整历史问题",
+        kb_scope=kb_scope,
+    )
+    if archived:
+        assert store.archive_conversation(
+            **scope, conversation_id=conversation_id, archived=True
+        )
+    return native_id
+
+
+def _paginated_history_titles(
+    store: GatewayStore, monkeypatch: pytest.MonkeyPatch, *, archived: bool
+) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """65 条等时记录覆盖旧50条窗口；原生兼容行刻意含未映射会话。"""
+    monkeypatch.setattr(
+        "wanshitong_gateway.store._now",
+        lambda: "2026-11-01T00:00:00+00:00",
+    )
+    sessions = {
+        _bind_test_history(
+            store, f"page-{index:03d}", archived=archived
+        ): f"历史标题 {index:03d}"
+        for index in range(65)
+    }
+    sessions["native-page-000"] = "很早的委托单审批说明"
+    sessions["native-not-mapped"] = "未映射的原生兼容标题"
+    calls: list[tuple[str, str]] = []
+
+    async def list_sessions(
+        _client: WeKnoraClient, *, user_id: str, keyword: str = ""
+    ) -> list[dict[str, Any]]:
+        calls.append((user_id, keyword))
+        return [
+            {"id": identifier, "title": title}
+            for identifier, title in sessions.items()
+            if keyword.casefold() in title.casefold()
+        ]
+
+    monkeypatch.setattr(WeKnoraClient, "list_sessions", list_sessions)
+    return sessions, calls
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_history_pagination_passes_old_window_and_stays_stable(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+    archived: bool,
+) -> None:
+    browser, store, _requests, _status = managed_history
+    sessions, calls = _paginated_history_titles(
+        store, monkeypatch, archived=archived
+    )
+    params = {"archived": str(archived).lower()}
+    base = "/kb/api/public/conversations"
+    first = browser.get(base, params=params).json()
+    assert first["limit"] == 30
+    assert first["total"] == 65
+    assert first["has_more"] is True
+    assert len(first["items"]) == 30
+    assert first["items"][0]["conversation_id"] == "page-064"
+    assert calls == [("u1", "")]
+
+    # 新会话插入当前列表前端，后续页不应重复或跳过原有等时记录。
+    identifier = _bind_test_history(store, "zz-new", archived=archived)
+    sessions[identifier] = "刚新增的标题"
+    identifiers = [item["conversation_id"] for item in first["items"]]
+    cursor = first["next_cursor"]
+    while cursor:
+        response = browser.get(base, params={**params, "cursor": cursor})
+        assert response.status_code == 200
+        page = response.json()
+        identifiers.extend(item["conversation_id"] for item in page["items"])
+        assert page["has_more"] is (page["next_cursor"] is not None)
+        cursor = page["next_cursor"]
+    assert identifiers == [f"page-{index:03d}" for index in reversed(range(65))]
+    refreshed = browser.get(base, params=params).json()
+    assert refreshed["items"][0]["conversation_id"] == "zz-new"
+    other_group = browser.get(
+        base, params={"archived": str(not archived).lower()}
+    ).json()
+    assert other_group["items"] == []
+
+
+def test_history_search_finds_older_native_title_and_binds_cursor(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser, store, _requests, _status = managed_history
+    _sessions, calls = _paginated_history_titles(
+        store, monkeypatch, archived=False
+    )
+    base = "/kb/api/public/conversations"
+    found = browser.get(base, params={"query": "  委托单审批  "}).json()
+    assert found["total"] == 1
+    assert found["items"][0]["conversation_id"] == "page-000"
+    assert found["has_more"] is False
+    assert found["next_cursor"] is None
+    assert calls[-1] == ("u1", "委托单审批")
+    cursor = browser.get(base, params={"limit": 1}).json()["next_cursor"]
+    for params, headers in (
+        ({"cursor": cursor, "query": "历史"}, {}),
+        ({"cursor": cursor, "archived": "true"}, {}),
+        ({"cursor": cursor}, {"x-test-user": "u2"}),
+        ({"cursor": cursor[:-4] + "AAAA"}, {}),
+    ):
+        assert (
+            browser.get(base, params=params, headers=headers).status_code == 422
+        )
+
+
+def test_history_counts_exclude_unmapped_deleted_unavailable_and_revoked(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    browser, store, _requests, _status = managed_history
+    sessions, _calls = _paginated_history_titles(
+        store, monkeypatch, archived=False
+    )
+    sessions.pop("native-page-001")
+    assert store.delete_conversation(
+        deployment_id="candidate",
+        owner_id="rdms:candidate:u1",
+        conversation_id="page-002",
+    )
+    foreign = _bind_test_history(store, "other-person", owner="u2")
+    sessions[foreign] = "他人的标题不应公开"
+    store.bind_session(
+        deployment_id="other-deployment",
+        owner_id="rdms:candidate:u1",
+        conversation_id="other-deployment",
+        native_session_id="native-other-deployment",
+    )
+    sessions["native-other-deployment"] = "其他部署标题不应公开"
+    with sqlite3.connect(tmp_path / "gateway.sqlite3") as connection:
+        connection.execute(
+            "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES(?,?,?)",
+            ("kb-hr-secret", "hr_internal", ""),
+        )
+    hidden = _bind_test_history(store, "hr-secret", kb_scope=("kb-hr-secret",))
+    sessions[hidden] = "人力内部秘密标题"
+
+    original = _FakeAuth.require_profile
+
+    def profile(
+        auth: _FakeAuth, request: Request, *, csrf: bool | None = None
+    ) -> UserProfile:
+        value = original(auth, request, csrf=csrf)
+        return (
+            replace(value, role="hr")
+            if request.headers.get("x-test-hr")
+            else value
+        )
+
+    monkeypatch.setattr(_FakeAuth, "require_profile", profile)
+    base = "/kb/api/public/conversations"
+    before = browser.get(
+        base, params={"limit": 1}, headers={"x-test-hr": "1"}
+    ).json()
+    assert before["total"] == 64
+    cursor = before["next_cursor"]
+    after = browser.get(base, params={"cursor": cursor, "limit": 50}).json()
+    assert after["total"] == 63
+    assert "人力内部秘密标题" not in json.dumps(after, ensure_ascii=False)
+    secret_search = browser.get(base, params={"query": "秘密"}).json()
+    assert secret_search["total"] == 0
+    assert secret_search["items"] == []
+    assert secret_search["has_more"] is False
+    assert secret_search["next_cursor"] is None
+    own = browser.get(base, headers={"x-test-user": "u2"}).json()
+    assert own["total"] == 1
+    assert own["items"][0]["conversation_id"] == "other-person"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"limit": "0"},
+        {"limit": "51"},
+        {"limit": "abc"},
+        {"query": "长" * 201},
+        {"archived": "unknown"},
+        {"cursor": ""},
+        {"cursor": "not-a-valid-cursor"},
+        {"cursor": "长" * 4097},
+    ],
+)
+def test_history_rejects_invalid_pagination_input(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    params: dict[str, str],
+) -> None:
+    browser, _store, _requests, _status = managed_history
+    assert (
+        browser.get("/kb/api/public/conversations", params=params).status_code
+        == 422
+    )
+
+
+@pytest.mark.parametrize("native_status", [403, 503])
+def test_history_native_unavailable_is_not_reported_as_empty(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+    native_status: int,
+) -> None:
+    browser, _store, _requests, _status = managed_history
+
+    async def fail(
+        _client: WeKnoraClient, *, user_id: str, keyword: str = ""
+    ) -> list[dict[str, Any]]:
+        del user_id, keyword
+        raise NativeHttpError(native_status, "private-native-error")
+
+    monkeypatch.setattr(WeKnoraClient, "list_sessions", fail)
+    response = browser.get("/kb/api/public/conversations")
+    assert response.status_code == 502
+    assert "items" not in response.json()
+    assert "private-native-error" not in response.text
 
 
 def _events(body: str) -> list[dict[str, Any]]:

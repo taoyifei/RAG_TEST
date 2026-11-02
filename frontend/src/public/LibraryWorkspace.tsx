@@ -1,5 +1,13 @@
-import { Download, RefreshCw, Share2, Trash2, Upload, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  Download,
+  RefreshCw,
+  Search,
+  Share2,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { redirectToSso } from "./authNavigation";
 import {
@@ -130,7 +138,45 @@ function LibraryListing({
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [sortOrder, setSortOrder] = useState("newest");
   const fileInput = useRef<HTMLInputElement>(null);
+  const filteredItems = useMemo(() => {
+    const keyword = query.trim().toLocaleLowerCase();
+    return (data?.items ?? [])
+      .filter((item) => {
+        if (keyword && !item.title.toLocaleLowerCase().includes(keyword))
+          return false;
+        if (statusFilter === "ready") return READY_STATES.has(item.status);
+        if (statusFilter === "failed") return FAILED_STATES.has(item.status);
+        if (statusFilter === "parsing")
+          return (
+            !READY_STATES.has(item.status) && !FAILED_STATES.has(item.status)
+          );
+        return true;
+      })
+      .sort((left, right) => {
+        if (sortOrder === "name")
+          return left.title.localeCompare(right.title, "zh-CN", {
+            numeric: true,
+          });
+        const difference =
+          (Date.parse(right.created_at) || 0) -
+          (Date.parse(left.created_at) || 0);
+        return (
+          (sortOrder === "oldest" ? -difference : difference) ||
+          left.title.localeCompare(right.title, "zh-CN", { numeric: true })
+        );
+      });
+  }, [data?.items, query, sortOrder, statusFilter]);
+  const hasFilters =
+    !!query || statusFilter !== "all" || sortOrder !== "newest";
+  const clearFilters = () => {
+    setQuery("");
+    setStatusFilter("all");
+    setSortOrder("newest");
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -250,8 +296,8 @@ function LibraryListing({
       </div>
       {data?.can_manage && (
         <p className="wst-document-meta">
-          支持 DOCX、PDF、XLSX、PPTX、TXT 和 MD。PDF 支持文字版；扫描件需 OCR
-          识别。
+          支持 Word、Excel、PowerPoint、PDF 和文本文件；PDF
+          建议使用可选中文字的版本。
         </p>
       )}
       {error && (
@@ -263,6 +309,55 @@ function LibraryListing({
         <p className="wst-workspace-notice" role="status">
           {notice}
         </p>
+      )}
+      {data && data.items.length > 0 && (
+        <>
+          <div className="wst-library-filters" aria-label="查找资料">
+            <label className="wst-library-search">
+              <Search size={16} aria-hidden="true" />
+              <span className="sr-only">搜索资料名称</span>
+              <input
+                type="search"
+                placeholder="输入资料名称"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+              />
+            </label>
+            <label>
+              <span className="sr-only">资料状态</span>
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.currentTarget.value)}
+              >
+                <option value="all">全部状态</option>
+                <option value="ready">可问答</option>
+                <option value="parsing">正在准备</option>
+                <option value="failed">需要处理</option>
+              </select>
+            </label>
+            <label>
+              <span className="sr-only">资料排序</span>
+              <select
+                value={sortOrder}
+                onChange={(event) => setSortOrder(event.currentTarget.value)}
+              >
+                <option value="newest">最近上传</option>
+                <option value="oldest">最早上传</option>
+                <option value="name">按名称排序</option>
+              </select>
+            </label>
+            {hasFilters && (
+              <button type="button" onClick={clearFilters}>
+                清除筛选
+              </button>
+            )}
+          </div>
+          <p className="wst-library-result-count" role="status">
+            {hasFilters
+              ? `找到 ${filteredItems.length} 份资料，共 ${data.items.length} 份`
+              : `共 ${data.items.length} 份资料`}
+          </p>
+        </>
       )}
       {!data && !error && (
         <p className="wst-workspace-empty" role="status">
@@ -277,7 +372,12 @@ function LibraryListing({
             : "资料发布后会显示在这里。"}
         </p>
       )}
-      {data && data.items.length > 0 && (
+      {data && data.items.length > 0 && filteredItems.length === 0 && (
+        <p className="wst-workspace-empty">
+          没有找到相关资料，换个名称或清除筛选试试。
+        </p>
+      )}
+      {data && filteredItems.length > 0 && (
         <div className="wst-workspace-table-scroll">
           <table className="wst-workspace-table">
             <thead>
@@ -288,7 +388,7 @@ function LibraryListing({
               </tr>
             </thead>
             <tbody>
-              {data.items.map((item) => {
+              {filteredItems.map((item) => {
                 const canManage = item.can_manage ?? data.can_manage;
                 const failed = FAILED_STATES.has(item.status);
                 return (

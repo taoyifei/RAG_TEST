@@ -6,13 +6,17 @@ import ReactMarkdown, {
 } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { withAppBase } from "../app/basePath";
 import { PublicCitations } from "./PublicCitations";
+import { AnswerActions } from "./AnswerActions";
+import { ImagePreview } from "./ImagePreview";
 import { PublicFeedback } from "./PublicFeedback";
 import { PublicProcess } from "./PublicProcess";
 import { nativeCitationDisplay } from "./nativeCitationDisplay";
 import { PUBLIC_STAGE_LABELS } from "./publicSse";
-import type { PublicFeedbackSubmission } from "./publicApi";
+import {
+  publicNaturalImageUrl,
+  type PublicFeedbackSubmission,
+} from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
 
 const PROGRESS_STAGES = [
@@ -22,6 +26,20 @@ const PROGRESS_STAGES = [
   { label: PUBLIC_STAGE_LABELS.generation, short: "组织回答" },
   { label: PUBLIC_STAGE_LABELS.validation, short: "核对来源" },
 ] as const;
+
+interface MarkdownNode {
+  type: string;
+  tagName?: string;
+  children?: readonly MarkdownNode[];
+}
+
+function containsImage(node: MarkdownNode | undefined): boolean {
+  return Boolean(
+    node &&
+    ((node.type === "element" && node.tagName === "img") ||
+      node.children?.some(containsImage)),
+  );
+}
 
 function progressHint(
   stageMessage: string | undefined,
@@ -56,10 +74,17 @@ const MarkdownAnswer = memo(function MarkdownAnswer({
   content: string;
   turn: PublicTurn;
 }) {
+  const [preview, setPreview] = useState<{
+    src: string;
+    alt: string;
+    trigger: HTMLElement;
+  }>();
   const components = useMemo<Components>(
     () => ({
-      a: ({ children, href, title }) =>
-        href ? (
+      a: ({ children, href, title, node }) =>
+        containsImage(node) ? (
+          <span>{children}</span>
+        ) : href ? (
           <a
             href={href}
             rel="noopener noreferrer"
@@ -73,51 +98,69 @@ const MarkdownAnswer = memo(function MarkdownAnswer({
         ),
       img: ({ alt, src }) => {
         if (!src) return <span>{alt}</span>;
+        let imageSource = src;
         if (src.startsWith("resource://")) {
           if (!turn.traceId || turn.status !== "completed") {
             return <span>{alt}</span>;
           }
-          const path =
-            `/api/public/conversations/${encodeURIComponent(turn.conversationId)}` +
-            `/turns/${encodeURIComponent(turn.traceId)}/resources` +
-            `?file_path=${encodeURIComponent(src)}`;
-          return (
+          imageSource = publicNaturalImageUrl(
+            { conversationId: turn.conversationId, traceId: turn.traceId },
+            src,
+          );
+        }
+        return (
+          <button
+            aria-label={`放大图片：${alt || "回答中的图片"}`}
+            className="wst-answer-image-button"
+            onClick={(event) =>
+              setPreview({
+                src: imageSource,
+                alt: alt ?? "",
+                trigger: event.currentTarget,
+              })
+            }
+            title="点击放大图片"
+            type="button"
+          >
             <img
               alt={alt ?? ""}
               loading="lazy"
               referrerPolicy="no-referrer"
-              src={withAppBase(path)}
+              src={imageSource}
             />
-          );
-        }
-        return (
-          <img
-            alt={alt ?? ""}
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            src={src}
-          />
+          </button>
         );
       },
     }),
     [turn.conversationId, turn.traceId, turn.status],
   );
   return (
-    <div className="wst-final-answer">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        urlTransform={(url, key, node) =>
-          key === "src" &&
-          node.tagName === "img" &&
-          url.startsWith("resource://")
-            ? url
-            : defaultUrlTransform(url)
-        }
-        components={components}
-      >
-        {nativeCitationDisplay(content, turn.citations)}
-      </ReactMarkdown>
-    </div>
+    <>
+      <div className="wst-final-answer">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          urlTransform={(url, key, node) =>
+            key === "src" &&
+            node.tagName === "img" &&
+            url.startsWith("resource://")
+              ? url
+              : defaultUrlTransform(url)
+          }
+          components={components}
+        >
+          {nativeCitationDisplay(content, turn.citations)}
+        </ReactMarkdown>
+      </div>
+      {preview && (
+        <ImagePreview
+          alt={preview.alt}
+          key={preview.src}
+          onClose={() => setPreview(undefined)}
+          returnFocusTo={preview.trigger}
+          src={preview.src}
+        />
+      )}
+    </>
   );
 });
 
@@ -128,6 +171,8 @@ export function PublicAnswer({
   onFeedback,
   onFeedbackLogin,
   onDownloadReference,
+  onReadReference,
+  beforeExport,
   onRetry,
   onRecover,
   turn,
@@ -142,6 +187,8 @@ export function PublicAnswer({
     documentName: string,
     original?: boolean,
   ) => Promise<void>;
+  onReadReference?: (referenceId: string) => Promise<string>;
+  beforeExport?: () => Promise<void>;
   onRetry: () => void;
   onRecover?: () => void;
   turn: PublicTurn;
@@ -288,8 +335,20 @@ export function PublicAnswer({
               allowSourceDownload={allowSourceDownload}
               citations={turn.citations}
               onDownloadReference={onDownloadReference}
+              onReadReference={onReadReference}
+              imageContext={
+                turn.traceId && turn.status === "completed"
+                  ? {
+                      conversationId: turn.conversationId,
+                      traceId: turn.traceId,
+                    }
+                  : undefined
+              }
             />
           </>
+        )}
+        {turn.status === "completed" && (
+          <AnswerActions beforeExport={beforeExport} turn={turn} />
         )}
         {allowFeedback &&
           (turn.status === "completed" ||

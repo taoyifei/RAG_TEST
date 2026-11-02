@@ -1,0 +1,54 @@
+.wst-completed-answer-actions {
+  margin-block: 16px 8px;
+  color: var(--wst-muted, #ababab);
+}
+.wst-answer-export-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wst-answer-export-buttons button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.wst-answer-export-buttons button:hover:not(:disabled) {
+  color: var(--wst-accent, #31d7b3);
+  background: var(--wst-sidebar-active, rgba(105, 145, 132, 0.1));
+  border-color: var(--wst-border, rgba(105, 145, 132, 0.2));
+}
+.wst-answer-export-buttons button:focus-visible {
+  outline: 2px solid #198d78;
+  outline-offset: 2px;
+}
+.wst-answer-export-buttons button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.wst-completed-answer-actions > p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.wst-completed-answer-actions > .is-success {
+  color: var(--wst-accent, #14816d);
+}
+.wst-completed-answer-actions > .is-error {
+  color: #f0a197;
+}
+.wst-root[data-theme="light"] .wst-completed-answer-actions > .is-error {
+  color: #b0443b;
+}

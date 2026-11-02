@@ -1,4 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { renderToString } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { PublicAnswer } from "./PublicAnswer";
@@ -227,7 +229,161 @@ it("把原生知识库引用标记显示为序号，保留原始引用和代码�
   expect(screen.getByText(/次月开始折旧。〔1〕/)).toBeInTheDocument();
   expect(screen.getByText("引用依据（1段）")).toBeInTheDocument();
   expect(container.querySelector("code")?.textContent).toContain(tag);
-  expect(container.querySelector(".wst-final-answer")?.textContent).not.toContain(
-    `${tag}${tag}`,
+  expect(
+    container.querySelector(".wst-final-answer")?.textContent,
+  ).not.toContain(`${tag}${tag}`);
+});
+
+function completedTurn(answer: string): PublicTurn {
+  const now = Date.now();
+  return {
+    id: "turn-reading",
+    conversationId: "conversation-reading",
+    traceId: "trace-reading",
+    question: "查看操作图",
+    status: "completed",
+    stageHistory: [],
+    startedAt: now,
+    stageStartedAt: now,
+    lastSignalAt: now,
+    claims: [],
+    answer,
+    citations: [],
+    partial: false,
+    feedback: "idle",
+  };
+}
+
+it.each([
+  [
+    "普通图片链接",
+    "[![委托单示意图](resource://figures/guide.png)](https://example.test/guide)",
+  ],
+  [
+    "带加粗的图片链接",
+    "[**![委托单示意图](resource://figures/guide.png)**](https://example.test/guide)",
+  ],
+])("%s可键盘放大并复用kb前缀鉴权地址，不嵌套交互元素", async (_, markdown) => {
+  const previous = window.location.pathname;
+  window.history.replaceState({}, "", "/kb/");
+  try {
+    const user = userEvent.setup();
+    const { container } = render(
+      <div className="wst-root">
+        <PublicAnswer
+          onFeedback={vi.fn()}
+          onRetry={vi.fn()}
+          turn={completedTurn(markdown)}
+        />
+      </div>,
+    );
+    const trigger = screen.getByRole("button", {
+      name: "放大图片：委托单示意图",
+    });
+    const inline = within(trigger).getByRole("img");
+    expect(inline.getAttribute("src")).toBe(
+      "/kb/api/public/conversations/conversation-reading/turns/trace-reading/resources?file_path=resource%3A%2F%2Ffigures%2Fguide.png",
+    );
+    expect(container.querySelector("a button")).toBeNull();
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "图片预览" });
+    expect(within(dialog).getByRole("img")).toHaveAttribute(
+      "src",
+      inline.getAttribute("src"),
+    );
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+  } finally {
+    window.history.replaceState({}, "", previous);
+  }
+});
+
+it("答案把来源读取回调透传到阅读抽屉", async () => {
+  const reader = vi.fn().mockResolvedValue("来自受保护接口的引用原文");
+  const user = userEvent.setup();
+  render(
+    <PublicAnswer
+      onFeedback={vi.fn()}
+      onRetry={vi.fn()}
+      onReadReference={reader}
+      turn={{
+        ...completedTurn("根据制度办理。"),
+        citations: [
+          {
+            document_name: "现行制度",
+            reference_id: "ref-1",
+            source_available: true,
+            source_kind: "weknora",
+            quote: "应按制度办理",
+          },
+        ],
+      }}
+    />,
   );
+  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByRole("button", { name: "阅读来源：现行制度" }));
+  expect(await screen.findByText("来自受保护接口的引用原文")).toBeVisible();
+  expect(reader).toHaveBeenCalledExactlyOnceWith("ref-1");
+});
+
+it("回答没有配图时，引用独有图片仍透传本条会话身份并可放大", async () => {
+  const user = userEvent.setup();
+  const reader = vi
+    .fn()
+    .mockResolvedValue("![引用独有示意图](resource://citation-only-figure)");
+  render(
+    <PublicAnswer
+      onFeedback={vi.fn()}
+      onRetry={vi.fn()}
+      onReadReference={reader}
+      turn={{
+        ...completedTurn("请按指引操作。"),
+        conversationId: "citation-session",
+        traceId: "citation-trace",
+        citations: [
+          {
+            document_name: "操作说明",
+            reference_id: "source-reference",
+            source_available: true,
+            source_kind: "weknora",
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByRole("button", { name: "阅读来源：操作说明" }));
+  const source = screen.getByRole("dialog", { name: "来源阅读：操作说明" });
+  const thumb = await within(source).findByRole("img", {
+    name: "引用独有示意图",
+  });
+  const url =
+    "/api/public/conversations/citation-session/turns/citation-trace/resources?file_path=resource%3A%2F%2Fcitation-only-figure";
+  expect(thumb).toHaveAttribute("src", url);
+  await user.click(
+    within(source).getByRole("button", { name: "放大图片：引用独有示意图" }),
+  );
+  expect(
+    within(screen.getByRole("dialog", { name: "图片预览" })).getByRole("img"),
+  ).toHaveAttribute("src", url);
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog")).toBe(source);
+  expect(reader).toHaveBeenCalledExactlyOnceWith("source-reference");
+});
+
+it("完成答案的静态渲染不挂载浮层或启动原文读取", () => {
+  const reader = vi.fn().mockResolvedValue("不应读取");
+  const html = renderToString(
+    <PublicAnswer
+      onFeedback={vi.fn()}
+      onRetry={vi.fn()}
+      onReadReference={reader}
+      turn={completedTurn("![示意图](resource://figures/guide.png)")}
+    />,
+  );
+  expect(html).toContain("放大图片");
+  expect(html).not.toContain('role="dialog"');
+  expect(reader).not.toHaveBeenCalled();
 });

@@ -65,6 +65,102 @@ afterEach(() => {
 });
 
 describe("历史会话侧栏", () => {
+  it("全量标题搜索在输入停顿后执行，加载更多保留已有列表和草稿", async () => {
+    const user = userEvent.setup();
+    const parameters = props();
+    const onHistorySearch = vi.fn().mockResolvedValue(undefined);
+    const onLoadMoreHistory = vi.fn().mockResolvedValue(undefined);
+    const view = render(
+      <PublicConversationLayout
+        {...parameters}
+        historyHasMore
+        onHistorySearch={onHistorySearch}
+        onLoadMoreHistory={onLoadMoreHistory}
+      />,
+    );
+    const history = screen.getByRole("navigation", { name: "历史会话" });
+    history.scrollTop = 140;
+    const draft = screen.getByRole("textbox", { name: "向湾小度提问" });
+    await user.type(draft, "尚未发送的草稿");
+    await user.type(
+      screen.getByRole("searchbox", { name: "搜索历史会话" }),
+      "旧委托单",
+    );
+    await waitFor(() =>
+      expect(onHistorySearch).toHaveBeenCalledExactlyOnceWith("旧委托单"),
+    );
+    // 结果由服务端返回，不能再用当前已加载标题二次过滤。
+    expect(
+      screen.getByRole("button", { name: sessions[0].title }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "加载更多对话" }));
+    expect(onLoadMoreHistory).toHaveBeenCalledOnce();
+    view.rerender(
+      <PublicConversationLayout
+        {...parameters}
+        historyHasMore
+        historyLoadingMore
+        onHistorySearch={onHistorySearch}
+        onLoadMoreHistory={onLoadMoreHistory}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "正在加载…" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: sessions[0].title }),
+    ).toBeVisible();
+    expect(draft).toHaveValue("尚未发送的草稿");
+    expect(history.scrollTop).toBe(140);
+    await user.click(screen.getByRole("button", { name: "清空会话搜索" }));
+    await waitFor(() => expect(onHistorySearch).toHaveBeenLastCalledWith(""));
+    expect(
+      screen.getByText("可搜索全部历史对话，或向下加载更多。"),
+    ).toBeVisible();
+  });
+
+  it("切换归档后立即重输同一关键词仍会搜索，写操作期间推迟搜索", async () => {
+    const user = userEvent.setup();
+    const parameters = props();
+    const onHistorySearch = vi.fn().mockResolvedValue(undefined);
+    const onHistoryViewChange = vi.fn().mockResolvedValue(undefined);
+    const view = render(
+      <PublicConversationLayout
+        {...parameters}
+        onHistorySearch={onHistorySearch}
+        onHistoryViewChange={onHistoryViewChange}
+      />,
+    );
+    const input = screen.getByRole("searchbox", { name: "搜索历史会话" });
+    await user.type(input, "报账");
+    await waitFor(() =>
+      expect(onHistorySearch).toHaveBeenCalledExactlyOnceWith("报账"),
+    );
+    await user.click(screen.getByRole("button", { name: "查看已归档会话" }));
+    await user.type(input, "报账");
+    await waitFor(() => expect(onHistorySearch).toHaveBeenCalledTimes(2));
+    await user.clear(input);
+    await user.type(input, "新词");
+    view.rerender(
+      <PublicConversationLayout
+        {...parameters}
+        historyActionBusy
+        onHistorySearch={onHistorySearch}
+        onHistoryViewChange={onHistoryViewChange}
+      />,
+    );
+    expect(input).toBeDisabled();
+    expect(onHistorySearch).not.toHaveBeenCalledWith("新词");
+    view.rerender(
+      <PublicConversationLayout
+        {...parameters}
+        onHistorySearch={onHistorySearch}
+        onHistoryViewChange={onHistoryViewChange}
+      />,
+    );
+    await waitFor(() =>
+      expect(onHistorySearch).toHaveBeenLastCalledWith("新词"),
+    );
+  });
+
   it("会话菜单不打开会话，支持归档、恢复及点外部收起", async () => {
     const user = userEvent.setup();
     const parameters = props();

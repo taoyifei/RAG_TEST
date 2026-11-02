@@ -465,6 +465,28 @@ pre {
   font-size: 12px;
   line-height: 1.7;
 }
+.wst-sidebar-load-more {
+  display: block;
+  width: calc(100% - 12px);
+  min-height: 36px;
+  margin: 12px 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--wst-border);
+  border-radius: 8px;
+  color: var(--wst-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wst-sidebar-load-more:hover:not(:disabled) {
+  background: var(--wst-panel-raised);
+  color: var(--wst-text);
+}
+.wst-sidebar-load-more:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
 .wst-sidebar-footnote {
   padding: 6px 8px 0;
   font-size: 11px;

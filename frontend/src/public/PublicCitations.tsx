@@ -1,5 +1,8 @@
 import type { PublicCitation } from "./publicSse";
-import { useState } from "react";
+import { useCallback, useState } from "react";
+
+import { ReferenceDrawer } from "./ReferenceDrawer";
+import type { PublicNaturalImageContext } from "./publicApi";
 
 interface CitationGroup {
   key: string;
@@ -56,6 +59,8 @@ export function PublicCitations({
   allowSourceDownload = true,
   citations,
   onDownloadReference,
+  onReadReference,
+  imageContext,
 }: {
   allowSourceDownload?: boolean;
   citations: PublicCitation[];
@@ -64,8 +69,15 @@ export function PublicCitations({
     documentName: string,
     original?: boolean,
   ) => Promise<void>;
+  onReadReference?: (referenceId: string) => Promise<string>;
+  imageContext?: PublicNaturalImageContext;
 }) {
   const [downloadError, setDownloadError] = useState<string>();
+  const [reading, setReading] = useState<{
+    citation: PublicCitation;
+    trigger: HTMLElement;
+  }>();
+  const closeReading = useCallback(() => setReading(undefined), []);
   const visible = citations.filter(
     (citation) =>
       typeof citation.document_name === "string" &&
@@ -74,108 +86,160 @@ export function PublicCitations({
   if (visible.length === 0) return null;
   const groups = groupCitations(visible);
   return (
-    <details className="wst-citations">
-      <summary>引用依据（{visible.length}段）</summary>
-      <div className="wst-citation-list">
-        {groups.map((group) => (
-          <article key={group.key}>
-            <details className="wst-citation-group">
-              <summary className="wst-citation-heading">
-                <strong>{group.documentName}</strong>
-                <span className="wst-citation-count">
-                  {group.citations.length}段
-                </span>
-                <span className="wst-citation-toggle">展开全部片段</span>
-              </summary>
-              <div className="wst-citation-group-body">
-                {(group.department || group.category) && (
-                  <p className="wst-citation-meta">
-                    {[group.department, group.category]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                )}
-                {group.sourceRelativePath && (
-                  <>
-                    <p className="wst-citation-locator">
-                      {group.sourceRelativePath}
+    <>
+      <details className="wst-citations">
+        <summary>引用依据（{visible.length}段）</summary>
+        <div className="wst-citation-list">
+          {groups.map((group) => (
+            <article key={group.key}>
+              <details className="wst-citation-group">
+                <summary className="wst-citation-heading">
+                  <strong>
+                    {onReadReference ? (
+                      <button
+                        aria-haspopup="dialog"
+                        aria-label={`阅读来源：${group.documentName}`}
+                        className="wst-citation-document-open"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setReading({
+                            citation:
+                              group.citations.find(
+                                (citation) =>
+                                  citation.reference_id &&
+                                  citation.source_available !== false,
+                              ) ?? group.citations[0],
+                            trigger: event.currentTarget,
+                          });
+                        }}
+                        type="button"
+                      >
+                        {group.documentName}
+                      </button>
+                    ) : (
+                      group.documentName
+                    )}
+                  </strong>
+                  <span className="wst-citation-count">
+                    {group.citations.length}段
+                  </span>
+                  <span className="wst-citation-toggle">展开全部片段</span>
+                </summary>
+                <div className="wst-citation-group-body">
+                  {(group.department || group.category) && (
+                    <p className="wst-citation-meta">
+                      {[group.department, group.category]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </p>
-                    <p className="wst-citation-group-note">
-                      按本次返回路径整理
-                    </p>
-                  </>
-                )}
-                <ol className="wst-citation-segments">
-                  {group.citations.map((citation, index) => (
-                    <li
-                      className="wst-citation-segment"
-                      key={`${group.key}-segment-${index}`}
-                    >
-                      <p className="wst-citation-segment-label">
-                        片段 {index + 1}
+                  )}
+                  {group.sourceRelativePath && (
+                    <>
+                      <p className="wst-citation-locator">
+                        {group.sourceRelativePath}
                       </p>
-                      {citation.locator && (
-                        <p className="wst-citation-locator">
-                          {citation.locator}
+                      <p className="wst-citation-group-note">
+                        按本次返回路径整理
+                      </p>
+                    </>
+                  )}
+                  <ol className="wst-citation-segments">
+                    {group.citations.map((citation, index) => (
+                      <li
+                        className="wst-citation-segment"
+                        key={`${group.key}-segment-${index}`}
+                      >
+                        <p className="wst-citation-segment-label">
+                          片段 {index + 1}
                         </p>
-                      )}
-                      {citation.quote && (
-                        <blockquote>{citation.quote}</blockquote>
-                      )}
-                      {citation.reference_id &&
-                        onDownloadReference &&
-                        (citation.source_kind === "weknora"
-                          ? citation.source_available
-                          : allowSourceDownload) && (
-                          <button
-                            onClick={() => {
-                              setDownloadError(undefined);
-                              void onDownloadReference(
-                                citation.reference_id!,
-                                citation.document_name,
-                              ).catch(() => {
-                                setDownloadError(
-                                  "引用内容暂不可用，请稍后重试。",
-                                );
-                              });
-                            }}
-                            type="button"
-                          >
-                            {citation.source_kind === "weknora"
-                              ? "查看引用片段"
-                              : "下载本次引用的原件"}
-                          </button>
+                        {citation.locator && (
+                          <p className="wst-citation-locator">
+                            {citation.locator}
+                          </p>
                         )}
-                      {citation.reference_id &&
-                        citation.source_kind === "weknora" &&
-                        citation.original_available &&
-                        allowSourceDownload &&
-                        onDownloadReference && (
-                          <button
-                            onClick={() => {
-                              setDownloadError(undefined);
-                              void onDownloadReference(
-                                citation.reference_id!,
-                                citation.document_name,
-                                true,
-                              ).catch(() => {
-                                setDownloadError("原件暂不可用，请稍后重试。");
-                              });
-                            }}
-                            type="button"
-                          >
-                            下载原件
-                          </button>
+                        {citation.quote && (
+                          <blockquote>{citation.quote}</blockquote>
                         )}
-                    </li>
-                  ))}
-                </ol>
-                {downloadError && <p role="alert">{downloadError}</p>}
-              </div>
-            </details>
-          </article>
-        ))}
-      </div>
-    </details>
+                        {citation.reference_id &&
+                          (onDownloadReference ||
+                            (citation.source_kind === "weknora" &&
+                              onReadReference)) &&
+                          (citation.source_kind === "weknora"
+                            ? citation.source_available
+                            : allowSourceDownload) && (
+                            <button
+                              onClick={(event) => {
+                                if (
+                                  citation.source_kind === "weknora" &&
+                                  onReadReference
+                                ) {
+                                  setReading({
+                                    citation,
+                                    trigger: event.currentTarget,
+                                  });
+                                  return;
+                                }
+                                setDownloadError(undefined);
+                                void onDownloadReference?.(
+                                  citation.reference_id!,
+                                  citation.document_name,
+                                ).catch(() => {
+                                  setDownloadError(
+                                    "引用内容暂不可用，请稍后重试。",
+                                  );
+                                });
+                              }}
+                              type="button"
+                            >
+                              {citation.source_kind === "weknora"
+                                ? "查看引用片段"
+                                : "下载本次引用的原件"}
+                            </button>
+                          )}
+                        {citation.reference_id &&
+                          citation.source_kind === "weknora" &&
+                          citation.original_available &&
+                          allowSourceDownload &&
+                          onDownloadReference && (
+                            <button
+                              onClick={() => {
+                                setDownloadError(undefined);
+                                void onDownloadReference(
+                                  citation.reference_id!,
+                                  citation.document_name,
+                                  true,
+                                ).catch(() => {
+                                  setDownloadError(
+                                    "原件暂不可用，请稍后重试。",
+                                  );
+                                });
+                              }}
+                              type="button"
+                            >
+                              下载原件
+                            </button>
+                          )}
+                      </li>
+                    ))}
+                  </ol>
+                  {downloadError && <p role="alert">{downloadError}</p>}
+                </div>
+              </details>
+            </article>
+          ))}
+        </div>
+      </details>
+      {reading && (
+        <ReferenceDrawer
+          citation={reading.citation}
+          key={`${reading.citation.reference_id ?? reading.citation.document_name}:${reading.citation.locator ?? ""}`}
+          onClose={closeReading}
+          onReadReference={onReadReference}
+          imageContext={imageContext}
+          returnFocusTo={reading.trigger}
+        />
+      )}
+    </>
   );
 }

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 
@@ -214,8 +214,133 @@ it("关闭原件下载时保留原生引用片段和依据，隐藏新旧原件�
     const summary = group.querySelector(".wst-citation-heading");
     if (summary) await user.click(summary);
   }
-  expect(screen.getByRole("button", { name: "查看引用片段" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "下载原件" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "下载本次引用的原件" })).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "查看引用片段" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "下载原件" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "下载本次引用的原件" }),
+  ).not.toBeInTheDocument();
   expect(screen.getByText("合成证据片段 1")).toBeInTheDocument();
+});
+
+it("点击文档名在旁边阅读来源，保留答案与原下载权限检查", async () => {
+  const user = userEvent.setup();
+  const reader = vi.fn().mockResolvedValue("完整的本次引用原文");
+  const download = vi.fn().mockResolvedValue(undefined);
+  render(
+    <div className="wst-root">
+      <p>当前答案继续显示</p>
+      <PublicCitations
+        allowSourceDownload={false}
+        citations={[
+          citation(1, {
+            source_kind: "weknora",
+            reference_id: "ref-source",
+            source_available: true,
+            original_available: true,
+          }),
+        ]}
+        onDownloadReference={download}
+        onReadReference={reader}
+      />
+    </div>,
+  );
+  await user.click(screen.getByText("引用依据（1段）"));
+  const trigger = screen.getByRole("button", {
+    name: "阅读来源：开发中心三种工作模式",
+  });
+  await user.click(trigger);
+  const dialog = screen.getByRole("dialog", {
+    name: "来源阅读：开发中心三种工作模式",
+  });
+  expect(await within(dialog).findByText("完整的本次引用原文")).toBeVisible();
+  expect(within(dialog).getByText("表格第 1 行")).toBeVisible();
+  expect(screen.getByText("当前答案继续显示")).toBeVisible();
+  expect(download).not.toHaveBeenCalled();
+  expect(reader).toHaveBeenCalledExactlyOnceWith("ref-source");
+  expect(
+    screen.queryByRole("button", { name: "下载原件" }),
+  ).not.toBeInTheDocument();
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(trigger).toHaveFocus());
+});
+
+it("阅读原文不触发下载，原件下载仍传递original标记", async () => {
+  const user = userEvent.setup();
+  const reader = vi.fn().mockResolvedValue("片段原文");
+  const download = vi.fn().mockResolvedValue(undefined);
+  render(
+    <PublicCitations
+      citations={[
+        citation(1, {
+          source_kind: "weknora",
+          reference_id: "ref-source",
+          source_available: true,
+          original_available: true,
+        }),
+      ]}
+      onReadReference={reader}
+      onDownloadReference={download}
+    />,
+  );
+  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByText("展开全部片段"));
+  await user.click(screen.getByRole("button", { name: "下载原件" }));
+  expect(download).toHaveBeenCalledExactlyOnceWith(
+    "ref-source",
+    "开发中心三种工作模式",
+    true,
+  );
+  await user.click(screen.getByRole("button", { name: "查看引用片段" }));
+  await screen.findByText("片段原文");
+  expect(reader).toHaveBeenCalledExactlyOnceWith("ref-source");
+  expect(download).toHaveBeenCalledOnce();
+});
+
+it("关闭后切换来源，旧读取迟到不会覆盖新的来源", async () => {
+  let finishFirst: (text: string) => void = () => undefined;
+  const reader = vi.fn<(id: string) => Promise<string>>((id) =>
+    id === "first"
+      ? new Promise((resolve) => {
+          finishFirst = resolve;
+        })
+      : Promise.resolve("乙文件的原文"),
+  );
+  const user = userEvent.setup();
+  render(
+    <PublicCitations
+      citations={[
+        citation(1, {
+          document_name: "甲文件",
+          source_relative_path: "甲",
+          reference_id: "first",
+          source_available: true,
+        }),
+        citation(2, {
+          document_name: "乙文件",
+          source_relative_path: "乙",
+          reference_id: "second",
+          source_available: true,
+        }),
+      ]}
+      onReadReference={reader}
+    />,
+  );
+  await user.click(screen.getByText("引用依据（2段）"));
+  await user.click(screen.getByRole("button", { name: "阅读来源：甲文件" }));
+  await waitFor(() => expect(reader).toHaveBeenCalledWith("first"));
+  await user.click(screen.getByRole("button", { name: "关闭来源阅读" }));
+  await user.click(screen.getByRole("button", { name: "阅读来源：乙文件" }));
+  await screen.findByText("乙文件的原文");
+  await act(async () => {
+    finishFirst("甲文件迟到的原文");
+    await Promise.resolve();
+  });
+  expect(
+    screen.getByRole("dialog", { name: "来源阅读：乙文件" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("甲文件迟到的原文")).not.toBeInTheDocument();
 });

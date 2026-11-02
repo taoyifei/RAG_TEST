@@ -13,8 +13,8 @@
         <div class="upload-mask" v-show="ismask">
             <UploadMask></UploadMask>
         </div>
-        <!-- 全局设置模态框，供所有 platform 子路由使用 -->
-        <Settings v-if="!WANSHITONG_GATEWAY_AUTH || route.path !== '/platform/settings'" />
+        <!-- 设置路由本身只持有URL，湾小度与原生模式都由此处挂载唯一设置面板。 -->
+        <Settings />
         <!-- 全局命令面板 (⌘K)，随 platform 路由存活 -->
         <GlobalCommandPalette v-if="!WANSHITONG_GATEWAY_AUTH" />
         <!-- 知识库文件上传进度浮层：上传队列放在 store 里，切换页面不中断 -->

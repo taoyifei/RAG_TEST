@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -16,6 +16,130 @@ function requestPath(input: RequestInfo | URL): string {
 }
 
 describe("用户资料和角色", () => {
+  it("按名称和准备状态查找资料，清除筛选后恢复完整列表和时间排序", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        scope: "personal",
+        can_manage: true,
+        items: [
+          {
+            id: "old",
+            title: "采购指引.docx",
+            status: "completed",
+            created_at: "2026-09-01",
+            size: 20,
+            shared: false,
+          },
+          {
+            id: "new",
+            title: "报账附件.xlsx",
+            status: "failed",
+            created_at: "2026-11-01",
+            size: 20,
+            shared: false,
+          },
+          {
+            id: "middle",
+            title: "人力说明.pdf",
+            status: "processing",
+            created_at: "2026-10-01",
+            size: 20,
+            shared: false,
+          },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        userRole="user"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByText("采购指引.docx");
+    const firstRow = () =>
+      within(screen.getByRole("table")).getAllByRole("row")[1];
+    expect(firstRow()).toHaveTextContent("报账附件.xlsx");
+    await user.type(
+      screen.getByRole("searchbox", { name: "搜索资料名称" }),
+      "报账",
+    );
+    expect(screen.getByText("报账附件.xlsx")).toBeVisible();
+    expect(screen.queryByText("采购指引.docx")).not.toBeInTheDocument();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "资料状态" }),
+      "ready",
+    );
+    expect(
+      screen.getByText("没有找到相关资料，换个名称或清除筛选试试。"),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.getByRole("searchbox", { name: "搜索资料名称" })).toHaveValue(
+      "",
+    );
+    expect(firstRow()).toHaveTextContent("报账附件.xlsx");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "资料排序" }),
+      "oldest",
+    );
+    expect(firstRow()).toHaveTextContent("采购指引.docx");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "资料状态" }),
+      "parsing",
+    );
+    expect(screen.getByText("人力说明.pdf")).toBeVisible();
+    expect(screen.queryByText("采购指引.docx")).not.toBeInTheDocument();
+    expect(screen.getByText("找到 1 份资料，共 3 份")).toBeVisible();
+  });
+
+  it("切换个人和公共资料时重置筛选，不残留另一范围的结果", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const scope = new URL(
+        requestPath(input),
+        "http://localhost",
+      ).searchParams.get("scope");
+      return Promise.resolve(
+        Response.json({
+          scope,
+          can_manage: scope === "personal",
+          items: [
+            {
+              id: scope,
+              title: scope === "personal" ? "个人记录.txt" : "公共制度.pdf",
+              status: "completed",
+              created_at: "2026-11-01",
+              size: 20,
+              shared: false,
+            },
+          ],
+        }),
+      );
+    });
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        userRole="user"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByText("个人记录.txt");
+    await user.type(
+      screen.getByRole("searchbox", { name: "搜索资料名称" }),
+      "个人",
+    );
+    await user.click(screen.getByRole("button", { name: "公共资料" }));
+    await screen.findByText("公共制度.pdf");
+    expect(screen.getByRole("searchbox", { name: "搜索资料名称" })).toHaveValue(
+      "",
+    );
+    expect(screen.queryByText("个人记录.txt")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "上传资料" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("普通用户上传资料默认放入个人区，随后可以共享和取消共享", async () => {
     let uploaded = false;
     let shared = false;
