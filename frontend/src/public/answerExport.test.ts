@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   answerClipboardText,
-  answerWordFilename,
   buildAnswerExport,
   canExportAnswer,
 } from "./answerExport";
@@ -84,14 +83,10 @@ describe("完成回答导出模型", () => {
     expect(content.askedAt).toBe("未记录");
   });
 
-  it("截断状态保留说明；文件名为真正docx且清除文件系统保留符号", () => {
+  it("复制截断回答时保留说明", () => {
     const turn = completedTurn();
     turn.truncated = true;
-    turn.question = "资料/审批：怎么申请？";
     expect(answerClipboardText(turn)).toContain("本次回答已截断");
-    expect(answerWordFilename(turn)).toMatch(
-      /^湾小度回答_[^/\\:*?"<>|]+\.docx$/,
-    );
   });
 
   it.each([

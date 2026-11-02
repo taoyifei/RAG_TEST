@@ -477,7 +477,7 @@ describe("湾事通公共应用", () => {
       screen.getByRole("button", { name: "查看引用片段" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "下载原件" }),
+      screen.queryByRole("button", { name: /^下载原件：/ }),
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText("回答反馈")).not.toBeInTheDocument();
     expect(
