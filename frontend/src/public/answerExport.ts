@@ -43,7 +43,6 @@ export interface AnswerExportContent {
   scopes: string[];
   blocks: AnswerExportBlock[];
   references: AnswerExportReference[];
-  containsImages: boolean;
   truncated: boolean;
 }
 
@@ -298,7 +297,6 @@ export function buildAnswerExport(turn: PublicTurn): AnswerExportContent {
       quote: humanMarkdown(citation.quote ?? ""),
       unavailable: citation.source_available === false,
     })),
-    containsImages: /!\[|<img\b/i.test(content),
     truncated: turn.truncated === true,
   };
 }
@@ -331,17 +329,4 @@ export function answerClipboardText(
     ...(sources.length ? sources : ["本次回答未附参考来源。"]),
     ...(sources.length ? ["完整引用原文可在湾小度的“引用依据”中查看。"] : []),
   ].join("\n\n");
-}
-
-export function answerWordFilename(turn: PublicTurn): string {
-  const title = Array.from(visibleText(turn.question), (character) =>
-    character.charCodeAt(0) < 32 ? " " : character,
-  )
-    .join("")
-    .replace(/[<>:"/\\|?*]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 48)
-    .replace(/[. ]+$/, "");
-  return `湾小度回答_${title || "知识问答"}.docx`;
 }

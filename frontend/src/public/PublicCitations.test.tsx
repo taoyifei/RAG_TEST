@@ -145,6 +145,7 @@ it("仅对标记原件可用的 WeKnora 引用展示下载入口", () => {
     />,
   );
   expect(container.querySelector(".wst-citation-segment button")).toBeNull();
+  expect(container.querySelector(".wst-citation-download")).toBeNull();
   rerender(
     <PublicCitations
       citations={[
@@ -161,6 +162,7 @@ it("仅对标记原件可用的 WeKnora 引用展示下载入口", () => {
     container.querySelector(".wst-citation-segment button"),
   ).toBeInTheDocument();
   expect(screen.getByText("查看引用片段")).toBeInTheDocument();
+  expect(container.querySelector(".wst-citation-download")).toBeNull();
 });
 
 it("原生引用的片段与原件分别使用明确入口", async () => {
@@ -181,11 +183,129 @@ it("原生引用的片段与原件分别使用明确入口", async () => {
   );
   await user.click(screen.getByText("引用依据（1段）"));
   await user.click(screen.getByText("开发中心三种工作模式"));
-  await user.click(screen.getByRole("button", { name: "下载原件" }));
+  await user.click(screen.getByRole("button", { name: /^下载原件：/ }));
   expect(onDownload).toHaveBeenCalledWith(
     `ref_${"b".repeat(32)}`,
     "开发中心三种工作模式",
     true,
+  );
+});
+
+it("同一文件多段只在标题旁提供一次下载，折叠时也可用并保留原扩展名", async () => {
+  const user = userEvent.setup();
+  const download = vi.fn().mockResolvedValue(undefined);
+  const reader = vi.fn();
+  render(
+    <PublicCitations
+      citations={[false, true, true].map((originalAvailable, index) =>
+        citation(index + 1, {
+          document_name: "操作流程.docx",
+          document_title: "操作流程",
+          source_kind: "weknora",
+          reference_id: `ref-${index}`,
+          source_available: true,
+          original_available: originalAvailable,
+        }),
+      )}
+      onDownloadReference={download}
+      onReadReference={reader}
+    />,
+  );
+  await user.click(screen.getByText("引用依据（3段）"));
+  const group = screen.getByRole("article");
+  const button = within(group).getByRole("button", {
+    name: "下载原件：操作流程",
+  });
+  expect(group.querySelector(".wst-citation-group")).not.toHaveAttribute(
+    "open",
+  );
+  expect(button.closest("summary")).toHaveClass("wst-citation-heading");
+  expect(button).toBeVisible();
+  await user.click(button);
+  expect(download).toHaveBeenCalledExactlyOnceWith(
+    "ref-1",
+    "操作流程.docx",
+    true,
+  );
+  expect(reader).not.toHaveBeenCalled();
+  expect(group.querySelector(".wst-citation-group")).not.toHaveAttribute(
+    "open",
+  );
+  await user.click(within(group).getByText("展开全部片段"));
+  expect(
+    within(group).getAllByRole("button", { name: /^下载原件：/ }),
+  ).toHaveLength(1);
+  expect(
+    within(group).getAllByRole("button", { name: "查看引用片段" }),
+  ).toHaveLength(3);
+});
+
+it("下载中阻止重复请求，失败时折叠状态仍显示提示并可重试", async () => {
+  const user = userEvent.setup();
+  let rejectDownload: (reason: Error) => void = () => undefined;
+  const download = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectDownload = reject;
+        }),
+    )
+    .mockResolvedValue(undefined);
+  render(
+    <PublicCitations
+      citations={[
+        citation(1, {
+          source_kind: "weknora",
+          reference_id: "ref-original",
+          original_available: true,
+        }),
+      ]}
+      onDownloadReference={download}
+    />,
+  );
+  await user.click(screen.getByText("引用依据（1段）"));
+  const button = screen.getByRole("button", { name: /^下载原件：/ });
+  await user.dblClick(button);
+  expect(download).toHaveBeenCalledOnce();
+  expect(button).toBeDisabled();
+  expect(button).toHaveTextContent("下载中");
+  act(() => {
+    rejectDownload(new Error("private upstream detail"));
+  });
+  expect(await screen.findByRole("alert")).toBeVisible();
+  expect(screen.getByRole("alert")).toHaveTextContent("原件暂不可用");
+  expect(screen.queryByText("private upstream detail")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("article").querySelector("details"),
+  ).not.toHaveAttribute("open");
+  await user.click(button);
+  expect(download).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("旧版原件入口同样放在文件标题旁，每文件只下载一次", async () => {
+  const user = userEvent.setup();
+  const download = vi.fn().mockResolvedValue(undefined);
+  render(
+    <PublicCitations
+      citations={[1, 2].map((index) =>
+        citation(index, {
+          source_kind: "legacy",
+          reference_id: `legacy-${index}`,
+        }),
+      )}
+      onDownloadReference={download}
+    />,
+  );
+  await user.click(screen.getByText("引用依据（2段）"));
+  const buttons = screen.getAllByRole("button", { name: /^下载原件：/ });
+  expect(buttons).toHaveLength(1);
+  await user.click(buttons[0]);
+  expect(download).toHaveBeenCalledExactlyOnceWith(
+    "legacy-1",
+    "开发中心三种工作模式",
+    undefined,
   );
 });
 
@@ -218,7 +338,7 @@ it("关闭原件下载时保留原生引用片段和依据，隐藏新旧原件�
     screen.getByRole("button", { name: "查看引用片段" }),
   ).toBeInTheDocument();
   expect(
-    screen.queryByRole("button", { name: "下载原件" }),
+    screen.queryByRole("button", { name: /^下载原件：/ }),
   ).not.toBeInTheDocument();
   expect(
     screen.queryByRole("button", { name: "下载本次引用的原件" }),
@@ -262,7 +382,7 @@ it("点击文档名在旁边阅读来源，保留答案与原下载权限检查"
   expect(download).not.toHaveBeenCalled();
   expect(reader).toHaveBeenCalledExactlyOnceWith("ref-source");
   expect(
-    screen.queryByRole("button", { name: "下载原件" }),
+    screen.queryByRole("button", { name: /^下载原件：/ }),
   ).not.toBeInTheDocument();
   await user.keyboard("{Escape}");
   await waitFor(() => expect(trigger).toHaveFocus());
@@ -288,7 +408,7 @@ it("阅读原文不触发下载，原件下载仍传递original标记", async ()
   );
   await user.click(screen.getByText("引用依据（1段）"));
   await user.click(screen.getByText("展开全部片段"));
-  await user.click(screen.getByRole("button", { name: "下载原件" }));
+  await user.click(screen.getByRole("button", { name: /^下载原件：/ }));
   expect(download).toHaveBeenCalledExactlyOnceWith(
     "ref-source",
     "开发中心三种工作模式",

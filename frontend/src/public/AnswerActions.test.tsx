@@ -1,18 +1,9 @@
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { AnswerActions } from "./AnswerActions";
-import { answerWordBlob } from "./answerDocx";
 import { PublicApiError } from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
-
-vi.mock("./answerDocx", () => ({ answerWordBlob: vi.fn() }));
 
 function turn(overrides: Partial<PublicTurn> = {}): PublicTurn {
   return {
@@ -44,18 +35,25 @@ it.each([
   { status: "failed" },
   { partial: true },
   { answer: "" },
-] as Partial<PublicTurn>[])(
-  "未完成最终回答时没有复制和导出操作 %j",
-  (overrides) => {
-    render(<AnswerActions turn={turn(overrides)} />);
-    expect(
-      screen.queryByRole("button", { name: "导出Word" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "复制回答" }),
-    ).not.toBeInTheDocument();
-  },
-);
+] as Partial<PublicTurn>[])("未完成最终回答时没有回答操作 %j", (overrides) => {
+  render(<AnswerActions turn={turn(overrides)} />);
+  expect(
+    screen.queryByRole("button", { name: "导出Word" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "复制回答" }),
+  ).not.toBeInTheDocument();
+});
+
+it("完成回答只保留两种复制操作，不再提供Word导出", () => {
+  render(<AnswerActions turn={turn()} />);
+  expect(screen.getAllByRole("button")).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "复制回答" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "复制含来源" })).toBeEnabled();
+  expect(
+    screen.queryByRole("button", { name: "导出Word" }),
+  ).not.toBeInTheDocument();
+});
 
 it("复制前先等待权限复核，复核中不允许重复点击", async () => {
   let release: (() => void) | undefined;
@@ -71,18 +69,18 @@ it("复制前先等待权限复核，复核中不允许重复点击", async () =
   fireEvent.click(screen.getByRole("button", { name: "复制回答" }));
   expect(beforeExport).toHaveBeenCalledOnce();
   expect(writeText).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: "导出Word" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "正在复制…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "复制含来源" })).toBeDisabled();
   release?.();
   await waitFor(() => expect(writeText).toHaveBeenCalledWith("先填写申请。"));
   expect(await screen.findByRole("status")).toHaveTextContent("已复制回答");
 });
 
-it.each(["复制回答", "复制含来源", "导出Word"])(
-  "%s遇到权限撤回时不执行复制或生成文件",
+it.each(["复制回答", "复制含来源"])(
+  "%s遇到权限撤回时不执行复制",
   async (label) => {
     const writeText = vi.fn();
     vi.stubGlobal("navigator", { clipboard: { writeText } });
-    vi.mocked(answerWordBlob).mockClear();
     render(
       <AnswerActions
         turn={turn()}
@@ -98,7 +96,6 @@ it.each(["复制回答", "复制含来源", "导出Word"])(
       "资料权限已变化",
     );
     expect(writeText).not.toHaveBeenCalled();
-    expect(answerWordBlob).not.toHaveBeenCalled();
     expect(screen.queryByText("内部信息不应展示")).not.toBeInTheDocument();
   },
 );
@@ -122,55 +119,5 @@ it("HTTP环境没有Clipboard API时采用本地复制并清理临时输入框",
   } finally {
     if (previous) Object.defineProperty(document, "execCommand", previous);
     else Reflect.deleteProperty(document, "execCommand");
-  }
-});
-
-it("导出生成真正Word类型的下载，文件扩展名docx并回收对象URL", async () => {
-  vi.useFakeTimers();
-  const blob = new Blob(["fixture"], {
-    type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  });
-  vi.mocked(answerWordBlob).mockResolvedValue(blob);
-  const originalCreate = Object.getOwnPropertyDescriptor(
-    URL,
-    "createObjectURL",
-  );
-  const originalRevoke = Object.getOwnPropertyDescriptor(
-    URL,
-    "revokeObjectURL",
-  );
-  const create = vi.fn(() => "blob:local-word");
-  const revoke = vi.fn();
-  URL.createObjectURL = create;
-  URL.revokeObjectURL = revoke;
-  let filename = "";
-  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
-    this: HTMLAnchorElement,
-  ) {
-    filename = this.download;
-  });
-  const guard = vi.fn().mockResolvedValue(undefined);
-  try {
-    render(<AnswerActions turn={turn()} beforeExport={guard} />);
-    fireEvent.click(screen.getByRole("button", { name: "导出Word" }));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(guard).toHaveBeenCalledOnce();
-    expect(answerWordBlob).toHaveBeenCalledOnce();
-    expect(create).toHaveBeenCalledWith(blob);
-    expect(filename).toMatch(/\.docx$/);
-    expect(screen.getByRole("status")).toHaveTextContent("Word文件已生成");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    expect(revoke).toHaveBeenCalledWith("blob:local-word");
-  } finally {
-    if (originalCreate)
-      Object.defineProperty(URL, "createObjectURL", originalCreate);
-    else Reflect.deleteProperty(URL, "createObjectURL");
-    if (originalRevoke)
-      Object.defineProperty(URL, "revokeObjectURL", originalRevoke);
-    else Reflect.deleteProperty(URL, "revokeObjectURL");
   }
 });
