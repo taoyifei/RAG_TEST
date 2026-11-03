@@ -265,6 +265,7 @@ export function WanshitongApp() {
         historyError={chat.historyError}
         onHistoryViewChange={chat.changeHistoryView}
         onArchive={chat.archiveHistory}
+        onRename={chat.renameHistory}
         onDelete={chat.deleteHistory}
         onNewTopic={newConversation}
         onSelect={selectConversation}
@@ -275,9 +276,11 @@ export function WanshitongApp() {
               ? "工作助手"
               : view === "users" && role === "admin"
                 ? "用户与角色"
-                : (chat.historySessions.find(
+                : (chat.activeConversationTitle ??
+                  chat.historySessions.find(
                     (item) => item.conversation_id === chat.conversationId,
-                  )?.title ?? "知识问答")
+                  )?.title ??
+                  "知识问答")
         }
         navigation={navigation}
         toolbar={

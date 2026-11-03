@@ -16,12 +16,24 @@ const turn = {
   search_scopes: ["public"],
 };
 
+function pathOf(input: RequestInfo | URL): string {
+  return new URL(
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url,
+    "http://localhost",
+  ).pathname;
+}
+
 function installHistory(
   options: {
     archiveStatus?: number;
     pendingArchive?: Promise<Response>;
     pendingList?: Promise<Response>;
     historyStatus?: number;
+    renameStatus?: number;
     list?: (url: URL) => Response | Promise<Response>;
   } = {},
 ) {
@@ -34,6 +46,7 @@ function installHistory(
     },
   ];
   let archived: typeof active = [];
+  let customTitle: string | null = null;
   if (options.historyStatus) active.splice(0);
   return vi
     .spyOn(globalThis, "fetch")
@@ -64,12 +77,29 @@ function installHistory(
         if (options.list) return options.list(url);
         if (url.searchParams.get("archived") === "true" && options.pendingList)
           return options.pendingList;
-        const items =
-          url.searchParams.get("archived") === "true" ? archived : active;
+        const query = url.searchParams.get("query")?.toLocaleLowerCase();
+        const items = (
+          url.searchParams.get("archived") === "true" ? archived : active
+        ).filter(
+          (item) => !query || item.title.toLocaleLowerCase().includes(query),
+        );
         return Response.json({
           items: [...items],
           has_more: false,
           total: items.length,
+        });
+      }
+      if (url.pathname.endsWith("/rename")) {
+        if (options.renameStatus)
+          return Response.json({}, { status: options.renameStatus });
+        const body = JSON.parse(
+          typeof init?.body === "string" ? init.body : "{}",
+        ) as { title: string };
+        customTitle = body.title.trim();
+        for (const item of [...active, ...archived]) item.title = customTitle;
+        return Response.json({
+          conversation_id: originalId,
+          title: customTitle,
         });
       }
       if (url.pathname.endsWith("/archive")) {
@@ -109,6 +139,7 @@ function installHistory(
       if (url.pathname.startsWith("/api/public/conversations/"))
         return Response.json({
           turns: url.pathname.endsWith(originalId) ? [turn] : [],
+          title: url.pathname.endsWith(originalId) ? customTitle : null,
         });
       return new Response(null, { status: 404 });
     });
@@ -121,6 +152,141 @@ afterEach(() => {
 });
 
 describe("个人历史会话操作", () => {
+  it("改名成功立即同步列表与当前标题，不请求刷新列表，重新加载仍保留", async () => {
+    window.sessionStorage.setItem(storageKey, originalId);
+    const fetchMock = installHistory();
+    const first = renderHook(() => usePublicChat());
+    await waitFor(() => expect(first.result.current.sessionReady).toBe(true));
+    const listCalls = () =>
+      fetchMock.mock.calls.filter(
+        ([input]) => pathOf(input) === "/api/public/conversations",
+      ).length;
+    const before = listCalls();
+    await act(async () =>
+      first.result.current.renameHistory(originalId, "  报销资料  "),
+    );
+    expect(first.result.current.historySessions[0].title).toBe("报销资料");
+    expect(first.result.current.activeConversationTitle).toBe("报销资料");
+    expect(first.result.current.historyActionBusy).toBe(false);
+    expect(listCalls()).toBe(before);
+    const request = fetchMock.mock.calls.find(([input]) =>
+      pathOf(input).endsWith("/rename"),
+    );
+    expect(request?.[1]).toMatchObject({
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": "a".repeat(64) },
+    });
+    first.unmount();
+    const next = renderHook(() => usePublicChat());
+    await waitFor(() => expect(next.result.current.sessionReady).toBe(true));
+    expect(next.result.current.activeConversationTitle).toBe("报销资料");
+    expect(next.result.current.historySessions[0].title).toBe("报销资料");
+  });
+
+  it("从搜索中改名后立即移除旧词结果，顶栏保留新名，新词可搜到且归档不丢名", async () => {
+    window.sessionStorage.setItem(storageKey, originalId);
+    installHistory();
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    await act(async () => result.current.searchHistory("原问题"));
+    await act(async () => result.current.renameHistory(originalId, "采购记录"));
+    expect(result.current.historySessions).toHaveLength(0);
+    expect(result.current.activeConversationTitle).toBe("采购记录");
+    await act(async () => result.current.searchHistory("采购"));
+    expect(result.current.historySessions[0].title).toBe("采购记录");
+    await act(async () => result.current.archiveHistory(originalId, true));
+    await act(async () => result.current.changeHistoryView(true));
+    expect(result.current.historySessions[0].title).toBe("采购记录");
+    expect(result.current.activeConversationTitle).toBe("采购记录");
+  });
+
+  it("当前旧会话不在首批历史列表中，重开页面仍从详情恢复手动名称", async () => {
+    window.sessionStorage.setItem(storageKey, originalId);
+    installHistory({
+      list: () => Response.json({ items: [], total: 0, has_more: false }),
+    });
+    const first = renderHook(() => usePublicChat());
+    await waitFor(() => expect(first.result.current.sessionReady).toBe(true));
+    await act(async () =>
+      first.result.current.renameHistory(originalId, "旧会话的新名称"),
+    );
+    first.unmount();
+    const next = renderHook(() => usePublicChat());
+    await waitFor(() => expect(next.result.current.sessionReady).toBe(true));
+    expect(next.result.current.historySessions).toHaveLength(0);
+    expect(next.result.current.activeConversationTitle).toBe("旧会话的新名称");
+  });
+
+  it("失败不会覆盖旧名称，且解除操作中的禁用状态", async () => {
+    window.sessionStorage.setItem(storageKey, originalId);
+    installHistory({ renameStatus: 404 });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    await act(async () => {
+      await expect(
+        result.current.renameHistory(originalId, "不应保存的名字"),
+      ).rejects.toMatchObject({ status: 404 });
+    });
+    expect(result.current.historySessions[0].title).toBe("原问题");
+    expect(result.current.activeConversationTitle).toBe("原问题");
+    expect(result.current.historyActionBusy).toBe(false);
+  });
+
+  it("改名前迟到的搜索结果不能覆盖已保存的新名称", async () => {
+    window.sessionStorage.setItem(storageKey, originalId);
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+    let searching = false;
+    installHistory({
+      list: (url) => {
+        if (url.searchParams.get("query")) {
+          searching = true;
+          return pending;
+        }
+        return Response.json({
+          items: [
+            {
+              conversation_id: originalId,
+              title: "原问题",
+              updated_at: turn.created_at,
+            },
+          ],
+          total: 1,
+          has_more: false,
+        });
+      },
+    });
+    const { result } = renderHook(() => usePublicChat());
+    await waitFor(() => expect(result.current.sessionReady).toBe(true));
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current.searchHistory("问题");
+    });
+    expect(searching).toBe(true);
+    await act(async () => result.current.renameHistory(originalId, "问题资料"));
+    await act(async () => {
+      finish(
+        Response.json({
+          items: [
+            {
+              conversation_id: originalId,
+              title: "原问题",
+              updated_at: turn.created_at,
+            },
+          ],
+          total: 1,
+        }),
+      );
+      await request;
+    });
+    expect(result.current.historySessions[0].title).toBe("问题资料");
+    expect(result.current.activeConversationTitle).toBe("问题资料");
+    expect(result.current.historyLoading).toBe(false);
+  });
+
   it("历史分页追加且去重，标题搜索可以返回尚未加载的旧会话", async () => {
     let resolvePage!: (response: Response) => void;
     const pendingPage = new Promise<Response>((done) => {

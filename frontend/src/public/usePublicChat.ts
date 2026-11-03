@@ -7,6 +7,7 @@ import {
   createPublicSession,
   deletePublicNaturalConversation,
   getPublicNaturalHistory,
+  getPublicNaturalConversation,
   getPublicNaturalSessions,
   getPublicNaturalSource,
   getPublicCapabilities,
@@ -14,6 +15,7 @@ import {
   openPublicChat,
   PublicApiError,
   publicErrorMessage,
+  renamePublicNaturalConversation,
   sendPublicFeedback,
   stopPublicNaturalChat,
   type PublicFeedbackSubmission,
@@ -297,6 +299,9 @@ export function usePublicChat() {
   const [historySessions, setHistorySessions] = useState<
     PublicNaturalSession[]
   >([]);
+  const [conversationTitles, setConversationTitles] = useState<
+    Record<string, string>
+  >({});
   const [historyMoreCount, setHistoryMoreCount] = useState(0);
   const [historyArchived, setHistoryArchived] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -353,6 +358,7 @@ export function usePublicChat() {
     feedbackAttemptsRef.current.clear();
     setTurns([]);
     setHistorySessions([]);
+    setConversationTitles({});
     setHistoryMoreCount(0);
     historyRequestRef.current += 1;
     historyArchivedRef.current = false;
@@ -456,6 +462,12 @@ export function usePublicChat() {
           : sessions.items;
         historySessionsRef.current = items;
         setHistorySessions(items);
+        setConversationTitles((current) => ({
+          ...current,
+          ...Object.fromEntries(
+            items.map((item) => [item.conversation_id, item.title]),
+          ),
+        }));
         historyNextCursorRef.current = sessions.next_cursor;
         setHistoryHasMore(sessions.has_more && !!sessions.next_cursor);
         setHistoryMoreCount(
@@ -529,11 +541,18 @@ export function usePublicChat() {
           window.sessionStorage.setItem(key, restored);
           conversationRef.current = restored;
           setConversationId(restored);
-          const history = await getPublicNaturalHistory({
+          const snapshot = await getPublicNaturalConversation({
             conversationId: restored,
             csrfToken: session.csrfToken,
             signal,
           });
+          const history = snapshot.turns;
+          if (snapshot.title) {
+            setConversationTitles((current) => ({
+              ...current,
+              [restored]: snapshot.title!,
+            }));
+          }
           const historyScopes = history.at(-1)?.search_scopes ?? ["public"];
           const restoredScopes = orderedSearchScopes(
             historyScopes,
@@ -1098,11 +1117,12 @@ export function usePublicChat() {
       const csrfToken = csrfRef.current;
       if (!csrfToken) return;
       const historyRequestId = ++requestIdRef.current;
-      const history = await getPublicNaturalHistory({
+      const snapshot = await getPublicNaturalConversation({
         conversationId: selectedConversationId,
         csrfToken,
       });
       if (busyRef.current || historyRequestId !== requestIdRef.current) return;
+      const history = snapshot.turns;
       const historyScopes = history.at(-1)?.search_scopes ?? ["public"];
       const restoredScopes = orderedSearchScopes(
         historyScopes,
@@ -1124,6 +1144,12 @@ export function usePublicChat() {
       setScopeNotice(undefined);
       conversationRef.current = selectedConversationId;
       setConversationId(selectedConversationId);
+      if (snapshot.title) {
+        setConversationTitles((current) => ({
+          ...current,
+          [selectedConversationId]: snapshot.title!,
+        }));
+      }
       setTurns(
         history.map((item) =>
           restoreNaturalTurn(
@@ -1280,6 +1306,57 @@ export function usePublicChat() {
   const archiveHistory = useCallback(
     (id: string, archived: boolean) => updateHistoryConversation(id, archived),
     [updateHistoryConversation],
+  );
+  const renameHistory = useCallback(
+    async (selectedConversationId: string, title: string) => {
+      const csrfToken = csrfRef.current;
+      if (!csrfToken || !sessionReady)
+        throw new PublicApiError("请重新登录后再试。", { status: 401 });
+      if (!pageSettings.show_history)
+        throw new PublicApiError("历史会话当前未开放。", { status: 403 });
+      if (busyRef.current || historyActionRef.current)
+        throw new PublicApiError("请等待当前操作完成。", { status: 409 });
+      historyActionRef.current = true;
+      setHistoryActionBusy(true);
+      // 让改名前已发出的列表请求失效，避免旧名称覆盖保存后的即时结果。
+      historyRequestRef.current += 1;
+      historyFetchBusyRef.current = false;
+      setHistoryLoading(false);
+      setHistoryLoadingMore(false);
+      try {
+        const renamed = await renamePublicNaturalConversation({
+          conversationId: selectedConversationId,
+          title,
+          csrfToken,
+        });
+        if (csrfRef.current !== csrfToken) return;
+        const keyword = historyQueryRef.current.toLocaleLowerCase();
+        const items = historySessionsRef.current
+          .map((item) =>
+            item.conversation_id === selectedConversationId
+              ? { ...item, title: renamed.title }
+              : item,
+          )
+          .filter(
+            (item) =>
+              !keyword || item.title.toLocaleLowerCase().includes(keyword),
+          );
+        historySessionsRef.current = items;
+        setHistorySessions(items);
+        // 当前会话可能已被搜索过滤掉，独立记住标题使顶栏同步更新。
+        setConversationTitles((current) => ({
+          ...current,
+          [selectedConversationId]: renamed.title,
+        }));
+        setHistoryError(undefined);
+      } finally {
+        if (csrfRef.current === csrfToken) {
+          historyActionRef.current = false;
+          setHistoryActionBusy(false);
+        }
+      }
+    },
+    [pageSettings.show_history, sessionReady],
   );
   const deleteHistory = useCallback(
     (id: string) => updateHistoryConversation(id),
@@ -1554,6 +1631,7 @@ export function usePublicChat() {
     busy,
     changeSearchScopes,
     conversationId,
+    activeConversationTitle: conversationTitles[conversationId],
     deploymentId,
     downloadReference,
     readReference,
@@ -1574,6 +1652,7 @@ export function usePublicChat() {
     loadMoreHistory,
     retryHistory,
     archiveHistory,
+    renameHistory,
     deleteHistory,
     loggedOut,
     login,

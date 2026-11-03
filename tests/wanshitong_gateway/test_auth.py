@@ -8,20 +8,25 @@ from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from wanshitong_gateway.app import create_app
 from wanshitong_gateway.auth import GatewayAuth, register_auth_routes
 from wanshitong_gateway.compat.wanshitong.sso_client import SsoClient
 from wanshitong_gateway.compat.wanshitong.sso_session import (
     SsoIdentity,
     SsoSessionService,
 )
+from wanshitong_gateway.engine_settings import EngineSettings
 from wanshitong_gateway.roles import Role, UserProfile
 from wanshitong_gateway.settings import GatewayAuthSettings
 from wanshitong_gateway.store import GatewayStore
-from wanshitong_gateway.weknora.client import NativeHttpError
+from wanshitong_gateway.weknora.admin import NativeAdminClient
+from wanshitong_gateway.weknora.client import NativeHttpError, WeKnoraClient
+from wanshitong_gateway.weknora.principal import ExternalPrincipalSigner
 
 _ORIGIN = "http://candidate.test:8289"
 _TICKET = "a" * 32
@@ -160,6 +165,88 @@ def test_sso_public_cookie_does_not_grant_admin(
         == 401
     )
     assert auth.settings.admin_cookie_name not in browser.cookies
+
+
+def test_rename_requires_authenticated_public_cookie_and_current_csrf(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(browser, monkeypatch)
+    store = GatewayStore(auth.settings.database_path)
+    scope = {
+        "deployment_id": auth.settings.deployment_id,
+        "owner_id": "rdms:candidate_8289:1001",
+        "conversation_id": "csrf-rename",
+    }
+    store.bind_session(**scope, native_session_id="native-csrf")
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/sessions/native-csrf"
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    engine = EngineSettings(
+        base_url="http://native.test:8080",
+        tenant_id=8,
+        public_kb_ids=("kb-public",),
+        api_key_file=auth.settings.database_path.parent / "unused-api-key",
+        external_signing_key_file=(
+            auth.settings.database_path.parent / "unused-signing-key"
+        ),
+        admin_email="candidate@example.test",
+        admin_password_file=auth.settings.database_path.parent / "unused-pass",
+    )
+    transport = httpx.MockTransport(respond)
+    native = WeKnoraClient(
+        base_url=engine.base_url,
+        api_key="test-only-key",
+        signer=ExternalPrincipalSigner(
+            secret="test-signing",  # noqa: S106
+            tenant_id=engine.tenant_id,
+            deployment_id=auth.settings.deployment_id,
+        ),
+        transport=transport,
+    )
+    admin = NativeAdminClient(
+        base_url=engine.base_url,
+        email=engine.admin_email,
+        password="test-only-password",  # noqa: S106
+        tenant_id=engine.tenant_id,
+        transport=transport,
+    )
+    app = create_app(
+        auth=auth, store=store, engine=engine, native=native, admin_native=admin
+    )
+    path = "/kb/api/public/conversations/csrf-rename/rename"
+    with TestClient(app, base_url=_ORIGIN) as client:
+        assert client.post(path, json={"title": "缺少登录"}).status_code == 401
+        client.cookies.update(browser.cookies)
+        for headers in (
+            {"Origin": _ORIGIN},
+            {"Origin": _ORIGIN, "X-CSRF-Token": "invalid"},
+            {
+                "Origin": "http://other.test",
+                "X-CSRF-Token": session["csrf_token"],
+            },
+        ):
+            assert (
+                client.post(
+                    path, json={"title": "不得保存"}, headers=headers
+                ).status_code
+                == 403
+            )
+        assert requests == []
+        assert store.conversation_title(**scope) is None
+        response = client.post(
+            path,
+            json={"title": "本人有效会话"},
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]},
+        )
+        assert response.status_code == 200
+    assert store.conversation_title(**scope) == "本人有效会话"
+    assert len(requests) == 1
 
 
 def test_admin_session_is_independent_and_csrf_protected(

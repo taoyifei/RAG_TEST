@@ -389,11 +389,11 @@ export async function stopPublicNaturalChat(options: {
   return result.cancelled;
 }
 
-export async function getPublicNaturalHistory(options: {
+export async function getPublicNaturalConversation(options: {
   conversationId: string;
   csrfToken: string;
   signal?: AbortSignal;
-}): Promise<PublicNaturalHistoryTurn[]> {
+}): Promise<{ turns: PublicNaturalHistoryTurn[]; title?: string | null }> {
   const path = `/api/public/conversations/${encodeURIComponent(options.conversationId)}`;
   const response = await fetch(withAppBase(path), {
     credentials: "same-origin",
@@ -403,10 +403,16 @@ export async function getPublicNaturalHistory(options: {
     },
     signal: options.signal,
   });
-  const body = await requireJson<{ turns: PublicNaturalHistoryTurn[] }>(
-    response,
-  );
-  return body.turns;
+  return requireJson<{
+    turns: PublicNaturalHistoryTurn[];
+    title?: string | null;
+  }>(response);
+}
+
+export async function getPublicNaturalHistory(
+  options: Parameters<typeof getPublicNaturalConversation>[0],
+): Promise<PublicNaturalHistoryTurn[]> {
+  return (await getPublicNaturalConversation(options)).turns;
 }
 
 export async function getPublicNaturalSessions(options: {
@@ -468,6 +474,24 @@ export async function archivePublicNaturalConversation(options: {
     body: JSON.stringify({ archived: options.archived }),
   });
   await requireJson<{ conversation_id: string; archived: boolean }>(response);
+}
+
+export async function renamePublicNaturalConversation(options: {
+  conversationId: string;
+  title: string;
+  csrfToken: string;
+}): Promise<{ conversation_id: string; title: string }> {
+  const path = `/api/public/conversations/${encodeURIComponent(options.conversationId)}/rename`;
+  const response = await fetch(withAppBase(path), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": options.csrfToken,
+    },
+    body: JSON.stringify({ title: options.title }),
+  });
+  return requireJson<{ conversation_id: string; title: string }>(response);
 }
 
 export async function deletePublicNaturalConversation(options: {

@@ -14,13 +14,13 @@ import sqlite3
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from starlette.background import BackgroundTask
 
 from wanshitong_gateway.admin_scope import AdminScopeGuard
@@ -167,6 +167,19 @@ class _ConversationArchiveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     archived: bool
+
+
+class _ConversationRenameRequest(BaseModel):
+    """本人历史会话的手动名称，先去掉首尾空白再校验长度。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: Annotated[
+        str,
+        StringConstraints(
+            strict=True, strip_whitespace=True, min_length=1, max_length=120
+        ),
+    ]
 
 
 class _FeedbackReviewRequest(BaseModel):
@@ -1573,10 +1586,16 @@ def create_app(  # noqa: PLR0913, PLR0915
             owner_id=owner_id,
             archived=archived,
         )
+        # 手动名称与原生标题可能不同；仍只批量读取一次，再按实际展示名搜索。
+        native_keyword = (
+            "" if any(row["custom_title"] for row in rows) else keyword
+        )
         # 原生列表可包含兼容旧版的空主体记录；先取本人映射交集，不公开原生总数。
         try:
             sessions = (
-                await native.list_sessions(user_id=user_id, keyword=keyword)
+                await native.list_sessions(
+                    user_id=user_id, keyword=native_keyword
+                )
                 if rows
                 else []
             )
@@ -1600,13 +1619,18 @@ def create_app(  # noqa: PLR0913, PLR0915
                 )
             except HTTPException:
                 continue
-            title = titles[row["native_session_id"]]
+            native_title = titles[row["native_session_id"]]
+            title = row["custom_title"] or (
+                native_title
+                if isinstance(native_title, str) and native_title
+                else "新对话"
+            )
+            if keyword and keyword.casefold() not in title.casefold():
+                continue
             visible.append(
                 {
                     "conversation_id": row["conversation_id"],
-                    "title": title
-                    if isinstance(title, str) and title
-                    else "新对话",
+                    "title": title,
                     "updated_at": row["updated_at"],
                     "archived": archived,
                 }
@@ -1632,6 +1656,52 @@ def create_app(  # noqa: PLR0913, PLR0915
             if has_more
             else None,
         }
+
+    @app.post("/api/public/conversations/{conversation_id}/rename")
+    async def rename_conversation(
+        conversation_id: str,
+        body: _ConversationRenameRequest,
+        request: Request,
+    ) -> dict[str, str]:
+        """确认本人会话及当前资料权限后保存名称，不触发原生自动标题。"""
+        principal = auth.require_public(request, csrf=True)
+        user_id = _required_user(principal.user_id)
+        owner_id = _owner_id(auth, user_id)
+        lock = locks.setdefault((owner_id, conversation_id), asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(409, "会话正在回答，请结束后再操作。")
+        async with lock:
+            native_session_id = store.native_session(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            )
+            if native_session_id is None:
+                raise HTTPException(404, "conversation not found")
+            library.check_history(
+                auth.require_profile(request),
+                store.list_turns(
+                    deployment_id=auth.settings.deployment_id,
+                    owner_id=owner_id,
+                    conversation_id=conversation_id,
+                ),
+            )
+            try:
+                await native.session(
+                    user_id=user_id, session_id=native_session_id
+                )
+            except NativeHttpError as error:
+                if error.status_code in {403, 404}:
+                    raise HTTPException(404, "conversation not found") from None
+                raise HTTPException(502, "改名未完成，请稍后重试。") from None
+            if not store.rename_conversation(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+                title=body.title,
+            ):
+                raise HTTPException(404, "conversation not found")
+        return {"conversation_id": conversation_id, "title": body.title}
 
     @app.post("/api/public/conversations/{conversation_id}/archive")
     async def archive_conversation(
@@ -1761,10 +1831,12 @@ def create_app(  # noqa: PLR0913, PLR0915
             or library.historical_search_scopes(stored_turns)
             or ("public",)
         )
+        history_accessible = True
         for turn in stored_turns:
             try:
                 library.check_turn(auth.require_profile(request), turn)
             except HTTPException:
+                history_accessible = False
                 continue
             native_message = native_by_id.get(turn["native_message_id"])
             native_answer = (
@@ -1833,7 +1905,16 @@ def create_app(  # noqa: PLR0913, PLR0915
                     "search_scopes": list(search_scopes),
                 }
             )
-        return {"turns": turns}
+        return {
+            "turns": turns,
+            "title": store.conversation_title(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            )
+            if history_accessible
+            else None,
+        }
 
     @app.get(
         "/api/public/conversations/{conversation_id}/turns/"

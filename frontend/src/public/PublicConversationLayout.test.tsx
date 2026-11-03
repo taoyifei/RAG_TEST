@@ -65,6 +65,76 @@ afterEach(() => {
 });
 
 describe("历史会话侧栏", () => {
+  it("会话菜单可重命名，自动选中旧名称，Enter保存并回到原入口", async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn().mockResolvedValue(undefined);
+    const parameters = props();
+    render(<PublicConversationLayout {...parameters} onRename={onRename} />);
+    const trigger = screen.getByRole("button", {
+      name: `会话操作：${sessions[0].title}`,
+    });
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "重命名会话" }));
+    expect(parameters.onSelect).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "重命名会话" });
+    const input = within(dialog).getByRole<HTMLInputElement>("textbox", {
+      name: "会话名称",
+    });
+    expect(input).toHaveFocus();
+    expect(
+      input.value.slice(input.selectionStart ?? 0, input.selectionEnd ?? 0),
+    ).toBe(sessions[0].title);
+    await user.clear(input);
+    await user.type(input, "  我的报账资料  {Enter}");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "重命名会话" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(onRename).toHaveBeenCalledExactlyOnceWith(
+      "history-1",
+      "我的报账资料",
+    );
+    expect(trigger).toHaveFocus();
+    expect(screen.getByRole("status")).toHaveTextContent("会话名称已更新");
+  });
+
+  it("取消、Esc和空名称不会写入，保存失败保留输入并显示可重试提示", async () => {
+    const user = userEvent.setup();
+    const onRename = vi
+      .fn()
+      .mockRejectedValue(
+        new PublicApiError("不应展示的内部信息", { status: 502 }),
+      );
+    render(<PublicConversationLayout {...props()} onRename={onRename} />);
+    const trigger = screen.getByRole("button", {
+      name: `会话操作：${sessions[0].title}`,
+    });
+    const open = async () => {
+      await user.click(trigger);
+      await user.click(screen.getByRole("button", { name: "重命名会话" }));
+      return screen.getByRole("dialog", { name: "重命名会话" });
+    };
+    let dialog = await open();
+    await user.clear(within(dialog).getByRole("textbox"));
+    expect(within(dialog).getByRole("button", { name: "保存" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(onRename).not.toHaveBeenCalled();
+    dialog = await open();
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(onRename).not.toHaveBeenCalled();
+    dialog = await open();
+    const input = within(dialog).getByRole("textbox");
+    await user.clear(input);
+    await user.type(input, "新名称{Enter}");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "暂时无法保存名称",
+    );
+    expect(input).toHaveValue("新名称");
+    expect(within(dialog).getByRole("button", { name: "保存" })).toBeEnabled();
+    expect(screen.queryByText("不应展示的内部信息")).not.toBeInTheDocument();
+  });
+
   it("全量标题搜索在输入停顿后执行，加载更多保留已有列表和草稿", async () => {
     const user = userEvent.setup();
     const parameters = props();

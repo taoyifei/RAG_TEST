@@ -29,6 +29,7 @@ def test_existing_history_migrates_and_archive_remains_user_scoped(
     store = GatewayStore(database)
     scope = {"deployment_id": "candidate", "owner_id": "owner"}
     assert store.list_conversations(**scope)[0]["conversation_id"] == "old"
+    assert store.conversation_title(**scope, conversation_id="old") is None
     assert not store.archive_conversation(
         deployment_id="candidate",
         owner_id="other",
@@ -56,6 +57,98 @@ def test_existing_history_migrates_and_archive_remains_user_scoped(
         **scope, conversation_id="old", archived=False
     )
     assert reopened.list_conversations(**scope) == archived
+
+
+def test_custom_title_survives_reload_continuation_and_archive(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "gateway.sqlite3"
+    store = GatewayStore(database)
+    scope = {"deployment_id": "candidate", "owner_id": "owner"}
+    store.bind_session(
+        **scope,
+        conversation_id="same",
+        native_session_id="native-original",
+        search_scopes=("public", "personal"),
+    )
+    before = store.list_conversations(**scope)[0]
+    assert store.rename_conversation(
+        **scope, conversation_id="same", title="我的委托单"
+    )
+    assert store.list_conversations(**scope)[0] == {
+        **before,
+        "custom_title": "我的委托单",
+    }
+    assert store.archive_conversation(
+        **scope, conversation_id="same", archived=True
+    )
+    reopened = GatewayStore(database)
+    assert reopened.conversation_title(**scope, conversation_id="same") == (
+        "我的委托单"
+    )
+    assert (
+        reopened.bind_session(
+            **scope,
+            conversation_id="same",
+            native_session_id="unused",
+            search_scopes=("public", "personal"),
+        )
+        == "native-original"
+    )
+    reopened.start_turn(
+        **scope,
+        trace_id="continued-turn",
+        conversation_id="same",
+        native_session_id="native-original",
+        question="继续提问",
+    )
+    reopened.finish_turn(
+        trace_id="continued-turn",
+        status="completed",
+        answer="保留手动名称",
+        references=(),
+        native_message_id="continued-message",
+        native_request_id="continued-request",
+        truncated=False,
+        finish_reason="stop",
+    )
+    assert reopened.list_conversations(**scope) == []
+    assert reopened.archive_conversation(
+        **scope, conversation_id="same", archived=False
+    )
+    assert reopened.list_conversations(**scope)[0]["custom_title"] == (
+        "我的委托单"
+    )
+    assert reopened.conversation_search_scopes(
+        **scope, conversation_id="same"
+    ) == ("public", "personal")
+
+
+def test_rename_is_owner_deployment_and_deleted_scoped(tmp_path: Path) -> None:
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    scope = {"deployment_id": "candidate", "owner_id": "owner"}
+    store.bind_session(
+        **scope, conversation_id="same", native_session_id="native-original"
+    )
+    for incorrect in (
+        {**scope, "owner_id": "other"},
+        {**scope, "deployment_id": "other"},
+    ):
+        assert not store.rename_conversation(
+            **incorrect, conversation_id="same", title="不可修改"
+        )
+        assert (
+            store.conversation_title(**incorrect, conversation_id="same")
+            is None
+        )
+    assert store.rename_conversation(
+        **scope, conversation_id="same", title="本人名称"
+    )
+    assert store.delete_conversation(**scope, conversation_id="same")
+    assert not store.rename_conversation(
+        **scope, conversation_id="same", title="不能恢复已删除会话"
+    )
+    assert store.conversation_title(**scope, conversation_id="same") is None
 
 
 def test_delete_removes_turn_children_and_keeps_owner_scoped_tombstone(

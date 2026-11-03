@@ -2,6 +2,7 @@ import {
   Archive,
   ArchiveRestore,
   MoreHorizontal,
+  Pencil,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -24,6 +25,7 @@ import {
 import { redirectToSso } from "./authNavigation";
 import { PublicApiError, type PublicNaturalSession } from "./publicApi";
 import { AnchoredPopover } from "./AnchoredPopover";
+import { RenameConversationDialog } from "./RenameConversationDialog";
 
 const COMPACT_QUERY = "(max-width: 900px)";
 const COLLAPSED_KEY = "wanshitong-sidebar-collapsed";
@@ -72,6 +74,7 @@ const ConversationItem = memo(function ConversationItem({
   opening,
   onSelect,
   onArchive,
+  onRename,
   onDelete,
   archived,
   active,
@@ -82,6 +85,7 @@ const ConversationItem = memo(function ConversationItem({
   opening: boolean;
   onSelect: (id: string) => Promise<void>;
   onArchive?: (item: PublicNaturalSession) => void;
+  onRename?: (item: PublicNaturalSession, trigger: HTMLElement | null) => void;
   onDelete?: (item: PublicNaturalSession) => void;
   archived: boolean;
   active: boolean;
@@ -112,7 +116,7 @@ const ConversationItem = memo(function ConversationItem({
         <span>{item.title}</span>
         {opening && <small role="status">打开中…</small>}
       </button>
-      {onArchive && onDelete && (
+      {(onRename || (onArchive && onDelete)) && (
         <>
           <button
             aria-label={`会话操作：${item.title}`}
@@ -137,31 +141,47 @@ const ConversationItem = memo(function ConversationItem({
             role="group"
             width={176}
           >
-            <button
-              onClick={() => {
-                dismiss();
-                onArchive(item);
-              }}
-              type="button"
-            >
-              {archived ? (
-                <ArchiveRestore aria-hidden="true" size={15} />
-              ) : (
-                <Archive aria-hidden="true" size={15} />
-              )}
-              {archived ? "恢复会话" : "归档会话"}
-            </button>
-            <button
-              className="is-destructive"
-              onClick={() => {
-                dismiss();
-                onDelete(item);
-              }}
-              type="button"
-            >
-              <Trash2 aria-hidden="true" size={15} />
-              删除会话
-            </button>
+            {onRename && (
+              <button
+                onClick={() => {
+                  dismiss();
+                  onRename(item, trigger.current);
+                }}
+                type="button"
+              >
+                <Pencil aria-hidden="true" size={15} />
+                重命名会话
+              </button>
+            )}
+            {onArchive && (
+              <button
+                onClick={() => {
+                  dismiss();
+                  onArchive(item);
+                }}
+                type="button"
+              >
+                {archived ? (
+                  <ArchiveRestore aria-hidden="true" size={15} />
+                ) : (
+                  <Archive aria-hidden="true" size={15} />
+                )}
+                {archived ? "恢复会话" : "归档会话"}
+              </button>
+            )}
+            {onDelete && (
+              <button
+                className="is-destructive"
+                onClick={() => {
+                  dismiss();
+                  onDelete(item);
+                }}
+                type="button"
+              >
+                <Trash2 aria-hidden="true" size={15} />
+                删除会话
+              </button>
+            )}
           </AnchoredPopover>
         </>
       )}
@@ -197,6 +217,7 @@ export function PublicConversationLayout({
   onLoadMoreHistory,
   onRetryHistory,
   onArchive,
+  onRename,
   onDelete,
   toolbar,
   navigation = [],
@@ -221,6 +242,7 @@ export function PublicConversationLayout({
   onLoadMoreHistory?: () => Promise<void>;
   onRetryHistory?: () => Promise<void>;
   onArchive?: (id: string, archived: boolean) => Promise<void>;
+  onRename?: (id: string, title: string) => Promise<void>;
   onDelete?: (id: string) => Promise<void>;
   toolbar: ReactNode;
   navigation?: PublicNavigationItem[];
@@ -239,6 +261,10 @@ export function PublicConversationLayout({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [actionId, setActionId] = useState<string>();
+  const [renaming, setRenaming] = useState<{
+    item: PublicNaturalSession;
+    trigger: HTMLElement | null;
+  }>();
   const historyToggleRef = useRef<HTMLButtonElement>(null);
   const requestRef = useRef(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -514,6 +540,15 @@ export function PublicConversationLayout({
     },
     [updateConversation],
   );
+  const renameConversation = useCallback(
+    (item: PublicNaturalSession, trigger: HTMLElement | null) => {
+      if (busy || openingId || historyActionBusy || actionId) return;
+      setError(undefined);
+      setNotice(undefined);
+      setRenaming({ item, trigger });
+    },
+    [busy, openingId, historyActionBusy, actionId],
+  );
 
   return (
     <div
@@ -707,6 +742,7 @@ export function PublicConversationLayout({
                         key={item.conversation_id}
                         onSelect={selectSession}
                         onArchive={onArchive ? archiveConversation : undefined}
+                        onRename={onRename ? renameConversation : undefined}
                         onDelete={onDelete ? deleteConversation : undefined}
                       />
                     ))}
@@ -796,6 +832,21 @@ export function PublicConversationLayout({
         </header>
         <div className="wst-content-pane">{children}</div>
       </div>
+      {renaming && onRename && (
+        <RenameConversationDialog
+          item={renaming.item}
+          key={renaming.item.conversation_id}
+          onClose={() => setRenaming(undefined)}
+          onSave={async (title) => {
+            await onRename(renaming.item.conversation_id, title);
+            setNotice("会话名称已更新。");
+          }}
+          returnFocusTo={renaming.trigger}
+          returnFocusFallback={() =>
+            historyToggleRef.current ?? triggerRef.current
+          }
+        />
+      )}
     </div>
   );
 }
