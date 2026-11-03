@@ -90,7 +90,7 @@ def managed_history(
 ]:
     """提供两用户权限边界和可控原生删除失败的真实HTTP客户端合同。"""
     requests: list[httpx.Request] = []
-    status = {"delete": 200}
+    status = {"delete": 200, "session": 200}
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -111,8 +111,11 @@ def managed_history(
             )
         if request.url.path == "/api/v1/sessions/native-1":
             return httpx.Response(
-                200,
-                json={"success": True, "data": {"title": "历史管理验收"}},
+                status["session"],
+                json={
+                    "success": status["session"] == 200,
+                    "data": {"title": "历史管理验收"},
+                },
             )
         if request.url.path == "/api/v1/messages/native-1/load":
             return httpx.Response(
@@ -192,6 +195,172 @@ def managed_history(
     )
     with TestClient(app, base_url="http://candidate.test") as browser:
         yield browser, store, requests, status
+
+
+def test_rename_persists_normalized_title_in_list_and_opened_history(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+) -> None:
+    browser, _store, requests, _status = managed_history
+    base = "/kb/api/public/conversations"
+    before = browser.get(base).json()["items"][0]
+    history_before = browser.get(base + "/c-1").json()
+    assert history_before["title"] is None
+    saved = browser.post(base + "/c-1/rename", json={"title": "  我的委托单  "})
+    assert saved.status_code == 200
+    assert saved.json() == {"conversation_id": "c-1", "title": "我的委托单"}
+    assert browser.get(base).json()["items"][0] == {
+        **before,
+        "title": "我的委托单",
+    }
+    # 当前搜索列表没有这条记录时，单独重新打开仍可读回名称及原有正文。
+    assert browser.get(base, params={"query": "其他标题"}).json()["items"] == []
+    assert browser.get(base + "/c-1").json() == {
+        **history_before,
+        "title": "我的委托单",
+    }
+    assert (
+        browser.post(base + "/c-1/archive", json={"archived": True}).status_code
+        == 200
+    )
+    assert (
+        browser.post(
+            base + "/c-1/rename", json={"title": "归档后的委托单"}
+        ).status_code
+        == 200
+    )
+    assert browser.get(base + "?archived=true").json()["items"][0]["title"] == (
+        "归档后的委托单"
+    )
+    assert (
+        browser.post(
+            base + "/c-1/archive", json={"archived": False}
+        ).status_code
+        == 200
+    )
+    assert browser.get(base + "/c-1").json()["title"] == "归档后的委托单"
+    assert all(request.method == "GET" for request in requests)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"title": ""},
+        {"title": " \n\t "},
+        {"title": "长" * 121},
+        {"title": None},
+        {"title": 123},
+        {"title": ["名称"]},
+        {"title": "名称", "owner_id": "u2"},
+    ],
+)
+def test_invalid_rename_does_not_change_title_or_call_native(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    body: dict[str, Any],
+) -> None:
+    browser, store, requests, _status = managed_history
+    scope = {"deployment_id": "candidate", "owner_id": "rdms:candidate:u1"}
+    assert store.rename_conversation(
+        **scope, conversation_id="c-1", title="保留原名称"
+    )
+    response = browser.post(
+        "/kb/api/public/conversations/c-1/rename", json=body
+    )
+    assert response.status_code == 422
+    assert requests == []
+    assert store.conversation_title(**scope, conversation_id="c-1") == (
+        "保留原名称"
+    )
+
+
+def test_rename_accepts_maximum_after_trimming_and_rejects_other_owner(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+) -> None:
+    browser, _store, requests, _status = managed_history
+    base = "/kb/api/public/conversations/c-1/rename"
+    assert (
+        browser.post(
+            base, json={"title": "不属于本人"}, headers={"x-test-user": "u2"}
+        ).status_code
+        == 404
+    )
+    assert requests == []
+    title = "名" * 120
+    assert browser.post(base, json={"title": "  " + title + "  "}).json() == {
+        "conversation_id": "c-1",
+        "title": title,
+    }
+    assert browser.delete("/kb/api/public/conversations/c-1").status_code == 200
+    before = len(requests)
+    assert browser.post(base, json={"title": "已删除"}).status_code == 404
+    assert len(requests) == before
+
+
+@pytest.mark.parametrize("upstream_status", [403, 404, 503])
+def test_native_rename_validation_failure_preserves_original_title(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    upstream_status: int,
+) -> None:
+    browser, store, _requests, status = managed_history
+    status["session"] = upstream_status
+    scope = {"deployment_id": "candidate", "owner_id": "rdms:candidate:u1"}
+    assert store.rename_conversation(
+        **scope, conversation_id="c-1", title="仍是旧名称"
+    )
+    response = browser.post(
+        "/kb/api/public/conversations/c-1/rename", json={"title": "新名称"}
+    )
+    assert response.status_code == (
+        404 if upstream_status in {403, 404} else 502
+    )
+    assert store.conversation_title(**scope, conversation_id="c-1") == (
+        "仍是旧名称"
+    )
+
+
+def test_revoked_history_does_not_allow_rename_or_expose_custom_title(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    tmp_path: Path,
+) -> None:
+    browser, store, requests, _status = managed_history
+    scope = {"deployment_id": "candidate", "owner_id": "rdms:candidate:u1"}
+    assert store.rename_conversation(
+        **scope, conversation_id="c-1", title="人力内部手动名称"
+    )
+    with sqlite3.connect(tmp_path / "gateway.sqlite3") as connection:
+        connection.execute(
+            "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES(?,?,?)",
+            ("kb-hr-secret", "hr_internal", ""),
+        )
+        connection.execute(
+            "UPDATE gateway_turns SET kb_scope_json=? WHERE trace_id=?",
+            ('["kb-hr-secret"]', "trace-history"),
+        )
+    base = "/kb/api/public/conversations"
+    assert (
+        browser.post(
+            base + "/c-1/rename", json={"title": "越权修改"}
+        ).status_code
+        == 403
+    )
+    assert requests == []
+    listing = browser.get(base, params={"query": "人力内部手动名称"}).json()
+    assert listing["total"] == 0
+    assert listing["items"] == []
+    assert browser.get(base + "/c-1").json() == {"turns": [], "title": None}
+    assert store.conversation_title(**scope, conversation_id="c-1") == (
+        "人力内部手动名称"
+    )
 
 
 def test_archive_restore_keeps_history_and_owner_boundary(
@@ -311,6 +480,12 @@ def test_busy_conversation_rejects_overlapping_history_mutations(
                 == 409
             )
             assert browser.delete(base).status_code == 409
+            assert (
+                browser.post(
+                    base + "/rename", json={"title": "回答期间不可改名"}
+                ).status_code
+                == 409
+            )
         finally:
             release.set()
         assert pending.result(timeout=3).json() == {"deleted": True}
@@ -378,6 +553,72 @@ def _paginated_history_titles(
 
     monkeypatch.setattr(WeKnoraClient, "list_sessions", list_sessions)
     return sessions, calls
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_custom_title_search_finds_older_history_and_uses_stable_cursor(
+    managed_history: tuple[
+        TestClient, GatewayStore, list[httpx.Request], dict[str, int]
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+    archived: bool,
+) -> None:
+    browser, store, _requests, _status = managed_history
+    sessions, calls = _paginated_history_titles(
+        store, monkeypatch, archived=archived
+    )
+    scope = {"deployment_id": "candidate", "owner_id": "rdms:candidate:u1"}
+    for index in range(2):
+        assert store.rename_conversation(
+            **scope,
+            conversation_id=f"page-{index:03d}",
+            title=f"手动 FAQ {index}",
+        )
+    base = "/kb/api/public/conversations"
+    params = {"archived": str(archived).lower()}
+    initial = browser.get(base, params={**params, "limit": 50}).json()
+    assert initial["total"] == 65
+    assert all(
+        item["conversation_id"] != "page-000" for item in initial["items"]
+    )
+    found = browser.get(
+        base, params={**params, "query": " faq ", "limit": 1}
+    ).json()
+    assert found["total"] == 2
+    assert found["items"][0]["conversation_id"] == "page-001"
+    assert found["items"][0]["title"] == "手动 FAQ 1"
+    assert found["has_more"] is True
+    assert calls[-1] == ("u1", "")
+    cursor = found["next_cursor"]
+    # 原生继续生成自动标题不会覆盖手动名称，也不会改变本地分页顺序。
+    sessions["native-page-000"] = "原生自动生成的新标题"
+    second = browser.get(
+        base, params={**params, "query": "faq", "limit": 1, "cursor": cursor}
+    ).json()
+    assert second["items"][0]["conversation_id"] == "page-000"
+    assert second["items"][0]["title"] == "手动 FAQ 0"
+    assert second["has_more"] is False
+    assert (
+        browser.get(
+            base, params={**params, "query": "原生自动生成的新标题"}
+        ).json()["total"]
+        == 0
+    )
+    assert (
+        browser.get(
+            base,
+            params={**params, "query": "FAQ", "cursor": cursor},
+        ).status_code
+        == 422
+    )
+    assert (
+        browser.get(
+            base,
+            params={**params, "query": "faq"},
+            headers={"x-test-user": "u2"},
+        ).json()["items"]
+        == []
+    )
 
 
 @pytest.mark.parametrize("archived", [False, True])

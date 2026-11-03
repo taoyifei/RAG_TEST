@@ -22,7 +22,7 @@ function controlsWithin(panel: HTMLElement): HTMLElement[] {
   );
 }
 
-/** 阅读浮层共用主题、焦点和模态隔离，不创建额外资源入口。 */
+/** 浮层共用主题、焦点和模态隔离，不创建额外资源入口。 */
 export function ReadingOverlay({
   children,
   kind,
@@ -34,7 +34,7 @@ export function ReadingOverlay({
   suspended = false,
 }: {
   children: ReactNode;
-  kind: "reference" | "image";
+  kind: "reference" | "image" | "rename";
   label: string;
   modal: boolean;
   onClose: () => void;
@@ -180,7 +180,7 @@ export function ReadingOverlay({
     >
       {modal && (
         <button
-          aria-label={`关闭${kind === "image" ? "图片预览" : "来源阅读"}遮罩`}
+          aria-label={`关闭${kind === "image" ? "图片预览" : kind === "rename" ? "重命名会话" : "来源阅读"}遮罩`}
           className="wst-reading-backdrop"
           onClick={onClose}
           tabIndex={-1}

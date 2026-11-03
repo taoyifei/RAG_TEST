@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS gateway_conversations (
     conversation_id TEXT NOT NULL,
     native_session_id TEXT NOT NULL,
     search_scopes_json TEXT,
+    custom_title TEXT,
     archived_at TEXT,
     deleted_at TEXT,
     created_at TEXT NOT NULL,
@@ -186,7 +187,7 @@ class GatewayStore:
                     "ALTER TABLE gateway_conversations "
                     "ADD COLUMN search_scopes_json TEXT"
                 )
-            for name in ("archived_at", "deleted_at"):
+            for name in ("archived_at", "deleted_at", "custom_title"):
                 if name not in conversation_columns:
                     connection.execute(
                         "ALTER TABLE gateway_conversations "
@@ -426,7 +427,8 @@ class GatewayStore:
         """按归档状态列出本人有效会话，不展示已删除的映射墓碑。"""
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT conversation_id,native_session_id,updated_at "
+                "SELECT conversation_id,native_session_id,updated_at, "
+                "coalesce(custom_title,'') AS custom_title "
                 "FROM gateway_conversations WHERE deployment_id=? "
                 "AND owner_id=? AND deleted_at IS NULL "
                 "AND (archived_at IS NOT NULL)=? "
@@ -434,6 +436,38 @@ class GatewayStore:
                 (deployment_id, owner_id, archived),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def conversation_title(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> str | None:
+        """读取本人有效会话的手动名称，不回退到原生自动标题。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT custom_title FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=? "
+                "AND deleted_at IS NULL",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+        title = row["custom_title"] if row is not None else None
+        return title if isinstance(title, str) else None
+
+    def rename_conversation(
+        self,
+        *,
+        deployment_id: str,
+        owner_id: str,
+        conversation_id: str,
+        title: str,
+    ) -> bool:
+        """只修改本人有效会话的手动名称，保留排序、归档及资料范围。"""
+        with self._connect() as connection:
+            result = connection.execute(
+                "UPDATE gateway_conversations SET custom_title=? "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=? "
+                "AND deleted_at IS NULL",
+                (title, deployment_id, owner_id, conversation_id),
+            )
+        return result.rowcount == 1
 
     def conversation_deleted(
         self, *, deployment_id: str, owner_id: str, conversation_id: str

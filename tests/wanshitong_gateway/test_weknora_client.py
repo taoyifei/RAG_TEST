@@ -148,6 +148,25 @@ async def test_delete_session_uses_owner_and_requires_native_success(
 
 
 @pytest.mark.asyncio
+async def test_session_read_maps_connection_failure_without_retry() -> None:
+    calls = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ConnectError("synthetic-unavailable", request=request)
+
+    client = _message_client(respond)
+    try:
+        with pytest.raises(NativeHttpError, match="读取连接失败") as caught:
+            await client.session(user_id="user-1", session_id="native-s1")
+        assert caught.value.status_code == 502
+    finally:
+        await client.close()
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_session_and_chat_use_native_api_without_rewriting() -> None:
     requests: list[httpx.Request] = []
 

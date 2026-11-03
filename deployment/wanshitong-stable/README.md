@@ -1,4 +1,6 @@
-# 湾事通 × WeKnora 部署
+# 历史部署说明（WeKnora 0.8.2）
+
+**本文件记录2026年9月旧版的部署过程。当前生产与测试均已使用WeKnora 0.9.0，现行环境、功能和分支以[根目录README](../../README.md)为准，构建及隔离说明见[V2部署文档](../wanshitong-v2/README.md)。下方的旧容器、镜像、8192上下文、4并发及回退步骤不代表当前运行配置，不能直接套用到当前环境。**
 
 **2026-09-30 当前状态：有限生产试用已接入“湾小度”。** 正式内网入口为 `http://10.242.180.54:18288/kb/`，公网入口为 `https://devmng.nat200.top/kb/`。54:18288 转发到 60:8288 `wst_pilot_prefix_proxy_popular_20260930`，再到 60:18294 `wst_pilot_production_edge_brand_20260930`；生产网关运行新品牌镜像，原生 WeKnora 与生产数据沿用原服务。生产公共应用为 `ACTIVE` 修订版 6。54:8289 仍是独立测试环境，不连接生产引擎；上一版代理、edge、镜像与数据保留供回退。现场验收与剩余限制见[发布门禁](PILOT-RELEASE-GATE.md)，现行链路和回退见[切流手册](PILOT-CUTOVER-ROLLBACK.md)。
 
@@ -6,7 +8,7 @@
 
 2026-09-26 的现场测试入口是 `http://10.242.180.54:8289/kb/`，由 54 的原测试转发进入 60 上独立候选栈。原 8289 应用容器已停止但保留（`14c0f9a42c14`），原镜像 `sha256:ca38110829dd5a1e65589e9571744a1c7342b3b2fc95e94004ba9f7aa9168d06`、数据及切换前 SQLite 快照均保留。该段为候选阶段的历史记录；当前正式入口及暂停状态以[切流手册](PILOT-CUTOVER-ROLLBACK.md)为准。
 
-源码分支 `wanshitong-stable` 最终交付时在 `/home/jerry/work/RAG` 检出，VS Code 可直接在原目录查看。此前独立工作目录 `/home/jerry/work/RAG-wanshitong-stable` 保留为 detached HEAD 快照；Git 不允许同一分支同时在两个 worktree 中检出。
+查看已发布源码请使用 `wanshitong-stable`；工作目录由开发者自行选择。使用多个Git worktree时，同一分支不能同时在两个工作区检出。
 
 ## 固定版本与隔离
 

@@ -281,10 +281,13 @@ class WeKnoraClient:
 
     async def session(self, *, user_id: str, session_id: str) -> dict[str, Any]:
         """读取原生会话标题及所属身份。"""
-        response = await self._http.get(
-            f"/api/v1/sessions/{session_id}",
-            headers=self._headers(user_id),
-        )
+        try:
+            response = await self._http.get(
+                f"/api/v1/sessions/{session_id}",
+                headers=self._headers(user_id),
+            )
+        except httpx.RequestError as error:
+            raise NativeHttpError(502, "原生会话读取连接失败。") from error
         payload = _require_success(response)
         data = payload.get("data")
         if not isinstance(data, dict):
