@@ -1,6 +1,6 @@
 # 湾小度 V2 测试部署
 
-本目录仅面向 `54:8289 → 60:8289`。0.9.0项目为 `wxd_v2_090_8289`，数据根目录为 `/srv/wanshitong-data/wxd-v2-test-090`；2026-11-01 已在临时18299端口完成预演并切换到8289，18299不再作为入口。现场固定镜像与配置位于 `/data/tyf/wxd-v2-090-20261031/compose.json`。生产继续使用独立 `wxd_prod_083_8288` 及其0.8.3数据，不使用本分支更新。
+本目录的示例栈面向 `54:8289 → 60:8289`。测试0.9.0项目为 `wxd_v2_090_8289`，数据根目录为 `/srv/wanshitong-data/wxd-v2-test-090`，现场固定配置为 `/data/tyf/wxd-v2-090-20261031/compose.json`；临时18299已不作为入口。生产同样为0.9.0，使用独立项目 `wxd_prod_090_8288`、数据目录 `/srv/wanshitong-data/production-v2-090` 和配置 `/data/tyf/wxd-production-090-20261101/compose.json`。功能先在8289验收后再按授权发布生产，不能用测试数据覆盖生产。当前入口与功能见[根目录README](../../README.md)。
 
 ## 固定版本与运行时
 
@@ -27,11 +27,11 @@ docker build --pull=false --network=none -f deployment/wanshitong-v2/Dockerfile.
 
 `.env.example` 不包含凭据。复制为本次测试自己的 `.env` 后填写现场值及构建镜像ID。SSO注册表只含 `id/origin/authorize_url`，回调由网关自动推导；使用测试 `wanshitong_dev` client，Cookie部署ID为 `wxd_v2_test_8289`。
 
-超级管理员通过 `WXD_SUPER_ADMIN_USER_IDS=325` 绑定研发系统稳定用户ID，Compose将其传给网关的 `WANSHITONG_SUPER_ADMIN_USER_IDS`。页面只能修改普通、人力、管理员三种业务角色，不能授予或撤销超管身份。管理员任免与同级保护规则见根目录README；角色变更记录保存在测试网关数据库 `user_role_changes` 表中。
+部署人员通过 `WXD_SUPER_ADMIN_USER_IDS` 配置超级管理员对应的研发系统稳定用户ID，文档不指定个人账号或ID。Compose将该配置传给网关的 `WANSHITONG_SUPER_ADMIN_USER_IDS`。页面只能修改普通、人力、管理员三种业务角色，不能授予或撤销超管身份。管理员任免与同级保护规则见根目录README；角色变更记录保存在网关数据库 `user_role_changes` 表中。
 
 四个090测试网络为front `192.168.88.0/24`、engine `192.168.89.0/24`、data `192.168.90.0/24`、model-egress `192.168.91.0/24`。部署前核对无重叠；edge固定 `192.168.88.3`，网关只信任该代理。不得覆盖生产84–87或旧测试80–83网段。
 
-已有8289升级须完整备份PostgreSQL、网关SQLite、files、Redis和docreader临时文件，保留测试SSO密钥、部署ID、原生用户、角色、个人资料及历史。候选恢复到自己的卷，执行118→134迁移；网关SQLite不运行WeKnora Lite的SQLite迁移。切换前再次停写同步，保留旧测试栈用于回退；迁移125的数据清理不能靠down恢复。
+从0.8.3升级到0.9.0时须完整备份PostgreSQL、网关SQLite、files、Redis和docreader临时文件，保留SSO密钥、部署ID、原生用户、角色、个人资料及历史，再按原生迁移执行118→134；网关SQLite不运行WeKnora Lite的SQLite迁移。当前已运行0.9.0，后续应用补丁不重复这次原生升级。会话重命名仅由网关增加可空 `custom_title` 列，不修改原生标题、消息或模型。切换前核对运行与排队问答，备份现场配置和网关数据库，保留应用镜像回退；数据库备份不能直接覆盖上线后的业务增量。
 
 ## 模型与图片
 
@@ -47,7 +47,7 @@ DOCX解析器会抽取并保存嵌入图片；Go ImageResolver保存资源发生
 
 - 消息历史接口单次上限200；网关按完整时间戳组分页，不把服务端裁剪误判为结束。满200条同刻消息无法由原生时间游标安全遍历时明确报错。
 - 定向接入图片管线目录及参数校验；知识库设置保存仍经原有资料权限检查。员工工作助手只提供本人独立空间的定向代理，不提供通用原生接口；融合边界见[方案](../../docs/WEKNORA-090-INTEGRATION.md)。
-- 本轮网关/身份280项、用户端133项、Vue相关160项和完整类型构建通过；46个网关模块严格mypy及源代码ruff通过。它们不替代真实登录、资料解析、图片和跨角色验收。
+- 对本次变更执行相关网关、身份及前端测试、Ruff、类型检查和构建，并记录精确源码SHA及实际通过范围；当前命令见根目录README。历史验收次数见实施记录，不能代替新版本的真实登录与对应功能验收。
 
 ## 工作助手初始化与启用
 
