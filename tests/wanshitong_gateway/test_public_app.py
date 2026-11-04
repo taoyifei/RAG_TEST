@@ -975,6 +975,7 @@ def test_publish_model_and_kb_changes_next_public_chat(
         assert json.loads(legacy_chat.content) == {
             "query": "旧范围过渡",
             "knowledge_ids": ["doc-kb-old"],
+            "knowledge_ids_use_kb_thresholds": True,
         }
         unconfirmed = _save_body(
             revision=0, model_id="model-a", kb_ids=["kb-old"]
@@ -1039,11 +1040,13 @@ def test_publish_model_and_kb_changes_next_public_chat(
                 "query": "问题一",
                 "knowledge_ids": ["doc-kb-old"],
                 "agent_id": _AGENT_ID_A,
+                "knowledge_ids_use_kb_thresholds": True,
             },
             {
                 "query": "问题二",
                 "knowledge_ids": ["doc-kb-new"],
                 "agent_id": _AGENT_ID_B,
+                "knowledge_ids_use_kb_thresholds": True,
             },
         ]
         assert state.agents[_AGENT_ID_A]["config"]["model_id"] == "model-a"
