@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from email.parser import BytesParser
 from pathlib import Path
+from threading import Event
 from typing import Any, cast
 
 import httpx
@@ -19,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 import wanshitong_gateway.library as library_module
 from wanshitong_gateway.auth import GatewayAuth
+from wanshitong_gateway.compat.core.errors import ProviderUnavailable
 from wanshitong_gateway.library import LibraryService, register_library_routes
 from wanshitong_gateway.roles import UserProfile
 from wanshitong_gateway.weknora.admin import NativeAdminClient
@@ -60,6 +62,11 @@ class _Native:
         self.deferred_deletes: dict[str, int] = {}
         self.pending_deletes: set[str] = set()
         self.requests: list[tuple[str, str]] = []
+        self.parse_status = "completed"
+        self.upload_error_status: int | None = None
+        self.lose_upload_response = False
+        self.delay_retry_state = False
+        self.lose_retry_response = False
 
     def respond(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911 - 模拟固定原生接口。
         path = request.url.path
@@ -124,6 +131,10 @@ class _Native:
                     if item["knowledge_base_id"] == kb_id
                 ]
             )
+        if self.upload_error_status is not None:
+            return httpx.Response(
+                self.upload_error_status, json={"success": False}
+            )
         mime = BytesParser().parsebytes(
             b"Content-Type: "
             + request.headers["content-type"].encode()
@@ -146,9 +157,13 @@ class _Native:
             "id": native_id,
             "knowledge_base_id": kb_id,
             "file_name": part.get_filename(),
-            "parse_status": "completed",
+            "parse_status": self.parse_status,
             "file_size": len(content),
+            "metadata": json.loads(self.upload_fields[native_id]["metadata"]),
         }
+        if self.lose_upload_response:
+            self.lose_upload_response = False
+            raise httpx.ReadTimeout("响应丢失", request=request)
         return self.ok(self.documents[native_id])
 
     def knowledge(self, request: httpx.Request) -> httpx.Response:
@@ -165,6 +180,14 @@ class _Native:
         if parts[-1] == "reparse":
             assert json.loads(request.content) == {}
             self.retries += 1
+            if not self.delay_retry_state:
+                self.documents[native_id]["parse_status"] = self.parse_status
+                self.documents[native_id]["updated_at"] = (
+                    f"reparse-{self.retries}"
+                )
+            if self.lose_retry_response:
+                self.lose_retry_response = False
+                raise httpx.ReadTimeout("重试响应丢失", request=request)
             return self.ok(self.documents[native_id])
         if request.method == "DELETE":
             if native_id in self.deferred_deletes:
@@ -212,6 +235,7 @@ async def library(
     try:
         yield service, state, public_scope
     finally:
+        await service.close()
         await native.close()
 
 
@@ -1001,3 +1025,392 @@ async def test_disabling_sharing_keeps_old_public_copy_when_deleting_private(
     # 公共副本仍可由有权的管理员独立删除。
     await service.delete(published["id"], profile)
     assert published["id"] not in native.documents
+
+
+@pytest.mark.asyncio
+async def test_personal_quota_warns_blocks_new_files_and_delete_releases_space(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    service.set_personal_limits(_ALICE.user_id, 100, 50)
+    first = await service.upload("personal", _ALICE, "one.txt", b"a" * 80)
+    quota = (await service.list_documents("personal", _ALICE))["quota"]
+    assert quota["used_bytes"] == 80 and quota["warning"] is True
+    assert quota["full"] is False
+    second = await service.upload("personal", _ALICE, "two.txt", b"b" * 20)
+    quota = (await service.list_documents("personal", _ALICE))["quota"]
+    assert quota["used_bytes"] == 100 and quota["used_files"] == 2
+    assert quota["full"] is True and quota["upload_allowed"] is False
+    with pytest.raises(HTTPException) as full:
+        await service.upload("personal", _ALICE, "three.txt", b"c")
+    assert full.value.status_code == 409
+    assert len(native.files) == 2
+    assert (await service.download(first["id"], _ALICE)).content == b"a" * 80
+    assert (await service.download(second["id"], _ALICE)).content == b"b" * 20
+    await service.delete(first["id"], _ALICE)
+    quota = (await service.list_documents("personal", _ALICE))["quota"]
+    assert quota["used_bytes"] == 20 and quota["used_files"] == 1
+    assert quota["upload_allowed"] is True
+    assert (await service.list_documents("personal", _BOB))["quota"][
+        "used_bytes"
+    ] == 0
+
+
+@pytest.mark.asyncio
+async def test_public_and_hr_uploads_do_not_use_or_expose_personal_quota(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    service.set_personal_limits(_PUBLISHER.user_id, 1, 1)
+    for scope, profile in (
+        ("public", _PUBLISHER),
+        ("hr_public", _HR),
+        ("hr_internal", _HR),
+    ):
+        uploaded = await service.upload(
+            cast(library_module.LibraryScope, scope),
+            profile,
+            f"{scope}.txt",
+            b"large" * 20,
+        )
+        assert uploaded["id"] in native.documents
+        assert "quota" not in await service.list_documents(
+            cast(library_module.LibraryScope, scope), profile
+        )
+        assert service._quota.jobs(profile.user_id) == []
+    assert (await service.list_documents("personal", _PUBLISHER))["quota"][
+        "used_files"
+    ] == 0
+
+
+@pytest.mark.asyncio
+async def test_personal_queue_limit_and_local_original_owner_isolation(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    native.parse_status = "processing"
+    first = await service.upload("personal", _ALICE, "active.txt", b"active")
+    queued = [
+        await service.upload(
+            "personal", _ALICE, f"queued-{index}.txt", b"queued"
+        )
+        for index in range(5)
+    ]
+    assert len(native.files) == 1
+    listed = await service.list_documents("personal", _ALICE)
+    assert len(listed["items"]) == 6
+    assert listed["quota"]["active_parses"] == 1
+    assert listed["quota"]["queued_parses"] == 5
+    with pytest.raises(HTTPException) as full:
+        await service.upload("personal", _ALICE, "seventh.txt", b"seven")
+    assert full.value.status_code == 429
+    local = queued[0]["id"]
+    assert (await service.download(local, _ALICE)).content == b"queued"
+    for profile in (_BOB, _PUBLISHER, _SUPER):
+        # 同 owner 的管理员仍是本人，另两人和超管绝不获得访问权限。
+        if profile.user_id == _ALICE.user_id:
+            continue
+        with pytest.raises(HTTPException) as denied:
+            await service.download(local, profile)
+        assert denied.value.status_code == 403
+        with pytest.raises(HTTPException):
+            await service.delete(local, profile)
+    native_delete_count = sum(
+        method == "DELETE" for method, _ in native.requests
+    )
+    await service.delete(local, _ALICE)
+    assert (
+        sum(method == "DELETE" for method, _ in native.requests)
+        == native_delete_count
+    )
+    quota = (await service.list_documents("personal", _ALICE))["quota"]
+    assert quota["used_files"] == 5 and quota["queued_parses"] == 4
+    assert native.documents[first["id"]]["parse_status"] == "processing"
+    other = await service.upload("personal", _BOB, "other.txt", b"other")
+    assert other["id"] in native.documents and len(native.files) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["completed", "failed", "cancelled"])
+async def test_next_personal_file_starts_only_after_native_terminal(
+    library: tuple[LibraryService, _Native, list[str]], terminal: str
+) -> None:
+    service, native, _ = library
+    native.parse_status = "processing"
+    first = await service.upload("personal", _ALICE, "first.txt", b"first")
+    second = await service.upload("personal", _ALICE, "second.txt", b"second")
+    await service._advance_personal(_ALICE.user_id)
+    assert len(native.files) == 1
+    native.documents[first["id"]]["parse_status"] = "finalizing"
+    await service._advance_personal(_ALICE.user_id)
+    assert len(native.files) == 1
+    native.documents[first["id"]]["parse_status"] = terminal
+    await service._advance_personal(_ALICE.user_id)
+    assert len(native.files) == 2
+    job = service._quota.job(second["id"])
+    assert job is not None and job.native_id in native.documents
+    assert (
+        sum(
+            item["parse_status"] == "processing"
+            for item in native.documents.values()
+        )
+        == 1
+    )
+    assert (await service.download(second["id"], _ALICE)).content == b"second"
+
+
+@pytest.mark.asyncio
+async def test_untracked_native_personal_work_also_holds_the_slot(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    first = await service.upload("personal", _ALICE, "one.txt", b"one")
+    kb_id = native.documents[first["id"]]["knowledge_base_id"]
+    native.documents["legacy"] = {
+        "id": "legacy",
+        "knowledge_base_id": kb_id,
+        "parse_status": "processing",
+        "file_name": "legacy.txt",
+        "file_size": 6,
+    }
+    native.files["legacy"] = b"legacy"
+    queued = await service.upload("personal", _ALICE, "queued.txt", b"new")
+    assert queued["status"] == "queued" and len(native.files) == 2
+    listed = await service.list_documents("personal", _ALICE)
+    assert listed["quota"]["active_parses"] == 1
+    assert listed["quota"]["queued_parses"] == 1
+    native.documents["legacy"]["parse_status"] = "completed"
+    await service._advance_personal(_ALICE.user_id)
+    assert len(native.files) == 3
+
+
+@pytest.mark.asyncio
+async def test_response_loss_is_adopted_by_upload_marker_after_restart(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    native.parse_status = "processing"
+    native.lose_upload_response = True
+    response = await service.upload("personal", _ALICE, "one.txt", b"original")
+    assert response["status"] == "failed" and len(native.files) == 1
+    job_id = response["id"]
+    assert service._spool_file(job_id).read_bytes() == b"original"
+    restarted = LibraryService(
+        service._connections.database_path,
+        service._native,
+        ("public",),
+        hashlib.sha256(_SERVICE_KEY.encode()).digest(),
+    )
+    await restarted._advance_personal(_ALICE.user_id)
+    job = restarted._quota.job(job_id)
+    assert job is not None and job.native_id in native.documents
+    assert job.state == "processing"
+    assert len(native.files) == 1
+    assert not restarted._spool_file(job_id).exists()
+    quota = (await restarted.list_documents("personal", _ALICE))["quota"]
+    assert quota["used_files"] == 1 and quota["used_bytes"] == len(b"original")
+    assert (await restarted.download(job_id, _ALICE)).content == b"original"
+
+
+@pytest.mark.asyncio
+async def test_uncertain_upload_keeps_original_and_stops_automatic_next_file(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    native.upload_error_status = 503
+    first = await service.upload("personal", _ALICE, "one.txt", b"original")
+    assert first["status"] == "failed" and native.files == {}
+    assert (await service.download(first["id"], _ALICE)).content == b"original"
+    native.upload_error_status = None
+    await service.upload("personal", _ALICE, "two.txt", b"queued")
+    await service._advance_personal(_ALICE.user_id)
+    assert native.files == {}
+    quota = (await service.list_documents("personal", _ALICE))["quota"]
+    assert quota["active_parses"] == 1 and quota["queued_parses"] == 1
+    assert quota["used_files"] == 2
+    with pytest.raises(HTTPException) as waiting:
+        await service.retry(first["id"], _ALICE)
+    assert waiting.value.status_code == 409
+    assert native.files == {}
+    with service._connections.transaction(write=True) as connection:
+        connection.execute(
+            "UPDATE library_personal_jobs SET lease_until=0,updated_at=0 "
+            "WHERE job_id=?",
+            (first["id"],),
+        )
+    resumed = await service.retry(first["id"], _ALICE)
+    assert resumed["id"] in native.documents and len(native.files) == 1
+    assert (await service.list_documents("personal", _ALICE))["quota"][
+        "used_files"
+    ] == 2
+
+
+@pytest.mark.asyncio
+async def test_personal_retry_uses_same_slot_without_double_counting_full_quota(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    original = await service.upload("personal", _ALICE, "one.txt", b"x")
+    service.set_personal_limits(_ALICE.user_id, 1, 1)
+    native.parse_status = "processing"
+    await service.retry(original["id"], _ALICE)
+    assert native.retries == 1
+    listed = await service.list_documents("personal", _ALICE)
+    assert listed["quota"]["used_bytes"] == 1
+    assert listed["quota"]["used_files"] == 1
+    assert listed["quota"]["active_parses"] == 1
+    with pytest.raises(HTTPException) as busy:
+        await service.retry(original["id"], _ALICE)
+    assert busy.value.status_code == 409 and native.retries == 1
+    await service.delete(original["id"], _ALICE)
+    assert (await service.list_documents("personal", _ALICE))["quota"][
+        "used_files"
+    ] == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_start_close_advances_persisted_queue_once(
+    library: tuple[LibraryService, _Native, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, native, _ = library
+    native.parse_status = "processing"
+    first = await service.upload("personal", _ALICE, "one.txt", b"one")
+    await service.upload("personal", _ALICE, "two.txt", b"two")
+    native.documents[first["id"]]["parse_status"] = "completed"
+    monkeypatch.setattr(library_module, "_PERSONAL_POLL_SECONDS", 0.01)
+    await service.start()
+    await service.start()
+    try:
+        async with asyncio.timeout(2):
+            while len(native.files) != 2:
+                await asyncio.sleep(0.01)
+    finally:
+        await service.close()
+    assert len(native.files) == 2 and service._personal_worker is None
+
+
+@pytest.mark.asyncio
+async def test_staging_is_not_downloadable_and_cancel_waits_for_disk_writer(
+    library: tuple[LibraryService, _Native, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, native, _ = library
+    started, finish = Event(), Event()
+    original_fsync = library_module.os.fsync
+
+    def paused_fsync(descriptor: int) -> None:
+        original_fsync(descriptor)
+        started.set()
+        finish.wait(timeout=3)
+
+    monkeypatch.setattr(library_module.os, "fsync", paused_fsync)
+    upload = asyncio.create_task(
+        service.upload("personal", _ALICE, "one.txt", b"original")
+    )
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        job = service._quota.jobs(_ALICE.user_id)[0]
+        assert not service._spool_file(job.job_id).exists()
+        assert service._spool_file(job.job_id).with_suffix(".part").exists()
+        with pytest.raises(HTTPException) as partial:
+            await service.download(job.job_id, _ALICE)
+        assert partial.value.status_code == 409
+        upload.cancel()
+        await asyncio.sleep(0)
+        assert not upload.done()
+        assert service._quota.summary(_ALICE.user_id, [])["used_files"] == 1
+    finally:
+        finish.set()
+    with pytest.raises(asyncio.CancelledError):
+        await upload
+    assert service._quota.jobs(_ALICE.user_id) == []
+    assert list(service._quota.spool_path.iterdir()) == []
+    assert native.files == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["owners", "advance"])
+async def test_worker_recovers_from_temporary_sqlite_busy(
+    library: tuple[LibraryService, _Native, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    service, native, _ = library
+    native.parse_status = "processing"
+    first = await service.upload("personal", _ALICE, "one.txt", b"one")
+    await service.upload("personal", _ALICE, "two.txt", b"two")
+    native.documents[first["id"]]["parse_status"] = "completed"
+    attempts = [0]
+    original_owners = service._quota.owner_jobs
+    original_advance = service._advance_personal
+
+    def owners() -> list[str]:
+        if stage == "owners":
+            attempts[0] += 1
+            if attempts[0] == 1:
+                raise ProviderUnavailable("暂忙", stage="sqlite.connect")
+        return original_owners()
+
+    async def advance(owner_id: str) -> None:
+        if stage == "advance":
+            attempts[0] += 1
+            if attempts[0] == 1:
+                raise ProviderUnavailable("暂忙", stage="sqlite.transaction")
+        await original_advance(owner_id)
+
+    monkeypatch.setattr(service._quota, "owner_jobs", owners)
+    monkeypatch.setattr(service, "_advance_personal", advance)
+    monkeypatch.setattr(library_module, "_PERSONAL_POLL_SECONDS", 0.01)
+    await service.start()
+    try:
+        async with asyncio.timeout(2):
+            while len(native.files) != 2:
+                await asyncio.sleep(0.01)
+        assert attempts[0] >= 2
+        assert service._personal_worker is not None
+        assert not service._personal_worker.done()
+    finally:
+        await service.close()
+    assert len(native.files) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lost_response", [False, True])
+async def test_retry_old_completed_receipt_does_not_release_personal_slot(
+    library: tuple[LibraryService, _Native, list[str]], lost_response: bool
+) -> None:
+    service, native, _ = library
+    original = await service.upload("personal", _ALICE, "one.txt", b"original")
+    native.delay_retry_state = True
+    native.lose_retry_response = lost_response
+    submitted = await service.retry(original["id"], _ALICE)
+    assert submitted["status"] == ("failed" if lost_response else "pending")
+    assert native.retries == 1
+    second = await service.upload("personal", _ALICE, "two.txt", b"second")
+    assert second["status"] == "queued"
+    await service._advance_personal(_ALICE.user_id)
+    listed = await service.list_documents("personal", _ALICE)
+    assert listed["quota"]["active_parses"] == 1
+    assert listed["quota"]["queued_parses"] == 1
+    assert len(native.files) == 1
+    assert (
+        await service.download(original["id"], _ALICE)
+    ).content == b"original"
+    with pytest.raises(HTTPException) as unconfirmed:
+        await service.delete(original["id"], _ALICE)
+    assert unconfirmed.value.status_code == 409
+    # 原生真实开始新尝试后才接纳状态，绝不把旧 completed 当新结果。
+    native.documents[original["id"]]["parse_status"] = "processing"
+    await service._advance_personal(_ALICE.user_id)
+    assert len(native.files) == 1
+    native.documents[original["id"]]["parse_status"] = "completed"
+    native.documents[original["id"]]["updated_at"] = "confirmed-new-attempt"
+    await service._advance_personal(_ALICE.user_id)
+    assert len(native.files) == 2
+    assert (
+        service._quota.summary(_ALICE.user_id, list(native.documents.values()))[
+            "used_files"
+        ]
+        == 2
+    )

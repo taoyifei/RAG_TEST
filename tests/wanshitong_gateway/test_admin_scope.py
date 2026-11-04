@@ -148,11 +148,12 @@ async def test_hr_and_super_admin_remain_authorized(
 
 
 @pytest.mark.asyncio
-async def test_public_and_own_personal_management_stay_available(
+async def test_public_management_and_own_personal_read_stay_available(
     guard: tuple[AdminScopeGuard, GatewayStore],
 ) -> None:
     for identifier in ("public-doc", "hr-public-doc", "admin-doc"):
         await _check(guard[0], f"api/v1/knowledge/{identifier}/download")
+    for identifier in ("public-doc", "hr-public-doc"):
         await _check(
             guard[0],
             f"api/v1/chunks/{identifier}/chunk-1",
@@ -498,9 +499,14 @@ async def test_super_private_history_respects_owner(
     await _check(
         protector, "api/v1/knowledge/root-doc/download", profile=_SUPER
     )
-    await _check(
-        protector, "api/v1/knowledge/root-doc", method="DELETE", profile=_SUPER
-    )
+    with pytest.raises(HTTPException) as denied_write:
+        await _check(
+            protector,
+            "api/v1/knowledge/root-doc",
+            method="DELETE",
+            profile=_SUPER,
+        )
+    assert denied_write.value.status_code == 409
     _remember_session(store, "private-session", ("kb-personal",))
     _remember_session(store, "own-session", ("kb-root-personal",))
     with pytest.raises(HTTPException) as denied:
@@ -558,3 +564,41 @@ async def test_private_parameters_and_unknown_target_rejected_before_write(
                 body=body,
             )
         assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "profile,doc,kb",
+    [
+        (_ADMIN, "admin-doc", "kb-admin-personal"),
+        (_SUPER, "root-doc", "kb-root-personal"),
+    ],
+)
+async def test_private_native_writes_require_personal_workbench(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+    profile: UserProfile,
+    doc: str,
+    kb: str,
+) -> None:
+    for method, path, body in (
+        ("POST", f"api/v1/knowledge-bases/{kb}/knowledge/file", None),
+        (
+            "POST",
+            f"api/v1/knowledge-bases/{kb}/knowledge/manual",
+            {"content": "x"},
+        ),
+        ("POST", f"api/v1/knowledge/{doc}/reparse", {}),
+        ("DELETE", f"api/v1/knowledge/{doc}", None),
+        ("PUT", f"api/v1/chunks/{doc}/chunk", {"content": "x"}),
+        (
+            "POST",
+            "api/v1/knowledge-bases/copy",
+            {"source_id": "kb-public", "target_id": kb},
+        ),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await _check(
+                guard[0], path, method=method, profile=profile, body=body
+            )
+        assert denied.value.status_code == 409
+        assert "我的资料" in denied.value.detail

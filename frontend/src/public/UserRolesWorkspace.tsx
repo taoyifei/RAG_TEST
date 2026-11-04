@@ -3,8 +3,10 @@ import { useEffect, useState } from "react";
 import { redirectToSso } from "./authNavigation";
 import {
   listUsers,
+  updateUserPersonalQuota,
   updateUserRole,
   type ManagedUser,
+  type PersonalQuotaLimits,
   type UserRole,
 } from "./libraryApi";
 import { workspaceErrorMessage } from "./LibraryWorkspace";
@@ -14,6 +16,7 @@ const ROLE_LABELS: Record<UserRole, string> = {
   hr: "人力角色",
   admin: "系统管理员",
 };
+const MEBIBYTE = 1024 * 1024;
 
 export function UserRolesWorkspace({
   getCsrfToken,
@@ -58,6 +61,33 @@ export function UserRolesWorkspace({
       setBusy(undefined);
     }
   };
+  const saveQuota = async (user: ManagedUser, limits: PersonalQuotaLimits) => {
+    const csrf = getCsrfToken();
+    if (!csrf) {
+      redirectToSso();
+      return;
+    }
+    setBusy(`quota:${user.user_id}`);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const saved = await updateUserPersonalQuota(user.user_id, limits, csrf);
+      setUsers((current) =>
+        current?.map((item) =>
+          item.user_id === user.user_id
+            ? { ...item, personal_quota: saved }
+            : item,
+        ),
+      );
+      setNotice(
+        `已更新 ${user.display_name || user.username} 的个人资料额度。`,
+      );
+    } catch (failure) {
+      setError(workspaceErrorMessage(failure));
+    } finally {
+      setBusy(undefined);
+    }
+  };
   return (
     <main className="wst-workspace" id="main-content">
       <header className="wst-workspace-heading">
@@ -92,6 +122,11 @@ export function UserRolesWorkspace({
         </p>
       )}
       <section className="wst-library-panel" aria-label="用户角色管理">
+        {users?.some((user) => user.personal_quota) && (
+          <p className="wst-document-meta">
+            个人资料额度仅限超级管理员调整，调整额度不会开放个人文件的查看权限。
+          </p>
+        )}
         {!users && !error && (
           <p className="wst-workspace-empty" role="status">
             正在加载用户…
@@ -102,12 +137,13 @@ export function UserRolesWorkspace({
         )}
         {users && users.length > 0 && (
           <div className="wst-workspace-table-scroll">
-            <table className="wst-workspace-table">
+            <table className="wst-workspace-table wst-user-table">
               <thead>
                 <tr>
                   <th scope="col">用户</th>
                   <th scope="col">所属部门</th>
                   <th scope="col">角色</th>
+                  <th scope="col">个人资料额度</th>
                 </tr>
               </thead>
               <tbody>
@@ -118,6 +154,9 @@ export function UserRolesWorkspace({
                     busy={!!busy}
                     onSave={(role) => {
                       void save(user, role);
+                    }}
+                    onSaveQuota={(limits) => {
+                      void saveQuota(user, limits);
                     }}
                   />
                 ))}
@@ -134,10 +173,12 @@ function UserRoleRow({
   user,
   busy,
   onSave,
+  onSaveQuota,
 }: {
   user: ManagedUser;
   busy: boolean;
   onSave: (role: UserRole) => void;
+  onSaveQuota: (limits: PersonalQuotaLimits) => void;
 }) {
   const [role, setRole] = useState(user.role);
   return (
@@ -187,6 +228,107 @@ function UserRoleRow({
           </div>
         )}
       </td>
+      <td>
+        {user.personal_quota ? (
+          user.can_edit_personal_quota === true ? (
+            <PersonalQuotaEditor
+              key={`${user.personal_quota.max_bytes}:${user.personal_quota.max_files}`}
+              user={user}
+              limits={user.personal_quota}
+              busy={busy}
+              onSave={onSaveQuota}
+            />
+          ) : (
+            <span>
+              {`${(user.personal_quota.max_bytes / MEBIBYTE).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} MB · ${user.personal_quota.max_files} 份`}
+            </span>
+          )
+        ) : (
+          <span className="wst-document-meta">尚未同步</span>
+        )}
+      </td>
     </tr>
+  );
+}
+
+function PersonalQuotaEditor({
+  user,
+  limits,
+  busy,
+  onSave,
+}: {
+  user: ManagedUser;
+  limits: PersonalQuotaLimits;
+  busy: boolean;
+  onSave: (limits: PersonalQuotaLimits) => void;
+}) {
+  const [capacityMb, setCapacityMb] = useState(
+    String(limits.max_bytes / MEBIBYTE),
+  );
+  const [files, setFiles] = useState(String(limits.max_files));
+  const [error, setError] = useState<string>();
+  const capacity = Number(capacityMb);
+  const fileCount = Number(files);
+  const changed =
+    capacity * MEBIBYTE !== limits.max_bytes || fileCount !== limits.max_files;
+  const name = user.display_name || user.username;
+  return (
+    <form
+      className="wst-quota-limit-editor"
+      aria-label={`${name}的个人资料额度`}
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (
+          !Number.isInteger(capacity) ||
+          capacity <= 0 ||
+          !Number.isSafeInteger(capacity * MEBIBYTE) ||
+          !Number.isSafeInteger(fileCount) ||
+          fileCount <= 0
+        ) {
+          setError("容量和份数请填写大于0的整数。");
+          return;
+        }
+        setError(undefined);
+        onSave({ max_bytes: capacity * MEBIBYTE, max_files: fileCount });
+      }}
+    >
+      <div className="wst-quota-limit-fields">
+        <label>
+          <span>容量（MB）</span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="1"
+            step="1"
+            aria-label={`${name}的个人空间（MB）`}
+            value={capacityMb}
+            disabled={busy}
+            onChange={(event) => setCapacityMb(event.currentTarget.value)}
+          />
+        </label>
+        <label>
+          <span>最多份数</span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="1"
+            step="1"
+            aria-label={`${name}的个人资料份数`}
+            value={files}
+            disabled={busy}
+            onChange={(event) => setFiles(event.currentTarget.value)}
+          />
+        </label>
+      </div>
+      <button type="submit" disabled={busy || !changed}>
+        保存额度
+      </button>
+      {error && (
+        <p className="wst-document-error" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }

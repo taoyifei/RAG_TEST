@@ -18,6 +18,7 @@ import {
   type LibraryDocument,
   type LibraryResponse,
   type LibraryScope,
+  type PersonalLibraryQuota,
   type UserRole,
 } from "./libraryApi";
 import { PublicApiError } from "./publicApi";
@@ -51,6 +52,7 @@ const READY_STATES = new Set([
   "indexed",
 ]);
 const FAILED_STATES = new Set(["failed", "error"]);
+const MEBIBYTE = 1024 * 1024;
 
 function statusLabel(status: string): string {
   if (READY_STATES.has(status)) return "可问答";
@@ -64,6 +66,15 @@ function formatSize(size: number): string {
   return size >= 1024 * 1024
     ? `${(size / 1024 / 1024).toFixed(1)} MB`
     : `${Math.max(1, Math.round(size / 1024))} KB`;
+}
+
+function formatCapacity(size: number): string {
+  if (size > 0 && size < MEBIBYTE) {
+    return size < 1024
+      ? `${size} B`
+      : `${(size / 1024).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} KB`;
+  }
+  return `${(size / MEBIBYTE).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} MB`;
 }
 
 function errorMessage(error: unknown): string {
@@ -137,6 +148,7 @@ function LibraryListing({
 }) {
   const [data, setData] = useState<LibraryResponse>();
   const [error, setError] = useState<string>();
+  const [loadError, setLoadError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState<string>();
   const [refresh, setRefresh] = useState(0);
@@ -144,6 +156,8 @@ function LibraryListing({
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortOrder, setSortOrder] = useState("newest");
   const fileInput = useRef<HTMLInputElement>(null);
+  const quota = scope === "personal" ? data?.quota : undefined;
+  const uploadBlocked = quota?.upload_allowed === false;
   const filteredItems = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase();
     return (data?.items ?? [])
@@ -185,17 +199,20 @@ function LibraryListing({
     void listLibrary(scope, controller.signal)
       .then((result) => {
         setData(result);
-        setError(undefined);
+        setLoadError(undefined);
       })
       .catch((failure: unknown) => {
-        if (!controller.signal.aborted) setError(errorMessage(failure));
+        if (!controller.signal.aborted) setLoadError(errorMessage(failure));
       });
     return () => controller.abort();
   }, [scope, refresh]);
 
-  const parsing = data?.items.some(
-    (item) => !READY_STATES.has(item.status) && !FAILED_STATES.has(item.status),
-  );
+  const parsing =
+    data?.items.some(
+      (item) =>
+        !READY_STATES.has(item.status) && !FAILED_STATES.has(item.status),
+    ) ||
+    (quota !== undefined && quota.active_parses + quota.queued_parses > 0);
   useEffect(() => {
     if (!parsing) return;
     const timer = window.setInterval(
@@ -221,12 +238,49 @@ function LibraryListing({
     try {
       await operation(csrf);
       setNotice(success);
-      setRefresh((value) => value + 1);
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
+      setRefresh((value) => value + 1);
       setBusy(undefined);
     }
+  };
+
+  const upload = (file: File) => {
+    setError(undefined);
+    setNotice(undefined);
+    if (scope === "personal") {
+      const maxFileBytes = quota?.max_file_bytes ?? 50 * MEBIBYTE;
+      if (!file.size) {
+        setError("请上传非空文件。");
+        return;
+      }
+      if (file.size > maxFileBytes) {
+        setError(`单个文件不能超过 ${formatCapacity(maxFileBytes)}。`);
+        return;
+      }
+      if (uploadBlocked) {
+        setError(
+          quota?.upload_block_reason || "个人资料暂时无法新增，请稍后重试。",
+        );
+        return;
+      }
+      if (quota && quota.used_files + 1 > quota.max_files) {
+        setError("个人资料份数已达上限，请先删除不再需要的资料。");
+        return;
+      }
+      if (quota && quota.used_bytes + file.size > quota.max_bytes) {
+        setError(
+          "个人空间不足，请先删除不再需要的资料，或联系超级管理员调整额度。",
+        );
+        return;
+      }
+    }
+    void run(
+      "upload",
+      (csrf) => uploadLibrary(scope, file, csrf),
+      "已上传，正在准备解析。解析完成后即可提问。",
+    );
   };
 
   const mutate = (
@@ -258,7 +312,10 @@ function LibraryListing({
         <div className="wst-library-actions">
           <button
             type="button"
-            onClick={() => setRefresh((value) => value + 1)}
+            onClick={() => {
+              setError(undefined);
+              setRefresh((value) => value + 1);
+            }}
             disabled={!!busy}
           >
             <RefreshCw size={16} aria-hidden="true" />
@@ -276,17 +333,13 @@ function LibraryListing({
                   const file = event.currentTarget.files?.[0];
                   event.currentTarget.value = "";
                   if (!file) return;
-                  void run(
-                    "upload",
-                    (csrf) => uploadLibrary(scope, file, csrf),
-                    "已上传，正在准备解析。解析完成后即可提问。",
-                  );
+                  upload(file);
                 }}
               />
               <button
                 className="wst-workspace-primary"
                 type="button"
-                disabled={!!busy}
+                disabled={!!busy || uploadBlocked}
                 onClick={() => fileInput.current?.click()}
               >
                 <Upload size={16} aria-hidden="true" />
@@ -296,15 +349,16 @@ function LibraryListing({
           )}
         </div>
       </div>
+      {quota && <PersonalQuotaPanel quota={quota} />}
       {data?.can_manage && (
         <p className="wst-document-meta">
           支持 Word、Excel、PowerPoint、PDF 和文本文件；PDF
           建议使用可选中文字的版本。
         </p>
       )}
-      {error && (
+      {(error || loadError) && (
         <p className="wst-workspace-error" role="alert">
-          {error}
+          {error || loadError}
         </p>
       )}
       {notice && (
@@ -361,7 +415,7 @@ function LibraryListing({
           </p>
         </>
       )}
-      {!data && !error && (
+      {!data && !error && !loadError && (
         <p className="wst-workspace-empty" role="status">
           正在加载资料…
         </p>
@@ -370,7 +424,9 @@ function LibraryListing({
         <p className="wst-workspace-empty">
           这里还没有资料。
           {data.can_manage
-            ? "点击“上传资料”开始。"
+            ? uploadBlocked
+              ? "额度或解析名额恢复后即可上传。"
+              : "点击“上传资料”开始。"
             : "资料发布后会显示在这里。"}
         </p>
       )}
@@ -485,6 +541,60 @@ function LibraryListing({
           </table>
         </div>
       )}
+    </section>
+  );
+}
+
+function PersonalQuotaPanel({ quota }: { quota: PersonalLibraryQuota }) {
+  const capacity = `${formatCapacity(quota.used_bytes)} / ${formatCapacity(quota.max_bytes)}`;
+  const files = `${quota.used_files} / ${quota.max_files} 份`;
+  return (
+    <section
+      className={`wst-personal-quota ${quota.full || quota.warning ? "warning" : ""}`}
+      aria-label="个人资料额度"
+    >
+      <div className="wst-quota-meters">
+        <div>
+          <div className="wst-quota-heading">
+            <span>个人空间</span>
+            <strong>{capacity}</strong>
+          </div>
+          <progress
+            aria-label="个人空间使用量"
+            aria-valuetext={capacity}
+            max={Math.max(1, quota.max_bytes)}
+            value={Math.min(quota.used_bytes, Math.max(1, quota.max_bytes))}
+          />
+        </div>
+        <div>
+          <div className="wst-quota-heading">
+            <span>资料份数</span>
+            <strong>{files}</strong>
+          </div>
+          <progress
+            aria-label="个人资料份数"
+            aria-valuetext={files}
+            max={Math.max(1, quota.max_files)}
+            value={Math.min(quota.used_files, Math.max(1, quota.max_files))}
+          />
+        </div>
+      </div>
+      <p className="wst-quota-parsing" role="status">
+        {`正在解析 ${quota.active_parses} 份 · 等待 ${quota.queued_parses} / ${quota.max_queued_parses} 份`}
+        <span>{`每人同时解析 ${quota.max_active_parses} 份，单文件最多 ${formatCapacity(quota.max_file_bytes)}。`}</span>
+      </p>
+      {(quota.warning || !quota.upload_allowed) && (
+        <p className="wst-quota-message" role="status">
+          {!quota.upload_allowed
+            ? quota.upload_block_reason ||
+              "个人资料已达额度上限，暂时无法新增。"
+            : "个人空间或资料份数已使用80%以上，请留意剩余额度。"}
+          <span>已有资料仍可问答、下载和删除。</span>
+        </p>
+      )}
+      <p className="wst-document-meta">
+        额度仅计算个人原件，公共和人力资料另计。
+      </p>
     </section>
   );
 }

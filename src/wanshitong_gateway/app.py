@@ -212,6 +212,15 @@ class _RecommendationRequest(BaseModel):
     disabled_reason: str | None = Field(default=None, max_length=500)
 
 
+class _PersonalQuotaRequest(BaseModel):
+    """个人原件容量及份数由超级管理员配置，不改变文件访问权限。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_bytes: int = Field(gt=0, le=2**63 - 1, strict=True)
+    max_files: int = Field(gt=0, le=2**31 - 1, strict=True)
+
+
 def _recommendation_fields(body: _RecommendationRequest) -> dict[str, Any]:
     """审核通过前需要明确的资料核对记录；不进行旧检索或答案预判。"""
     question = body.question.strip()
@@ -324,8 +333,10 @@ def create_app(  # noqa: PLR0913, PLR0915
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
+            await library.start()
             yield
         finally:
+            await library.close()
             await native.close()
             await admin_native.close()
             if workbench is not None:
@@ -364,14 +375,41 @@ def create_app(  # noqa: PLR0913, PLR0915
             chat_model_override=engine.workbench_chat_model_id,
         )
     if workbench is None:
-        register_auth_routes(app, auth)
+        register_auth_routes(app, auth, personal_limits=library.personal_limits)
     else:
         register_auth_routes(
-            app, auth, before_role_change=workbench.before_role_change
+            app,
+            auth,
+            before_role_change=workbench.before_role_change,
+            personal_limits=library.personal_limits,
         )
     register_library_routes(app, auth, library)
     register_workbench_routes(app, auth, workbench)
     admin_scope_guard = AdminScopeGuard(library, store)
+
+    @app.put("/api/ops/users/{user_id}/personal-quota")
+    def update_personal_quota(
+        user_id: str, body: _PersonalQuotaRequest, request: Request
+    ) -> dict[str, int]:
+        """只修改额度配置，超级管理员仍不能读取或替他人删除私件。"""
+        principal = auth.require_admin(request)
+        actor = auth.require_profile(request)
+        if not actor.is_super_admin:
+            raise HTTPException(403, "只有超级管理员可以调整个人资料额度。")
+        if auth.users is None:
+            raise AssertionError("用户资料库未初始化。")
+        if auth.users.get(user_id) is None:
+            raise HTTPException(404, "用户不存在。")
+        result = library.set_personal_limits(
+            user_id, body.max_bytes, body.max_files
+        )
+        store.record_admin_action(
+            actor=principal.audit_actor,
+            method="PUT",
+            path="personal-quota:" + user_id,
+            status_code=200,
+        )
+        return result
 
     def admin_profile(request: Request) -> UserProfile:
         """独立控制台会话沿用管理员能力，不推断为员工超级管理员。"""

@@ -137,7 +137,7 @@ def managed_history(
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     auth = _FakeAuth(tmp_path / "gateway.sqlite3")
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     native = WeKnoraClient(
         base_url="http://native.test:8080",
@@ -894,7 +894,7 @@ def test_public_native_round_trip_preserves_answer_and_isolation(  # noqa: PLR09
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     auth = _FakeAuth(tmp_path / "gateway.sqlite3")
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     native = WeKnoraClient(
         base_url="http://native.test:8080",
@@ -1047,7 +1047,7 @@ def test_recommendations_require_review_before_publication(
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     auth = _FakeAuth(tmp_path / "gateway.sqlite3")
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
 
     async def close() -> None:

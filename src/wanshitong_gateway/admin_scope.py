@@ -101,6 +101,12 @@ class AdminScopeGuard:
         )
         if not allowed:
             _deny()
+        scope = self._library._scope_for_kb(kb_id)
+        if write and scope is not None and scope["scope"] == "personal":
+            # 私件写入统一经过容量预占和本人解析队列，原生代理不能绕过。
+            raise HTTPException(
+                409, "个人资料请在“我的资料”上传、删除或重新解析。"
+            )
 
     async def _check_knowledge(
         self, knowledge_id: str, profile: UserProfile, *, write: bool = False

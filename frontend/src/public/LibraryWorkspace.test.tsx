@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LibraryWorkspace } from "./LibraryWorkspace";
 import { UserRolesWorkspace } from "./UserRolesWorkspace";
+import type { PersonalLibraryQuota } from "./libraryApi";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -15,7 +16,291 @@ function requestPath(input: RequestInfo | URL): string {
       : input.url;
 }
 
+const MEBIBYTE = 1024 * 1024;
+
+function personalQuota(
+  overrides: Partial<PersonalLibraryQuota> = {},
+): PersonalLibraryQuota {
+  return {
+    max_bytes: 250 * MEBIBYTE,
+    used_bytes: 0,
+    max_files: 50,
+    used_files: 0,
+    max_file_bytes: 50 * MEBIBYTE,
+    warning: false,
+    full: false,
+    active_parses: 0,
+    queued_parses: 0,
+    max_active_parses: 1,
+    max_queued_parses: 5,
+    upload_allowed: true,
+    upload_block_reason: null,
+    ...overrides,
+  };
+}
+
 describe("用户资料和角色", () => {
+  it("显示个人容量、份数及排队信息，80%提醒时仍可上传", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        scope: "personal",
+        can_manage: true,
+        can_share: false,
+        items: [],
+        quota: personalQuota({
+          used_bytes: 200 * MEBIBYTE,
+          used_files: 40,
+          active_parses: 1,
+          queued_parses: 2,
+          warning: true,
+        }),
+      }),
+    );
+    render(
+      <LibraryWorkspace
+        userRole="user"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("200 MB / 250 MB")).toBeVisible();
+    expect(screen.getByText("40 / 50 份")).toBeVisible();
+    expect(
+      screen.getByRole("progressbar", { name: "个人空间使用量" }),
+    ).toHaveAttribute("value", String(200 * MEBIBYTE));
+    expect(screen.getByText("正在解析 1 份 · 等待 2 / 5 份")).toBeVisible();
+    expect(
+      screen.getByText("个人空间或资料份数已使用80%以上，请留意剩余额度。"),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "上传资料" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "共享给全员" })).toBeNull();
+  });
+
+  it("满额仅暂停上传，保留原件操作且删除后立即恢复额度", async () => {
+    let removed = false;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((_input, init) => {
+        if (init?.method === "DELETE") {
+          removed = true;
+          return Promise.resolve(Response.json({ success: true }));
+        }
+        return Promise.resolve(
+          Response.json({
+            scope: "personal",
+            can_manage: true,
+            can_share: false,
+            quota: personalQuota({
+              used_bytes: (removed ? 249 : 250) * MEBIBYTE,
+              used_files: removed ? 49 : 50,
+              full: !removed,
+              warning: true,
+              upload_allowed: removed,
+              upload_block_reason: removed ? null : "个人资料已达50份上限。",
+            }),
+            items: removed
+              ? []
+              : [
+                  {
+                    id: "own",
+                    title: "本人记录.txt",
+                    status: "completed",
+                    size: MEBIBYTE,
+                    created_at: "2026-11-04",
+                    shared: false,
+                    can_manage: true,
+                  },
+                ],
+          }),
+        );
+      });
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        userRole="user"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByText("本人记录.txt");
+    expect(screen.getByRole("button", { name: "上传资料" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "下载" })).toBeEnabled();
+    expect(screen.getByText("已有资料仍可问答、下载和删除。")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    await screen.findByText("249 MB / 250 MB");
+    expect(screen.getByText("49 / 50 份")).toBeVisible();
+    expect(screen.getByRole("button", { name: "上传资料" })).toBeEnabled();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/public/library/own",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it.each([
+    {
+      label: "单文件超限",
+      bytes: 50 * MEBIBYTE + 1,
+      used: 0,
+      message: "单个文件不能超过 50 MB。",
+    },
+    {
+      label: "剩余空间不足",
+      bytes: 2 * MEBIBYTE,
+      used: 249 * MEBIBYTE,
+      message:
+        "个人空间不足，请先删除不再需要的资料，或联系超级管理员调整额度。",
+    },
+  ])("$label 时不发上传请求", async ({ bytes, used, message }) => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        scope: "personal",
+        can_manage: true,
+        items: [],
+        quota: personalQuota({ used_bytes: used }),
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        userRole="user"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByRole("button", { name: "上传资料" });
+    const file = new File(["样本"], "说明.txt", { type: "text/plain" });
+    Object.defineProperty(file, "size", { value: bytes });
+    await user.upload(screen.getByLabelText("选择上传资料"), file);
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(
+      false,
+    );
+  });
+
+  it("解析排队已满时只停新增，失败资料仍可操作", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        scope: "personal",
+        can_manage: true,
+        quota: personalQuota({
+          active_parses: 1,
+          queued_parses: 5,
+          upload_allowed: false,
+          upload_block_reason: "已有5份资料等待解析，请稍后再上传。",
+        }),
+        items: [
+          {
+            id: "failed",
+            title: "待处理.txt",
+            status: "failed",
+            size: 10,
+            created_at: "2026-11-04",
+            shared: false,
+            can_manage: true,
+          },
+        ],
+      }),
+    );
+    render(
+      <LibraryWorkspace
+        userRole="user"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    expect(
+      await screen.findByText("已有5份资料等待解析，请稍后再上传。"),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "上传资料" })).toBeDisabled();
+    for (const name of ["下载", "删除", "重试"]) {
+      expect(screen.getByRole("button", { name })).toBeEnabled();
+    }
+  });
+
+  it("后台拒绝并发超额后刷新用量并保留原因", async () => {
+    let rejected = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      if (init?.method === "POST") {
+        rejected = true;
+        return Promise.resolve(
+          Response.json(
+            { detail: "其他上传已用满个人空间。" },
+            { status: 413 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        Response.json({
+          scope: "personal",
+          can_manage: true,
+          items: [],
+          quota: personalQuota({
+            used_bytes: rejected ? 250 * MEBIBYTE : 0,
+            upload_allowed: !rejected,
+            full: rejected,
+            upload_block_reason: rejected ? "个人空间已满。" : null,
+          }),
+        }),
+      );
+    });
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        userRole="user"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByRole("button", { name: "上传资料" });
+    await user.upload(
+      screen.getByLabelText("选择上传资料"),
+      new File(["样本"], "说明.txt", { type: "text/plain" }),
+    );
+    expect(await screen.findByText("250 MB / 250 MB")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "其他上传已用满个人空间。",
+    );
+    expect(screen.getByRole("button", { name: "上传资料" })).toBeDisabled();
+  });
+
+  it.each([
+    { scope: "public", label: "公共资料" },
+    { scope: "hr_public", label: "公开人力制度" },
+    { scope: "hr_internal", label: "人力内部资料" },
+  ])("$label 不显示或应用个人额度", async ({ label }) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const selected = new URL(
+        requestPath(input),
+        "http://localhost",
+      ).searchParams.get("scope");
+      return Promise.resolve(
+        Response.json({
+          scope: selected,
+          can_manage: true,
+          items: [],
+          quota: personalQuota({ full: true, upload_allowed: false }),
+        }),
+      );
+    });
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        userRole="admin"
+        isSuperAdmin
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await screen.findByRole("region", { name: "个人资料额度" });
+    await user.click(screen.getByRole("button", { name: label }));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "个人资料额度" })).toBeNull(),
+    );
+    expect(screen.getByRole("button", { name: "上传资料" })).toBeEnabled();
+    expect(screen.getByRole("region", { name: label })).toBeVisible();
+  });
+
   it("按名称和准备状态查找资料，清除筛选后恢复完整列表和时间排序", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json({

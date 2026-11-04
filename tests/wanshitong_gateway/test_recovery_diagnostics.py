@@ -63,7 +63,7 @@ def _gateway(
     database = tmp_path / "gateway.sqlite3"
     store = GatewayStore(database)
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     transport = httpx.MockTransport(respond)
     native = WeKnoraClient(

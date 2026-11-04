@@ -306,7 +306,9 @@ def test_even_super_admin_cannot_publish_a_personal_library(
     owner_id: str,
     historical: bool,
 ) -> None:
-    monkeypatch.setattr(gateway_app, "register_auth_routes", lambda *_: None)
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda *_args, **_kwargs: None
+    )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     profile = UserProfile("root", "root", "超级管理员", None, "admin", True)
@@ -367,7 +369,9 @@ class _ScopeNativeState(_NativeState):
 def _scope_browser(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: UserProfile
 ) -> tuple[TestClient, _ScopeNativeState, GatewayStore]:
-    monkeypatch.setattr(gateway_app, "register_auth_routes", lambda *_: None)
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda *_args, **_kwargs: None
+    )
     state = _ScopeNativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     app = _app(tmp_path, state, store, profile)
@@ -863,7 +867,7 @@ def test_custom_intent_prompts_survive_save_readback_and_page_edit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -908,7 +912,7 @@ def test_invalid_intent_override_does_not_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, custom: dict[str, str]
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -925,7 +929,7 @@ def test_publish_model_and_kb_changes_next_public_chat(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -1050,7 +1054,7 @@ def test_publish_rejects_conflicts_key_mismatch_and_partial_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -1123,7 +1127,7 @@ def test_publish_requires_scoped_key_and_prompt_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -1148,7 +1152,7 @@ def test_publish_does_not_replace_agent_when_intent_templates_are_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     state.missing_intent_template = True
@@ -1177,7 +1181,7 @@ def test_loading_existing_prompt_uses_new_public_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first_line: str
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -1198,7 +1202,7 @@ def test_drift_requires_explicit_rebuild_without_reusing_old_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -1238,7 +1242,7 @@ def test_page_switches_control_public_response_and_server_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
