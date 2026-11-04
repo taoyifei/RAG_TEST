@@ -577,11 +577,6 @@ describe("用户资料和角色", () => {
       expect(screen.queryByRole("button", { name: "共享给全员" })).toBeNull();
       expect(screen.queryByRole("button", { name: "取消共享" })).toBeNull();
       expect(screen.queryByText("已共享", { exact: true })).toBeNull();
-      expect(
-        screen.getByText(
-          "仅本人可查看、检索、下载和维护；管理员和超级管理员也不能访问他人的个人资料。",
-        ),
-      ).toBeVisible();
     },
   );
 
@@ -743,9 +738,6 @@ describe("用户资料和角色", () => {
     expect(
       await screen.findByRole("button", { name: "上传资料" }),
     ).toBeEnabled();
-    expect(
-      screen.getByText("仅人力角色和超级管理员可查看、检索和维护。"),
-    ).toBeVisible();
   });
 
   it("普通管理员看不到人力内部区，超级管理员可以访问", async () => {

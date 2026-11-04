@@ -23,24 +23,18 @@ import {
 } from "./libraryApi";
 import { PublicApiError } from "./publicApi";
 
-const SCOPES: Record<LibraryScope, { title: string; description: string }> = {
+const SCOPES: Record<LibraryScope, { title: string }> = {
   personal: {
     title: "个人资料",
-    description:
-      "仅本人可查看、检索、下载和维护；管理员和超级管理员也不能访问他人的个人资料。",
   },
   public: {
     title: "公共资料",
-    description: "所有同事可查看、检索和下载，由管理员和超级管理员维护。",
   },
   hr_public: {
     title: "公开人力制度",
-    description:
-      "所有同事可查看、检索和下载，由管理员、人力角色和超级管理员维护。",
   },
   hr_internal: {
     title: "人力内部资料",
-    description: "仅人力角色和超级管理员可查看、检索和维护。",
   },
 };
 
@@ -308,7 +302,6 @@ function LibraryListing({
   return (
     <section className="wst-library-panel" aria-label={SCOPES[scope].title}>
       <div className="wst-library-toolbar">
-        <p>{SCOPES[scope].description}</p>
         <div className="wst-library-actions">
           <button
             type="button"
@@ -592,9 +585,6 @@ function PersonalQuotaPanel({ quota }: { quota: PersonalLibraryQuota }) {
           <span>已有资料仍可问答、下载和删除。</span>
         </p>
       )}
-      <p className="wst-document-meta">
-        额度仅计算个人原件，公共和人力资料另计。
-      </p>
     </section>
   );
 }

@@ -117,8 +117,7 @@
   font-size: 30px;
   letter-spacing: -0.04em;
 }
-.wst-workspace-heading p,
-.wst-library-toolbar > p {
+.wst-workspace-heading p {
   color: var(--wst-muted);
   line-height: 1.65;
 }
@@ -168,11 +167,8 @@
   background: var(--wst-panel);
 }
 .wst-library-toolbar {
+  justify-content: flex-end;
   margin-bottom: 16px;
-}
-.wst-library-toolbar > p {
-  max-width: 620px;
-  margin: 0;
 }
 .wst-library-actions,
 .wst-document-actions,
