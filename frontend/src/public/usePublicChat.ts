@@ -26,6 +26,8 @@ import {
   type PublicPageSettings,
   type PublicSearchScope,
   type PublicSearchScopeOption,
+  type PublicTargetDocument,
+  type PublicAnswerOrigin,
 } from "./publicApi";
 import { availableSearchScopes, orderedSearchScopes } from "./searchScopes";
 import * as authNavigation from "./authNavigation";
@@ -98,6 +100,8 @@ export interface PublicTurn {
   id: string;
   conversationId: string;
   searchScopes?: PublicSearchScope[];
+  targetDocuments?: PublicTargetDocument[];
+  answerOrigin?: PublicAnswerOrigin;
   question: string;
   status:
     | "submitting"
@@ -205,6 +209,7 @@ function resetTurn(turn: PublicTurn): PublicTurn {
     finishReason: undefined,
     nativeMessageId: undefined,
     nativeRequestId: undefined,
+    answerOrigin: undefined,
     feedback: "idle",
     feedbackError: undefined,
     feedbackUseful: undefined,
@@ -244,6 +249,8 @@ function restoreNaturalTurn(
     id: item.turn_id,
     conversationId,
     searchScopes: item.search_scopes ?? ["public"],
+    targetDocuments: item.target_documents ?? [],
+    answerOrigin: item.answer_origin,
     question: item.question,
     status,
     stageHistory: [],
@@ -287,6 +294,10 @@ export function usePublicChat() {
   >(() => availableSearchScopes());
   const [scopeNotice, setScopeNotice] = useState<string>();
   const searchScopesRef = useRef<PublicSearchScope[]>(["public"]);
+  const [targetDocuments, setTargetDocuments] = useState<
+    PublicTargetDocument[]
+  >([]);
+  const targetDocumentsRef = useRef<PublicTargetDocument[]>([]);
   const [naturalProtocol, setNaturalProtocol] = useState<
     "wanshitong-natural-sse-v1" | typeof WEKNORA_STREAM_PROTOCOL | undefined
   >();
@@ -384,6 +395,8 @@ export function usePublicChat() {
     setUsageContextEnabled(false);
     searchScopesRef.current = ["public"];
     setSearchScopes(["public"]);
+    targetDocumentsRef.current = [];
+    setTargetDocuments([]);
     setSearchScopeOptions(availableSearchScopes());
     setScopeNotice(undefined);
     setNaturalProtocol(undefined);
@@ -415,6 +428,8 @@ export function usePublicChat() {
     feedbackAttemptsRef.current.clear();
     setTurns([]);
     setScopeNotice(undefined);
+    targetDocumentsRef.current = [];
+    setTargetDocuments([]);
     setPhase("ready");
     return nextConversationId;
   }, [sessionReady]);
@@ -502,6 +517,8 @@ export function usePublicChat() {
       setSearchScopeOptions(availableScopes);
       searchScopesRef.current = ["public"];
       setSearchScopes(["public"]);
+      targetDocumentsRef.current = [];
+      setTargetDocuments([]);
       setScopeNotice(undefined);
       setDeploymentId(session.deploymentId);
       setFeedbackDetailsEnabled(capabilities.feedback_details === true);
@@ -570,6 +587,9 @@ export function usePublicChat() {
           } else {
             searchScopesRef.current = restoredScopes;
             setSearchScopes(restoredScopes);
+            const documents = history.at(-1)?.target_documents ?? [];
+            targetDocumentsRef.current = documents;
+            setTargetDocuments(documents);
             setTurns(
               history.map((item) =>
                 restoreNaturalTurn(
@@ -685,6 +705,7 @@ export function usePublicChat() {
     ) => {
       if (busyRef.current || historyActionRef.current || !sessionReady) return;
       const turnScopes = [...(selectedScopes ?? searchScopesRef.current)];
+      const turnDocuments = [...targetDocumentsRef.current];
       busyRef.current = true;
       activeTurnRef.current = turnId;
       activeTraceIdRef.current = recoverTraceId;
@@ -716,6 +737,7 @@ export function usePublicChat() {
             id: turnId,
             conversationId: turnConversationId,
             searchScopes: turnScopes,
+            targetDocuments: turnDocuments,
             question,
             status: "submitting",
             stageMessage: "正在提交问题",
@@ -806,6 +828,7 @@ export function usePublicChat() {
             clientContext: usageContextEnabled ? clientContext : undefined,
             naturalProtocol,
             searchScopes: turnScopes,
+            knowledgeIds: turnDocuments.map((item) => item.id),
           });
         }
         if (!response.body) {
@@ -833,6 +856,12 @@ export function usePublicChat() {
             return !tracker.terminal;
           }
           tracker.lastSequence = event.sequence;
+          if ("answer_origin" in event && event.answer_origin) {
+            batch.push((turn) => ({
+              ...turn,
+              answerOrigin: event.answer_origin,
+            }));
+          }
           const traceId =
             typeof event.trace_id === "string" ? event.trace_id : undefined;
           if (event.type === "meta") {
@@ -844,6 +873,7 @@ export function usePublicChat() {
                 citations: [],
                 claims: [],
                 partial: false,
+                answerOrigin: undefined,
               }));
             }
             if (traceId) {
@@ -1091,7 +1121,11 @@ export function usePublicChat() {
     (selected: PublicSearchScope[]) => {
       if (busyRef.current || historyActionRef.current || !sessionReady) return;
       const next = orderedSearchScopes(selected, searchScopeOptions);
-      if (!next.length || next.join() === searchScopesRef.current.join())
+      if (
+        !next.length ||
+        (next.join() === searchScopesRef.current.join() &&
+          targetDocumentsRef.current.length === 0)
+      )
         return;
       requestIdRef.current += 1;
       if (turns.length > 0) {
@@ -1100,8 +1134,30 @@ export function usePublicChat() {
       }
       searchScopesRef.current = next;
       setSearchScopes(next);
+      targetDocumentsRef.current = [];
+      setTargetDocuments([]);
     },
     [resetConversationState, searchScopeOptions, sessionReady, turns.length],
+  );
+
+  const askDocuments = useCallback(
+    (scope: PublicSearchScope, documents: PublicTargetDocument[]) => {
+      const nextScopes = orderedSearchScopes([scope], searchScopeOptions);
+      const selected = [
+        ...new Map(documents.map((item) => [item.id, item])).values(),
+      ]
+        .filter((item) => item.id && item.title)
+        .sort((left, right) => left.id.localeCompare(right.id));
+      if (!nextScopes.length || !selected.length || selected.length > 20)
+        return false;
+      if (!resetConversationState()) return false;
+      searchScopesRef.current = nextScopes;
+      setSearchScopes(nextScopes);
+      targetDocumentsRef.current = selected;
+      setTargetDocuments(selected);
+      return true;
+    },
+    [resetConversationState, searchScopeOptions],
   );
 
   const openHistory = useCallback(
@@ -1141,6 +1197,9 @@ export function usePublicChat() {
       }
       searchScopesRef.current = restoredScopes;
       setSearchScopes(restoredScopes);
+      const documents = history.at(-1)?.target_documents ?? [];
+      targetDocumentsRef.current = documents;
+      setTargetDocuments(documents);
       setScopeNotice(undefined);
       conversationRef.current = selectedConversationId;
       setConversationId(selectedConversationId);
@@ -1630,6 +1689,8 @@ export function usePublicChat() {
     getCsrfToken,
     busy,
     changeSearchScopes,
+    askDocuments,
+    targetDocuments,
     conversationId,
     activeConversationTitle: conversationTitles[conversationId],
     deploymentId,

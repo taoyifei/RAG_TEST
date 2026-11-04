@@ -58,6 +58,29 @@ describe("湾事通 SSE parser", () => {
     ).rejects.toBeInstanceOf(PublicSseParseError);
   });
 
+  it("读取回答来源标识并拒绝未知标识", async () => {
+    const seen: string[] = [];
+    await consumePublicSse(
+      body(
+        'event: final\ndata: {"type":"final","sequence":1,"answer":"加油","citations":[],"answer_origin":"model_no_results"}\n\n',
+      ),
+      (event) => {
+        if (event.answer_origin) seen.push(event.answer_origin);
+      },
+      new AbortController().signal,
+    );
+    expect(seen).toEqual(["model_no_results"]);
+    await expect(
+      consumePublicSse(
+        body(
+          'event: final\ndata: {"type":"final","sequence":1,"answer":"加油","citations":[],"answer_origin":"invented"}\n\n',
+        ),
+        vi.fn(),
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(PublicSseParseError);
+  });
+
   it("终态后停止消费同一网络块中的晚到事件", async () => {
     const controller = new AbortController();
     const seen: string[] = [];

@@ -15,6 +15,44 @@ export interface LibraryDocument {
   owner_name?: string;
   error?: string | null;
   can_manage?: boolean;
+  version_state?: "current" | "staging" | "archived";
+  replaces_id?: string;
+  kind?: DocumentKind;
+  group_name?: string;
+  health?: DocumentHealth | null;
+  assets?: DocumentAsset[];
+}
+
+export type DocumentKind = "policy" | "illustration" | "template";
+export interface DocumentHealth {
+  checked_at: string;
+  original_available: boolean | null;
+  check_error?: string;
+  parse_status: string;
+  ready: boolean;
+  size_ok?: boolean;
+  hash_ok?: boolean;
+  image_check: "not_checked";
+}
+export interface DocumentAsset {
+  id: string;
+  filename: string;
+  size: number;
+  relation: "template" | "source_workbook" | "full_guide";
+}
+export interface DocumentDetails {
+  id: string;
+  kind: DocumentKind;
+  version_state: string;
+  group_name: string;
+  assets: DocumentAsset[];
+  health?: DocumentHealth | null;
+}
+export interface UploadReceipt {
+  id: string;
+  status: string;
+  duplicate?: boolean;
+  message?: string;
 }
 
 export interface LibraryResponse {
@@ -84,11 +122,14 @@ export async function uploadLibrary(
   scope: LibraryScope,
   file: File,
   csrfToken: string,
-): Promise<void> {
+  options?: { replacesId?: string; kind?: DocumentKind },
+): Promise<UploadReceipt> {
   const body = new FormData();
   body.set("scope", scope);
   body.set("file", file);
-  await checkResponse(
+  if (options?.replacesId) body.set("replaces_id", options.replacesId);
+  if (options?.kind) body.set("kind", options.kind);
+  const response = await checkResponse(
     await fetch(withAppBase("/api/public/library"), {
       method: "POST",
       credentials: "same-origin",
@@ -96,6 +137,101 @@ export async function uploadLibrary(
       body,
     }),
   );
+  return response.json() as Promise<UploadReceipt>;
+}
+
+export async function getDocumentDetails(
+  id: string,
+  signal?: AbortSignal,
+): Promise<DocumentDetails> {
+  const response = await checkResponse(
+    await fetch(
+      withAppBase(`/api/public/library/${encodeURIComponent(id)}/details`),
+      { credentials: "same-origin", signal },
+    ),
+  );
+  return response.json() as Promise<DocumentDetails>;
+}
+
+export async function checkDocumentHealth(
+  id: string,
+  csrf: string,
+): Promise<DocumentHealth> {
+  const response = await checkResponse(
+    await fetch(
+      withAppBase(`/api/public/library/${encodeURIComponent(id)}/health`),
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf },
+      },
+    ),
+  );
+  return response.json() as Promise<DocumentHealth>;
+}
+
+export async function publishDocumentVersion(
+  id: string,
+  csrf: string,
+): Promise<void> {
+  await checkResponse(
+    await fetch(
+      withAppBase(`/api/public/library/${encodeURIComponent(id)}/publish`),
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf },
+      },
+    ),
+  );
+}
+
+export async function uploadDocumentAsset(
+  id: string,
+  file: File,
+  relation: DocumentAsset["relation"],
+  csrf: string,
+): Promise<void> {
+  const body = new FormData();
+  body.set("file", file);
+  body.set("relation", relation);
+  await checkResponse(
+    await fetch(
+      withAppBase(`/api/public/library/${encodeURIComponent(id)}/assets`),
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf },
+        body,
+      },
+    ),
+  );
+}
+
+export async function downloadDocumentAsset(
+  id: string,
+  asset: DocumentAsset,
+): Promise<void> {
+  const response = await checkResponse(
+    await fetch(
+      withAppBase(
+        `/api/public/library/${encodeURIComponent(id)}/assets/${encodeURIComponent(asset.id)}`,
+      ),
+      { credentials: "same-origin" },
+    ),
+  );
+  saveDownload(await response.blob(), asset.filename);
+}
+
+function saveDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename.replace(/[\\/:*?"<>|]/g, "_");
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export async function changeDocument(

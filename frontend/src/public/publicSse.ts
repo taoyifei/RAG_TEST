@@ -1,3 +1,5 @@
+import type { PublicAnswerOrigin } from "./publicApi";
+
 export interface PublicCitation {
   document_name: string;
   reference_id?: string;
@@ -25,6 +27,7 @@ interface PublicEventBase {
   native_request_id?: string | null;
   native_message_id?: string | null;
   native_session_id?: string | null;
+  answer_origin?: PublicAnswerOrigin;
 }
 
 export const WEKNORA_STREAM_PROTOCOL = "wanshitong-weknora-sse-v1" as const;
@@ -274,6 +277,18 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
     type !== frame.event ||
     !Number.isSafeInteger(sequence) ||
     (sequence as number) < 0
+  ) {
+    throw new PublicSseParseError();
+  }
+  if (
+    value.answer_origin !== undefined &&
+    (typeof value.answer_origin !== "string" ||
+      ![
+        "knowledge",
+        "model_no_results",
+        "model_unreferenced",
+        "unknown",
+      ].includes(value.answer_origin))
   ) {
     throw new PublicSseParseError();
   }

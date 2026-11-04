@@ -106,24 +106,34 @@ class WeKnoraClient:
             raise NativeHttpError(502, "原生会话响应缺少 ID。")
         return session_id
 
-    async def knowledge_chat(
+    async def knowledge_chat(  # noqa: PLR0913 - 原生问答身份与限定范围保持显式。
         self,
         *,
         user_id: str,
         session_id: str,
         question: str,
-        knowledge_base_ids: tuple[str, ...],
+        knowledge_base_ids: tuple[str, ...] = (),
         agent_id: str | None = None,
+        knowledge_ids: tuple[str, ...] | None = None,
     ) -> AsyncIterator[bytes]:
-        """逐字节转发一次原生自然问答，绝不重试生成 POST。"""
-        if not knowledge_base_ids:
-            raise ValueError("普通问答知识库范围不能为空。")
+        """逐字节转发一次原生自然问答，文件模式不得同时提交整库目标。"""
+        if knowledge_ids is not None and not knowledge_ids:
+            raise ValueError("指定资料范围不能为空，不能回退为全库检索。")
+        if knowledge_ids is None and not knowledge_base_ids:
+            raise ValueError("普通问答资料范围不能为空。")
+        # 原生 buildSearchTargets 会优先整库并忽略同库文件 ID；
+        # 因此文件白名单与整库范围只能二选一，不能一起序列化。
+        targets = (
+            {"knowledge_ids": list(knowledge_ids)}
+            if knowledge_ids is not None
+            else {"knowledge_base_ids": list(knowledge_base_ids)}
+        )
         async with self._http.stream(
             "POST",
             f"/api/v1/knowledge-chat/{session_id}",
             json={
                 "query": question,
-                "knowledge_base_ids": list(knowledge_base_ids),
+                **targets,
                 **({"agent_id": agent_id} if agent_id else {}),
             },
             headers={

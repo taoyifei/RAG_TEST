@@ -66,6 +66,29 @@ def _gateway(
         gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     transport = httpx.MockTransport(respond)
+
+    def admin_respond(request: httpx.Request) -> httpx.Response:
+        # 本组故障注入只针对原生生成流；资料目录需保留可检索原件。
+        if request.url.path == "/api/v1/auth/login":
+            return httpx.Response(
+                200, json={"success": True, "token": "test-admin"}
+            )
+        if request.url.path == "/api/v1/knowledge-bases/kb-public/knowledge":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "doc-1",
+                            "knowledge_base_id": "kb-public",
+                            "parse_status": "completed",
+                        }
+                    ],
+                },
+            )
+        return respond(request)
+
     native = WeKnoraClient(
         base_url="http://native.test:8080",
         api_key="test-only-key",
@@ -81,7 +104,7 @@ def _gateway(
         email="candidate@example.test",
         password="test-only-password",  # noqa: S106 - 固定合成凭据。
         tenant_id=8,
-        transport=transport,
+        transport=httpx.MockTransport(admin_respond),
     )
     engine = EngineSettings(
         base_url="http://native.test:8080",

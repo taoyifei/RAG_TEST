@@ -1,5 +1,6 @@
 import {
   Download,
+  MessageCircle,
   RefreshCw,
   Search,
   Share2,
@@ -12,9 +13,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { redirectToSso } from "./authNavigation";
 import {
   changeDocument,
+  checkDocumentHealth,
   downloadDocument,
   listLibrary,
   uploadLibrary,
+  publishDocumentVersion,
+  uploadDocumentAsset,
+  type DocumentAsset,
+  type DocumentKind,
   type LibraryDocument,
   type LibraryResponse,
   type LibraryScope,
@@ -22,6 +28,10 @@ import {
   type UserRole,
 } from "./libraryApi";
 import { PublicApiError } from "./publicApi";
+import {
+  DOCUMENT_KIND_NAMES,
+  DocumentAssetButtons,
+} from "./DocumentAttachments";
 
 const SCOPES: Record<LibraryScope, { title: string }> = {
   personal: {
@@ -87,11 +97,16 @@ export function LibraryWorkspace({
   isSuperAdmin = false,
   getCsrfToken,
   onBack,
+  onAskDocuments,
 }: {
   userRole: UserRole;
   isSuperAdmin?: boolean;
   getCsrfToken: () => string | undefined;
   onBack: () => void;
+  onAskDocuments: (
+    scope: LibraryScope,
+    documents: { id: string; title: string }[],
+  ) => void;
 }) {
   const [scope, setScope] = useState<LibraryScope>("personal");
   const scopes: LibraryScope[] = [
@@ -128,6 +143,7 @@ export function LibraryWorkspace({
         key={visibleScope}
         scope={visibleScope}
         getCsrfToken={getCsrfToken}
+        onAskDocuments={onAskDocuments}
       />
     </main>
   );
@@ -136,9 +152,14 @@ export function LibraryWorkspace({
 function LibraryListing({
   scope,
   getCsrfToken,
+  onAskDocuments,
 }: {
   scope: LibraryScope;
   getCsrfToken: () => string | undefined;
+  onAskDocuments: (
+    scope: LibraryScope,
+    documents: { id: string; title: string }[],
+  ) => void;
 }) {
   const [data, setData] = useState<LibraryResponse>();
   const [error, setError] = useState<string>();
@@ -149,6 +170,14 @@ function LibraryListing({
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortOrder, setSortOrder] = useState("newest");
+  const [versionFilter, setVersionFilter] = useState("current");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [uploadKind, setUploadKind] = useState<DocumentKind>("policy");
+  const [versionFor, setVersionFor] = useState<LibraryDocument>();
+  const [assetFor, setAssetFor] = useState<LibraryDocument>();
+  const [assetRelation, setAssetRelation] =
+    useState<DocumentAsset["relation"]>("template");
+  const assetInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const quota = scope === "personal" ? data?.quota : undefined;
   const uploadBlocked = quota?.upload_allowed === false;
@@ -156,6 +185,12 @@ function LibraryListing({
     const keyword = query.trim().toLocaleLowerCase();
     return (data?.items ?? [])
       .filter((item) => {
+        if (
+          versionFilter === "archived"
+            ? item.version_state !== "archived"
+            : item.version_state === "archived"
+        )
+          return false;
         if (keyword && !item.title.toLocaleLowerCase().includes(keyword))
           return false;
         if (statusFilter === "ready") return READY_STATES.has(item.status);
@@ -179,13 +214,23 @@ function LibraryListing({
           left.title.localeCompare(right.title, "zh-CN", { numeric: true })
         );
       });
-  }, [data?.items, query, sortOrder, statusFilter]);
+  }, [data?.items, query, sortOrder, statusFilter, versionFilter]);
+  const askable = (item: LibraryDocument) =>
+    READY_STATES.has(item.status) &&
+    (item.version_state ?? "current") === "current";
+  const chosen = (data?.items ?? []).filter(
+    (item) => selected.has(item.id) && askable(item),
+  );
   const hasFilters =
-    !!query || statusFilter !== "all" || sortOrder !== "newest";
+    !!query ||
+    statusFilter !== "all" ||
+    sortOrder !== "newest" ||
+    versionFilter !== "current";
   const clearFilters = () => {
     setQuery("");
     setStatusFilter("all");
     setSortOrder("newest");
+    setVersionFilter("current");
   };
 
   useEffect(() => {
@@ -218,7 +263,7 @@ function LibraryListing({
 
   const run = async (
     key: string,
-    operation: (csrf: string) => Promise<void>,
+    operation: (csrf: string) => Promise<void | string>,
     success: string,
   ) => {
     const csrf = getCsrfToken();
@@ -230,8 +275,8 @@ function LibraryListing({
     setError(undefined);
     setNotice(undefined);
     try {
-      await operation(csrf);
-      setNotice(success);
+      const result = await operation(csrf);
+      setNotice(typeof result === "string" ? result : success);
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -272,7 +317,14 @@ function LibraryListing({
     }
     void run(
       "upload",
-      (csrf) => uploadLibrary(scope, file, csrf),
+      async (csrf) => {
+        const result = await uploadLibrary(scope, file, csrf, {
+          replacesId: versionFor?.id,
+          kind: versionFor?.kind ?? uploadKind,
+        });
+        setVersionFor(undefined);
+        return result.message;
+      },
       "已上传，正在准备解析。解析完成后即可提问。",
     );
   };
@@ -316,6 +368,22 @@ function LibraryListing({
           </button>
           {data?.can_manage && (
             <>
+              <label className="wst-document-meta">
+                资料用途{" "}
+                <select
+                  aria-label="上传资料用途"
+                  value={uploadKind}
+                  onChange={(event) =>
+                    setUploadKind(event.currentTarget.value as DocumentKind)
+                  }
+                >
+                  {Object.entries(DOCUMENT_KIND_NAMES).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <input
                 ref={fileInput}
                 type="file"
@@ -333,10 +401,46 @@ function LibraryListing({
                 className="wst-workspace-primary"
                 type="button"
                 disabled={!!busy || uploadBlocked}
-                onClick={() => fileInput.current?.click()}
+                onClick={() => {
+                  setVersionFor(undefined);
+                  fileInput.current?.click();
+                }}
               >
                 <Upload size={16} aria-hidden="true" />
                 {busy === "upload" ? "上传中…" : "上传资料"}
+              </button>
+              <button
+                type="button"
+                disabled={!!busy || !data.items.length}
+                onClick={() =>
+                  void run(
+                    "health",
+                    async (csrf) => {
+                      const candidates = data.items.filter(
+                        (item) => item.version_state !== "archived",
+                      );
+                      let issues = 0;
+                      for (
+                        let offset = 0;
+                        offset < candidates.length;
+                        offset += 4
+                      ) {
+                        const results = await Promise.all(
+                          candidates
+                            .slice(offset, offset + 4)
+                            .map((item) => checkDocumentHealth(item.id, csrf)),
+                        );
+                        issues += results.filter(
+                          (result) => !result.ready,
+                        ).length;
+                      }
+                      return `已检查 ${candidates.length} 份资料的原件和解析状态${issues ? `，${issues} 份需要处理，详见资料列表。` : "，均可下载且已解析。"} 图片显示效果请在引用片段中确认。`;
+                    },
+                    "原件检查完成。",
+                  )
+                }
+              >
+                {busy === "health" ? "检查中…" : "检查资料"}
               </button>
             </>
           )}
@@ -359,6 +463,72 @@ function LibraryListing({
           {notice}
         </p>
       )}
+      {assetFor && (
+        <div
+          className="wst-asset-editor"
+          role="region"
+          aria-label="关联原始附件"
+        >
+          <p>
+            <strong>给“{assetFor.title}”关联文件</strong>
+          </p>
+          <p className="wst-document-meta">
+            请提供真正可编辑的原始附件或完整指引。截图文档请选择操作图示，不作为可填写模板。
+          </p>
+          <select
+            aria-label="关联文件用途"
+            value={assetRelation}
+            onChange={(event) =>
+              setAssetRelation(
+                event.currentTarget.value as DocumentAsset["relation"],
+              )
+            }
+          >
+            <option value="template">可填写附件</option>
+            <option value="full_guide">完整操作指引</option>
+            <option value="source_workbook">原始Excel附件汇总</option>
+          </select>
+          <input
+            ref={assetInput}
+            type="file"
+            aria-label="选择原始附件"
+            accept=".xlsx,.xls,.docx,.doc,.pdf"
+          />
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => {
+              const file = assetInput.current?.files?.[0];
+              if (!file) {
+                setError("请先选择一个文件。");
+                return;
+              }
+              void run(
+                "asset",
+                async (csrf) => {
+                  await uploadDocumentAsset(
+                    assetFor.id,
+                    file,
+                    assetRelation,
+                    csrf,
+                  );
+                  setAssetFor(undefined);
+                },
+                "附件已关联，可在资料列表及回答引用旁下载。",
+              );
+            }}
+          >
+            关联文件
+          </button>
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => setAssetFor(undefined)}
+          >
+            取消
+          </button>
+        </div>
+      )}
       {data && data.items.length > 0 && (
         <>
           <div className="wst-library-filters" aria-label="查找资料">
@@ -371,6 +541,19 @@ function LibraryListing({
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
               />
+            </label>
+            <label>
+              <span className="sr-only">版本范围</span>
+              <select
+                aria-label="版本范围"
+                value={versionFilter}
+                onChange={(event) =>
+                  setVersionFilter(event.currentTarget.value)
+                }
+              >
+                <option value="current">当前资料</option>
+                <option value="archived">已归档旧版</option>
+              </select>
             </label>
             <label>
               <span className="sr-only">资料状态</span>
@@ -400,6 +583,29 @@ function LibraryListing({
                 清除筛选
               </button>
             )}
+          </div>
+          <div className="wst-document-selection">
+            <button
+              type="button"
+              disabled={!!busy || !chosen.length}
+              onClick={() =>
+                onAskDocuments(
+                  scope,
+                  chosen.map(({ id, title }) => ({ id, title })),
+                )
+              }
+            >
+              <MessageCircle size={15} aria-hidden="true" />
+              问选中资料{chosen.length ? `（${chosen.length}）` : ""}
+            </button>
+            {chosen.length > 0 && (
+              <button type="button" onClick={() => setSelected(new Set())}>
+                取消选择
+              </button>
+            )}
+            <span className="wst-document-meta">
+              可选1—20份，只在选中的资料中查找。
+            </span>
           </div>
           <p className="wst-library-result-count" role="status">
             {hasFilters
@@ -445,7 +651,40 @@ function LibraryListing({
                 return (
                   <tr key={item.id}>
                     <td>
-                      <strong>{item.title}</strong>
+                      <div className="wst-document-choice">
+                        <input
+                          type="checkbox"
+                          aria-label={`选择${item.title}`}
+                          disabled={
+                            !askable(item) ||
+                            (!selected.has(item.id) && chosen.length >= 20)
+                          }
+                          checked={selected.has(item.id) && askable(item)}
+                          onChange={(event) => {
+                            const checked = event.currentTarget.checked;
+                            setSelected((previous) => {
+                              const next = new Set(previous);
+                              if (checked) next.add(item.id);
+                              else next.delete(item.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        <strong>{item.title}</strong>
+                      </div>
+                      <span className="wst-document-kind">
+                        {DOCUMENT_KIND_NAMES[item.kind ?? "policy"]}
+                      </span>
+                      {item.version_state === "staging" && (
+                        <span className="wst-document-meta">
+                          新版本待发布，现有版本继续使用
+                        </span>
+                      )}
+                      {item.version_state === "archived" && (
+                        <span className="wst-document-meta">
+                          已归档，不参与新问答
+                        </span>
+                      )}
                       <div className="wst-document-meta">
                         {formatSize(item.size)}
                         {item.created_at &&
@@ -455,6 +694,27 @@ function LibraryListing({
                       {item.error && (
                         <p className="wst-document-error">{item.error}</p>
                       )}
+                      {item.health && (
+                        <span
+                          className={`wst-document-health ${item.health.ready ? "" : "issue"}`}
+                        >
+                          {item.health.ready
+                            ? "原件及解析已检查"
+                            : item.health.original_available === null
+                              ? "原件下载暂时失败，请稍后重试"
+                              : !item.health.original_available
+                                ? "原件暂不可用，请联系资料维护者"
+                                : "原件或解析状态需要处理"}{" "}
+                          ·{" "}
+                          {new Date(item.health.checked_at).toLocaleDateString(
+                            "zh-CN",
+                          )}
+                        </span>
+                      )}
+                      <DocumentAssetButtons
+                        documentId={item.id}
+                        assets={item.assets ?? []}
+                      />
                     </td>
                     <td>
                       <span
@@ -470,6 +730,20 @@ function LibraryListing({
                     </td>
                     <td>
                       <div className="wst-document-actions">
+                        {askable(item) && (
+                          <button
+                            type="button"
+                            disabled={!!busy}
+                            onClick={() =>
+                              onAskDocuments(scope, [
+                                { id: item.id, title: item.title },
+                              ])
+                            }
+                          >
+                            <MessageCircle size={15} aria-hidden="true" />
+                            问这份资料
+                          </button>
+                        )}
                         <button
                           type="button"
                           disabled={!!busy}
@@ -485,6 +759,56 @@ function LibraryListing({
                           <Download size={15} aria-hidden="true" />
                           下载
                         </button>
+                        {canManage &&
+                          item.version_state !== "archived" &&
+                          item.version_state !== "staging" && (
+                            <button
+                              type="button"
+                              disabled={!!busy}
+                              onClick={() => {
+                                setVersionFor(item);
+                                fileInput.current?.click();
+                              }}
+                            >
+                              更新版本
+                            </button>
+                          )}
+                        {canManage &&
+                          item.version_state === "staging" &&
+                          READY_STATES.has(item.status) && (
+                            <button
+                              type="button"
+                              disabled={!!busy}
+                              onClick={() => {
+                                if (
+                                  !window.confirm(
+                                    "发布此版本？检查通过后，新问答将使用此版本，旧版本保留在“已归档旧版”。",
+                                  )
+                                )
+                                  return;
+                                void run(
+                                  item.id,
+                                  (csrf) =>
+                                    publishDocumentVersion(item.id, csrf),
+                                  "新版本已发布，旧版已归档，不再参与新问答。",
+                                );
+                              }}
+                            >
+                              发布此版本
+                            </button>
+                          )}
+                        {canManage && scope !== "personal" && (
+                          <button
+                            type="button"
+                            disabled={!!busy}
+                            onClick={() => {
+                              setAssetFor(item);
+                              setError(undefined);
+                            }}
+                          >
+                            关联附件
+                          </button>
+                        )}
                         {canManage && failed && (
                           <button
                             type="button"

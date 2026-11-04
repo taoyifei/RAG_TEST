@@ -14,6 +14,7 @@ SEARCH_SCOPE_ORDER: tuple[SearchScope, ...] = (
     "personal",
     "hr_internal",
 )
+_MAX_KNOWLEDGE_ID_CHARS = 128
 
 
 def normalize_search_scopes(values: Iterable[str]) -> tuple[SearchScope, ...]:
@@ -41,6 +42,21 @@ class GatewayChatRequest(BaseModel):
     search_scopes: list[SearchScope] | None = Field(
         default=None, min_length=1, max_length=len(SEARCH_SCOPE_ORDER)
     )
+    knowledge_ids: list[str] | None = Field(default=None, max_length=20)
+
+    @field_validator("knowledge_ids")
+    @classmethod
+    def _normalize_knowledge_ids(
+        cls, value: list[str] | None
+    ) -> list[str] | None:
+        if value is None:
+            return None
+        selected = {item.strip() for item in value}
+        if any(
+            not item or len(item) > _MAX_KNOWLEDGE_ID_CHARS for item in selected
+        ):
+            raise ValueError("请选择有效的资料。")
+        return sorted(selected)
 
     @field_validator("search_scopes")
     @classmethod

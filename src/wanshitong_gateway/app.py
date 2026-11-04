@@ -107,6 +107,35 @@ _INLINE_IMAGE_TYPES = frozenset(
 )
 
 
+async def _target_documents(
+    library: LibraryService,
+    profile: UserProfile,
+    kb_ids: tuple[str, ...],
+    knowledge_ids: tuple[str, ...],
+) -> tuple[dict[str, str], ...]:
+    """每轮按当前角色及资料状态核对文件，浏览器不能扩大检索范围。"""
+    targets: dict[str, dict[str, str]] = {}
+    for knowledge_id in knowledge_ids:
+        item, _scope = await library.document(knowledge_id, profile)
+        native_id = str(item.get("id") or "")
+        if item.get("knowledge_base_id") not in kb_ids:
+            raise HTTPException(403, "所选资料不在当前问答范围内。")
+        if (
+            not native_id
+            or item.get("parse_status") != "completed"
+            or item.get("enable_status") == "disabled"
+            or not library.catalogue.searchable(native_id)
+        ):
+            raise HTTPException(
+                409, "所选资料尚未就绪或版本已更新，请重新选择资料提问。"
+            )
+        targets[native_id] = {
+            "id": native_id,
+            "title": str(item.get("file_name") or item.get("title") or "资料"),
+        }
+    return tuple(targets[key] for key in sorted(targets))
+
+
 def _history_cursor(key: bytes, context: str, after: tuple[str, str]) -> str:
     """签发绑定本人、归档组及搜索词的稳定键集游标。"""
     payload = json.dumps(
@@ -1186,6 +1215,18 @@ def create_app(  # noqa: PLR0913, PLR0915
             conversation_id=conversation_id,
         )
         library.check_history(profile, previous_turns)
+        for turn in previous_turns:
+            for citation in json.loads(turn.get("references_json") or "[]"):
+                if not isinstance(citation, dict):
+                    continue
+                knowledge_id = citation.get("native_knowledge_id")
+                if (
+                    isinstance(knowledge_id, str)
+                    and library.catalogue.entry(knowledge_id).get("state")
+                    == "archived"
+                ):
+                    # 文档过滤不能抹去原生旧上下文，已引用旧版需换新会话。
+                    raise HTTPException(409, "资料版本已更新，请新建对话。")
         original_scopes = store.conversation_search_scopes(
             deployment_id=auth.settings.deployment_id,
             owner_id=owner_id,
@@ -1200,6 +1241,30 @@ def create_app(  # noqa: PLR0913, PLR0915
             raise HTTPException(409, "资料范围已变化，请新建对话。")
         kb_ids = library.search_kbs(profile, search_scopes)
         await library.require_searchable(kb_ids, search_scopes)
+        original_targets = store.conversation_knowledge_targets(
+            deployment_id=auth.settings.deployment_id,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+        )
+        selected_ids = (
+            tuple(body.knowledge_ids)
+            if body.knowledge_ids is not None
+            else tuple(item["id"] for item in (original_targets or ()))
+        )
+        knowledge_targets = await _target_documents(
+            library, profile, kb_ids, selected_ids
+        )
+        knowledge_ids = tuple(item["id"] for item in knowledge_targets)
+        if original_targets is not None and knowledge_ids != tuple(
+            item["id"] for item in original_targets
+        ):
+            raise HTTPException(409, "指定资料已变化，请新建对话。")
+        # 当前文档白名单既排除归档/待发布版本，也防止排队时意外纳入新原件。
+        native_knowledge_ids = (
+            knowledge_ids or await library.searchable_document_ids(kb_ids)
+        )
+        if not native_knowledge_ids:
+            raise HTTPException(409, "当前范围暂无可问答的资料。")
         client_context = _usage_context(body.client_context)
         retry_of = client_context.get("retry_of_trace_id")
         if retry_of is not None:
@@ -1237,6 +1302,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                 conversation_id=conversation_id,
                 native_session_id=native_session_id,
                 search_scopes=search_scopes,
+                knowledge_targets=knowledge_targets,
             )
             trace_id = "trace_" + secrets.token_hex(16)
             store.start_turn(
@@ -1299,8 +1365,9 @@ def create_app(  # noqa: PLR0913, PLR0915
                     user_id=user_id,
                     session_id=native_session_id,
                     question=body.query,
-                    knowledge_base_ids=kb_ids,
+                    # 原生整库目标会覆盖文件限定，HTTP 只发送文件 ID。
                     agent_id=agent_id,
+                    knowledge_ids=native_knowledge_ids,
                 ):
                     for event in decoder.feed(chunk):
                         for frame in bridge.accept(event):
@@ -1429,7 +1496,19 @@ def create_app(  # noqa: PLR0913, PLR0915
         turn = store.get_turn(trace_id=trace_id, owner_id=owner_id)
         if turn is None or turn["conversation_id"] != body.conversation_id:
             raise HTTPException(status_code=404, detail="turn not found")
-        library.check_turn(auth.require_profile(request), turn)
+        profile = auth.require_profile(request)
+        library.check_turn(profile, turn)
+        targets = store.conversation_knowledge_targets(
+            deployment_id=auth.settings.deployment_id,
+            owner_id=owner_id,
+            conversation_id=body.conversation_id,
+        )
+        await _target_documents(
+            library,
+            profile,
+            tuple(json.loads(turn.get("kb_scope_json") or "[]")),
+            tuple(item["id"] for item in (targets or ())),
+        )
         message_id = turn["native_message_id"]
         if not isinstance(message_id, str) or not message_id:
             raise HTTPException(
@@ -1456,6 +1535,8 @@ def create_app(  # noqa: PLR0913, PLR0915
             trace_id=trace_id,
             session_id=str(turn["native_session_id"]),
             reference_mapper=_reference_mapper(store, trace_id),
+            initial_events=store.turn_native_events(trace_id),
+            initial_references=json.loads(turn["references_json"]),
         )
         released = False
 
@@ -1844,6 +1925,17 @@ def create_app(  # noqa: PLR0913, PLR0915
         )
         if native_session_id is None:
             return {"turns": []}
+        knowledge_targets = (
+            store.conversation_knowledge_targets(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            )
+            or ()
+        )
+        for target in knowledge_targets:
+            # 旧版仍可追溯；归属变化则不能借历史正文绕开当前文件权限。
+            await library.document(target["id"], auth.require_profile(request))
         try:
             messages = await native.messages(
                 user_id=user_id, session_id=native_session_id
@@ -1929,6 +2021,12 @@ def create_app(  # noqa: PLR0913, PLR0915
                     else None,
                     "answer": answer if isinstance(answer, str) else None,
                     "citations": json.loads(turn["references_json"]),
+                    "answer_origin": store.turn_answer_origin(
+                        turn["trace_id"],
+                        citations=json.loads(turn["references_json"]),
+                        status=status,
+                        answer=answer if isinstance(answer, str) else None,
+                    ),
                     "partial": status
                     in {
                         "failed",
@@ -1944,6 +2042,8 @@ def create_app(  # noqa: PLR0913, PLR0915
                     "stop_acknowledged": bool(turn["stop_acknowledged"]),
                     "created_at": turn["created_at"],
                     "search_scopes": list(search_scopes),
+                    "knowledge_ids": [item["id"] for item in knowledge_targets],
+                    "target_documents": list(knowledge_targets),
                 }
             )
         return {

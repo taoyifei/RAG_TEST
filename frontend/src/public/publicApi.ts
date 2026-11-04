@@ -139,6 +139,17 @@ const PUBLIC_CHAT_PATH = "/api/public/chat";
 const PUBLIC_FEEDBACK_PATH = "/api/public/feedback";
 const PUBLIC_POPULAR_QUESTIONS_PATH = "/api/public/popular-questions";
 
+export type PublicAnswerOrigin =
+  | "knowledge"
+  | "model_no_results"
+  | "model_unreferenced"
+  | "unknown";
+
+export interface PublicTargetDocument {
+  id: string;
+  title: string;
+}
+
 export interface PublicNaturalHistoryTurn {
   turn_id: string;
   trace_id: string;
@@ -155,6 +166,9 @@ export interface PublicNaturalHistoryTurn {
   native_message_id?: string | null;
   native_request_id?: string | null;
   search_scopes?: PublicSearchScope[];
+  knowledge_ids?: string[];
+  target_documents?: PublicTargetDocument[];
+  answer_origin?: PublicAnswerOrigin;
 }
 
 export interface PublicNaturalSession {
@@ -316,6 +330,7 @@ export async function openPublicChat(options: {
   clientContext?: PublicUsageContext;
   naturalProtocol?: "wanshitong-natural-sse-v1" | "wanshitong-weknora-sse-v1";
   searchScopes?: PublicSearchScope[];
+  knowledgeIds?: string[];
 }): Promise<Response> {
   const response = await fetch(withAppBase(PUBLIC_CHAT_PATH), {
     method: "POST",
@@ -332,6 +347,9 @@ export async function openPublicChat(options: {
       conversation_id: options.conversationId,
       query: options.question,
       search_scopes: options.searchScopes ?? ["public"],
+      ...(options.knowledgeIds?.length
+        ? { knowledge_ids: options.knowledgeIds }
+        : {}),
       ...(options.clientContext
         ? { client_context: options.clientContext }
         : {}),

@@ -5,10 +5,11 @@ from __future__ import annotations
 import codecs
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from wanshitong_gateway.weknora.answer_origin import AnswerOriginTracker
 from wanshitong_gateway.weknora.client import classify_native_error
 
 PROTOCOL = "wanshitong-weknora-sse-v1"
@@ -87,19 +88,25 @@ class BridgeStream:
         trace_id: str,
         session_id: str,
         reference_mapper: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+        initial_events: Iterable[Mapping[str, Any]] = (),
+        initial_references: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         self.trace_id = trace_id
         self.session_id = session_id
         self._reference_mapper = reference_mapper
         self._sequence = 0
         self._answer: list[str] = []
-        self._references: list[dict[str, Any]] = []
+        self._references: list[dict[str, Any]] = [
+            dict(reference) for reference in initial_references
+        ]
         self._native_request_id: str | None = None
         self._message_id: str | None = None
         self._usage: Mapping[str, Any] | None = None
         self._finish_reason: str | None = None
         self._truncated = False
         self._stopped = False
+        self._origin = AnswerOriginTracker()
+        self._origin.restore(initial_events)
         self.terminal = False
         self.terminal_type: str | None = None
         self.error_category: str | None = None
@@ -150,6 +157,7 @@ class BridgeStream:
         if native.event != "message" or not isinstance(response_type, str):
             raise ValueError("原生 SSE 事件类型无效。")
         self._capture_metadata(payload)
+        self._origin.accept(payload)
         if response_type == "answer":
             content = payload.get("content", "")
             if not isinstance(content, str):
@@ -173,6 +181,7 @@ class BridgeStream:
                         "native_request_id": self._native_request_id,
                         "native_message_id": self._message_id,
                         "truncated": self._truncated,
+                        "answer_origin": self._answer_origin(completed=False),
                         "native": payload,
                     },
                 )
@@ -217,6 +226,7 @@ class BridgeStream:
                         "usage": self._usage,
                         "finish_reason": self._finish_reason,
                         "truncated": self._truncated,
+                        "answer_origin": self._answer_origin(completed=True),
                         "native": payload,
                     },
                 )
@@ -257,6 +267,7 @@ class BridgeStream:
                     "response_type": response_type,
                     "done": payload.get("done"),
                     "native_request_id": self._native_request_id,
+                    "answer_origin": self._answer_origin(completed=False),
                     "native": payload,
                 },
             )
@@ -292,6 +303,13 @@ class BridgeStream:
         finish_reason = payload.get("finish_reason")
         if isinstance(finish_reason, str):
             self._finish_reason = finish_reason
+
+    def _answer_origin(self, *, completed: bool) -> str:
+        return self._origin.origin(
+            has_citations=bool(self._references),
+            has_answer=bool(self.answer.strip()),
+            completed=completed,
+        )
 
     def _emit(self, event_type: str, data: Mapping[str, Any]) -> bytes:
         frame = encode_event(

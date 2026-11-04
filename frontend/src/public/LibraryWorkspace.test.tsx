@@ -58,6 +58,7 @@ describe("用户资料和角色", () => {
     );
     render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="user"
         getCsrfToken={() => "csrf"}
         onBack={() => undefined}
@@ -118,6 +119,7 @@ describe("用户资料和角色", () => {
     const user = userEvent.setup();
     render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="user"
         getCsrfToken={() => "csrf"}
         onBack={() => undefined}
@@ -163,6 +165,7 @@ describe("用户资料和角色", () => {
     const user = userEvent.setup();
     render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="user"
         getCsrfToken={() => "csrf"}
         onBack={() => undefined}
@@ -204,6 +207,7 @@ describe("用户资料和角色", () => {
     );
     render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="user"
         getCsrfToken={() => "csrf"}
         onBack={() => undefined}
@@ -247,6 +251,7 @@ describe("用户资料和角色", () => {
     const user = userEvent.setup();
     render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="user"
         getCsrfToken={() => "csrf"}
         onBack={() => undefined}
@@ -286,6 +291,7 @@ describe("用户资料和角色", () => {
     const user = userEvent.setup();
     render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="admin"
         isSuperAdmin
         getCsrfToken={() => "csrf"}
@@ -337,6 +343,7 @@ describe("用户资料和角色", () => {
     const user = userEvent.setup();
     render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="user"
         getCsrfToken={() => "csrf"}
         onBack={() => undefined}
@@ -404,6 +411,7 @@ describe("用户资料和角色", () => {
     const user = userEvent.setup();
     render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="user"
         getCsrfToken={() => "csrf"}
         onBack={() => undefined}
@@ -475,6 +483,7 @@ describe("用户资料和角色", () => {
       const user = userEvent.setup();
       render(
         <LibraryWorkspace
+          onAskDocuments={vi.fn()}
           userRole="admin"
           isSuperAdmin={isSuperAdmin}
           getCsrfToken={() => "csrf-token"}
@@ -563,6 +572,7 @@ describe("用户资料和角色", () => {
       );
       render(
         <LibraryWorkspace
+          onAskDocuments={vi.fn()}
           userRole={userRole}
           isSuperAdmin={isSuperAdmin}
           getCsrfToken={() => "csrf"}
@@ -684,6 +694,7 @@ describe("用户资料和角色", () => {
       const user = userEvent.setup();
       render(
         <LibraryWorkspace
+          onAskDocuments={vi.fn()}
           userRole={userRole}
           isSuperAdmin={isSuperAdmin}
           getCsrfToken={() => "csrf"}
@@ -723,6 +734,7 @@ describe("用户资料和角色", () => {
     const user = userEvent.setup();
     render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="hr"
         getCsrfToken={() => "csrf"}
         onBack={() => undefined}
@@ -746,6 +758,7 @@ describe("用户资料和角色", () => {
     );
     const { rerender } = render(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="admin"
         getCsrfToken={() => "csrf"}
         onBack={() => undefined}
@@ -757,6 +770,7 @@ describe("用户资料和角色", () => {
     ).not.toBeInTheDocument();
     rerender(
       <LibraryWorkspace
+        onAskDocuments={vi.fn()}
         userRole="admin"
         isSuperAdmin
         getCsrfToken={() => "csrf"}

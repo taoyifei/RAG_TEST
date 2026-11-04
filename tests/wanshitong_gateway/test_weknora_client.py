@@ -223,6 +223,66 @@ async def test_session_and_chat_use_native_api_without_rewriting() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kb_ids", [(), ("whole-kb",)])
+async def test_file_whitelist_never_sends_a_full_kb_target(
+    kb_ids: tuple[str, ...],
+) -> None:
+    """原生上层会用整库覆盖同库文件目标，不能把底层 AND 当调用契约。"""
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"event: complete\ndata: {}\n\n")
+
+    client = _message_client(respond)
+    try:
+        _chunks = [
+            chunk
+            async for chunk in client.knowledge_chat(
+                user_id="owner",
+                session_id="conversation",
+                question="只问已选文件",
+                knowledge_base_ids=kb_ids,
+                knowledge_ids=("selected-file",),
+                agent_id="configured-quick-answer",
+            )
+        ]
+    finally:
+        await client.close()
+    assert len(requests) == 1
+    # 显式文件 ID 保持原生 hasExplicitMention=true，继续沿用所选 Agent 的
+    # 模型/提示词，同时不触发其缺省整库范围。
+    assert json.loads(requests[0].content) == {
+        "query": "只问已选文件",
+        "knowledge_ids": ["selected-file"],
+        "agent_id": "configured-quick-answer",
+    }
+
+
+@pytest.mark.asyncio
+async def test_empty_file_whitelist_cannot_fall_back_to_kb_or_agent() -> None:
+    def respond(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("空白名单不能产生任何原生请求。")
+
+    client = _message_client(respond)
+    try:
+        with pytest.raises(ValueError, match="不能为空"):
+            _chunks = [
+                chunk
+                async for chunk in client.knowledge_chat(
+                    user_id="owner",
+                    session_id="conversation",
+                    question="无可用文件",
+                    knowledge_base_ids=("whole-kb",),
+                    knowledge_ids=(),
+                    agent_id="configured-quick-answer",
+                )
+            ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_native_error_does_not_retry_generation() -> None:
     calls = 0
 

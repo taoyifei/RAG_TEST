@@ -8,6 +8,106 @@ import type { PublicTurn } from "./usePublicChat";
 
 afterEach(() => vi.restoreAllMocks());
 
+it.each([
+  {
+    name: "检索零结果的实时回答",
+    status: "streaming" as const,
+    origin: "model_no_results" as const,
+    count: 0,
+    citation: false,
+    notice: "未找到相关资料，以下内容由大模型生成，仅供参考。",
+  },
+  {
+    name: "恢复的无引用历史回答",
+    status: "completed" as const,
+    origin: "model_unreferenced" as const,
+    count: undefined,
+    citation: false,
+    notice: "未引用知识库资料，以下内容由大模型生成，仅供参考。",
+  },
+  {
+    name: "检索命中但没有引用的回答",
+    status: "completed" as const,
+    origin: "model_unreferenced" as const,
+    count: 3,
+    citation: false,
+    notice: "未引用知识库资料，以下内容由大模型生成，仅供参考。",
+  },
+  {
+    name: "明确命中时不沿用旧的零结果标识",
+    status: "completed" as const,
+    origin: "model_no_results" as const,
+    count: 3,
+    citation: false,
+    notice: "未引用知识库资料，以下内容由大模型生成，仅供参考。",
+  },
+  {
+    name: "正在生成且尚未收到引用时不猜测零结果",
+    status: "streaming" as const,
+    origin: "unknown" as const,
+    count: undefined,
+    citation: false,
+    notice: undefined,
+  },
+  {
+    name: "有引用时不显示模型自行回答标识",
+    status: "completed" as const,
+    origin: "model_no_results" as const,
+    count: 0,
+    citation: true,
+    notice: undefined,
+  },
+  {
+    name: "失败的部分回答不冒充完整模型回答",
+    status: "failed" as const,
+    origin: "model_no_results" as const,
+    count: 0,
+    citation: false,
+    notice: undefined,
+  },
+])("$name", ({ status, origin, count, citation, notice }) => {
+  const now = Date.now();
+  const turn: PublicTurn = {
+    id: "turn-origin",
+    conversationId: "origin-test",
+    question: "测试问题",
+    status,
+    answerOrigin: origin,
+    nativeProtocol: true,
+    stageHistory: [],
+    startedAt: now,
+    stageStartedAt: now,
+    lastSignalAt: now,
+    claims: [],
+    ...(status === "streaming"
+      ? { provisionalAnswer: "这是一段回答。" }
+      : { answer: "这是一段回答。" }),
+    citations: citation ? [{ document_name: "制度.docx" }] : [],
+    nativeEvents:
+      count === undefined
+        ? []
+        : [
+            {
+              sequence: 1,
+              responseType: "tool_result",
+              payload: {
+                data: { tool_name: "knowledge_search", success: true, count },
+              },
+            },
+          ],
+    partial: status === "failed",
+    feedback: "idle",
+  };
+  const { container } = render(
+    <PublicAnswer onFeedback={vi.fn()} onRetry={vi.fn()} turn={turn} />,
+  );
+  if (notice) {
+    expect(screen.getByRole("note")).toHaveTextContent(notice);
+  } else {
+    expect(container.querySelector(".wst-answer-origin")).toBeNull();
+  }
+});
+
 it("生成等待期间只报告真实的连接活动，不伪造阶段进度", async () => {
   const now = Date.now();
   vi.spyOn(Date, "now").mockReturnValue(now);

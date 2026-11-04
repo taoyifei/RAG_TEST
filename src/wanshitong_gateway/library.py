@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import hashlib
 import json
 import logging
 import os
 import time
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -32,6 +34,11 @@ from wanshitong_gateway.compat.adapters.stores.sqlite_connection import (
     SqliteConnectionFactory,
 )
 from wanshitong_gateway.compat.core.errors import ProviderUnavailable
+from wanshitong_gateway.document_catalogue import (
+    DocumentCatalogue,
+    guide_group,
+    infer_kind,
+)
 from wanshitong_gateway.library_quota import (
     ACTIVE_STATES,
     MAX_FILE_BYTES,
@@ -128,6 +135,8 @@ class LibraryService:
         self._personal_locks: dict[str, asyncio.Lock] = {}
         self._personal_transfers = asyncio.Semaphore(2)
         self._quota = PersonalQuotaStore(database_path)
+        self.catalogue = DocumentCatalogue(database_path)
+        self._workflow_lock = asyncio.Lock()
         self._personal_worker: asyncio.Task[None] | None = None
         with self._connections.transaction(write=True) as connection:
             connection.executescript(
@@ -297,6 +306,7 @@ class LibraryService:
             return
         if job.native_id is None or job.state in ACTIVE_STATES:
             self._quota.accept_native(job.job_id, item)
+            self.catalogue.adopt(job.job_id, str(item["id"]))
             if job.kind == "upload" and job.native_id is None:
                 self._remember(str(item["id"]), self._job_profile(job))
             self._remove_spool(job.job_id)
@@ -329,6 +339,7 @@ class LibraryService:
             self._quota.set_state(job.job_id, "queued")
         else:
             self._quota.forget_staging(job.job_id)
+            self.catalogue.forget(job.job_id)
             self._remove_spool(job.job_id)
 
     async def _advance_personal(
@@ -364,6 +375,10 @@ class LibraryService:
                     content,
                     self._job_profile(job),
                     upload_id=job.job_id,
+                    replaces_id=self.catalogue.entry(job.job_id).get(
+                        "replaces_id"
+                    )
+                    or None,
                 )
                 method_path = f"knowledge-bases/{kb_id}/knowledge/file"
                 request_content = multipart.read()
@@ -400,6 +415,7 @@ class LibraryService:
                 )
                 return
             self._quota.accept_native(job.job_id, accepted_item)
+            self.catalogue.adopt(job.job_id, str(accepted_item["id"]))
             if job.kind == "upload":
                 self._remember(str(accepted_item["id"]), self._job_profile(job))
                 self._remove_spool(job.job_id)
@@ -443,7 +459,15 @@ class LibraryService:
         if response.status_code >= HTTPStatus.BAD_REQUEST and not (
             response.status_code == HTTPStatus.CONFLICT
             and isinstance(item, dict)
-            and self._upload_marker(item) == job.job_id
+            and (
+                self._upload_marker(item) == job.job_id
+                or (
+                    payload.get("code") == "duplicate_file"
+                    and str(item.get("knowledge_base_id")) == kb_id
+                    and self.catalogue.entry(job.job_id).get("state")
+                    != "staging"
+                )
+            )
         ):
             self._quota.set_state(
                 job.job_id,
@@ -854,7 +878,31 @@ class LibraryService:
             raise HTTPException(403, "没有访问这份资料的权限。")
         if write and not self.can_manage_kb(kb_id, profile):
             raise HTTPException(403, "没有维护这份资料的权限。")
+        self._restore_version_record(item)
         return item, scope
+
+    def _restore_version_record(self, item: dict[str, Any]) -> None:
+        """从原生持久化标记恢复回执中断的新版本，未发布时保持隔离。"""
+        metadata = item.get("metadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except ValueError:
+                return
+        if not isinstance(metadata, dict) or not metadata.get(
+            "wxd_replaces_id"
+        ):
+            return
+        native_id = str(item["id"])
+        marker = self._upload_marker(item)
+        if marker and self.catalogue.entry(marker):
+            self.catalogue.adopt(marker, native_id)
+        if not self.catalogue.entry(native_id):
+            self.catalogue.stage(
+                native_id,
+                str(item["knowledge_base_id"]),
+                str(metadata["wxd_replaces_id"]),
+            )
 
     async def _scope_kb(
         self,
@@ -980,6 +1028,7 @@ class LibraryService:
                 if scope == "personal":
                     personal_native.extend(batch)
                 for item in batch:
+                    self._restore_version_record(item)
                     record = self._record(item["id"])
                     kb_scope = self._scope_for_kb(kb_id)
                     items.append(
@@ -1021,7 +1070,355 @@ class LibraryService:
             result["quota"] = await self._personal_listing(
                 profile.user_id, items, personal_native
             )
+        for item in items:
+            entry = self.catalogue.entry(item["id"])
+            item.update(
+                {
+                    "version_state": entry.get("state", "current"),
+                    "replaces_id": entry.get("replaces_id") or None,
+                    "kind": entry.get("kind") or infer_kind(item["title"]),
+                    "group_name": entry.get("group_name")
+                    or guide_group(item["title"]),
+                    "health": json.loads(entry["health_json"])
+                    if entry.get("health_json")
+                    else None,
+                    "assets": self.catalogue.assets(item["id"]),
+                }
+            )
         return result
+
+    async def searchable_document_ids(
+        self, kb_ids: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """原生知识 ID 过滤快照排除待发布及旧版，不改变检索排序。"""
+        async with self._workflow_lock:
+            items = await self._items_in_kbs(kb_ids)
+            return tuple(
+                str(item["id"])
+                for item in items
+                if (
+                    item.get("parse_status") == "completed"
+                    and item.get("enable_status", "enabled") == "enabled"
+                    and self.catalogue.searchable(str(item["id"]))
+                )
+            )
+
+    async def _items_in_kbs(
+        self, kb_ids: tuple[str, ...]
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for kb_id in kb_ids:
+            page = 1
+            while True:
+                payload = await self._request(
+                    "GET",
+                    f"knowledge-bases/{kb_id}/knowledge",
+                    query=f"page_size={_PAGE_SIZE}&page={page}",
+                )
+                batch = payload.get("data", [])
+                for item in batch:
+                    self._restore_version_record(item)
+                items.extend(batch)
+                if len(batch) < _PAGE_SIZE or page * _PAGE_SIZE >= payload.get(
+                    "total", page * _PAGE_SIZE + 1
+                ):
+                    break
+                page += 1
+        return items
+
+    @staticmethod
+    def _same_content(item: dict[str, Any], content: bytes) -> bool:
+        expected = str(item.get("file_hash") or "").lower().lstrip("0")
+        if not expected:
+            return False
+        return expected in {
+            hashlib.sha256(content).hexdigest().lstrip("0"),
+            hashlib.md5(content, usedforsecurity=False).hexdigest().lstrip("0"),
+        }
+
+    async def _duplicate_upload(
+        self,
+        scope: LibraryScope,
+        profile: UserProfile,
+        content: bytes,
+        existing: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        hashes = {
+            hashlib.sha256(content).hexdigest().lstrip("0"),
+            hashlib.md5(content, usedforsecurity=False).hexdigest().lstrip("0"),
+        }
+        duplicate = next(
+            (
+                item
+                for item in existing
+                if str(item.get("file_hash") or "").lower().lstrip("0")
+                in hashes
+            ),
+            None,
+        )
+        if duplicate:
+            version_state = self.catalogue.entry(str(duplicate["id"])).get(
+                "state", "current"
+            )
+            return {
+                "id": duplicate["id"],
+                "status": duplicate.get("parse_status", "pending"),
+                "duplicate": True,
+                "version_state": version_state,
+                "message": "这份资料已经存在，已保留现有文件，"
+                "没有重复解析或占用额度。"
+                if version_state == "current"
+                else "相同内容已在已归档旧版中，请切换版本范围查看。"
+                if version_state == "archived"
+                else "相同内容是待发布的新版本，请等待解析完成后发布。",
+            }
+        if scope == "personal":
+            for job in self._quota.jobs(profile.user_id):
+                if (
+                    job.kind != "upload"
+                    or job.native_id is not None
+                    or job.state == "deleted"
+                ):
+                    continue
+                path = self._spool_file(job.job_id)
+                if (
+                    path.is_file()
+                    and await asyncio.to_thread(path.read_bytes) == content
+                ):
+                    return {
+                        **self._job_response(job),
+                        "duplicate": True,
+                        "message": "相同资料已经在准备中，无需重复上传。",
+                    }
+        return None
+
+    async def receive_upload(  # noqa: PLR0913 - 区分资料区、认证主体、原件及可选用途/版本。
+        self,
+        scope: LibraryScope,
+        profile: UserProfile,
+        filename: str,
+        content: bytes,
+        *,
+        replaces_id: str | None = None,
+        kind: str = "",
+    ) -> dict[str, Any]:
+        """先识别本资料区重复文件；新版本解析合格后才允许显式发布。"""
+        self._check_scope(scope, profile)
+        if kind and kind not in {"policy", "illustration", "template"}:
+            raise HTTPException(422, "资料用途无效。")
+        if not self.can_manage_scope(scope, profile):
+            raise HTTPException(403, "没有向该资料区新增资料的权限。")
+        async with self._workflow_lock:
+            if replaces_id:
+                previous, zone = await self.document(
+                    replaces_id, profile, write=True
+                )
+                replaces_id = str(previous["id"])
+                if zone["scope"] != scope or not self.catalogue.searchable(
+                    replaces_id
+                ):
+                    raise HTTPException(
+                        409, "请对同一资料区的当前版本执行更新。"
+                    )
+                if self.catalogue.pending(replaces_id):
+                    raise HTTPException(
+                        409, "已有待发布版本，请先处理或删除它。"
+                    )
+                kb_id = str(previous["knowledge_base_id"])
+            else:
+                kb_id = await self._scope_kb(scope, profile)
+            existing = await self._items_in_kbs((kb_id,))
+            duplicate = await self._duplicate_upload(
+                scope, profile, content, existing
+            )
+            if duplicate:
+                if replaces_id:
+                    raise HTTPException(
+                        409, "文件内容与已有资料完全相同，无需更新版本。"
+                    )
+                return duplicate
+            clean_name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+            if not replaces_id and any(
+                (item.get("file_name") or item.get("title")) == clean_name
+                for item in existing
+            ):
+                raise HTTPException(
+                    409,
+                    "已有同名资料。内容有更新时，请点击该资料的“更新版本”，"
+                    "避免新旧内容混用。",
+                )
+            result = await self.upload(
+                scope, profile, filename, content, replaces_id=replaces_id
+            )
+            if replaces_id:
+                result["version_state"] = "staging"
+                result["message"] = (
+                    "新版本已接收，原版本继续使用。解析完成并检查通过后，点击“发布此版本”。"
+                )
+            else:
+                result["message"] = (
+                    "原件已接收。正在准备解析，状态变为“可问答”后可直接问这份资料。"
+                )
+            if kind:
+                self.catalogue.annotate(str(result["id"]), kb_id, kind=kind)
+            return result
+
+    async def check_document_health(
+        self, native_id: str, profile: UserProfile
+    ) -> dict[str, Any]:
+        """验证原件确实能下载且大小一致；解析完成不等于已核验图片效果。"""
+        item, zone = await self.document(native_id, profile)
+        health: dict[str, Any] = {
+            "checked_at": datetime.now(UTC).isoformat(),
+            "original_available": False,
+            "parse_status": item.get("parse_status"),
+            "image_check": "not_checked",
+        }
+        try:
+            raw = await self.download(native_id, profile)
+            expected_size = int(item.get("file_size") or 0)
+            size_ok = not expected_size or len(raw.content) == expected_size
+            hash_ok = not item.get("file_hash") or self._same_content(
+                item, raw.content
+            )
+            health.update(
+                {
+                    "original_available": True,
+                    "size_ok": size_ok,
+                    "hash_ok": hash_ok,
+                    "bytes": len(raw.content),
+                }
+            )
+        except HTTPException as error:
+            if error.status_code not in {
+                HTTPStatus.NOT_FOUND,
+                HTTPStatus.BAD_GATEWAY,
+                HTTPStatus.CONFLICT,
+            }:
+                raise
+            if error.status_code != HTTPStatus.NOT_FOUND:
+                health["original_available"] = None
+                health["check_error"] = (
+                    "原件下载暂时失败，尚未确认是否可用，请稍后重试。"
+                )
+        health["ready"] = bool(
+            health["original_available"]
+            and health.get("size_ok")
+            and health.get("hash_ok")
+            and item.get("parse_status") == "completed"
+        )
+        self.catalogue.set_health(str(item["id"]), str(zone["kb_id"]), health)
+        return health
+
+    async def publish_version(
+        self, native_id: str, profile: UserProfile
+    ) -> dict[str, Any]:
+        """解析及原件检查通过才切换版本，失败时旧版本不受影响。"""
+        async with self._workflow_lock:
+            item, zone = await self.document(native_id, profile, write=True)
+            native_id = str(item["id"])
+            entry = self.catalogue.entry(native_id)
+            previous_id = str(entry.get("replaces_id") or "")
+            if entry.get("state") != "staging" or not previous_id:
+                raise HTTPException(409, "这不是待发布的新版本。")
+            previous, previous_zone = await self.document(
+                previous_id, profile, write=True
+            )
+            if (
+                str(previous["knowledge_base_id"])
+                != str(item["knowledge_base_id"])
+                or previous_zone != zone
+            ):
+                raise HTTPException(403, "版本所属资料区不一致，不能发布。")
+            health = await self.check_document_health(native_id, profile)
+            if not health["ready"]:
+                raise HTTPException(
+                    409,
+                    "新版本尚未解析完成或原件检查未通过，旧版本仍继续使用。",
+                )
+            try:
+                self.catalogue.publish(
+                    native_id, str(zone["kb_id"]), previous_id
+                )
+            except ValueError as error:
+                raise HTTPException(409, str(error)) from error
+            return {
+                "id": native_id,
+                "version_state": "current",
+                "previous_id": previous_id,
+            }
+
+    async def add_document_asset(
+        self,
+        native_id: str,
+        profile: UserProfile,
+        filename: str,
+        content: bytes,
+        relation: str,
+    ) -> dict[str, Any]:
+        """只有该共享资料区的维护者可附真实原始模板，个人附件不绕过额度。"""
+        item, zone = await self.document(native_id, profile, write=True)
+        if zone["scope"] == "personal":
+            raise HTTPException(
+                422,
+                "个人资料请直接上传文件，附件关联仅用于公共和人力资料的模板及指引。",
+            )
+        if relation not in {"template", "source_workbook", "full_guide"}:
+            raise HTTPException(422, "附件用途无效。")
+        filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+        if (
+            Path(filename).suffix.lower()
+            not in {".xlsx", ".xls", ".docx", ".doc", ".pdf"}
+            or not content
+            or len(content) > MAX_FILE_BYTES
+        ):
+            raise HTTPException(
+                422, "请提供不超过50MB的原始Word、Excel或PDF文件。"
+            )
+        digest = hashlib.sha256(content).hexdigest()
+        existing = next(
+            (
+                asset
+                for asset in self.catalogue.assets(str(item["id"]))
+                if asset["sha256"] == digest and asset["relation"] == relation
+            ),
+            None,
+        )
+        return existing or self.catalogue.add_asset(
+            str(item["id"]), filename, content, digest, relation
+        )
+
+    async def document_asset(
+        self, native_id: str, asset_id: str, profile: UserProfile
+    ) -> NativeAdminResponse:
+        """附件下载每次重新验证锚点资料权限，不接受任意资源路径。"""
+        item, _ = await self.document(native_id, profile)
+        asset = next(
+            (
+                asset
+                for asset in self.catalogue.assets(str(item["id"]))
+                if asset["id"] == asset_id
+            ),
+            None,
+        )
+        if not asset:
+            raise HTTPException(404, "未找到该资料的附件。")
+        try:
+            content = (
+                self.catalogue.asset_root / str(uuid.UUID(asset_id))
+            ).read_bytes()
+        except (ValueError, FileNotFoundError):
+            raise HTTPException(404, "附件原件暂不可用。") from None
+        return NativeAdminResponse(
+            200,
+            content,
+            {
+                "content-type": "application/octet-stream",
+                "content-disposition": "attachment; filename*=UTF-8''"
+                + quote(asset["filename"], safe=""),
+                "Cache-Control": "private, no-store",
+            },
+        )
 
     async def _personal_listing(
         self,
@@ -1042,7 +1439,7 @@ class LibraryService:
                         item["error"] = job.error
         return self._quota.summary(owner_id, native_items)
 
-    async def upload(
+    async def upload(  # noqa: PLR0913 - 上传内容及可选原件来源/版本标记保持显式。
         self,
         scope: LibraryScope,
         profile: UserProfile,
@@ -1050,6 +1447,7 @@ class LibraryService:
         content: bytes,
         *,
         source_id: str | None = None,
+        replaces_id: str | None = None,
     ) -> dict[str, Any]:
         """上传到服务端决定的目标库，共享副本必须由当前用户已授权的原件产生。"""
         if source_id is not None:
@@ -1073,7 +1471,7 @@ class LibraryService:
         if scope == "personal":
             async with self._personal_lock(profile.user_id):
                 # Key 或私库恢复失败必须在接收原件前返回，避免悄悄变成排队失败。
-                await self._scope_kb(scope, profile)
+                kb_id = await self._scope_kb(scope, profile)
                 native_items = await self._personal_native_items(
                     profile.user_id
                 )
@@ -1085,6 +1483,8 @@ class LibraryService:
                     len(content),
                     native_items,
                 )
+                if replaces_id:
+                    self.catalogue.stage(job.job_id, kb_id, replaces_id)
                 write_task = asyncio.create_task(
                     asyncio.to_thread(self._write_spool, job, content)
                 )
@@ -1095,6 +1495,7 @@ class LibraryService:
                     with contextlib.suppress(OSError):
                         await asyncio.shield(write_task)
                     self._quota.forget_staging(job.job_id)
+                    self.catalogue.forget(job.job_id)
                     self._remove_spool(job.job_id)
                     raise
                 self._quota.set_state(job.job_id, "queued")
@@ -1107,7 +1508,11 @@ class LibraryService:
             return self._job_response(accepted)
         kb_id = await self._scope_kb(scope, profile)
         multipart = self._multipart(
-            filename, content, profile, source_id=source_id
+            filename,
+            content,
+            profile,
+            source_id=source_id,
+            replaces_id=replaces_id,
         )
         result = await self._request(
             "POST",
@@ -1116,6 +1521,8 @@ class LibraryService:
             content_type=multipart.headers["content-type"],
         )
         item = result["data"]
+        if replaces_id:
+            self.catalogue.stage(str(item["id"]), kb_id, replaces_id)
         self._remember(item["id"], profile, source_id)
         return {"id": item["id"], "status": item.get("parse_status", "pending")}
 
@@ -1130,13 +1537,14 @@ class LibraryService:
         part.replace(final)
 
     @staticmethod
-    def _multipart(
+    def _multipart(  # noqa: PLR0913 - 原生multipart来源与恢复标记必须分别传递。
         filename: str,
         content: bytes,
         profile: UserProfile,
         *,
         source_id: str | None = None,
         upload_id: str | None = None,
+        replaces_id: str | None = None,
     ) -> httpx.Request:
         return httpx.Request(
             "POST",
@@ -1155,6 +1563,11 @@ class LibraryService:
                     {
                         "wxd_owner_id": profile.user_id,
                         **({"wxd_upload_id": upload_id} if upload_id else {}),
+                        **(
+                            {"wxd_replaces_id": replaces_id}
+                            if replaces_id
+                            else {}
+                        ),
                         **(
                             {"wxd_source_id": source_id}
                             if source_id is not None
@@ -1213,10 +1626,15 @@ class LibraryService:
             else contextlib.nullcontext()
         )
         async with (
+            self._workflow_lock,
             owner_lock,
             self._document_lock(native_id),
         ):
             item, scope = await self.document(native_id, profile, write=True)
+            if self.catalogue.pending(str(item["id"])):
+                raise HTTPException(
+                    409, "这份资料有待发布的新版本，请先处理或删除新版本。"
+                )
             job = self._quota.job(native_id)
             if job is not None and job.native_id is None:
                 native_items = await self._personal_native_items(
@@ -1244,6 +1662,7 @@ class LibraryService:
                         native_id, profile.user_id
                     ):
                         self._remove_spool(identifier)
+                    self.catalogue.forget(native_id)
                     return
                 item, scope = await self.document(
                     native_id, profile, write=True
@@ -1264,6 +1683,8 @@ class LibraryService:
                 await self._unshare_locked(effective_id)
             await self._delete_native(effective_id)
             self._forget(effective_id)
+            self.catalogue.forget(effective_id)
+            self.catalogue.forget(native_id)
             if scope["scope"] == "personal":
                 for identifier in self._quota.mark_deleted(
                     effective_id, profile.user_id
@@ -1411,15 +1832,112 @@ def register_library_routes(
         request: Request,
         file: Annotated[UploadFile, File()],
         scope: Annotated[LibraryScope, Form()] = "personal",
+        replaces_id: Annotated[str | None, Form()] = None,
+        kind: Annotated[
+            Literal["policy", "illustration", "template"] | None, Form()
+        ] = None,
     ) -> dict[str, Any]:
         profile = auth.require_profile(request)
         try:
             content = await file.read(_MAX_FILE_BYTES + 1)
         finally:
             await file.close()
-        return await service.upload(
-            scope, profile, file.filename or "", content
+        return await service.receive_upload(
+            scope,
+            profile,
+            file.filename or "",
+            content,
+            replaces_id=replaces_id,
+            kind=kind or "",
         )
+
+    @app.post("/api/public/library/{native_id}/health")
+    async def library_health(
+        native_id: str, request: Request
+    ) -> dict[str, Any]:
+        return await service.check_document_health(
+            native_id, auth.require_profile(request)
+        )
+
+    @app.get("/api/public/library/{native_id}/details")
+    async def library_details(
+        native_id: str, request: Request
+    ) -> dict[str, Any]:
+        item, _ = await service.document(
+            native_id, auth.require_profile(request)
+        )
+        identifier = str(item["id"])
+        entry = service.catalogue.entry(identifier)
+        title = item.get("file_name") or item.get("title") or "未命名资料"
+        return {
+            "id": identifier,
+            "kind": entry.get("kind") or infer_kind(title),
+            "version_state": entry.get("state", "current"),
+            "group_name": entry.get("group_name") or guide_group(title),
+            "assets": service.catalogue.assets(identifier),
+            "health": json.loads(entry["health_json"])
+            if entry.get("health_json")
+            else None,
+        }
+
+    @app.post("/api/public/library/{native_id}/publish")
+    async def publish_library_version(
+        native_id: str, request: Request
+    ) -> dict[str, Any]:
+        return await service.publish_version(
+            native_id, auth.require_profile(request)
+        )
+
+    @app.post("/api/public/library/{native_id}/assets")
+    async def upload_library_asset(
+        request: Request,
+        native_id: str,
+        file: Annotated[UploadFile, File()],
+        relation: Annotated[str, Form()] = "template",
+    ) -> dict[str, Any]:
+        try:
+            content = await file.read(MAX_FILE_BYTES + 1)
+        finally:
+            await file.close()
+        return await service.add_document_asset(
+            native_id,
+            auth.require_profile(request),
+            file.filename or "",
+            content,
+            relation,
+        )
+
+    @app.get("/api/public/library/{native_id}/assets/{asset_id}")
+    async def download_library_asset(
+        native_id: str, asset_id: str, request: Request
+    ) -> Response:
+        upstream = await service.document_asset(
+            native_id, asset_id, auth.require_profile(request)
+        )
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            headers=upstream.headers,
+        )
+
+    @app.post("/api/public/library/{native_id}/asset-links")
+    async def link_library_asset(
+        native_id: str, request: Request, source_id: str, asset_id: str
+    ) -> dict[str, bool]:
+        profile = auth.require_profile(request)
+        item, zone = await service.document(native_id, profile, write=True)
+        source, source_zone = await service.document(
+            source_id, profile, write=True
+        )
+        if zone["scope"] == "personal" or zone["kb_id"] != source_zone["kb_id"]:
+            raise HTTPException(403, "附件仅可关联到同一公共或人力资料区。")
+        if not any(
+            asset["id"] == asset_id
+            for asset in service.catalogue.assets(str(source["id"]))
+        ):
+            raise HTTPException(404, "原资料没有这份附件。")
+        service.catalogue.link_asset(str(item["id"]), asset_id)
+        return {"success": True}
 
     @app.get("/api/public/library/{native_id}/download")
     async def download_library(native_id: str, request: Request) -> Response:

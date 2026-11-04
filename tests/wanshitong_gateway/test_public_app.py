@@ -136,6 +136,21 @@ class _NativeState:
                 },
             )
         if path.startswith("/api/v1/knowledge-bases/"):
+            if path.endswith("/knowledge"):
+                kb_id = path.split("/")[4]
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": [
+                            {
+                                "id": f"doc-{kb_id}",
+                                "knowledge_base_id": kb_id,
+                                "parse_status": "completed",
+                            }
+                        ],
+                    },
+                )
             kb_id = path.rsplit("/", maxsplit=1)[-1]
             return httpx.Response(
                 200,
@@ -352,7 +367,8 @@ class _ScopeNativeState(_NativeState):
                     "success": True,
                     "data": [
                         {
-                            "id": "scoped-document",
+                            "id": f"doc-{path.split('/')[4]}",
+                            "knowledge_base_id": path.split("/")[4],
                             "parse_status": (
                                 "pending" if self.pending else "completed"
                             ),
@@ -387,6 +403,16 @@ def _scope_browser(
             ],
         )
     return TestClient(app), state, store
+
+
+def _native_target_kbs(request: httpx.Request) -> set[str]:
+    """将真实文件目标反查所属库；禁止整库字段覆盖文件限定。"""
+    payload = json.loads(request.content)
+    assert "knowledge_base_ids" not in payload
+    ids = payload["knowledge_ids"]
+    assert len(ids) == len(set(ids))
+    assert all(identity.startswith("doc-") for identity in ids)
+    return {identity.removeprefix("doc-") for identity in ids}
 
 
 @pytest.mark.parametrize(
@@ -462,8 +488,8 @@ def test_selected_scopes_are_the_actual_native_request_targets(
             if request.url.path.startswith("/api/v1/knowledge-chat/")
         ]
         assert len(requests) == 1
-        targets = json.loads(requests[0].content)["knowledge_base_ids"]
-        assert set(targets) == expected
+        targets = _native_target_kbs(requests[0])
+        assert targets == expected
         assert len(targets) == len(expected)
         turn = store.get_turn(trace_id=response.headers["X-Trace-Id"])
         assert set(json.loads(turn["kb_scope_json"])) == expected
@@ -523,8 +549,8 @@ def test_hr_internal_selection_requires_hr_or_super_admin(  # noqa: PLR0913, PLR
             if request.url.path.startswith("/api/v1/knowledge-chat/")
         ]
         if expected_status == 200:
-            targets = json.loads(requests[0].content)["knowledge_base_ids"]
-            assert set(targets) == expected_targets
+            targets = _native_target_kbs(requests[0])
+            assert targets == expected_targets
             assert len(targets) == len(expected_targets)
         else:
             assert requests == []
@@ -624,8 +650,7 @@ def test_hr_public_history_keeps_narrow_scope_until_new_conversation(
         ]
         assert len(requests) == 2
         assert all(
-            json.loads(request.content)["knowledge_base_ids"] == ["hr-public"]
-            for request in requests
+            _native_target_kbs(request) == {"hr-public"} for request in requests
         )
 
 
@@ -799,7 +824,7 @@ def test_legacy_hr_public_hit_still_means_original_public_scope(
             if request.url.path.startswith("/api/v1/knowledge-chat/")
         ]
         assert len(requests) == 1
-        assert set(json.loads(requests[0].content)["knowledge_base_ids"]) == {
+        assert _native_target_kbs(requests[0]) == {
             "kb-old",
             "shared",
             "hr-public",
@@ -949,7 +974,7 @@ def test_publish_model_and_kb_changes_next_public_chat(
         )
         assert json.loads(legacy_chat.content) == {
             "query": "旧范围过渡",
-            "knowledge_base_ids": ["kb-old"],
+            "knowledge_ids": ["doc-kb-old"],
         }
         unconfirmed = _save_body(
             revision=0, model_id="model-a", kb_ids=["kb-old"]
@@ -1012,12 +1037,12 @@ def test_publish_model_and_kb_changes_next_public_chat(
         assert chats == [
             {
                 "query": "问题一",
-                "knowledge_base_ids": ["kb-old"],
+                "knowledge_ids": ["doc-kb-old"],
                 "agent_id": _AGENT_ID_A,
             },
             {
                 "query": "问题二",
-                "knowledge_base_ids": ["kb-new"],
+                "knowledge_ids": ["doc-kb-new"],
                 "agent_id": _AGENT_ID_B,
             },
         ]

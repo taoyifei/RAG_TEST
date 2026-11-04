@@ -864,6 +864,20 @@ def test_public_native_round_trip_preserves_answer_and_isolation(  # noqa: PLR09
             return httpx.Response(
                 200, json={"success": True, "token": "admin-token"}
             )
+        if path == "/api/v1/knowledge-bases/kb-public/knowledge":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": [
+                        {
+                            "id": _KNOWLEDGE_ID,
+                            "knowledge_base_id": "kb-public",
+                            "parse_status": "completed",
+                        }
+                    ],
+                },
+            )
         if path == f"/api/v1/knowledge/{_KNOWLEDGE_ID}":
             return httpx.Response(
                 200,
@@ -1038,6 +1052,7 @@ def test_public_native_round_trip_preserves_answer_and_isolation(  # noqa: PLR09
         if request.url.path == "/api/v1/knowledge-chat/session-1"
     )
     assert json.loads(native_chat.content)["query"] == question
+    assert json.loads(native_chat.content)["knowledge_ids"] == [_KNOWLEDGE_ID]
 
 
 def test_recommendations_require_review_before_publication(

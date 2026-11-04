@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from wanshitong_gateway.weknora.answer_origin import answer_origin_from_events
+
 _CONVERSATION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS gateway_conversations (
     deployment_id TEXT NOT NULL,
@@ -18,6 +20,7 @@ CREATE TABLE IF NOT EXISTS gateway_conversations (
     conversation_id TEXT NOT NULL,
     native_session_id TEXT NOT NULL,
     search_scopes_json TEXT,
+    knowledge_targets_json TEXT,
     custom_title TEXT,
     archived_at TEXT,
     deleted_at TEXT,
@@ -187,6 +190,11 @@ class GatewayStore:
                     "ALTER TABLE gateway_conversations "
                     "ADD COLUMN search_scopes_json TEXT"
                 )
+            if "knowledge_targets_json" not in conversation_columns:
+                connection.execute(
+                    "ALTER TABLE gateway_conversations "
+                    "ADD COLUMN knowledge_targets_json TEXT"
+                )
             for name in ("archived_at", "deleted_at", "custom_title"):
                 if name not in conversation_columns:
                     connection.execute(
@@ -338,7 +346,7 @@ class GatewayStore:
             raise RuntimeError("public app was not saved")
         return saved
 
-    def bind_session(
+    def bind_session(  # noqa: PLR0913 - 会话身份、逻辑范围和文件范围必须一起固定。
         self,
         *,
         deployment_id: str,
@@ -346,9 +354,11 @@ class GatewayStore:
         conversation_id: str,
         native_session_id: str,
         search_scopes: tuple[str, ...] | None = None,
+        knowledge_targets: tuple[dict[str, str], ...] | None = None,
     ) -> str:
         """唯一绑定外部会话；并发竞争时返回已存在的权威映射。"""
         now = _now()
+        target_json = json.dumps(knowledge_targets or (), ensure_ascii=False)
         with self._connect() as connection:
             deleted = connection.execute(
                 "SELECT deleted_at FROM gateway_conversations "
@@ -360,8 +370,8 @@ class GatewayStore:
             connection.execute(
                 "INSERT OR IGNORE INTO gateway_conversations "
                 "(deployment_id,owner_id,conversation_id,native_session_id,"
-                "created_at,updated_at,search_scopes_json) "
-                "VALUES (?,?,?,?,?,?,?)",
+                "created_at,updated_at,search_scopes_json,"
+                "knowledge_targets_json) VALUES (?,?,?,?,?,?,?,?)",
                 (
                     deployment_id,
                     owner_id,
@@ -370,6 +380,7 @@ class GatewayStore:
                     now,
                     now,
                     json.dumps(search_scopes) if search_scopes else None,
+                    target_json,
                 ),
             )
             if search_scopes is not None:
@@ -396,6 +407,22 @@ class GatewayStore:
                     != search_scopes
                 ):
                     raise ValueError("资料范围已变化，请新建对话。")
+            # 空数组也固定为全库会话，不能沿用旧上下文再缩成指定文件。
+            stored_targets = connection.execute(
+                "SELECT knowledge_targets_json FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+            stored_ids = tuple(
+                item["id"]
+                for item in json.loads(
+                    stored_targets["knowledge_targets_json"] or "[]"
+                )
+            )
+            if stored_ids != tuple(
+                item["id"] for item in (knowledge_targets or ())
+            ):
+                raise ValueError("指定资料已变化，请新建对话。")
         bound = self.native_session(
             deployment_id=deployment_id,
             owner_id=owner_id,
@@ -404,6 +431,47 @@ class GatewayStore:
         if bound is None:
             raise RuntimeError("无法保存原生会话映射。")
         return bound
+
+    def conversation_knowledge_targets(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> tuple[dict[str, str], ...] | None:
+        """恢复本人会话固定的文件范围；旧会话空列视为未指定文件。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT knowledge_targets_json FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return tuple(json.loads(row["knowledge_targets_json"] or "[]"))
+
+    def turn_answer_origin(
+        self,
+        trace_id: str,
+        *,
+        citations: list[dict[str, Any]],
+        status: str,
+        answer: str | None,
+    ) -> str:
+        """仅恢复来源标识；调用方先核对本人会话和当前资料权限。"""
+        return answer_origin_from_events(
+            self.turn_native_events(trace_id),
+            citations=citations,
+            status=status,
+            answer=answer,
+        )
+
+    def turn_native_events(self, trace_id: str) -> list[dict[str, Any]]:
+        """读回原流与续流的检索证据，仅供已授权轮次恢复来源状态。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM gateway_events WHERE trace_id=? "
+                "AND event_type IN ('native_event','recovery_native_event') "
+                "ORDER BY sequence",
+                (trace_id,),
+            ).fetchall()
+        return [{"payload": json.loads(row["payload_json"])} for row in rows]
 
     def conversation_search_scopes(
         self, *, deployment_id: str, owner_id: str, conversation_id: str

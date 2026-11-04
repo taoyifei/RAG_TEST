@@ -1,4 +1,4 @@
-import { RotateCcw } from "lucide-react";
+import { Info, RotateCcw } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 import ReactMarkdown, {
   defaultUrlTransform,
@@ -18,6 +18,7 @@ import {
   type PublicFeedbackSubmission,
 } from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
+import "./answerOrigin.css";
 
 const PROGRESS_STAGES = [
   { label: PUBLIC_STAGE_LABELS.accepted, short: "已接收" },
@@ -26,6 +27,48 @@ const PROGRESS_STAGES = [
   { label: PUBLIC_STAGE_LABELS.generation, short: "组织回答" },
   { label: PUBLIC_STAGE_LABELS.validation, short: "核对来源" },
 ] as const;
+
+function answerOriginNotice(turn: PublicTurn): string | undefined {
+  const active = turn.status === "streaming";
+  if (
+    (turn.status !== "completed" && !active) ||
+    !(turn.answer ?? turn.provisionalAnswer)?.trim() ||
+    turn.citations.length > 0 ||
+    turn.answerOrigin === "knowledge"
+  ) {
+    return undefined;
+  }
+  let foundResults = false;
+  let zeroResults = false;
+  for (const event of turn.nativeEvents ?? []) {
+    if (event.responseType !== "tool_result") continue;
+    const data = event.payload.data;
+    if (typeof data !== "object" || data === null) continue;
+    const result = data as Record<string, unknown>;
+    if (result.tool_name !== "knowledge_search" || result.success !== true)
+      continue;
+    const nested = result.data;
+    const count =
+      result.count ??
+      (typeof nested === "object" && nested !== null
+        ? (nested as Record<string, unknown>).count
+        : undefined);
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
+      continue;
+    foundResults ||= count > 0;
+    zeroResults ||= count === 0;
+  }
+  if (
+    !foundResults &&
+    (turn.answerOrigin === "model_no_results" || zeroResults)
+  ) {
+    return "未找到相关资料，以下内容由大模型生成，仅供参考。";
+  }
+  if (turn.status === "completed") {
+    return "未引用知识库资料，以下内容由大模型生成，仅供参考。";
+  }
+  return undefined;
+}
 
 interface MarkdownNode {
   type: string;
@@ -213,6 +256,7 @@ export function PublicAnswer({
     stageSeconds,
     signalAgeSeconds,
   );
+  const originNotice = answerOriginNotice(turn);
 
   useEffect(() => {
     if (!active) return;
@@ -273,6 +317,12 @@ export function PublicAnswer({
               </p>
             )}
           </div>
+        )}
+        {originNotice && (
+          <p className="wst-answer-origin" role="note">
+            <Info aria-hidden="true" size={16} />
+            <span>{originNotice}</span>
+          </p>
         )}
         {turn.answer !== undefined ? (
           <MarkdownAnswer content={turn.answer} turn={turn} />

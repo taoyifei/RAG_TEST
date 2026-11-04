@@ -3,6 +3,7 @@ import { FileDown } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
 import { ReferenceDrawer } from "./ReferenceDrawer";
+import { DocumentAttachments } from "./DocumentAttachments";
 import type { PublicNaturalImageContext } from "./publicApi";
 
 interface CitationGroup {
@@ -78,6 +79,9 @@ export function PublicCitations({
     message: string;
   }>();
   const [downloadingGroup, setDownloadingGroup] = useState<string>();
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const downloadInProgress = useRef(false);
   const [reading, setReading] = useState<{
     citation: PublicCitation;
@@ -97,6 +101,19 @@ export function PublicCitations({
         <summary>引用依据（{visible.length}段）</summary>
         <div className="wst-citation-list">
           {groups.map((group) => {
+            const documentIds = [
+              ...new Set(
+                group.citations.flatMap((item) =>
+                  item.source_kind === "weknora" &&
+                  typeof item.native_knowledge_id === "string" &&
+                  item.native_knowledge_id.trim()
+                    ? [item.native_knowledge_id]
+                    : [],
+                ),
+              ),
+            ];
+            const documentId =
+              documentIds.length === 1 ? documentIds[0] : undefined;
             const original = group.citations.find(
               (citation) =>
                 citation.reference_id &&
@@ -105,7 +122,19 @@ export function PublicCitations({
             );
             return (
               <article key={group.key}>
-                <details className="wst-citation-group">
+                <details
+                  className="wst-citation-group"
+                  onToggle={(event) => {
+                    const open = event.currentTarget.open;
+                    setExpandedGroups((previous) => {
+                      if (previous.has(group.key) === open) return previous;
+                      const next = new Set(previous);
+                      if (open) next.add(group.key);
+                      else next.delete(group.key);
+                      return next;
+                    });
+                  }}
+                >
                   <summary className="wst-citation-heading">
                     <strong>
                       {onReadReference ? (
@@ -183,6 +212,10 @@ export function PublicCitations({
                     <span className="wst-citation-toggle">展开全部片段</span>
                   </summary>
                   <div className="wst-citation-group-body">
+                    {expandedGroups.has(group.key) &&
+                      typeof documentId === "string" && (
+                        <DocumentAttachments documentId={documentId} />
+                      )}
                     {(group.department || group.category) && (
                       <p className="wst-citation-meta">
                         {[group.department, group.category]

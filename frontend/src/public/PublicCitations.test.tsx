@@ -5,6 +5,48 @@ import { expect, it, vi } from "vitest";
 import { PublicCitations } from "./PublicCitations";
 import type { PublicCitation } from "./publicSse";
 
+vi.mock("./DocumentAttachments", () => ({
+  DocumentAttachments: ({ documentId }: { documentId: string }) => (
+    <p>关联附件：{documentId}</p>
+  ),
+}));
+
+it("展开原生引用文档后才加载对应附件，旧引用不猜测文件关联", async () => {
+  const user = userEvent.setup();
+  render(
+    <PublicCitations
+      citations={[
+        {
+          document_name: "线上操作指引.docx",
+          source_kind: "weknora",
+          native_knowledge_id: "doc-actual",
+        },
+        { document_name: "旧引用.docx" },
+        {
+          document_name: "同路径但不同资料.docx",
+          source_kind: "weknora",
+          source_relative_path: "同路径.docx",
+          native_knowledge_id: "doc-version-one",
+        },
+        {
+          document_name: "同路径但不同资料.docx",
+          source_kind: "weknora",
+          source_relative_path: "同路径.docx",
+          native_knowledge_id: "doc-version-two",
+        },
+      ]}
+    />,
+  );
+  expect(screen.queryByText("关联附件：doc-actual")).not.toBeInTheDocument();
+  await user.click(screen.getByText("引用依据（4段）"));
+  const groups = screen.getAllByRole("article");
+  await user.click(within(groups[0]).getByText("展开全部片段"));
+  expect(await screen.findByText("关联附件：doc-actual")).toBeVisible();
+  await user.click(within(groups[1]).getByText("展开全部片段"));
+  await user.click(within(groups[2]).getByText("展开全部片段"));
+  expect(screen.getAllByText(/关联附件/)).toHaveLength(1);
+});
+
 function citation(
   index: number,
   overrides: Partial<PublicCitation> = {},

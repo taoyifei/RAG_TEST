@@ -14,13 +14,14 @@ import { withAppBase } from "../app/basePath";
 import { consumeLoginDraft } from "./authNavigation";
 import { AccountMenu } from "./AccountMenu";
 import { LibraryWorkspace } from "./LibraryWorkspace";
+import type { LibraryScope } from "./libraryApi";
 import { WorkbenchWorkspace } from "./WorkbenchWorkspace";
 import {
   PublicConversationLayout,
   type PublicNavigationItem,
 } from "./PublicConversationLayout";
 import { UserRolesWorkspace } from "./UserRolesWorkspace";
-import type { PublicPopularQuestion } from "./publicApi";
+import type { PublicPopularQuestion, PublicTargetDocument } from "./publicApi";
 import type { SuggestedQuestion } from "./suggestedQuestions";
 import { WanshitongChat } from "./WanshitongChat";
 import { WanshitongHome } from "./WanshitongHome";
@@ -124,6 +125,15 @@ export function WanshitongApp() {
     openView("chat");
     startNewTopic();
   }, [openView, startNewTopic]);
+  const askDocuments = (
+    scope: LibraryScope,
+    documents: PublicTargetDocument[],
+  ) => {
+    if (chat.askDocuments(scope, documents)) {
+      setRestoredDraft("");
+      openView("chat");
+    }
+  };
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
@@ -317,6 +327,7 @@ export function WanshitongApp() {
             isSuperAdmin={chat.user?.isSuperAdmin === true}
             getCsrfToken={chat.getCsrfToken}
             onBack={() => openView("chat")}
+            onAskDocuments={askDocuments}
           />
         ) : view === "users" && role === "admin" ? (
           <UserRolesWorkspace
@@ -324,61 +335,98 @@ export function WanshitongApp() {
             onBack={() => openView("chat")}
           />
         ) : chat.turns.length === 0 ? (
-          <WanshitongHome
-            busy={chat.busy}
-            conversationId={chat.conversationId}
-            initialQuestion={restoredDraft}
-            placeholder={chat.pageSettings.input_placeholder}
-            searchScopes={chat.searchScopes}
-            searchScopeOptions={chat.searchScopeOptions}
-            scopeNotice={chat.scopeNotice}
-            onSearchScopesChange={chat.changeSearchScopes}
-            welcomeText={chat.pageSettings.welcome_text}
-            showRecommendations={
-              chat.pageSettings.show_recommendations &&
-              chat.searchScopes.includes("public")
-            }
-            onRefresh={suggestions.refresh}
-            onPopularQuestionSubmit={submitPopularQuestion}
-            onSuggestedQuestionSubmit={submitSuggestedQuestion}
-            onStop={chat.stop}
-            onSubmit={submitCurrentQuestion}
-            questions={suggestions.questions}
-            popular={popular}
-          />
+          <>
+            {chat.targetDocuments.length > 0 ? (
+              <div className="wst-document-target" role="status">
+                <span>
+                  仅问所选资料：
+                  {chat.targetDocuments.map((item) => item.title).join("、")}
+                </span>
+                <button
+                  type="button"
+                  className="wst-text-action"
+                  onClick={newConversation}
+                >
+                  改问公共知识库
+                </button>
+              </div>
+            ) : null}
+            <WanshitongHome
+              busy={chat.busy}
+              conversationId={chat.conversationId}
+              initialQuestion={restoredDraft}
+              placeholder={chat.pageSettings.input_placeholder}
+              searchScopes={chat.searchScopes}
+              searchScopeOptions={chat.searchScopeOptions}
+              scopeNotice={chat.scopeNotice}
+              onSearchScopesChange={chat.changeSearchScopes}
+              welcomeText={chat.pageSettings.welcome_text}
+              showRecommendations={
+                chat.pageSettings.show_recommendations &&
+                chat.targetDocuments.length === 0 &&
+                chat.searchScopes.includes("public")
+              }
+              onRefresh={suggestions.refresh}
+              onPopularQuestionSubmit={submitPopularQuestion}
+              onSuggestedQuestionSubmit={submitSuggestedQuestion}
+              onStop={chat.stop}
+              onSubmit={submitCurrentQuestion}
+              questions={suggestions.questions}
+              popular={popular}
+            />
+          </>
         ) : (
-          <WanshitongChat
-            busy={chat.busy}
-            conversationId={chat.conversationId}
-            feedbackDetailsEnabled={chat.feedbackDetailsEnabled}
-            allowFeedback={chat.pageSettings.allow_feedback}
-            allowSourceDownload={chat.pageSettings.allow_source_download}
-            placeholder={chat.pageSettings.input_placeholder}
-            searchScopes={chat.searchScopes}
-            searchScopeOptions={chat.searchScopeOptions}
-            scopeNotice={chat.scopeNotice}
-            onSearchScopesChange={chat.changeSearchScopes}
-            showRecommendations={
-              chat.pageSettings.show_recommendations &&
-              chat.searchScopes.includes("public")
-            }
-            initialQuestion={restoredDraft}
-            onFeedback={chat.submitFeedback}
-            onFeedbackLogin={chat.login}
-            onDownloadReference={chat.downloadReference}
-            onReadReference={chat.readReference}
-            beforeExport={chat.ensureTurnAccess}
-            onPopularQuestionSubmit={submitPopularQuestion}
-            onRefresh={suggestions.refresh}
-            onRetry={chat.retry}
-            onRecover={chat.recover}
-            onStop={chat.stop}
-            onSubmit={submitCurrentQuestion}
-            onSuggestedQuestionSubmit={submitSuggestedQuestion}
-            questions={suggestions.questions}
-            popular={popular}
-            turns={chat.turns}
-          />
+          <>
+            {chat.targetDocuments.length > 0 ? (
+              <div className="wst-document-target" role="status">
+                <span>
+                  仅问所选资料：
+                  {chat.targetDocuments.map((item) => item.title).join("、")}
+                </span>
+                <button
+                  type="button"
+                  className="wst-text-action"
+                  disabled={chat.busy}
+                  onClick={newConversation}
+                >
+                  新建公共问答
+                </button>
+              </div>
+            ) : null}
+            <WanshitongChat
+              busy={chat.busy}
+              conversationId={chat.conversationId}
+              feedbackDetailsEnabled={chat.feedbackDetailsEnabled}
+              allowFeedback={chat.pageSettings.allow_feedback}
+              allowSourceDownload={chat.pageSettings.allow_source_download}
+              placeholder={chat.pageSettings.input_placeholder}
+              searchScopes={chat.searchScopes}
+              searchScopeOptions={chat.searchScopeOptions}
+              scopeNotice={chat.scopeNotice}
+              onSearchScopesChange={chat.changeSearchScopes}
+              showRecommendations={
+                chat.pageSettings.show_recommendations &&
+                chat.targetDocuments.length === 0 &&
+                chat.searchScopes.includes("public")
+              }
+              initialQuestion={restoredDraft}
+              onFeedback={chat.submitFeedback}
+              onFeedbackLogin={chat.login}
+              onDownloadReference={chat.downloadReference}
+              onReadReference={chat.readReference}
+              beforeExport={chat.ensureTurnAccess}
+              onPopularQuestionSubmit={submitPopularQuestion}
+              onRefresh={suggestions.refresh}
+              onRetry={chat.retry}
+              onRecover={chat.recover}
+              onStop={chat.stop}
+              onSubmit={submitCurrentQuestion}
+              onSuggestedQuestionSubmit={submitSuggestedQuestion}
+              questions={suggestions.questions}
+              popular={popular}
+              turns={chat.turns}
+            />
+          </>
         )}
         <div aria-live="polite" className="sr-only" role="status">
           {chat.announcement}
