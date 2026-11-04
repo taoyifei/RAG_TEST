@@ -822,6 +822,7 @@ def test_public_native_round_trip_preserves_answer_and_isolation(  # noqa: PLR09
     second_user: str,
 ) -> None:
     requests: list[httpx.Request] = []
+    current_original_kb = {"id": "kb-public"}
 
     def respond(request: httpx.Request) -> httpx.Response:  # noqa: PLR0911 - 原生多端点形状逐项模拟。
         requests.append(request)
@@ -862,6 +863,17 @@ def test_public_native_round_trip_preserves_answer_and_isolation(  # noqa: PLR09
         if path == "/api/v1/auth/login":
             return httpx.Response(
                 200, json={"success": True, "token": "admin-token"}
+            )
+        if path == f"/api/v1/knowledge/{_KNOWLEDGE_ID}":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": {
+                        "id": _KNOWLEDGE_ID,
+                        "knowledge_base_id": current_original_kb["id"],
+                    },
+                },
             )
         if path == f"/api/v1/knowledge/{_KNOWLEDGE_ID}/download":
             return httpx.Response(
@@ -961,6 +973,21 @@ def test_public_native_round_trip_preserves_answer_and_isolation(  # noqa: PLR09
         assert original.status_code == 200
         assert original.content == b"original-docx"
         assert original.headers["content-disposition"].startswith("attachment;")
+        with sqlite3.connect(tmp_path / "gateway.sqlite3") as connection:
+            connection.execute(
+                "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES (?,?,?)",
+                ("moved-private", "personal", second_user),
+            )
+        current_original_kb["id"] = "moved-private"
+        downloads_before = sum(
+            request.url.path.endswith("/download") for request in requests
+        )
+        assert browser.get(original_url).status_code == 403
+        assert (
+            sum(request.url.path.endswith("/download") for request in requests)
+            == downloads_before
+        )
+        current_original_kb["id"] = "kb-public"
         assert (
             browser.get(
                 original_url, headers={"x-test-user": second_user}

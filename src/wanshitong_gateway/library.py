@@ -117,6 +117,10 @@ class LibraryService:
                 "native_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, "
                 "owner_name TEXT NOT NULL, source_id TEXT UNIQUE, "
                 "created_at TEXT NOT NULL);"
+                "CREATE TABLE IF NOT EXISTS library_personal_kbs ("
+                "kb_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL);"
+                "INSERT OR IGNORE INTO library_personal_kbs(kb_id,owner_id) "
+                "SELECT kb_id,owner_id FROM library_kbs WHERE scope='personal';"
                 "CREATE TABLE IF NOT EXISTS library_hr_internal_kbs ("
                 "kb_id TEXT PRIMARY KEY);"
                 "INSERT OR IGNORE INTO library_hr_internal_kbs(kb_id) "
@@ -131,12 +135,18 @@ class LibraryService:
             if self._public_scope is not None
             else self._initial_public_kb_ids
         )
-        private = self.hr_internal_kbs() | {
-            row["kb_id"]
-            for row in self.registered_kbs()
-            if row["scope"] == "personal"
-        }
+        private = self.hr_internal_kbs() | self.personal_kbs().keys()
         return tuple(kb_id for kb_id in candidates if kb_id not in private)
+
+    def personal_kbs(self) -> dict[str, str]:
+        """保留个人库的历史归属，重建后旧记录也不能被视为公开资料。"""
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT kb_id,owner_id FROM library_personal_kbs UNION ALL "
+                "SELECT kb_id,owner_id FROM library_kbs WHERE scope='personal' "
+                "AND kb_id NOT IN (SELECT kb_id FROM library_personal_kbs)"
+            ).fetchall()
+        return {row["kb_id"]: row["owner_id"] for row in rows}
 
     def hr_internal_kbs(self) -> frozenset[str]:
         """内部区即使误选进公共绑定，也不能按公共资料对外提供。"""
@@ -149,9 +159,11 @@ class LibraryService:
 
     def restricted_kbs(self, profile: UserProfile) -> tuple[str, ...]:
         """后台、记录与导出同样排除他人私库及当前无权访问的内部库。"""
-        candidates = self.hr_internal_kbs() | {
-            row["kb_id"] for row in self.registered_kbs()
-        }
+        candidates = (
+            self.hr_internal_kbs()
+            | self.personal_kbs().keys()
+            | {row["kb_id"] for row in self.registered_kbs()}
+        )
         return tuple(
             sorted(
                 kb_id
@@ -310,6 +322,9 @@ class LibraryService:
             self.check_turn(profile, turn)
 
     def _scope_for_kb(self, kb_id: str) -> dict[str, Any] | None:
+        owner_id = self.personal_kbs().get(kb_id)
+        if owner_id is not None:
+            return {"kb_id": kb_id, "scope": "personal", "owner_id": owner_id}
         registered = next(
             (row for row in self.registered_kbs() if row["kb_id"] == kb_id),
             None,
@@ -528,13 +543,20 @@ class LibraryService:
         kb_id = created["data"].get("id")
         if not isinstance(kb_id, str) or not kb_id:
             raise HTTPException(502, "原生资料库创建未返回有效 ID。")
-        if scope == "hr_internal":
+        if scope in {"hr_internal", "personal"}:
             with self._connections.transaction(write=True) as connection:
-                connection.execute(
-                    "INSERT OR IGNORE INTO library_hr_internal_kbs(kb_id) "
-                    "VALUES (?)",
-                    (kb_id,),
-                )
+                if scope == "personal":
+                    connection.execute(
+                        "INSERT OR IGNORE INTO library_personal_kbs"
+                        "(kb_id,owner_id) VALUES (?,?)",
+                        (kb_id, owner),
+                    )
+                else:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO library_hr_internal_kbs(kb_id) "
+                        "VALUES (?)",
+                        (kb_id,),
+                    )
         return kb_id
 
     @staticmethod

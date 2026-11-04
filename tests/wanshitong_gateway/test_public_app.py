@@ -299,8 +299,12 @@ def _app(
 
 
 @pytest.mark.parametrize("owner_id", ["root", "other-owner"])
+@pytest.mark.parametrize("historical", [False, True])
 def test_even_super_admin_cannot_publish_a_personal_library(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner_id: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner_id: str,
+    historical: bool,
 ) -> None:
     monkeypatch.setattr(gateway_app, "register_auth_routes", lambda *_: None)
     state = _NativeState()
@@ -308,10 +312,16 @@ def test_even_super_admin_cannot_publish_a_personal_library(
     profile = UserProfile("root", "root", "超级管理员", None, "admin", True)
     app = _app(tmp_path, state, store, profile)
     with sqlite3.connect(tmp_path / "gateway.sqlite3") as connection:
-        connection.execute(
-            "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES (?,?,?)",
-            ("private-kb", "personal", owner_id),
-        )
+        if historical:
+            connection.execute(
+                "INSERT INTO library_personal_kbs(kb_id,owner_id) VALUES (?,?)",
+                ("private-kb", owner_id),
+            )
+        else:
+            connection.execute(
+                "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES (?,?,?)",
+                ("private-kb", "personal", owner_id),
+            )
     with TestClient(app) as browser:
         response = browser.put(
             "/kb/api/admin/public-app",

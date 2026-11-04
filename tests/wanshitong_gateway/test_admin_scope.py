@@ -51,6 +51,13 @@ class _Library(LibraryService):
     def hr_internal_kbs() -> frozenset[str]:
         return frozenset({_HR_KB_ID})
 
+    def personal_kbs(self) -> dict[str, str]:
+        return {
+            row["kb_id"]: row["owner_id"]
+            for row in self.registered_kbs()
+            if row["scope"] == "personal"
+        }
+
     @staticmethod
     async def _knowledge(identifier: str) -> dict[str, Any]:
         mapping = {

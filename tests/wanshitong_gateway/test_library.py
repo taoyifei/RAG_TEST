@@ -800,3 +800,95 @@ async def test_downgraded_publisher_can_only_delete_private_original(
     assert (await service.download(public_id, _BOB)).content == b"private"
     await service.delete(public_id, _SUPER)
     assert public_id not in native.documents
+
+
+@pytest.mark.asyncio
+async def test_recreated_personal_kb_keeps_old_history_private(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, binding = library
+    original = await service.upload("personal", _BOB, "old.txt", b"old-private")
+    old_kb_id = native.documents[original["id"]]["knowledge_base_id"]
+    old_turn = {"kb_scope_json": json.dumps([old_kb_id])}
+    native.kbs.pop(old_kb_id)
+    native.documents.pop(original["id"])
+    replacement = await service.upload("personal", _BOB, "new.txt", b"new")
+    new_kb_id = native.documents[replacement["id"]]["knowledge_base_id"]
+    assert old_kb_id != new_kb_id
+    assert old_kb_id not in service.readable_kbs(_BOB)
+    assert new_kb_id in service.readable_kbs(_BOB)
+    assert service.personal_kbs() == {
+        old_kb_id: _BOB.user_id,
+        new_kb_id: _BOB.user_id,
+    }
+    # 历史登记不增加检索集合，错误公共绑定也不能让旧私库重新公开。
+    binding.append(old_kb_id)
+    assert old_kb_id not in service.public_kb_ids
+    assert service._scope_for_kb(old_kb_id) == {
+        "kb_id": old_kb_id,
+        "scope": "personal",
+        "owner_id": _BOB.user_id,
+    }
+    for profile in (_ALICE, _HR, _PUBLISHER, _SUPER):
+        assert old_kb_id in service.restricted_kbs(profile)
+        assert new_kb_id in service.restricted_kbs(profile)
+        assert not service.can_read_kb(old_kb_id, profile)
+        assert not service.can_manage_kb(old_kb_id, profile)
+        assert old_kb_id not in service.search_kbs(profile, ("public",))
+        with pytest.raises(HTTPException) as denied:
+            service.check_turn(profile, old_turn)
+        assert denied.value.status_code == 403
+    assert old_kb_id not in service.restricted_kbs(_BOB)
+
+
+@pytest.mark.asyncio
+async def test_existing_personal_registration_is_backfilled_on_restart(
+    library: tuple[LibraryService, _Native, list[str]],
+    tmp_path: Path,
+) -> None:
+    service, _, binding = library
+    original = await service.upload("personal", _BOB, "old.txt", b"private")
+    kb_id = next(
+        row["kb_id"]
+        for row in service.registered_kbs()
+        if row["owner_id"] == _BOB.user_id
+    )
+    # 模拟升级前没有历史归属表的旧数据库。
+    with service._connections.transaction(write=True) as connection:
+        connection.execute("DROP TABLE library_personal_kbs")
+    reloaded = LibraryService(
+        tmp_path / "gateway.sqlite3",
+        service._native,
+        ("public",),
+        hashlib.sha256(_SERVICE_KEY.encode()).digest(),
+        public_scope=lambda: tuple(binding),
+    )
+    assert reloaded.personal_kbs() == {kb_id: _BOB.user_id}
+    assert (await reloaded.download(original["id"], _BOB)).content == b"private"
+    assert kb_id in reloaded.restricted_kbs(_SUPER)
+    # 当前登记被恢复流程替换后，历史归属仍不能被公共绑定覆盖。
+    with reloaded._connections.transaction(write=True) as connection:
+        connection.execute("DELETE FROM library_kbs WHERE kb_id=?", (kb_id,))
+    binding.append(kb_id)
+    assert kb_id not in reloaded.public_kb_ids
+    assert kb_id in reloaded.restricted_kbs(_SUPER)
+    assert reloaded._scope_for_kb(kb_id)["owner_id"] == _BOB.user_id
+
+
+@pytest.mark.asyncio
+async def test_failed_personal_key_grant_preserves_created_kb_owner(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, binding = library
+    previous_kbs = set(native.kbs)
+    native.reject_key_updates = True
+    with pytest.raises(HTTPException) as unavailable:
+        await service.upload("personal", _BOB, "new.txt", b"private")
+    assert unavailable.value.status_code == 502
+    created_kb_id = (set(native.kbs) - previous_kbs).pop()
+    assert service.registered_kbs() == []
+    assert service.personal_kbs()[created_kb_id] == _BOB.user_id
+    binding.append(created_kb_id)
+    assert created_kb_id not in service.public_kb_ids
+    assert created_kb_id in service.restricted_kbs(_SUPER)
+    assert not service.can_read_kb(created_kb_id, _SUPER)

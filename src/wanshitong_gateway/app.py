@@ -453,10 +453,7 @@ def create_app(  # noqa: PLR0913, PLR0915
             kb_ids = body.kb_ids()
             if library.hr_internal_kbs().intersection(kb_ids):
                 raise HTTPException(403, "人力内部资料不能发布到公共知识库。")
-            if any(
-                row["scope"] == "personal" and row["kb_id"] in kb_ids
-                for row in library.registered_kbs()
-            ):
+            if set(library.personal_kbs()).intersection(kb_ids):
                 raise HTTPException(403, "个人资料库不能发布到公共知识库。")
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
@@ -2012,6 +2009,8 @@ def create_app(  # noqa: PLR0913, PLR0915
             raise HTTPException(
                 status_code=404, detail="original unavailable"
             ) from None
+        # 文件可能在回答生成后被移动，历史检索范围不能代替当前原件授权。
+        await library.document(knowledge_id, auth.require_profile(request))
         upstream = await admin_native.proxy(
             method="GET",
             path=f"api/v1/knowledge/{knowledge_id}/download",
