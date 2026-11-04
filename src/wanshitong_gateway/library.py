@@ -91,7 +91,7 @@ def _library_chunking_config(config: dict[str, Any]) -> dict[str, Any]:
 class LibraryService:
     """保存知识库归属及共享关系，不自行解析文件或建立索引。"""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - 服务依赖与独立能力开关保持显式注入。
         self,
         database_path: Path,
         native: NativeAdminClient,
@@ -99,11 +99,13 @@ class LibraryService:
         key_fingerprint: bytes,
         *,
         public_scope: Callable[[], tuple[str, ...]] | None = None,
+        personal_sharing_enabled: bool = False,
     ) -> None:
         self._connections = SqliteConnectionFactory(database_path)
         self._native = native
         self._initial_public_kb_ids = public_kb_ids
         self._public_scope = public_scope
+        self._personal_sharing_enabled = personal_sharing_enabled
         self._key_fingerprint = key_fingerprint
         self._creation_lock = asyncio.Lock()
         self._document_locks: dict[str, asyncio.Lock] = {}
@@ -621,7 +623,8 @@ class LibraryService:
         return {
             "scope": scope,
             "can_manage": self.can_manage_scope(scope, profile),
-            "can_share": scope == "personal"
+            "can_share": self._personal_sharing_enabled
+            and scope == "personal"
             and self.can_manage_scope("public", profile),
             "items": items,
         }
@@ -636,6 +639,8 @@ class LibraryService:
         source_id: str | None = None,
     ) -> dict[str, Any]:
         """上传到服务端决定的目标库，共享副本必须由当前用户已授权的原件产生。"""
+        if source_id is not None:
+            self._require_personal_sharing()
         self._check_scope(scope, profile)
         if not self.can_manage_scope(scope, profile):
             raise HTTPException(403, "没有向该资料区新增资料的权限。")
@@ -711,7 +716,9 @@ class LibraryService:
         """删除本人原件不授予公共区写权限，已有公共副本由管理员维护。"""
         async with self._document_lock(native_id):
             await self.document(native_id, profile, write=True)
-            if self.can_manage_scope("public", profile):
+            if self._personal_sharing_enabled and self.can_manage_scope(
+                "public", profile
+            ):
                 await self._unshare_locked(native_id)
             await self._delete_native(native_id)
             self._forget(native_id)
@@ -720,6 +727,7 @@ class LibraryService:
         self, native_id: str, profile: UserProfile
     ) -> dict[str, Any]:
         """显式发布个人原件副本，不扩大整个个人知识库的权限。"""
+        self._require_personal_sharing()
         if not self.can_manage_scope("public", profile):
             raise HTTPException(403, "只有管理员和超级管理员可以发布公共资料。")
         async with self._document_lock(native_id):
@@ -741,11 +749,17 @@ class LibraryService:
 
     async def unshare(self, native_id: str, profile: UserProfile) -> None:
         """撤回共享保留原件，已被阅读的回答不作伪造性抹除。"""
+        self._require_personal_sharing()
         if not self.can_manage_scope("public", profile):
             raise HTTPException(403, "只有管理员和超级管理员可以撤回公共资料。")
         async with self._document_lock(native_id):
             await self.document(native_id, profile, write=True)
             await self._unshare_locked(native_id)
+
+    def _require_personal_sharing(self) -> None:
+        """共享暂不开放，保留实现供以后显式启用。"""
+        if not self._personal_sharing_enabled:
+            raise HTTPException(403, "个人资料共享暂未开放。")
 
     async def _delete_native(self, native_id: str) -> None:
         """等待原生异步删除实际完成，提交任务不等于撤回已生效。"""

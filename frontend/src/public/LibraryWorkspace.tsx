@@ -413,9 +413,11 @@ function LibraryListing({
                       >
                         {statusLabel(item.status)}
                       </span>
-                      {scope === "personal" && item.shared && (
-                        <span className="wst-shared-label">已共享</span>
-                      )}
+                      {scope === "personal" &&
+                        data.can_share === true &&
+                        item.shared && (
+                          <span className="wst-shared-label">已共享</span>
+                        )}
                     </td>
                     <td>
                       <div className="wst-document-actions">

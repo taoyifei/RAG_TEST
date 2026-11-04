@@ -204,8 +204,10 @@ describe("用户资料和角色", () => {
       await screen.findByText("个人笔记.txt");
       await user.click(screen.getByRole("button", { name: "共享给全员" }));
       await screen.findByRole("button", { name: "取消共享" });
+      expect(screen.getByText("已共享", { exact: true })).toBeVisible();
       await user.click(screen.getByRole("button", { name: "取消共享" }));
       await screen.findByRole("button", { name: "共享给全员" });
+      expect(screen.queryByText("已共享", { exact: true })).toBeNull();
       expect(fetch).toHaveBeenCalledWith(
         "/api/public/library/doc-1/share",
         expect.objectContaining({ method: "DELETE" }),
@@ -214,12 +216,39 @@ describe("用户资料和角色", () => {
   );
 
   it.each([
-    { label: "普通员工", userRole: "user" as const, canShare: undefined },
-    { label: "普通员工", userRole: "user" as const, canShare: false },
-    { label: "人力角色", userRole: "hr" as const, canShare: false },
+    {
+      label: "普通员工",
+      userRole: "user" as const,
+      isSuperAdmin: false,
+      canShare: undefined,
+    },
+    {
+      label: "普通员工",
+      userRole: "user" as const,
+      isSuperAdmin: false,
+      canShare: false,
+    },
+    {
+      label: "人力角色",
+      userRole: "hr" as const,
+      isSuperAdmin: false,
+      canShare: false,
+    },
+    {
+      label: "管理员",
+      userRole: "admin" as const,
+      isSuperAdmin: false,
+      canShare: false,
+    },
+    {
+      label: "超级管理员",
+      userRole: "admin" as const,
+      isSuperAdmin: true,
+      canShare: false,
+    },
   ])(
-    "$label 可以维护自己的个人资料，但没有公共发布权限时不显示共享入口（$canShare）",
-    async ({ userRole, canShare }) => {
+    "$label 可以维护自己的个人资料，但共享关闭时不显示共享入口或状态（$canShare）",
+    async ({ userRole, isSuperAdmin, canShare }) => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(
         Response.json({
           scope: "personal",
@@ -250,6 +279,7 @@ describe("用户资料和角色", () => {
       render(
         <LibraryWorkspace
           userRole={userRole}
+          isSuperAdmin={isSuperAdmin}
           getCsrfToken={() => "csrf"}
           onBack={() => undefined}
         />,
@@ -261,6 +291,7 @@ describe("用户资料和角色", () => {
       expect(screen.getAllByRole("button", { name: "下载" })).toHaveLength(2);
       expect(screen.queryByRole("button", { name: "共享给全员" })).toBeNull();
       expect(screen.queryByRole("button", { name: "取消共享" })).toBeNull();
+      expect(screen.queryByText("已共享", { exact: true })).toBeNull();
       expect(
         screen.getByText(
           "仅本人可查看、检索、下载和维护；管理员和超级管理员也不能访问他人的个人资料。",

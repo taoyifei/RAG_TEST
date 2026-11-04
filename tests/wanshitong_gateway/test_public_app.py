@@ -386,6 +386,33 @@ def _scope_browser(
 
 
 @pytest.mark.parametrize(
+    "profile",
+    [
+        UserProfile("u1", "u1", "普通用户", None, "user"),
+        UserProfile("u1", "u1", "人力", None, "hr"),
+        UserProfile("u1", "u1", "管理员", None, "admin"),
+        UserProfile("u1", "u1", "超级管理员", None, "admin", True),
+    ],
+)
+def test_app_disables_personal_sharing_for_every_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: UserProfile
+) -> None:
+    browser, state, _store = _scope_browser(tmp_path, monkeypatch, profile)
+    with browser:
+        listed = browser.get("/kb/api/public/library?scope=personal")
+        assert listed.status_code == 200
+        assert listed.json()["can_share"] is False
+        before = len(state.requests)
+        for method in ("POST", "DELETE"):
+            response = browser.request(
+                method, "/kb/api/public/library/scoped-document/share"
+            )
+            assert response.status_code == 403
+            assert "暂未开放" in response.json()["detail"]
+        assert len(state.requests) == before
+
+
+@pytest.mark.parametrize(
     ("scopes", "expected", "expected_scopes"),
     [
         (None, {"kb-old", "shared", "hr-public"}, ["public"]),

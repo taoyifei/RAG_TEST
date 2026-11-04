@@ -346,6 +346,7 @@ def create_app(  # noqa: PLR0913, PLR0915
             )
             else engine.public_kb_ids
         ),
+        personal_sharing_enabled=False,
     )
     if engine.workbench_enabled and workbench is None:
         if auth.users is None:

@@ -59,9 +59,11 @@ class _Native:
         self.error: str | None = None
         self.deferred_deletes: dict[str, int] = {}
         self.pending_deletes: set[str] = set()
+        self.requests: list[tuple[str, str]] = []
 
     def respond(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911 - 模拟固定原生接口。
         path = request.url.path
+        self.requests.append((request.method, path))
         if path == "/api/v1/auth/login":
             return httpx.Response(
                 200, json={"success": True, "token": "admin-token"}
@@ -188,6 +190,7 @@ class _Native:
 @pytest_asyncio.fixture
 async def library(
     tmp_path: Path,
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[tuple[LibraryService, _Native, list[str]]]:
     state = _Native()
     native = NativeAdminClient(
@@ -204,6 +207,7 @@ async def library(
         ("public",),
         hashlib.sha256(_SERVICE_KEY.encode()).digest(),
         public_scope=lambda: tuple(public_scope),
+        personal_sharing_enabled=bool(getattr(request, "param", False)),
     )
     try:
         yield service, state, public_scope
@@ -298,6 +302,7 @@ async def test_library_pdf_upload_uses_builtin_with_existing_bad_template(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
 async def test_shared_pdf_keeps_builtin_override_without_changing_other_uploads(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:
@@ -413,6 +418,7 @@ async def test_recreated_hr_library_keeps_old_scope_protected(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
 async def test_share_withdraw_and_delete_keep_private_original(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:
@@ -481,6 +487,7 @@ async def test_library_http_upload_retry_and_upstream_failures(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
 async def test_delete_serializes_with_inflight_share(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:
@@ -498,6 +505,7 @@ async def test_delete_serializes_with_inflight_share(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
 async def test_unshare_waits_until_async_delete_is_no_longer_downloadable(
     library: tuple[LibraryService, _Native, list[str]],
     monkeypatch: pytest.MonkeyPatch,
@@ -522,6 +530,7 @@ async def test_unshare_waits_until_async_delete_is_no_longer_downloadable(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
 async def test_unshare_timeout_keeps_mapping_until_retry_confirms_deleted(
     library: tuple[LibraryService, _Native, list[str]],
     monkeypatch: pytest.MonkeyPatch,
@@ -565,6 +574,7 @@ async def test_original_delete_also_waits_until_async_delete_finishes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
 async def test_upload_recovers_deleted_kb_without_removing_other_data(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:
@@ -661,9 +671,7 @@ async def test_library_role_matrix_checks_read_download_and_writes(
     if may_read:
         listing = await service.list_documents(scope, profile)
         assert listing["can_manage"] is may_write
-        assert listing["can_share"] is (
-            scope == "personal" and profile in {_PUBLISHER, _SUPER}
-        )
+        assert listing["can_share"] is False
         listed = next(
             item for item in listing["items"] if item["id"] == identifier
         )
@@ -699,6 +707,7 @@ async def test_library_role_matrix_checks_read_download_and_writes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
 @pytest.mark.parametrize("profile", [_ALICE, _PUBLISHER, _HR, _SUPER])
 async def test_no_role_can_access_another_users_personal_documents(
     library: tuple[LibraryService, _Native, list[str]],
@@ -747,6 +756,7 @@ async def test_no_role_can_access_another_users_personal_documents(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
 @pytest.mark.parametrize("profile", [_ALICE, _HR])
 async def test_public_upload_cannot_be_bypassed_by_sharing_or_source_id(
     library: tuple[LibraryService, _Native, list[str]],
@@ -776,6 +786,7 @@ async def test_public_upload_cannot_be_bypassed_by_sharing_or_source_id(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
 async def test_downgraded_publisher_can_only_delete_private_original(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:
@@ -892,3 +903,101 @@ async def test_failed_personal_key_grant_preserves_created_kb_owner(
     assert created_kb_id not in service.public_kb_ids
     assert created_kb_id in service.restricted_kbs(_SUPER)
     assert not service.can_read_kb(created_kb_id, _SUPER)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [_ALICE, _PUBLISHER, _HR, _SUPER])
+async def test_personal_sharing_is_closed_by_default_for_every_role(
+    library: tuple[LibraryService, _Native, list[str]],
+    profile: UserProfile,
+) -> None:
+    service, native, _ = library
+    original = await service.upload(
+        "personal", profile, "private.txt", b"private"
+    )
+    identifier = original["id"]
+    listing = await service.list_documents("personal", profile)
+    assert listing["can_manage"] is True
+    assert listing["can_share"] is False
+    initial_requests = list(native.requests)
+    for operation in (
+        lambda: service.share(identifier, profile),
+        lambda: service.unshare(identifier, profile),
+        lambda: service.upload(
+            "public", profile, "copy.txt", b"private", source_id=identifier
+        ),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await operation()
+        assert denied.value.status_code == 403
+        assert denied.value.detail == "个人资料共享暂未开放。"
+    app = FastAPI()
+    register_library_routes(app, cast(GatewayAuth, _Auth(profile)), service)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as browser:
+        for action in ("share", "unshare"):
+            response = await (
+                browser.post(f"/api/public/library/{identifier}/share")
+                if action == "share"
+                else browser.delete(f"/api/public/library/{identifier}/share")
+            )
+            assert response.status_code == 403
+            assert response.json()["detail"] == "个人资料共享暂未开放。"
+    assert native.requests == initial_requests
+    assert set(native.documents) == {identifier}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
+@pytest.mark.parametrize("profile", [_ALICE, _PUBLISHER, _HR, _SUPER])
+async def test_explicit_sharing_opt_in_still_requires_public_write_permission(
+    library: tuple[LibraryService, _Native, list[str]],
+    profile: UserProfile,
+) -> None:
+    service, native, _ = library
+    original = await service.upload(
+        "personal", profile, "private.txt", b"private"
+    )
+    may_share = profile in {_PUBLISHER, _SUPER}
+    assert (await service.list_documents("personal", profile))["can_share"] is (
+        may_share
+    )
+    if may_share:
+        published = await service.share(original["id"], profile)
+        assert (
+            native.documents[published["id"]]["knowledge_base_id"] == "public"
+        )
+        assert (
+            await service.download(published["id"], _BOB)
+        ).content == b"private"
+    else:
+        with pytest.raises(HTTPException) as denied:
+            await service.share(original["id"], profile)
+        assert denied.value.status_code == 403
+        assert len(native.documents) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("library", [True], indirect=True)
+@pytest.mark.parametrize("profile", [_PUBLISHER, _SUPER])
+async def test_disabling_sharing_keeps_old_public_copy_when_deleting_private(
+    library: tuple[LibraryService, _Native, list[str]],
+    profile: UserProfile,
+) -> None:
+    service, native, _ = library
+    original = await service.upload(
+        "personal", profile, "private.txt", b"private"
+    )
+    published = await service.share(original["id"], profile)
+    service._personal_sharing_enabled = False
+    assert (await service.list_documents("personal", profile))[
+        "can_share"
+    ] is False
+    await service.delete(original["id"], profile)
+    assert original["id"] not in native.documents
+    assert published["id"] in native.documents
+    assert (await service.download(published["id"], _BOB)).content == b"private"
+    # 公共副本仍可由有权的管理员独立删除。
+    await service.delete(published["id"], profile)
+    assert published["id"] not in native.documents
