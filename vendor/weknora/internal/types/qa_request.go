@@ -168,27 +168,29 @@ func NormalizePageView(view string) string {
 // replacing the previous 14-parameter method signatures.
 // EventBus is passed separately to avoid circular dependency with the event package.
 type QARequest struct {
-	Session             *Session           // The conversation session
-	Query               string             // User query text
-	AssistantMessageID  string             // Pre-created assistant message ID
-	SummaryModelID      string             // Optional model override; empty = use agent/KB default
-	ReasoningEffort     string             // Optional per-request override; empty = use agent default
-	CustomAgent         *CustomAgent       // Optional custom agent for config override
-	SharedAgentReadOnly bool               // True only when access came from an agent share; source-workspace writes are forbidden
-	KnowledgeBaseIDs    []string           // Knowledge base IDs to search (from request + @mentions)
-	KnowledgeIDs        []string           // Specific knowledge (file) IDs to search
-	TagScopes           []TagScope         // Tag-constrained KB scopes from @mentions
-	MCPServiceIDs       []string           // Per-request MCP service IDs from @mentions
-	SkillNames          []string           // Per-request skill names from @mentions
-	ImageURLs           []string           // Image URLs for multimodal input
-	ImageDescription    string             // VLM-generated image description (fallback for non-vision models)
-	UserMessageID       string             // Created user message ID
-	LocalBrowserEnabled bool               // Explicit browser source preference for this request
-	WebSearchEnabled    bool               // Whether web search is enabled for this request
-	QuotedContext       string             // Quoted message content from IM quote-reply (appended at LLM prompt stage, not used for retrieval)
-	Attachments         MessageAttachments // File attachments (processed and ready for prompt injection)
-	QuestionOrigin      *QuestionOrigin    // Source of a picked suggested question; a retrieval hint only
-	PageContext         *PageContext       // Page the user has open; a hint inside the resolved scope only
+	Session             *Session     // The conversation session
+	Query               string       // User query text
+	AssistantMessageID  string       // Pre-created assistant message ID
+	SummaryModelID      string       // Optional model override; empty = use agent/KB default
+	ReasoningEffort     string       // Optional per-request override; empty = use agent default
+	CustomAgent         *CustomAgent // Optional custom agent for config override
+	SharedAgentReadOnly bool         // True only when access came from an agent share; source-workspace writes are forbidden
+	KnowledgeBaseIDs    []string     // Knowledge base IDs to search (from request + @mentions)
+	KnowledgeIDs        []string     // Specific knowledge (file) IDs to search
+	// 仅当前请求采用知识库原召回阈值，不更改 Agent 或会话的默认配置。
+	KnowledgeIDsUseKBThresholds bool
+	TagScopes                   []TagScope         // Tag-constrained KB scopes from @mentions
+	MCPServiceIDs               []string           // Per-request MCP service IDs from @mentions
+	SkillNames                  []string           // Per-request skill names from @mentions
+	ImageURLs                   []string           // Image URLs for multimodal input
+	ImageDescription            string             // VLM-generated image description (fallback for non-vision models)
+	UserMessageID               string             // Created user message ID
+	LocalBrowserEnabled         bool               // Explicit browser source preference for this request
+	WebSearchEnabled            bool               // Whether web search is enabled for this request
+	QuotedContext               string             // Quoted message content from IM quote-reply (appended at LLM prompt stage, not used for retrieval)
+	Attachments                 MessageAttachments // File attachments (processed and ready for prompt injection)
+	QuestionOrigin              *QuestionOrigin    // Source of a picked suggested question; a retrieval hint only
+	PageContext                 *PageContext       // Page the user has open; a hint inside the resolved scope only
 	// AssistantAccess is the access level the user picked for the WeKnora
 	// assistant; the workspace ceiling still caps it. Ignored by other agents.
 	AssistantAccess AssistantAccessLevel

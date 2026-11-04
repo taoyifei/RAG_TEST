@@ -1368,6 +1368,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                     # 原生整库目标会覆盖文件限定，HTTP 只发送文件 ID。
                     agent_id=agent_id,
                     knowledge_ids=native_knowledge_ids,
+                    knowledge_ids_use_kb_thresholds=not bool(knowledge_targets),
                 ):
                     for event in decoder.feed(chunk):
                         for frame in bridge.accept(event):

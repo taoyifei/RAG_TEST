@@ -572,18 +572,19 @@ type Message struct {
 // MessageExecutionContext is a message-level snapshot of the non-secret
 // request state used by derived experiences such as follow-up suggestions.
 type MessageExecutionContext struct {
-	AgentConfigHash       string                    `json:"agent_config_hash,omitempty"`
-	QuestionSuggestions   *QuestionSuggestionConfig `json:"question_suggestions,omitempty"`
-	KnowledgeBaseIDs      []string                  `json:"knowledge_base_ids,omitempty"`
-	KnowledgeIDs          []string                  `json:"knowledge_ids,omitempty"`
-	TagIDs                []string                  `json:"tag_ids,omitempty"`
-	TagScopes             []TagScope                `json:"tag_scopes,omitempty"`
-	MCPServiceIDs         []string                  `json:"mcp_service_ids,omitempty"`
-	SkillNames            []string                  `json:"skill_names,omitempty"`
-	LocalBrowserEnabled   bool                      `json:"local_browser_enabled,omitempty"`
-	WebSearchEnabled      bool                      `json:"web_search_enabled"`
-	Locale                string                    `json:"locale,omitempty"`
-	SuggestionAttribution *SuggestionAttribution    `json:"suggestion_attribution,omitempty"`
+	AgentConfigHash             string                    `json:"agent_config_hash,omitempty"`
+	QuestionSuggestions         *QuestionSuggestionConfig `json:"question_suggestions,omitempty"`
+	KnowledgeBaseIDs            []string                  `json:"knowledge_base_ids,omitempty"`
+	KnowledgeIDs                []string                  `json:"knowledge_ids,omitempty"`
+	KnowledgeIDsUseKBThresholds bool                      `json:"knowledge_ids_use_kb_thresholds,omitempty"`
+	TagIDs                      []string                  `json:"tag_ids,omitempty"`
+	TagScopes                   []TagScope                `json:"tag_scopes,omitempty"`
+	MCPServiceIDs               []string                  `json:"mcp_service_ids,omitempty"`
+	SkillNames                  []string                  `json:"skill_names,omitempty"`
+	LocalBrowserEnabled         bool                      `json:"local_browser_enabled,omitempty"`
+	WebSearchEnabled            bool                      `json:"web_search_enabled"`
+	Locale                      string                    `json:"locale,omitempty"`
+	SuggestionAttribution       *SuggestionAttribution    `json:"suggestion_attribution,omitempty"`
 	// LangfuseTraceparent is the W3C traceparent of the originating chat
 	// request. Follow-up suggestion generation often runs on a later HTTP
 	// call (or after the SSE handler has already finished the root span);

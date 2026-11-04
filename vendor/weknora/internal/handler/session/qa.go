@@ -40,40 +40,41 @@ const (
 
 // qaRequestContext holds all the common data needed for QA requests
 type qaRequestContext struct {
-	ctx                   context.Context
-	c                     *gin.Context
-	sessionID             string
-	requestID             string
-	receivedAt            time.Time // Wall-clock time the handler started processing the request
-	query                 string    // Question sent to models; the upload-only question when the user typed nothing
-	userInput             string    // Text the user typed, stored on the user message; may be empty
-	session               *types.Session
-	customAgent           *types.CustomAgent
-	assistantMessage      *types.Message
-	knowledgeBaseIDs      []string
-	knowledgeIDs          []string
-	tagScopes             []types.TagScope
-	tagIDs                []string
-	mcpServiceIDs         []string
-	skillNames            []string
-	summaryModelID        string
-	reasoningEffort       string
-	localBrowserEnabled   bool
-	webSearchEnabled      bool
-	mentionedItems        types.MentionedItems
-	effectiveTenantID     uint64                   // when using shared agent, tenant ID for model/KB/MCP resolution; 0 = use context tenant
-	sharedAgentReadOnly   bool                     // access was granted by a read-only agent share
-	images                []ImageAttachment        // Uploaded images with analysis text
-	userMessageID         string                   // Created user message ID (populated after createUserMessage)
-	userCreatedAt         time.Time                // Persisted user message timestamp, echoed on agent_query
-	channel               string                   // Source channel: "web", "api", "im", etc.
-	attachments           types.MessageAttachments // Processed base64 file attachments (legacy inline uploads)
-	attachmentIDs         []string                 // Pre-uploaded session-scoped document IDs, resolved after SSE starts
-	attachmentMetas       types.MessageAttachments // Metadata-only view of attachmentIDs for the persisted user message
-	suggestionAttribution *types.SuggestionAttribution
-	questionOrigin        *types.QuestionOrigin
-	pageContext           *types.PageContext
-	assistantAccess       types.AssistantAccessLevel
+	ctx                         context.Context
+	c                           *gin.Context
+	sessionID                   string
+	requestID                   string
+	receivedAt                  time.Time // Wall-clock time the handler started processing the request
+	query                       string    // Question sent to models; the upload-only question when the user typed nothing
+	userInput                   string    // Text the user typed, stored on the user message; may be empty
+	session                     *types.Session
+	customAgent                 *types.CustomAgent
+	assistantMessage            *types.Message
+	knowledgeBaseIDs            []string
+	knowledgeIDs                []string
+	knowledgeIDsUseKBThresholds bool
+	tagScopes                   []types.TagScope
+	tagIDs                      []string
+	mcpServiceIDs               []string
+	skillNames                  []string
+	summaryModelID              string
+	reasoningEffort             string
+	localBrowserEnabled         bool
+	webSearchEnabled            bool
+	mentionedItems              types.MentionedItems
+	effectiveTenantID           uint64                   // when using shared agent, tenant ID for model/KB/MCP resolution; 0 = use context tenant
+	sharedAgentReadOnly         bool                     // access was granted by a read-only agent share
+	images                      []ImageAttachment        // Uploaded images with analysis text
+	userMessageID               string                   // Created user message ID (populated after createUserMessage)
+	userCreatedAt               time.Time                // Persisted user message timestamp, echoed on agent_query
+	channel                     string                   // Source channel: "web", "api", "im", etc.
+	attachments                 types.MessageAttachments // Processed base64 file attachments (legacy inline uploads)
+	attachmentIDs               []string                 // Pre-uploaded session-scoped document IDs, resolved after SSE starts
+	attachmentMetas             types.MessageAttachments // Metadata-only view of attachmentIDs for the persisted user message
+	suggestionAttribution       *types.SuggestionAttribution
+	questionOrigin              *types.QuestionOrigin
+	pageContext                 *types.PageContext
+	assistantAccess             types.AssistantAccessLevel
 	// resourceRewriter turns internal storage references in the outbound stream
 	// into directly loadable URLs when the caller asks for `resource_urls=public`.
 	// Disabled (a pass-through) in the default handle mode.
@@ -125,28 +126,29 @@ func (rc *qaRequestContext) buildQARequest() *types.QARequest {
 		mode = types.RunModeAttended
 	}
 	req := &types.QARequest{
-		Session:             rc.session,
-		Query:               rc.query,
-		AssistantMessageID:  rc.assistantMessage.ID,
-		SummaryModelID:      rc.summaryModelID,
-		ReasoningEffort:     rc.reasoningEffort,
-		CustomAgent:         rc.customAgent,
-		SharedAgentReadOnly: rc.sharedAgentReadOnly,
-		KnowledgeBaseIDs:    rc.knowledgeBaseIDs,
-		KnowledgeIDs:        rc.knowledgeIDs,
-		TagScopes:           rc.tagScopes,
-		MCPServiceIDs:       rc.mcpServiceIDs,
-		SkillNames:          rc.skillNames,
-		ImageURLs:           imageURLs,
-		ImageDescription:    imageDescription,
-		UserMessageID:       rc.userMessageID,
-		WebSearchEnabled:    rc.webSearchEnabled,
-		LocalBrowserEnabled: rc.localBrowserEnabled,
-		Attachments:         rc.attachments,
-		QuestionOrigin:      rc.questionOrigin,
-		PageContext:         rc.pageContext,
-		AssistantAccess:     rc.assistantAccess,
-		TurnLeaseHeld:       rc.turnLeaseHeld,
+		Session:                     rc.session,
+		Query:                       rc.query,
+		AssistantMessageID:          rc.assistantMessage.ID,
+		SummaryModelID:              rc.summaryModelID,
+		ReasoningEffort:             rc.reasoningEffort,
+		CustomAgent:                 rc.customAgent,
+		SharedAgentReadOnly:         rc.sharedAgentReadOnly,
+		KnowledgeBaseIDs:            rc.knowledgeBaseIDs,
+		KnowledgeIDs:                rc.knowledgeIDs,
+		KnowledgeIDsUseKBThresholds: rc.knowledgeIDsUseKBThresholds,
+		TagScopes:                   rc.tagScopes,
+		MCPServiceIDs:               rc.mcpServiceIDs,
+		SkillNames:                  rc.skillNames,
+		ImageURLs:                   imageURLs,
+		ImageDescription:            imageDescription,
+		UserMessageID:               rc.userMessageID,
+		WebSearchEnabled:            rc.webSearchEnabled,
+		LocalBrowserEnabled:         rc.localBrowserEnabled,
+		Attachments:                 rc.attachments,
+		QuestionOrigin:              rc.questionOrigin,
+		PageContext:                 rc.pageContext,
+		AssistantAccess:             rc.assistantAccess,
+		TurnLeaseHeld:               rc.turnLeaseHeld,
 		// Only a caller that can answer the prompt later may leave the run
 		// suspended; an API-key caller would get a turn with no answer.
 		Suspendable: interactive,
@@ -468,6 +470,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	)
 
 	executionContext.LocalBrowserEnabled = request.LocalBrowserEnabled
+	executionContext.KnowledgeIDsUseKBThresholds = request.KnowledgeIDsUseKBThresholds
 
 	// Build request context
 	reqCtx := &qaRequestContext{
@@ -491,31 +494,32 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 			ModelID:          modelID,
 			ExecutionContext: executionContext,
 		},
-		knowledgeBaseIDs:      secutils.SanitizeForLogArray(kbIDs),
-		knowledgeIDs:          secutils.SanitizeForLogArray(knowledgeIDs),
-		tagScopes:             tagScopes,
-		tagIDs:                secutils.SanitizeForLogArray(tagIDs),
-		mcpServiceIDs:         secutils.SanitizeForLogArray(mcpServiceIDs),
-		skillNames:            secutils.SanitizeForLogArray(skillNames),
-		summaryModelID:        secutils.SanitizeForLog(request.SummaryModelID),
-		reasoningEffort:       request.ReasoningEffort,
-		webSearchEnabled:      request.WebSearchEnabled,
-		localBrowserEnabled:   request.LocalBrowserEnabled,
-		mentionedItems:        convertMentionedItems(request.MentionedItems),
-		effectiveTenantID:     effectiveTenantID,
-		sharedAgentReadOnly:   sharedAgentReadOnly,
-		images:                request.Images,
-		channel:               request.Channel,
-		attachments:           processedAttachments,
-		attachmentIDs:         attachmentIDs,
-		attachmentMetas:       attachmentMetas,
-		suggestionAttribution: request.SuggestionAttribution,
-		questionOrigin:        request.QuestionOrigin,
-		pageContext:           request.PageContext,
-		assistantAccess:       request.AssistantAccess,
-		reqAgentEnabled:       request.AgentEnabled,
-		reqAgentID:            request.AgentID,
-		resourceRewriter:      resourceRewriter,
+		knowledgeBaseIDs:            secutils.SanitizeForLogArray(kbIDs),
+		knowledgeIDs:                secutils.SanitizeForLogArray(knowledgeIDs),
+		knowledgeIDsUseKBThresholds: request.KnowledgeIDsUseKBThresholds,
+		tagScopes:                   tagScopes,
+		tagIDs:                      secutils.SanitizeForLogArray(tagIDs),
+		mcpServiceIDs:               secutils.SanitizeForLogArray(mcpServiceIDs),
+		skillNames:                  secutils.SanitizeForLogArray(skillNames),
+		summaryModelID:              secutils.SanitizeForLog(request.SummaryModelID),
+		reasoningEffort:             request.ReasoningEffort,
+		webSearchEnabled:            request.WebSearchEnabled,
+		localBrowserEnabled:         request.LocalBrowserEnabled,
+		mentionedItems:              convertMentionedItems(request.MentionedItems),
+		effectiveTenantID:           effectiveTenantID,
+		sharedAgentReadOnly:         sharedAgentReadOnly,
+		images:                      request.Images,
+		channel:                     request.Channel,
+		attachments:                 processedAttachments,
+		attachmentIDs:               attachmentIDs,
+		attachmentMetas:             attachmentMetas,
+		suggestionAttribution:       request.SuggestionAttribution,
+		questionOrigin:              request.QuestionOrigin,
+		pageContext:                 request.PageContext,
+		assistantAccess:             request.AssistantAccess,
+		reqAgentEnabled:             request.AgentEnabled,
+		reqAgentID:                  request.AgentID,
+		resourceRewriter:            resourceRewriter,
 	}
 
 	return reqCtx, &request, nil

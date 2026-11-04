@@ -53,6 +53,8 @@ type CreateKnowledgeQARequest struct {
 	KnowledgeBaseIDs []string `json:"knowledge_base_ids"`
 	// Selected knowledge ID for this request
 	KnowledgeIDs []string `json:"knowledge_ids"`
+	// 文件列表作为整库快照时保留知识库原召回阈值；缺省兼容显式文件检索。
+	KnowledgeIDsUseKBThresholds bool `json:"knowledge_ids_use_kb_thresholds,omitempty"`
 	// Whether agent mode is enabled for this request
 	AgentEnabled bool `json:"agent_enabled"`
 	// Selected custom agent ID (backend resolves shared agent and its workspace from share relation)

@@ -227,6 +227,7 @@ def test_file_target_is_enforced_upstream_and_survives_history(
     )
     assert set(state.chats[-1]["knowledge_ids"]) == {"doc-public", "doc-other"}
     assert "knowledge_base_ids" not in state.chats[-1]
+    assert state.chats[-1]["knowledge_ids_use_kb_thresholds"] is True
     selected = {
         "conversation_id": "file-chat",
         "query": "我的资料有什么",
@@ -235,6 +236,7 @@ def test_file_target_is_enforced_upstream_and_survives_history(
     }
     assert browser.post(base, json=selected).status_code == 200
     assert state.chats[-1]["knowledge_ids"] == ["doc-personal"]
+    assert state.chats[-1].get("knowledge_ids_use_kb_thresholds", False) is False
     assert "knowledge_base_ids" not in state.chats[-1]
     history = browser.get("/kb/api/public/conversations/file-chat").json()
     assert history["turns"][0]["knowledge_ids"] == ["doc-personal"]

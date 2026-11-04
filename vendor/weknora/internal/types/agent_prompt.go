@@ -174,18 +174,19 @@ type ResumableAgentRequest struct {
 	Query     string `json:"query,omitempty"`
 	// AgentTenantID is the agent owner's workspace; it differs from the
 	// session's when the agent is shared.
-	AgentTenantID       uint64          `json:"agent_tenant_id,omitempty"`
-	SummaryModelID      string          `json:"summary_model_id,omitempty"`
-	ReasoningEffort     string          `json:"reasoning_effort,omitempty"`
-	SharedAgentReadOnly bool            `json:"shared_agent_read_only,omitempty"`
-	KnowledgeBaseIDs    []string        `json:"knowledge_base_ids,omitempty"`
-	KnowledgeIDs        []string        `json:"knowledge_ids,omitempty"`
-	TagScopes           []TagScope      `json:"tag_scopes,omitempty"`
-	MCPServiceIDs       []string        `json:"mcp_service_ids,omitempty"`
-	SkillNames          []string        `json:"skill_names,omitempty"`
-	WebSearchEnabled    bool            `json:"web_search_enabled,omitempty"`
-	QuestionOrigin      *QuestionOrigin `json:"question_origin,omitempty"`
-	PageContext         *PageContext    `json:"page_context,omitempty"`
+	AgentTenantID               uint64          `json:"agent_tenant_id,omitempty"`
+	SummaryModelID              string          `json:"summary_model_id,omitempty"`
+	ReasoningEffort             string          `json:"reasoning_effort,omitempty"`
+	SharedAgentReadOnly         bool            `json:"shared_agent_read_only,omitempty"`
+	KnowledgeBaseIDs            []string        `json:"knowledge_base_ids,omitempty"`
+	KnowledgeIDs                []string        `json:"knowledge_ids,omitempty"`
+	KnowledgeIDsUseKBThresholds bool            `json:"knowledge_ids_use_kb_thresholds,omitempty"`
+	TagScopes                   []TagScope      `json:"tag_scopes,omitempty"`
+	MCPServiceIDs               []string        `json:"mcp_service_ids,omitempty"`
+	SkillNames                  []string        `json:"skill_names,omitempty"`
+	WebSearchEnabled            bool            `json:"web_search_enabled,omitempty"`
+	QuestionOrigin              *QuestionOrigin `json:"question_origin,omitempty"`
+	PageContext                 *PageContext    `json:"page_context,omitempty"`
 	// AssistantAccess is the level the user asked for; the ceiling is
 	// applied again on resume, so lowering it in between takes effect.
 	AssistantAccess AssistantAccessLevel `json:"assistant_access,omitempty"`

@@ -115,7 +115,9 @@ func (s *sessionService) KnowledgeQA(
 	retrievalTenantID := s.resolveRetrievalTenantID(ctx, req)
 
 	// Build unified search targets (computed once, used throughout pipeline)
-	searchTargets, err := s.buildSearchTargets(ctx, retrievalTenantID, knowledgeBaseIDs, knowledgeIDs, req.TagScopes)
+	searchTargets, err := s.buildSearchTargetsWithKBThresholds(
+		ctx, retrievalTenantID, knowledgeBaseIDs, knowledgeIDs, req.TagScopes, req.KnowledgeIDsUseKBThresholds,
+	)
 	if err != nil {
 		return fmt.Errorf("build search targets: %w", err)
 	}
@@ -453,6 +455,19 @@ func (s *sessionService) buildSearchTargets(
 	knowledgeIDs []string,
 	tagScopes []types.TagScope,
 ) (types.SearchTargets, error) {
+	return s.buildSearchTargetsWithKBThresholds(ctx, tenantID, knowledgeBaseIDs, knowledgeIDs, tagScopes, false)
+}
+
+// buildSearchTargetsWithKBThresholds 只按本次显式开关保留原召回阈值。
+// 普通文件列表快照不再放宽阈值；旧调用和用户显式选文件仍保持原生行为。
+func (s *sessionService) buildSearchTargetsWithKBThresholds(
+	ctx context.Context,
+	tenantID uint64,
+	knowledgeBaseIDs []string,
+	knowledgeIDs []string,
+	tagScopes []types.TagScope,
+	knowledgeIDsUseKBThresholds bool,
+) (types.SearchTargets, error) {
 	caller := types.CallerFromContext(ctx)
 	var targets types.SearchTargets
 	tagIDsByKB := mergeTagScopesByKB(tagScopes)
@@ -557,7 +572,7 @@ func (s *sessionService) buildSearchTargets(
 				KnowledgeBaseID:         kbID,
 				TenantID:                kbTenant,
 				KnowledgeIDs:            kidList,
-				DisableRecallThresholds: true,
+				DisableRecallThresholds: !knowledgeIDsUseKBThresholds,
 			})
 		}
 	}
@@ -595,7 +610,7 @@ func (s *sessionService) buildSearchTargets(
 				TenantID:                kbTenant,
 				KnowledgeIDs:            tagKnowledgeIDs,
 				ScopeTagIDs:             append([]string(nil), tagIDs...),
-				DisableRecallThresholds: true,
+				DisableRecallThresholds: !knowledgeIDsUseKBThresholds,
 			})
 			continue
 		}
@@ -611,7 +626,7 @@ func (s *sessionService) buildSearchTargets(
 		if len(explicitKnowledgeIDs) > 0 {
 			target.Type = types.SearchTargetTypeKnowledge
 			target.KnowledgeIDs = explicitKnowledgeIDs
-			target.DisableRecallThresholds = true
+			target.DisableRecallThresholds = !knowledgeIDsUseKBThresholds
 		}
 		targets = append(targets, target)
 	}

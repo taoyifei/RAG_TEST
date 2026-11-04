@@ -115,6 +115,7 @@ class WeKnoraClient:
         knowledge_base_ids: tuple[str, ...] = (),
         agent_id: str | None = None,
         knowledge_ids: tuple[str, ...] | None = None,
+        knowledge_ids_use_kb_thresholds: bool = False,
     ) -> AsyncIterator[bytes]:
         """逐字节转发一次原生自然问答，文件模式不得同时提交整库目标。"""
         if knowledge_ids is not None and not knowledge_ids:
@@ -134,6 +135,12 @@ class WeKnoraClient:
             json={
                 "query": question,
                 **targets,
+                **(
+                    {"knowledge_ids_use_kb_thresholds": True}
+                    if knowledge_ids is not None
+                    and knowledge_ids_use_kb_thresholds
+                    else {}
+                ),
                 **({"agent_id": agent_id} if agent_id else {}),
             },
             headers={
