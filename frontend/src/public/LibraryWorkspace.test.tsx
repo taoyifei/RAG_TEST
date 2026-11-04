@@ -360,6 +360,137 @@ describe("用户资料和角色", () => {
     expect(screen.getByRole("region", { name: label })).toBeVisible();
   });
 
+  it("普通员工可按全部用途及三种用途即时筛选，旧版数量单独计算", async () => {
+    const response = Response.json({
+      scope: "public",
+      can_manage: false,
+      items: [
+        { id: "policy", title: "现行制度.docx", kind: "policy" },
+        { id: "legacy", title: "未分类说明.docx" },
+        { id: "image", title: "操作示例.docx", kind: "illustration" },
+        { id: "form", title: "可填原表.xlsx", kind: "template" },
+        {
+          id: "archived",
+          title: "旧版原表.xlsx",
+          kind: "template",
+          version_state: "archived",
+        },
+      ].map((item) => ({
+        status: "completed",
+        created_at: "2026-11-01",
+        size: 20,
+        shared: false,
+        ...item,
+      })),
+    });
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => Promise.resolve(response.clone()));
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        onAskDocuments={vi.fn()}
+        userRole="user"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "公共资料" }));
+    await screen.findByText("现行制度.docx");
+    const filter = screen.getByRole("combobox", { name: "资料用途" });
+    expect(filter).toHaveValue("all");
+    expect(
+      within(filter)
+        .getAllByRole("option")
+        .map((item) => item.textContent),
+    ).toEqual(["全部用途", "制度说明", "操作图示", "可填写模板"]);
+    expect(screen.queryByRole("combobox", { name: "上传资料用途" })).toBeNull();
+    const requests = fetch.mock.calls.length;
+    await user.selectOptions(filter, "policy");
+    expect(screen.getByText("现行制度.docx")).toBeVisible();
+    expect(screen.getByText("未分类说明.docx")).toBeVisible();
+    expect(screen.queryByText("操作示例.docx")).toBeNull();
+    expect(screen.getByText("找到 2 份资料，共 4 份")).toBeVisible();
+    await user.selectOptions(filter, "illustration");
+    expect(screen.getByText("操作示例.docx")).toBeVisible();
+    expect(screen.queryByText("现行制度.docx")).toBeNull();
+    await user.selectOptions(filter, "template");
+    expect(screen.getByText("可填原表.xlsx")).toBeVisible();
+    expect(screen.queryByText("操作示例.docx")).toBeNull();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "版本范围" }),
+      "archived",
+    );
+    expect(screen.getByText("旧版原表.xlsx")).toBeVisible();
+    expect(screen.queryByText("可填原表.xlsx")).toBeNull();
+    expect(screen.getByText("找到 1 份资料，共 1 份")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(filter).toHaveValue("all");
+    expect(screen.getByRole("combobox", { name: "版本范围" })).toHaveValue(
+      "current",
+    );
+    expect(screen.getByText("共 4 份资料，另有 1 份已归档旧版")).toBeVisible();
+    expect(screen.queryByText("旧版原表.xlsx")).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(requests);
+  });
+
+  it("上传用途与列表用途筛选独立，清除筛选不改变本次上传选择", async () => {
+    let uploadedKind: FormDataEntryValue | null = null;
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      if (init?.body instanceof FormData) {
+        uploadedKind = init.body.get("kind");
+        return Promise.resolve(
+          Response.json({ id: "next", status: "pending" }),
+        );
+      }
+      return Promise.resolve(
+        Response.json({
+          scope: "personal",
+          can_manage: true,
+          can_share: false,
+          items: [
+            {
+              id: "form",
+              title: "个人原表.xlsx",
+              kind: "template",
+              status: "completed",
+              created_at: "2026-11-01",
+              size: 20,
+              shared: false,
+            },
+          ],
+        }),
+      );
+    });
+    const user = userEvent.setup();
+    render(
+      <LibraryWorkspace
+        userRole="user"
+        getCsrfToken={() => "csrf"}
+        onBack={() => undefined}
+        onAskDocuments={vi.fn()}
+      />,
+    );
+    await screen.findByText("个人原表.xlsx");
+    const uploadKind = screen.getByRole("combobox", { name: "上传资料用途" });
+    const listKind = screen.getByRole("combobox", { name: "资料用途" });
+    expect(uploadKind.closest("label")).toHaveTextContent("上传用途");
+    await user.selectOptions(uploadKind, "illustration");
+    expect(listKind).toHaveValue("all");
+    expect(screen.getByText("个人原表.xlsx")).toBeVisible();
+    await user.selectOptions(listKind, "template");
+    expect(uploadKind).toHaveValue("illustration");
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(listKind).toHaveValue("all");
+    expect(uploadKind).toHaveValue("illustration");
+    await user.upload(
+      screen.getByLabelText("选择上传资料"),
+      new File(["example"], "操作示例.docx"),
+    );
+    await screen.findByText("已上传，正在准备解析。解析完成后即可提问。");
+    expect(uploadedKind).toBe("illustration");
+  });
+
   it("按名称和准备状态查找资料，清除筛选后恢复完整列表和时间排序", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json({

@@ -171,6 +171,7 @@ function LibraryListing({
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortOrder, setSortOrder] = useState("newest");
   const [versionFilter, setVersionFilter] = useState("current");
+  const [kindFilter, setKindFilter] = useState<"all" | DocumentKind>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [uploadKind, setUploadKind] = useState<DocumentKind>("policy");
   const [versionFor, setVersionFor] = useState<LibraryDocument>();
@@ -194,6 +195,8 @@ function LibraryListing({
           return false;
         if (keyword && !item.title.toLocaleLowerCase().includes(keyword))
           return false;
+        if (kindFilter !== "all" && (item.kind ?? "policy") !== kindFilter)
+          return false;
         if (statusFilter === "ready") return READY_STATES.has(item.status);
         if (statusFilter === "failed") return FAILED_STATES.has(item.status);
         if (statusFilter === "parsing")
@@ -215,7 +218,7 @@ function LibraryListing({
           left.title.localeCompare(right.title, "zh-CN", { numeric: true })
         );
       });
-  }, [data?.items, query, sortOrder, statusFilter, versionFilter]);
+  }, [data?.items, kindFilter, query, sortOrder, statusFilter, versionFilter]);
   const askable = (item: LibraryDocument) =>
     READY_STATES.has(item.status) &&
     (item.version_state ?? "current") === "current";
@@ -228,11 +231,13 @@ function LibraryListing({
   const currentCount = (data?.items.length ?? 0) - archivedCount;
   const hasFilters =
     !!query ||
+    kindFilter !== "all" ||
     statusFilter !== "all" ||
     sortOrder !== "newest" ||
     versionFilter !== "current";
   const clearFilters = () => {
     setQuery("");
+    setKindFilter("all");
     setStatusFilter("all");
     setSortOrder("newest");
     setVersionFilter("current");
@@ -391,7 +396,7 @@ function LibraryListing({
           {data?.can_manage && (
             <>
               <label className="wst-document-meta">
-                资料用途{" "}
+                上传用途{" "}
                 <select
                   aria-label="上传资料用途"
                   value={uploadKind}
@@ -578,6 +583,25 @@ function LibraryListing({
               </select>
             </label>
             <label>
+              <span className="sr-only">资料用途</span>
+              <select
+                aria-label="资料用途"
+                value={kindFilter}
+                onChange={(event) =>
+                  setKindFilter(
+                    event.currentTarget.value as "all" | DocumentKind,
+                  )
+                }
+              >
+                <option value="all">全部用途</option>
+                {Object.entries(DOCUMENT_KIND_NAMES).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
               <span className="sr-only">资料状态</span>
               <select
                 value={statusFilter}
@@ -631,7 +655,7 @@ function LibraryListing({
           </div>
           <p className="wst-library-result-count" role="status">
             {hasFilters
-              ? `找到 ${filteredItems.length} 份资料，共 ${data.items.length} 份`
+              ? `找到 ${filteredItems.length} 份资料，共 ${versionFilter === "archived" ? archivedCount : currentCount} 份`
               : `共 ${currentCount} 份资料${archivedCount ? `，另有 ${archivedCount} 份已归档旧版` : ""}`}
           </p>
         </>
