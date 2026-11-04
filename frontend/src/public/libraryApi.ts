@@ -6,6 +6,7 @@ export type LibraryScope = "personal" | "public" | "hr_public" | "hr_internal";
 
 export interface LibraryDocument {
   id: string;
+  scope?: LibraryScope;
   title: string;
   status: string;
   created_at: string;

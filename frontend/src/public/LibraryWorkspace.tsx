@@ -179,6 +179,7 @@ function LibraryListing({
     useState<DocumentAsset["relation"]>("template");
   const assetInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const versionInput = useRef<HTMLInputElement>(null);
   const quota = scope === "personal" ? data?.quota : undefined;
   const uploadBlocked = quota?.upload_allowed === false;
   const filteredItems = useMemo(() => {
@@ -221,6 +222,10 @@ function LibraryListing({
   const chosen = (data?.items ?? []).filter(
     (item) => selected.has(item.id) && askable(item),
   );
+  const archivedCount = (data?.items ?? []).filter(
+    (item) => item.version_state === "archived",
+  ).length;
+  const currentCount = (data?.items.length ?? 0) - archivedCount;
   const hasFilters =
     !!query ||
     statusFilter !== "all" ||
@@ -318,10 +323,15 @@ function LibraryListing({
     void run(
       "upload",
       async (csrf) => {
-        const result = await uploadLibrary(scope, file, csrf, {
-          replacesId: versionFor?.id,
-          kind: versionFor?.kind ?? uploadKind,
-        });
+        const result = await uploadLibrary(
+          versionFor?.scope ?? scope,
+          file,
+          csrf,
+          {
+            replacesId: versionFor?.id,
+            kind: versionFor?.kind ?? uploadKind,
+          },
+        );
         setVersionFor(undefined);
         return result.message;
       },
@@ -353,6 +363,18 @@ function LibraryListing({
 
   return (
     <section className="wst-library-panel" aria-label={SCOPES[scope].title}>
+      <input
+        ref={versionInput}
+        type="file"
+        hidden
+        aria-label="选择资料新版本"
+        accept=".pdf,.docx,.xlsx,.pptx,.txt,.md"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file) upload(file);
+        }}
+      />
       <div className="wst-library-toolbar">
         <div className="wst-library-actions">
           <button
@@ -610,7 +632,7 @@ function LibraryListing({
           <p className="wst-library-result-count" role="status">
             {hasFilters
               ? `找到 ${filteredItems.length} 份资料，共 ${data.items.length} 份`
-              : `共 ${data.items.length} 份资料`}
+              : `共 ${currentCount} 份资料${archivedCount ? `，另有 ${archivedCount} 份已归档旧版` : ""}`}
           </p>
         </>
       )}
@@ -767,7 +789,7 @@ function LibraryListing({
                               disabled={!!busy}
                               onClick={() => {
                                 setVersionFor(item);
-                                fileInput.current?.click();
+                                versionInput.current?.click();
                               }}
                             >
                               更新版本

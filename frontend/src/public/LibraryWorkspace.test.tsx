@@ -8,6 +8,59 @@ import type { PersonalLibraryQuota } from "./libraryApi";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("人力在公共列表更新公开人力文件时保留真正资料区", async () => {
+  const user = userEvent.setup();
+  let uploadScope: FormDataEntryValue | null = null;
+  vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+    if (init?.body instanceof FormData) {
+      uploadScope = init.body.get("scope");
+      return Promise.resolve(
+        Response.json({ id: "next", status: "pending", message: "新版已接收" }),
+      );
+    }
+    const path = requestPath(_input);
+    return Promise.resolve(
+      Response.json({
+        scope: path.includes("scope=public") ? "public" : "personal",
+        can_manage: !path.includes("scope=public"),
+        can_share: false,
+        items: path.includes("scope=public")
+          ? [
+              {
+                id: "hr-doc",
+                scope: "hr_public",
+                title: "公开人力制度.docx",
+                status: "completed",
+                created_at: "",
+                size: 10,
+                shared: false,
+                can_manage: true,
+              },
+            ]
+          : [],
+      }),
+    );
+  });
+  render(
+    <LibraryWorkspace
+      userRole="hr"
+      getCsrfToken={() => "csrf"}
+      onBack={() => undefined}
+      onAskDocuments={vi.fn()}
+    />,
+  );
+  await user.click(
+    screen.getByRole("button", { name: "公共资料" }),
+  );
+  await user.click(await screen.findByRole("button", { name: "更新版本" }));
+  await user.upload(
+    screen.getByLabelText("选择资料新版本"),
+    new File(["updated"], "公开人力制度.docx"),
+  );
+  await screen.findByText("新版已接收");
+  expect(uploadScope).toBe("hr_public");
+});
+
 function requestPath(input: RequestInfo | URL): string {
   return typeof input === "string"
     ? input

@@ -367,6 +367,9 @@ class LibraryService:
         try:
             if job.kind == "upload":
                 kb_id = await self._scope_kb("personal", self._job_profile(job))
+                version = self.catalogue.entry(job.job_id)
+                if version.get("replaces_id"):
+                    kb_id = str(version["kb_id"])
                 content = await asyncio.to_thread(
                     self._spool_file(job.job_id).read_bytes
                 )
@@ -1034,6 +1037,7 @@ class LibraryService:
                     items.append(
                         {
                             "id": item["id"],
+                            "scope": kb_scope["scope"] if kb_scope else scope,
                             "title": item.get("file_name")
                             or item.get("title")
                             or "未命名资料",
@@ -1071,6 +1075,7 @@ class LibraryService:
                 profile.user_id, items, personal_native
             )
         for item in items:
+            item.setdefault("scope", scope)
             entry = self.catalogue.entry(item["id"])
             item.update(
                 {
@@ -1128,12 +1133,12 @@ class LibraryService:
 
     @staticmethod
     def _same_content(item: dict[str, Any], content: bytes) -> bool:
-        expected = str(item.get("file_hash") or "").lower().lstrip("0")
+        expected = str(item.get("file_hash") or "").lower()
         if not expected:
             return False
         return expected in {
-            hashlib.sha256(content).hexdigest().lstrip("0"),
-            hashlib.md5(content, usedforsecurity=False).hexdigest().lstrip("0"),
+            hashlib.sha256(content).hexdigest(),
+            hashlib.md5(content, usedforsecurity=False).hexdigest(),
         }
 
     async def _duplicate_upload(
@@ -1144,15 +1149,14 @@ class LibraryService:
         existing: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
         hashes = {
-            hashlib.sha256(content).hexdigest().lstrip("0"),
-            hashlib.md5(content, usedforsecurity=False).hexdigest().lstrip("0"),
+            hashlib.sha256(content).hexdigest(),
+            hashlib.md5(content, usedforsecurity=False).hexdigest(),
         }
         duplicate = next(
             (
                 item
                 for item in existing
-                if str(item.get("file_hash") or "").lower().lstrip("0")
-                in hashes
+                if str(item.get("file_hash") or "").lower() in hashes
             ),
             None,
         )
@@ -1468,10 +1472,19 @@ class LibraryService:
             )
         if not content or len(content) > _MAX_FILE_BYTES:
             raise HTTPException(413, "文件须非空且不超过 50MB。")
+        version_kb: str | None = None
+        if replaces_id:
+            previous, zone = await self.document(
+                replaces_id, profile, write=True
+            )
+            if zone["scope"] != scope:
+                raise HTTPException(403, "新旧版本必须属于同一资料区。")
+            version_kb = str(previous["knowledge_base_id"])
         if scope == "personal":
             async with self._personal_lock(profile.user_id):
                 # Key 或私库恢复失败必须在接收原件前返回，避免悄悄变成排队失败。
                 kb_id = await self._scope_kb(scope, profile)
+                kb_id = version_kb or kb_id
                 native_items = await self._personal_native_items(
                     profile.user_id
                 )
@@ -1507,6 +1520,7 @@ class LibraryService:
                 raise HTTPException(502, "原件上传状态未确认。")
             return self._job_response(accepted)
         kb_id = await self._scope_kb(scope, profile)
+        kb_id = version_kb or kb_id
         multipart = self._multipart(
             filename,
             content,

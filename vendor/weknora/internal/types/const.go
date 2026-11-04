@@ -31,6 +31,8 @@ const (
 	PrincipalAuthSourceContextKey ContextKey = "PrincipalAuthSource"
 	// TenantAPIKeyScopeContextKey carries per-API-key operation and KB scopes.
 	TenantAPIKeyScopeContextKey ContextKey = "TenantAPIKeyScope"
+	// TenantAPIKeyKnowledgeProofContextKey 仅保存服务端核验过的文件归属凭据。
+	TenantAPIKeyKnowledgeProofContextKey ContextKey = "TenantAPIKeyKnowledgeProof"
 	// AuditAPIKeyContextKey carries the API key id/name for activity
 	// attribution only. It is not an authorization grant.
 	AuditAPIKeyContextKey ContextKey = "AuditAPIKey"

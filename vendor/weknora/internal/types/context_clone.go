@@ -47,6 +47,8 @@ var contextCloneAcrossDetach = map[ContextKey]bool{
 	// Per-API-key operation and KB scopes: a restriction, so dropping it would
 	// hand background work broader reach than the key it came from.
 	TenantAPIKeyScopeContextKey: true,
+	// 文件凭据不跨请求脱离；异步 QA 和持久化恢复入口必须重新核验真实归属。
+	TenantAPIKeyKnowledgeProofContextKey: false,
 	// Display identity for which API key initiated work. Not a grant; dropping
 	// it would only lose activity attribution on detached goroutines.
 	AuditAPIKeyContextKey: true,

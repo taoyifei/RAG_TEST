@@ -11,7 +11,7 @@
   "source_file_count": 5870,
   "source_size_bytes": 174025371,
   "source_matches_checked_out_tag": false,
-  "source_note": "官方0.9.0固定提交的业务源码；Go与Docreader源文件使用官方内容，Vue重放湾小度品牌、网关认证和管理导航适配，并在网关模式禁用未适配的原生助手及自动化入口。归档文件数与字节数记录完整官方归档，不代表裁剪后数量。",
+  "source_note": "官方0.9.0固定提交的业务源码；Vue保留湾小度品牌、网关认证和管理导航适配。Go增加受限API Key指定文件授权兼容：查询真实文件和知识库归属并核对允许范围后才放行，续流重新核验；不修改检索、重排、生成算法或扩大Key范围。",
   "license_files": [
     {
       "path": "vendor/weknora/LICENSE",
@@ -28,7 +28,7 @@
     "postgres": "paradedb/paradedb@sha256:58bf87d2a6f1e72f56590b0f0ae1467e82c3f99ca203dde646672c8ac13148b2",
     "redis": "redis@sha256:c9d92d840fd011c908f040592857c724ae6d877f2aba5c40ad963276507386b2"
   },
-  "image_digests_status": "090测试栈使用经所有层摘要及diff_id核验的完整官方app，解析器使用官方090完整venv与源码派生镜像；实际daemon镜像ID另记在现场部署清单。生产继续运行083，不使用此分支更新生产。",
+  "image_digests_status": "官方镜像引用保持固定。生产8288沿用既有0.9.0发布；本分支8289在同源原生app上添加指定文件授权兼容，保留anydoc解析与运行配置。实际派生镜像ID、源码SHA及回退镜像记录在现场部署清单；不将本分支自动发布到生产。",
   "runtime_contract": {
     "app_official_config_digest": "sha256:902186be9c292b3b3ea8080d0a8dbaeea59b62923473c7cb04df0c53386dd50b",
     "docreader_official_config_digest": "sha256:8ce30838b94de852cb2c81cc5262e4518ee5ea1df16df6eeda00ba3d5d020d09",
@@ -40,7 +40,7 @@
     "docreader_venv_source": "complete verified layer from official v0.9.0 amd64 image; same Python 3.10.18 and first eight base layers as v0.8.3"
   },
   "delivery_omissions": [
-    "上游官网构建工程、截图及其余网站资料；仅保留UI实际链接的8个参考页面供契约检查。",
+    "上游官网前端构建工程、截图、首页数据及演示素材；保留Go服务端编译需要的website-docs/embed.go及7个编号Markdown目录，另保留UI实际链接的参考页。",
     "上游演示视频工程、产品宣传图片、Lite打包说明及独立sandbox实验模块。",
     "历史SSO阶段记录及无关本地业务文档、运行数据、会话、Trace、镜像。"
   ],
@@ -53,5 +53,35 @@
     "vendor/weknora/website-docs/04-api/01-api-overview.md",
     "vendor/weknora/website-docs/06-development/04-sandbox-deployment.md",
     "vendor/weknora/website-docs/index.md"
-  ]
+  ],
+  "native_patches": [
+    {
+      "name": "scoped-knowledge-target-authorization",
+      "purpose": "受限Key可按实际授权知识库中的指定文件提问；未知、越界或跨租户文件整体拒绝",
+      "source_paths": [
+        "vendor/weknora/internal/types/tenant_api_key_knowledge.go",
+        "vendor/weknora/internal/types/tenant_api_key.go",
+        "vendor/weknora/internal/application/service/session_api_key_knowledge.go",
+        "vendor/weknora/internal/handler/session/api_key_knowledge.go"
+      ],
+      "build_tags": [
+        "anydoc"
+      ],
+      "test_environment": "8289 only; production requires separate approval"
+    }
+  ],
+  "retained_runtime_documentation": {
+    "embed_package": "vendor/weknora/website-docs/embed.go",
+    "source_commit": "f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7",
+    "reason": "原生productdocs包的编译期go:embed资源，保持官方服务端功能；不引入官网前端工程",
+    "sections": [
+      "01-getting-started",
+      "02-architecture",
+      "03-features",
+      "04-api",
+      "05-clients",
+      "06-development",
+      "07-releases"
+    ]
+  }
 }

@@ -201,6 +201,12 @@ func (h *Handler) buildResumeRequest(
 		return nil, state, fmt.Errorf("shared KB workspace is no longer available for agent %s", req.AgentID)
 	}
 
+	// 持久化快照只记录目标，不保存文件授权；恢复时按当前 Key 再核验。
+	ctx, err = h.authorizeKnowledgeTargets(ctx, req.KnowledgeBaseIDs, req.KnowledgeIDs)
+	if err != nil {
+		return nil, state, err
+	}
+
 	// Mark the message as generating again before the run publishes itself
 	// as live: an awaiting message is not treated as a live run.
 	msg.RunState = ""

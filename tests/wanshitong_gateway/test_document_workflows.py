@@ -23,11 +23,9 @@ pytest_plugins = ("tests.wanshitong_gateway.test_library",)
 
 
 def _hash(native: _Native, identifier: str) -> None:
-    native.documents[identifier]["file_hash"] = (
-        hashlib.md5(native.files[identifier], usedforsecurity=False)
-        .hexdigest()
-        .lstrip("0")
-    )
+    native.documents[identifier]["file_hash"] = hashlib.md5(
+        native.files[identifier], usedforsecurity=False
+    ).hexdigest()
 
 
 @pytest.mark.asyncio
@@ -217,3 +215,35 @@ async def test_native_download_server_error_is_unknown_health_not_success(
     assert health["original_available"] is None
     assert health["check_error"]
     assert service.catalogue.entry(document["id"])["health_json"]
+
+
+@pytest.mark.asyncio
+async def test_replacement_keeps_its_original_published_kb(
+    library: tuple[LibraryService, _Native, list[str]],
+):
+    service, native, binding = library
+    old = await service.receive_upload("public", _PUBLISHER, "old.txt", b"old")
+    binding.append("public-new")
+    native.documents[old["id"]]["knowledge_base_id"] = "public-new"
+    new = await service.receive_upload(
+        "public", _PUBLISHER, "new.txt", b"new", replaces_id=old["id"]
+    )
+    assert native.documents[new["id"]]["knowledge_base_id"] == "public-new"
+    await service.publish_version(new["id"], _PUBLISHER)
+
+
+@pytest.mark.asyncio
+async def test_public_listing_preserves_hr_document_write_scope(
+    library: tuple[LibraryService, _Native, list[str]],
+):
+    service, _, _ = library
+    document = await service.receive_upload(
+        "hr_public", _HR, "hr.txt", b"hr-public"
+    )
+    listing = await service.list_documents("public", _HR)
+    row = next(
+        item for item in listing["items"] if item["id"] == document["id"]
+    )
+    assert listing["can_manage"] is False
+    assert row["can_manage"] is True
+    assert row["scope"] == "hr_public"

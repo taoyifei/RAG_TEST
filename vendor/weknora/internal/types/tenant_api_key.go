@@ -394,7 +394,7 @@ func AuthorizeTenantAPIKeyKnowledgeTargets(ctx context.Context, kbIDs, knowledge
 	if !ok || !scope.IsKnowledgeBaseRestricted() {
 		return nil
 	}
-	if len(knowledgeIDs) > 0 {
+	if len(knowledgeIDs) > 0 && !verifiedTenantAPIKeyKnowledgeTargets(ctx, scope, knowledgeIDs) {
 		return errors.NewForbiddenError("API key scope does not allow knowledge_ids without a verified knowledge base")
 	}
 	if len(kbIDs) > 0 && !scope.AllowsKnowledgeBases(kbIDs) {

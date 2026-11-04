@@ -48,6 +48,11 @@ func (s *sessionService) AgentQA(
 	req *types.QARequest,
 	eventBus *event.EventBus,
 ) error {
+	var err error
+	ctx, err = s.AuthorizeKnowledgeTargets(ctx, req.KnowledgeBaseIDs, req.KnowledgeIDs)
+	if err != nil {
+		return err
+	}
 	sessionID := req.Session.ID
 	if req.Session.Kind == types.SessionKindAgentDelegated {
 		b := collaboration.FromContext(ctx)

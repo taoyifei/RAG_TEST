@@ -37,6 +37,10 @@ func (s *sessionService) resolveKnowledgeBases(
 	ctx context.Context,
 	req *types.QARequest,
 ) (kbIDs []string, knowledgeIDs []string, err error) {
+	ctx, err = s.AuthorizeKnowledgeTargets(ctx, req.KnowledgeBaseIDs, req.KnowledgeIDs)
+	if err != nil {
+		return nil, nil, err
+	}
 	kbIDs = req.KnowledgeBaseIDs
 	knowledgeIDs = req.KnowledgeIDs
 	requestedKBIDs := append([]string(nil), req.KnowledgeBaseIDs...)

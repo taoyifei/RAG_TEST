@@ -26,6 +26,11 @@ func (s *sessionService) KnowledgeQA(
 	req *types.QARequest,
 	eventBus *event.EventBus,
 ) error {
+	var err error
+	ctx, err = s.AuthorizeKnowledgeTargets(ctx, req.KnowledgeBaseIDs, req.KnowledgeIDs)
+	if err != nil {
+		return err
+	}
 	webSearchEnabled := resolveWebSearchEnabled(req)
 	logger.Infof(
 		ctx,
@@ -817,6 +822,11 @@ func (s *sessionService) SearchKnowledge(ctx context.Context,
 	knowledgeBaseIDs []string, knowledgeIDs []string, tagScopes []types.TagScope, query string,
 	opts *types.KnowledgeSearchOptions,
 ) (*types.RetrievalResult, error) {
+	var err error
+	ctx, err = s.AuthorizeKnowledgeTargets(ctx, knowledgeBaseIDs, knowledgeIDs)
+	if err != nil {
+		return nil, err
+	}
 	logger.Info(ctx, "Start knowledge base search without LLM summary")
 	logger.Infof(ctx, "Knowledge base search parameters, knowledge base IDs: %v, knowledge IDs: %v, tag scopes: %d, query: %s",
 		knowledgeBaseIDs, knowledgeIDs, len(tagScopes), query)
