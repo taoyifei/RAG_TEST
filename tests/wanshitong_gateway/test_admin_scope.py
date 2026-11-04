@@ -21,16 +21,30 @@ _HR = UserProfile("hr", "hr", "人力", None, "hr")
 _HR_KB_ID = "kb-hr-internal"
 
 
-class _Library:
+class _Library(LibraryService):
     """只提供守卫需要的归属读取，服务器请求不在本专项中执行。"""
 
     public_kb_ids = ("kb-public",)
 
+    def __init__(self) -> None:
+        """用固定归属运行真实权限方法，不建立数据库或原生连接。"""
+
     @staticmethod
     def registered_kbs() -> list[dict[str, str]]:
         return [
-            {"kb_id": _HR_KB_ID, "scope": "hr_internal"},
-            {"kb_id": "kb-personal", "scope": "personal"},
+            {"kb_id": _HR_KB_ID, "scope": "hr_internal", "owner_id": ""},
+            {"kb_id": "kb-hr-public", "scope": "hr_public", "owner_id": ""},
+            {"kb_id": "kb-personal", "scope": "personal", "owner_id": "owner"},
+            {
+                "kb_id": "kb-admin-personal",
+                "scope": "personal",
+                "owner_id": "admin",
+            },
+            {
+                "kb_id": "kb-root-personal",
+                "scope": "personal",
+                "owner_id": "root",
+            },
         ]
 
     @staticmethod
@@ -39,13 +53,19 @@ class _Library:
 
     @staticmethod
     async def _knowledge(identifier: str) -> dict[str, Any]:
-        if identifier not in {"hr-doc", "public-doc", "private-doc"}:
+        mapping = {
+            "hr-doc": _HR_KB_ID,
+            "hr-public-doc": "kb-hr-public",
+            "public-doc": "kb-public",
+            "private-doc": "kb-personal",
+            "admin-doc": "kb-admin-personal",
+            "root-doc": "kb-root-personal",
+        }
+        if identifier not in mapping:
             raise HTTPException(404, "资料不存在。")
         return {
             "id": identifier,
-            "knowledge_base_id": _HR_KB_ID
-            if identifier == "hr-doc"
-            else "kb-public",
+            "knowledge_base_id": mapping[identifier],
         }
 
     @staticmethod
@@ -53,9 +73,10 @@ class _Library:
         assert method == "GET"
         return {
             "data": {
-                "knowledge_id": "hr-doc"
-                if path.endswith("hr-chunk")
-                else "public-doc"
+                "knowledge_id": {
+                    "hr-chunk": "hr-doc",
+                    "private-chunk": "private-doc",
+                }.get(path.rsplit("/", 1)[-1], "public-doc")
             }
         }
 
@@ -120,10 +141,10 @@ async def test_hr_and_super_admin_remain_authorized(
 
 
 @pytest.mark.asyncio
-async def test_public_and_other_personal_management_stay_available(
+async def test_public_and_own_personal_management_stay_available(
     guard: tuple[AdminScopeGuard, GatewayStore],
 ) -> None:
-    for identifier in ("public-doc", "private-doc"):
+    for identifier in ("public-doc", "hr-public-doc", "admin-doc"):
         await _check(guard[0], f"api/v1/knowledge/{identifier}/download")
         await _check(
             guard[0],
@@ -170,7 +191,7 @@ async def test_batch_copy_and_explicit_search_check_body_targets(
             )
         assert denied.value.status_code == 403
     await _check(
-        guard[0], "api/v1/knowledge/batch", query="ids=public-doc,private-doc"
+        guard[0], "api/v1/knowledge/batch", query="ids=public-doc,admin-doc"
     )
     await _check(
         guard[0],
@@ -373,18 +394,18 @@ async def test_kb_list_filters_internal_items_and_counts(
         _ADMIN, "api/v1/knowledge-bases", upstream
     )
     payload = json.loads(result.content)
-    assert payload["total"] == 2
+    assert payload["total"] == 1
     assert [row["id"] for row in payload["data"]] == [
         "kb-public",
-        "kb-personal",
     ]
     assert _HR_KB_ID.encode() not in result.content
-    assert (
-        await guard[0].filter_response(
-            _SUPER, "api/v1/knowledge-bases", upstream
-        )
-        is upstream
+    super_result = await guard[0].filter_response(
+        _SUPER, "api/v1/knowledge-bases", upstream
     )
+    assert [row["id"] for row in json.loads(super_result.content)["data"]] == [
+        "kb-public",
+        _HR_KB_ID,
+    ]
 
 
 @pytest.mark.asyncio
@@ -412,3 +433,121 @@ async def test_native_session_list_omits_internal_and_unknown_sessions(
         _ADMIN, "api/v1/sessions", upstream
     )
     assert json.loads(result.content)["data"] == [{"id": "public-session"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [_ADMIN, _SUPER])
+@pytest.mark.parametrize(
+    "method,path,body,query",
+    [
+        ("GET", "api/v1/knowledge-bases/kb-personal", None, ""),
+        ("DELETE", "api/v1/knowledge-bases/kb-personal", None, ""),
+        ("POST", "api/v1/knowledge-bases/kb-personal/knowledge/file", None, ""),
+        ("GET", "api/v1/knowledge/private-doc/download", None, ""),
+        ("DELETE", "api/v1/knowledge/private-doc", None, ""),
+        ("GET", "api/v1/chunks/private-doc", None, ""),
+        ("GET", "api/v1/chunks/by-id/private-chunk", None, ""),
+        ("GET", "api/v1/knowledge/batch", None, "ids=public-doc,private-doc"),
+        ("POST", "api/v1/knowledge/batch-delete", {"ids": ["private-doc"]}, ""),
+        (
+            "POST",
+            "api/v1/knowledge-bases/copy",
+            {"source_id": "kb-personal", "target_id": "kb-public"},
+            "",
+        ),
+        (
+            "POST",
+            "api/v1/knowledge-search",
+            {"knowledge_ids": ["private-doc"]},
+            "",
+        ),
+    ],
+)
+async def test_admin_and_super_cannot_read_or_mutate_other_personal_data(  # noqa: PLR0913, PLR0917 - 矩阵显式覆盖完整代理请求。
+    guard: tuple[AdminScopeGuard, GatewayStore],
+    profile: UserProfile,
+    method: str,
+    path: str,
+    body: object,
+    query: str,
+) -> None:
+    with pytest.raises(HTTPException) as denied:
+        await _check(
+            guard[0],
+            path,
+            method=method,
+            profile=profile,
+            body=body,
+            query=query,
+        )
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_super_private_history_respects_owner(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    protector, store = guard
+    await _check(
+        protector, "api/v1/knowledge/root-doc/download", profile=_SUPER
+    )
+    await _check(
+        protector, "api/v1/knowledge/root-doc", method="DELETE", profile=_SUPER
+    )
+    _remember_session(store, "private-session", ("kb-personal",))
+    _remember_session(store, "own-session", ("kb-root-personal",))
+    with pytest.raises(HTTPException) as denied:
+        await _check(
+            protector, "api/v1/messages/private-session/load", profile=_SUPER
+        )
+    assert denied.value.status_code == 403
+    await _check(protector, "api/v1/messages/own-session/load", profile=_SUPER)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [_ADMIN, _SUPER])
+async def test_native_kb_list_omits_unknown_and_other_private_libraries(
+    guard: tuple[AdminScopeGuard, GatewayStore], profile: UserProfile
+) -> None:
+    upstream = NativeAdminResponse(
+        200,
+        json.dumps(
+            {
+                "data": [
+                    {"id": "kb-public"},
+                    {"id": "kb-hr-public"},
+                    {"id": "kb-personal"},
+                    {"id": "kb-admin-personal"},
+                    {"id": "kb-root-personal"},
+                    {"id": "kb-unregistered"},
+                ]
+            }
+        ).encode(),
+        {"content-type": "application/json"},
+    )
+    filtered = await guard[0].filter_response(
+        profile, "api/v1/knowledge-bases", upstream
+    )
+    assert {row["id"] for row in json.loads(filtered.content)["data"]} == {
+        "kb-public",
+        "kb-hr-public",
+        f"kb-{profile.user_id}-personal",
+    }
+
+
+@pytest.mark.asyncio
+async def test_private_parameters_and_unknown_target_rejected_before_write(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    for body in (
+        {"target_kb_id": "kb-personal"},
+        {"target_kb_id": "kb-unregistered"},
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await _check(
+                guard[0],
+                "api/v1/knowledge/public-doc",
+                method="PUT",
+                body=body,
+            )
+        assert denied.value.status_code == 403

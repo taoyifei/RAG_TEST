@@ -125,14 +125,18 @@ class LibraryService:
 
     @property
     def public_kb_ids(self) -> tuple[str, ...]:
-        """读取当前已发布的公共范围，避免继续使用已撤销的旧绑定。"""
+        """读取有效公共绑定，个人及内部库即使误绑定也不能公开。"""
         candidates = (
             self._public_scope()
             if self._public_scope is not None
             else self._initial_public_kb_ids
         )
-        internal = self.hr_internal_kbs()
-        return tuple(kb_id for kb_id in candidates if kb_id not in internal)
+        private = self.hr_internal_kbs() | {
+            row["kb_id"]
+            for row in self.registered_kbs()
+            if row["scope"] == "personal"
+        }
+        return tuple(kb_id for kb_id in candidates if kb_id not in private)
 
     def hr_internal_kbs(self) -> frozenset[str]:
         """内部区即使误选进公共绑定，也不能按公共资料对外提供。"""
@@ -144,11 +148,49 @@ class LibraryService:
         return frozenset(row["kb_id"] for row in rows)
 
     def restricted_kbs(self, profile: UserProfile) -> tuple[str, ...]:
-        """普通管理员也不能通过后台记录读取人力内部资料。"""
+        """后台、记录与导出同样排除他人私库及当前无权访问的内部库。"""
+        candidates = self.hr_internal_kbs() | {
+            row["kb_id"] for row in self.registered_kbs()
+        }
+        return tuple(
+            sorted(
+                kb_id
+                for kb_id in candidates
+                if not self.can_read_kb(kb_id, profile)
+            )
+        )
+
+    @staticmethod
+    def can_manage_scope(scope: LibraryScope, profile: UserProfile) -> bool:
+        """资料区的写权限不由上传人或原生管理员身份推导。"""
+        if scope == "personal":
+            return True
+        if scope == "hr_internal":
+            return can_access_hr_internal(profile)
+        if scope == "hr_public":
+            return profile.role in {"admin", "hr"} or profile.is_super_admin
+        return profile.role == "admin" or profile.is_super_admin
+
+    @staticmethod
+    def _can_read_scope(scope: dict[str, Any], profile: UserProfile) -> bool:
+        if scope["scope"] == "personal":
+            return bool(scope["owner_id"] == profile.user_id)
+        if scope["scope"] == "hr_internal":
+            return can_access_hr_internal(profile)
+        return scope["scope"] in {"public", "hr_public"}
+
+    def can_read_kb(self, kb_id: str, profile: UserProfile) -> bool:
+        """库归属优先于公共绑定，超级管理员也没有他人私库读取特权。"""
+        scope = self._scope_for_kb(kb_id)
+        return scope is not None and self._can_read_scope(scope, profile)
+
+    def can_manage_kb(self, kb_id: str, profile: UserProfile) -> bool:
+        """读写使用同一归属，只有本人可以维护个人库。"""
+        scope = self._scope_for_kb(kb_id)
         return (
-            ()
-            if can_access_hr_internal(profile)
-            else tuple(sorted(self.hr_internal_kbs()))
+            scope is not None
+            and self._can_read_scope(scope, profile)
+            and self.can_manage_scope(scope["scope"], profile)
         )
 
     @staticmethod
@@ -176,7 +218,7 @@ class LibraryService:
         values = list(self.public_kb_ids) if "public" in scopes else []
         for row in self.registered_kbs():
             kind = row["scope"]
-            if (
+            if self._can_read_scope(row, profile) and (
                 (kind in {"public", "hr_public"} and "public" in scopes)
                 or (kind == "hr_public" and "hr_public" in scopes)
                 or (
@@ -243,16 +285,13 @@ class LibraryService:
             ]
 
     def readable_kbs(self, profile: UserProfile) -> tuple[str, ...]:
-        """每次问答根据当前角色确定检索范围，管理员问答也默认只用本人私库。"""
+        """每次问答重新核对资料归属，所有角色都只能检索本人私库。"""
         values = list(self.public_kb_ids)
-        for row in self.registered_kbs():
-            scope = row["scope"]
-            if (
-                scope in {"public", "hr_public"}
-                or (scope == "personal" and row["owner_id"] == profile.user_id)
-                or (scope == "hr_internal" and can_access_hr_internal(profile))
-            ):
-                values.append(row["kb_id"])
+        values.extend(
+            row["kb_id"]
+            for row in self.registered_kbs()
+            if self._can_read_scope(row, profile)
+        )
         return tuple(dict.fromkeys(values))
 
     def check_turn(self, profile: UserProfile, turn: dict[str, Any]) -> None:
@@ -271,12 +310,17 @@ class LibraryService:
             self.check_turn(profile, turn)
 
     def _scope_for_kb(self, kb_id: str) -> dict[str, Any] | None:
-        if kb_id in self.public_kb_ids:
-            return {"kb_id": kb_id, "scope": "public", "owner_id": ""}
-        return next(
+        registered = next(
             (row for row in self.registered_kbs() if row["kb_id"] == kb_id),
             None,
         )
+        if registered is not None:
+            return registered
+        if kb_id in self.hr_internal_kbs():
+            return {"kb_id": kb_id, "scope": "hr_internal", "owner_id": ""}
+        if kb_id in self.public_kb_ids:
+            return {"kb_id": kb_id, "scope": "public", "owner_id": ""}
+        return None
 
     def _record(self, native_id: str) -> dict[str, Any] | None:
         with self._connections.transaction() as connection:
@@ -397,36 +441,17 @@ class LibraryService:
         *,
         write: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """所有文件操作先校验知识库归属，系统管理员可管理已登记的个人库。"""
+        """文件、原件、引用及修改均按资料区和本人归属核对，不绕过超管。"""
         item = await self._knowledge(native_id)
         kb_id = str(item.get("knowledge_base_id", ""))
         scope = self._scope_for_kb(kb_id)
         if scope is None:
             raise HTTPException(404, "资料不存在。")
-        if scope["scope"] == "hr_internal":
-            self._check_scope("hr_internal", profile)
-        if profile.role != "admin" and kb_id not in self.readable_kbs(profile):
+        if not self._can_read_scope(scope, profile):
             raise HTTPException(403, "没有访问这份资料的权限。")
-        if write and not self._can_manage(item, scope, profile):
-            raise HTTPException(403, "只能维护自己的资料或授权的人力资料。")
+        if write and not self.can_manage_kb(kb_id, profile):
+            raise HTTPException(403, "没有维护这份资料的权限。")
         return item, scope
-
-    def _can_manage(
-        self,
-        item: dict[str, Any],
-        scope: dict[str, Any],
-        profile: UserProfile,
-    ) -> bool:
-        if scope["scope"] == "hr_internal":
-            return can_access_hr_internal(profile)
-        if profile.role == "admin":
-            return True
-        if scope["scope"] in {"hr_public", "hr_internal"}:
-            return profile.role == "hr"
-        if scope["scope"] == "personal":
-            return bool(scope["owner_id"] == profile.user_id)
-        record = self._record(item["id"])
-        return bool(record and record["owner_id"] == profile.user_id)
 
     async def _scope_kb(
         self,
@@ -516,11 +541,6 @@ class LibraryService:
     def _check_scope(scope: LibraryScope, profile: UserProfile) -> None:
         if scope == "hr_internal" and not can_access_hr_internal(profile):
             raise HTTPException(403, "人力内部资料仅限人力和超级管理员访问。")
-        if scope == "hr_public" and profile.role not in {
-            "admin",
-            "hr",
-        }:
-            raise HTTPException(403, "该资料区仅供人力角色使用。")
 
     async def list_documents(
         self,
@@ -566,9 +586,7 @@ class LibraryService:
                             "error": "解析失败，请重试。"
                             if item.get("parse_status") == "failed"
                             else None,
-                            "can_manage": self._can_manage(
-                                item, kb_scope, profile
-                            )
+                            "can_manage": self.can_manage_kb(kb_id, profile)
                             if kb_scope
                             else False,
                         }
@@ -580,9 +598,9 @@ class LibraryService:
                 page += 1
         return {
             "scope": scope,
-            "can_manage": scope == "personal"
-            or profile.role == "admin"
-            or (profile.role == "hr" and scope in {"hr_public", "hr_internal"}),
+            "can_manage": self.can_manage_scope(scope, profile),
+            "can_share": scope == "personal"
+            and self.can_manage_scope("public", profile),
             "items": items,
         }
 
@@ -597,8 +615,8 @@ class LibraryService:
     ) -> dict[str, Any]:
         """上传到服务端决定的目标库，共享副本必须由当前用户已授权的原件产生。"""
         self._check_scope(scope, profile)
-        if scope == "public" and profile.role != "admin" and source_id is None:
-            raise HTTPException(403, "请先上传个人资料，再主动共享给全员。")
+        if not self.can_manage_scope(scope, profile):
+            raise HTTPException(403, "没有向该资料区新增资料的权限。")
         filename = (
             filename.replace("\\", "/")
             .rsplit("/", 1)[-1]
@@ -668,10 +686,11 @@ class LibraryService:
         return self._document_locks.setdefault(lock_id, asyncio.Lock())
 
     async def delete(self, native_id: str, profile: UserProfile) -> None:
-        """删除原件时撤回公开副本，与共享操作使用同一把原件锁。"""
+        """删除本人原件不授予公共区写权限，已有公共副本由管理员维护。"""
         async with self._document_lock(native_id):
             await self.document(native_id, profile, write=True)
-            await self._unshare_locked(native_id)
+            if self.can_manage_scope("public", profile):
+                await self._unshare_locked(native_id)
             await self._delete_native(native_id)
             self._forget(native_id)
 
@@ -679,6 +698,8 @@ class LibraryService:
         self, native_id: str, profile: UserProfile
     ) -> dict[str, Any]:
         """显式发布个人原件副本，不扩大整个个人知识库的权限。"""
+        if not self.can_manage_scope("public", profile):
+            raise HTTPException(403, "只有管理员和超级管理员可以发布公共资料。")
         async with self._document_lock(native_id):
             item, scope = await self.document(native_id, profile, write=True)
             if scope["scope"] != "personal":
@@ -698,6 +719,8 @@ class LibraryService:
 
     async def unshare(self, native_id: str, profile: UserProfile) -> None:
         """撤回共享保留原件，已被阅读的回答不作伪造性抹除。"""
+        if not self.can_manage_scope("public", profile):
+            raise HTTPException(403, "只有管理员和超级管理员可以撤回公共资料。")
         async with self._document_lock(native_id):
             await self.document(native_id, profile, write=True)
             await self._unshare_locked(native_id)

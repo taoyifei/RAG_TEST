@@ -24,8 +24,10 @@ from wanshitong_gateway.roles import UserProfile
 from wanshitong_gateway.weknora.admin import NativeAdminClient
 
 _ALICE = UserProfile("a", "alice", "甲", None, "user")
+_PUBLISHER = replace(_ALICE, role="admin")
 _BOB = UserProfile("b", "bob", "乙", None, "user")
 _HR = UserProfile("h", "hr", "人力", "42", "hr")
+_SUPER = UserProfile("root", "root", "超级管理员", None, "admin", True)
 _SERVICE_KEY = "synthetic-key"
 
 
@@ -300,15 +302,15 @@ async def test_shared_pdf_keeps_builtin_override_without_changing_other_uploads(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:
     service, native, _ = library
-    original = await service.upload("personal", _ALICE, "guide.pdf", b"pdf")
-    published = await service.share(original["id"], _ALICE)
+    original = await service.upload("personal", _PUBLISHER, "guide.pdf", b"pdf")
+    published = await service.share(original["id"], _PUBLISHER)
     fields = native.upload_fields[published["id"]]
     assert (
         json.loads(fields["process_config"])["parser_engine_rules"][0]["engine"]
         == "builtin"
     )
     assert json.loads(fields["metadata"])["wxd_source_id"] == original["id"]
-    markdown = await service.upload("personal", _ALICE, "guide.md", b"text")
+    markdown = await service.upload("personal", _PUBLISHER, "guide.md", b"text")
     assert "process_config" not in native.upload_fields[markdown["id"]]
 
 
@@ -328,7 +330,6 @@ async def test_hr_public_qa_read_does_not_grant_maintenance(
     assert (await service.download(identifier, _ALICE)).content == b"policy"
 
     for operation in (
-        lambda: service.list_documents("hr_public", _ALICE),
         lambda: service.upload("hr_public", _ALICE, "new.md", b"new-policy"),
         lambda: service.document(identifier, _ALICE, write=True),
         lambda: service.delete(identifier, _ALICE),
@@ -416,10 +417,12 @@ async def test_share_withdraw_and_delete_keep_private_original(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:
     service, native, _ = library
-    original = await service.upload("personal", _ALICE, "one.txt", b"private")
+    original = await service.upload(
+        "personal", _PUBLISHER, "one.txt", b"private"
+    )
     shared = await asyncio.gather(
-        service.share(original["id"], _ALICE),
-        service.share(original["id"], _ALICE),
+        service.share(original["id"], _PUBLISHER),
+        service.share(original["id"], _PUBLISHER),
     )
     assert shared[0]["id"] == shared[1]["id"]
     published_id = shared[0]["id"]
@@ -427,21 +430,24 @@ async def test_share_withdraw_and_delete_keep_private_original(
     with pytest.raises(HTTPException) as denied:
         await service.delete(published_id, _BOB)
     assert denied.value.status_code == 403
-    await service.unshare(original["id"], _ALICE)
+    await service.unshare(original["id"], _PUBLISHER)
     assert published_id not in native.documents
     assert original["id"] in native.documents
-    assert (await service.list_documents("personal", _ALICE))["items"][0][
+    assert (await service.list_documents("personal", _PUBLISHER))["items"][0][
         "shared"
     ] is False
-    await service.share(original["id"], _ALICE)
-    await service.delete(original["id"], _ALICE)
+    await service.share(original["id"], _PUBLISHER)
+    await service.delete(original["id"], _PUBLISHER)
     assert native.documents == {}
 
 
 class _Auth:
+    def __init__(self, profile: UserProfile = _ALICE) -> None:
+        self.profile = profile
+
     def require_profile(self, request: Request) -> UserProfile:
         del request
-        return _ALICE
+        return self.profile
 
 
 @pytest.mark.asyncio
@@ -479,13 +485,15 @@ async def test_delete_serializes_with_inflight_share(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:
     service, native, _ = library
-    original = await service.upload("personal", _ALICE, "one.txt", b"private")
+    original = await service.upload(
+        "personal", _PUBLISHER, "one.txt", b"private"
+    )
     await asyncio.gather(
-        service.share(original["id"], _ALICE),
-        service.delete(original["id"], _ALICE),
+        service.share(original["id"], _PUBLISHER),
+        service.delete(original["id"], _PUBLISHER),
     )
     assert native.documents == {}
-    assert (await service.list_documents("personal", _ALICE))["items"] == []
+    assert (await service.list_documents("personal", _PUBLISHER))["items"] == []
     assert (await service.list_documents("public", _BOB))["items"] == []
 
 
@@ -495,18 +503,20 @@ async def test_unshare_waits_until_async_delete_is_no_longer_downloadable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, native, _ = library
-    original = await service.upload("personal", _ALICE, "one.txt", b"private")
-    published = await service.share(original["id"], _ALICE)
+    original = await service.upload(
+        "personal", _PUBLISHER, "one.txt", b"private"
+    )
+    published = await service.share(original["id"], _PUBLISHER)
     published_id = published["id"]
     native.deferred_deletes[published_id] = 2
     monkeypatch.setattr(library_module, "_DELETE_POLL_SECONDS", 0.0)
-    await service.unshare(original["id"], _ALICE)
+    await service.unshare(original["id"], _PUBLISHER)
     assert published_id not in native.documents
     assert original["id"] in native.documents
     with pytest.raises(HTTPException) as gone:
         await service.download(published_id, _BOB)
     assert gone.value.status_code == 404
-    assert (await service.list_documents("personal", _ALICE))["items"][0][
+    assert (await service.list_documents("personal", _PUBLISHER))["items"][0][
         "shared"
     ] is False
 
@@ -517,20 +527,22 @@ async def test_unshare_timeout_keeps_mapping_until_retry_confirms_deleted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, native, _ = library
-    original = await service.upload("personal", _ALICE, "one.txt", b"private")
-    published = await service.share(original["id"], _ALICE)
+    original = await service.upload(
+        "personal", _PUBLISHER, "one.txt", b"private"
+    )
+    published = await service.share(original["id"], _PUBLISHER)
     native.deferred_deletes[published["id"]] = 10
     monkeypatch.setattr(library_module, "_DELETE_TIMEOUT_SECONDS", 0.0)
     with pytest.raises(HTTPException) as pending:
-        await service.unshare(original["id"], _ALICE)
+        await service.unshare(original["id"], _PUBLISHER)
     assert pending.value.status_code == 502
     assert "撤回仍处理中" in pending.value.detail
-    assert (await service.list_documents("personal", _ALICE))["items"][0][
+    assert (await service.list_documents("personal", _PUBLISHER))["items"][0][
         "shared"
     ] is True
     native.documents.pop(published["id"])
-    await service.unshare(original["id"], _ALICE)
-    assert (await service.list_documents("personal", _ALICE))["items"][0][
+    await service.unshare(original["id"], _PUBLISHER)
+    assert (await service.list_documents("personal", _PUBLISHER))["items"][0][
         "shared"
     ] is False
     assert original["id"] in native.documents
@@ -557,8 +569,8 @@ async def test_upload_recovers_deleted_kb_without_removing_other_data(
     library: tuple[LibraryService, _Native, list[str]],
 ) -> None:
     service, native, _ = library
-    original = await service.upload("personal", _ALICE, "one.txt", b"alice")
-    published = await service.share(original["id"], _ALICE)
+    original = await service.upload("personal", _PUBLISHER, "one.txt", b"alice")
+    published = await service.share(original["id"], _PUBLISHER)
     other = await service.upload("personal", _BOB, "two.txt", b"bob")
     deleted_kb_id = native.documents[original["id"]]["knowledge_base_id"]
     other_kb_id = native.documents[other["id"]]["knowledge_base_id"]
@@ -566,11 +578,11 @@ async def test_upload_recovers_deleted_kb_without_removing_other_data(
     native.kbs.pop(deleted_kb_id)
     native.documents.pop(original["id"])
 
-    uploaded = await service.upload("personal", _ALICE, "new.txt", b"new")
+    uploaded = await service.upload("personal", _PUBLISHER, "new.txt", b"new")
     new_kb_id = native.documents[uploaded["id"]]["knowledge_base_id"]
     assert new_kb_id != deleted_kb_id
-    assert deleted_kb_id not in service.readable_kbs(_ALICE)
-    assert new_kb_id in service.readable_kbs(_ALICE)
+    assert deleted_kb_id not in service.readable_kbs(_PUBLISHER)
+    assert new_kb_id in service.readable_kbs(_PUBLISHER)
     assert set(native.key_scope) == previous_scope - {deleted_kb_id} | {
         new_kb_id
     }
@@ -618,3 +630,173 @@ async def test_kb_recovery_keeps_old_registry_until_key_update_succeeds(
     assert new_kb_id in service.readable_kbs(_ALICE)
     assert old_kb_id not in service.readable_kbs(_ALICE)
     assert old_kb_id not in native.key_scope
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [_ALICE, _PUBLISHER, _HR, _SUPER])
+@pytest.mark.parametrize(
+    "scope", ["public", "hr_public", "hr_internal", "personal"]
+)
+async def test_library_role_matrix_checks_read_download_and_writes(
+    library: tuple[LibraryService, _Native, list[str]],
+    profile: UserProfile,
+    scope: library_module.LibraryScope,
+) -> None:
+    service, native, _ = library
+    creator = profile if scope == "personal" else _SUPER
+    original = await service.upload(scope, creator, "matrix.txt", b"matrix")
+    identifier = original["id"]
+    kb_id = native.documents[identifier]["knowledge_base_id"]
+    may_read = scope != "hr_internal" or profile in {_HR, _SUPER}
+    may_write = (
+        scope == "personal"
+        or (scope == "public" and profile in {_PUBLISHER, _SUPER})
+        or (scope == "hr_public" and profile in {_PUBLISHER, _HR, _SUPER})
+        or (scope == "hr_internal" and profile in {_HR, _SUPER})
+    )
+    assert service.can_read_kb(kb_id, profile) is may_read
+    assert service.can_manage_kb(kb_id, profile) is may_write
+    assert service.can_manage_scope(scope, profile) is may_write
+
+    if may_read:
+        listing = await service.list_documents(scope, profile)
+        assert listing["can_manage"] is may_write
+        assert listing["can_share"] is (
+            scope == "personal" and profile in {_PUBLISHER, _SUPER}
+        )
+        listed = next(
+            item for item in listing["items"] if item["id"] == identifier
+        )
+        assert listed["can_manage"] is may_write
+        assert (
+            await service.download(identifier, profile)
+        ).content == b"matrix"
+    else:
+        for operation in (
+            lambda: service.list_documents(scope, profile),
+            lambda: service.download(identifier, profile),
+        ):
+            with pytest.raises(HTTPException) as denied:
+                await operation()
+            assert denied.value.status_code == 403
+
+    app = FastAPI()
+    register_library_routes(app, cast(GatewayAuth, _Auth(profile)), service)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as browser:
+        retry = await browser.post(f"/api/public/library/{identifier}/retry")
+        assert retry.status_code == (200 if may_write else 403)
+        uploaded = await browser.post(
+            "/api/public/library",
+            files={"file": ("new.txt", b"new")},
+            data={"scope": scope},
+        )
+        assert uploaded.status_code == (200 if may_write else 403)
+        deleted = await browser.delete(f"/api/public/library/{identifier}")
+        assert deleted.status_code == (200 if may_write else 403)
+    assert (identifier in native.documents) is not may_write
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [_ALICE, _PUBLISHER, _HR, _SUPER])
+async def test_no_role_can_access_another_users_personal_documents(
+    library: tuple[LibraryService, _Native, list[str]],
+    profile: UserProfile,
+) -> None:
+    service, native, binding = library
+    original = await service.upload("personal", _BOB, "private.txt", b"private")
+    identifier = original["id"]
+    kb_id = native.documents[identifier]["knowledge_base_id"]
+    # 误把私库加入公共绑定也不能改变原来的个人归属。
+    binding.append(kb_id)
+    assert kb_id not in service.public_kb_ids
+    assert kb_id not in service.readable_kbs(profile)
+    assert kb_id in service.restricted_kbs(profile)
+    assert not service.can_read_kb(kb_id, profile)
+    assert not service.can_manage_kb(kb_id, profile)
+    assert not service.can_read_kb("unregistered-kb", profile)
+    assert not service.can_manage_kb("unregistered-kb", profile)
+    assert kb_id not in service.search_kbs(profile, ("public", "personal"))
+    assert (await service.list_documents("personal", profile))["items"] == []
+    assert (await service.list_documents("public", profile))["items"] == []
+
+    for operation in (
+        lambda: service.document(identifier, profile),
+        lambda: service.download(identifier, profile),
+        lambda: service.delete(identifier, profile),
+        lambda: service.share(identifier, profile),
+        lambda: service.unshare(identifier, profile),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await operation()
+        assert denied.value.status_code == 403
+    with pytest.raises(HTTPException) as denied:
+        service.check_turn(profile, {"kb_scope_json": json.dumps([kb_id])})
+    assert denied.value.status_code == 403
+    app = FastAPI()
+    register_library_routes(app, cast(GatewayAuth, _Auth(profile)), service)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as browser:
+        retry = await browser.post(f"/api/public/library/{identifier}/retry")
+    assert retry.status_code == 403
+    assert native.retries == 0
+    assert (await service.download(identifier, _BOB)).content == b"private"
+    assert service._scope_for_kb(kb_id)["scope"] == "personal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [_ALICE, _HR])
+async def test_public_upload_cannot_be_bypassed_by_sharing_or_source_id(
+    library: tuple[LibraryService, _Native, list[str]],
+    profile: UserProfile,
+) -> None:
+    service, native, _ = library
+    original = await service.upload(
+        "personal", profile, "private.txt", b"private"
+    )
+    identifier = original["id"]
+    previous_documents = set(native.documents)
+    for operation in (
+        lambda: service.upload("public", profile, "new.txt", b"new"),
+        lambda: service.upload(
+            "public", profile, "new.txt", b"new", source_id=identifier
+        ),
+        lambda: service.share(identifier, profile),
+        lambda: service.unshare(identifier, profile),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await operation()
+        assert denied.value.status_code == 403
+    assert set(native.documents) == previous_documents
+    assert (await service.list_documents("personal", profile))[
+        "can_share"
+    ] is False
+
+
+@pytest.mark.asyncio
+async def test_downgraded_publisher_can_only_delete_private_original(
+    library: tuple[LibraryService, _Native, list[str]],
+) -> None:
+    service, native, _ = library
+    original = await service.upload(
+        "personal", _PUBLISHER, "one.txt", b"private"
+    )
+    published = await service.share(original["id"], _PUBLISHER)
+    public_id = published["id"]
+    for operation in (
+        lambda: service.delete(public_id, _ALICE),
+        lambda: service.share(original["id"], _ALICE),
+        lambda: service.unshare(original["id"], _ALICE),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await operation()
+        assert denied.value.status_code == 403
+    assert (await service.download(public_id, _ALICE)).content == b"private"
+    await service.delete(original["id"], _ALICE)
+    assert original["id"] not in native.documents
+    assert public_id in native.documents
+    assert (await service.download(public_id, _BOB)).content == b"private"
+    await service.delete(public_id, _SUPER)
+    assert public_id not in native.documents

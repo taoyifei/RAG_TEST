@@ -140,73 +140,264 @@ describe("用户资料和角色", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("普通用户上传资料默认放入个人区，随后可以共享和取消共享", async () => {
-    let uploaded = false;
-    let shared = false;
-    const fetch = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation((input, init) => {
-        const path = requestPath(input);
-        if (path.startsWith("/api/public/library?")) {
-          return Promise.resolve(
-            Response.json({
-              scope: "personal",
+  it.each([
+    { label: "管理员", isSuperAdmin: false },
+    { label: "超级管理员", isSuperAdmin: true },
+  ])(
+    "$label 上传自己的个人资料后可以共享和取消共享",
+    async ({ isSuperAdmin }) => {
+      let uploaded = false;
+      let shared = false;
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation((input, init) => {
+          const path = requestPath(input);
+          if (path.startsWith("/api/public/library?")) {
+            return Promise.resolve(
+              Response.json({
+                scope: "personal",
+                can_manage: true,
+                can_share: true,
+                items: uploaded
+                  ? [
+                      {
+                        id: "doc-1",
+                        title: "个人笔记.txt",
+                        status: "completed",
+                        created_at: "2026-10-29T01:00:00Z",
+                        size: 20,
+                        shared,
+                      },
+                    ]
+                  : [],
+              }),
+            );
+          }
+          if (path === "/api/public/library" && init?.method === "POST") {
+            expect((init.body as FormData).get("scope")).toBe("personal");
+            expect((init.body as FormData).get("file")).toBeInstanceOf(File);
+            expect(init.headers).toEqual({ "X-CSRF-Token": "csrf-token" });
+            uploaded = true;
+            return Promise.resolve(new Response(null, { status: 201 }));
+          }
+          if (path === "/api/public/library/doc-1/share") {
+            expect(init?.headers).toEqual({ "X-CSRF-Token": "csrf-token" });
+            shared = init?.method === "POST";
+            return Promise.resolve(new Response(null, { status: 204 }));
+          }
+          throw new Error(`unexpected request: ${path}`);
+        });
+      const user = userEvent.setup();
+      render(
+        <LibraryWorkspace
+          userRole="admin"
+          isSuperAdmin={isSuperAdmin}
+          getCsrfToken={() => "csrf-token"}
+          onBack={() => undefined}
+        />,
+      );
+      await screen.findByText(/这里还没有资料/);
+      await user.upload(
+        screen.getByLabelText("选择上传资料"),
+        new File(["内部笔记"], "个人笔记.txt", { type: "text/plain" }),
+      );
+      await screen.findByText("个人笔记.txt");
+      await user.click(screen.getByRole("button", { name: "共享给全员" }));
+      await screen.findByRole("button", { name: "取消共享" });
+      await user.click(screen.getByRole("button", { name: "取消共享" }));
+      await screen.findByRole("button", { name: "共享给全员" });
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/public/library/doc-1/share",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    },
+  );
+
+  it.each([
+    { label: "普通员工", userRole: "user" as const, canShare: undefined },
+    { label: "普通员工", userRole: "user" as const, canShare: false },
+    { label: "人力角色", userRole: "hr" as const, canShare: false },
+  ])(
+    "$label 可以维护自己的个人资料，但没有公共发布权限时不显示共享入口（$canShare）",
+    async ({ userRole, canShare }) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        Response.json({
+          scope: "personal",
+          can_manage: true,
+          can_share: canShare,
+          items: [
+            {
+              id: "private-ready",
+              title: "个人笔记.txt",
+              status: "completed",
+              created_at: "2026-11-04",
+              size: 20,
+              shared: false,
               can_manage: true,
-              items: uploaded
+            },
+            {
+              id: "private-shared",
+              title: "旧共享原件.txt",
+              status: "failed",
+              created_at: "2026-11-04",
+              size: 20,
+              shared: true,
+              can_manage: true,
+            },
+          ],
+        }),
+      );
+      render(
+        <LibraryWorkspace
+          userRole={userRole}
+          getCsrfToken={() => "csrf"}
+          onBack={() => undefined}
+        />,
+      );
+      await screen.findByText("个人笔记.txt");
+      expect(screen.getByRole("button", { name: "上传资料" })).toBeEnabled();
+      expect(screen.getAllByRole("button", { name: "删除" })).toHaveLength(2);
+      expect(screen.getByRole("button", { name: "重试" })).toBeEnabled();
+      expect(screen.getAllByRole("button", { name: "下载" })).toHaveLength(2);
+      expect(screen.queryByRole("button", { name: "共享给全员" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "取消共享" })).toBeNull();
+      expect(
+        screen.getByText(
+          "仅本人可查看、检索、下载和维护；管理员和超级管理员也不能访问他人的个人资料。",
+        ),
+      ).toBeVisible();
+    },
+  );
+
+  it.each([
+    {
+      label: "普通员工",
+      userRole: "user" as const,
+      isSuperAdmin: false,
+      scope: "public",
+      canManage: false,
+    },
+    {
+      label: "人力角色",
+      userRole: "hr" as const,
+      isSuperAdmin: false,
+      scope: "public",
+      canManage: false,
+    },
+    {
+      label: "管理员",
+      userRole: "admin" as const,
+      isSuperAdmin: false,
+      scope: "public",
+      canManage: true,
+    },
+    {
+      label: "超级管理员",
+      userRole: "admin" as const,
+      isSuperAdmin: true,
+      scope: "public",
+      canManage: true,
+    },
+    {
+      label: "普通员工",
+      userRole: "user" as const,
+      isSuperAdmin: false,
+      scope: "hr_public",
+      canManage: false,
+    },
+    {
+      label: "人力角色",
+      userRole: "hr" as const,
+      isSuperAdmin: false,
+      scope: "hr_public",
+      canManage: true,
+    },
+    {
+      label: "管理员",
+      userRole: "admin" as const,
+      isSuperAdmin: false,
+      scope: "hr_public",
+      canManage: true,
+    },
+    {
+      label: "超级管理员",
+      userRole: "admin" as const,
+      isSuperAdmin: true,
+      scope: "hr_public",
+      canManage: true,
+    },
+    {
+      label: "人力角色",
+      userRole: "hr" as const,
+      isSuperAdmin: false,
+      scope: "hr_internal",
+      canManage: true,
+    },
+    {
+      label: "超级管理员",
+      userRole: "admin" as const,
+      isSuperAdmin: true,
+      scope: "hr_internal",
+      canManage: true,
+    },
+  ])(
+    "$label 的 $scope 区域始终可下载，维护按钮跟随服务端权限（$canManage）",
+    async ({ userRole, isSuperAdmin, scope, canManage }) => {
+      vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+        const selectedScope = new URL(
+          requestPath(input),
+          "http://localhost",
+        ).searchParams.get("scope");
+        return Promise.resolve(
+          Response.json({
+            scope: selectedScope,
+            can_manage: selectedScope === scope ? canManage : true,
+            can_share: false,
+            items:
+              selectedScope === scope
                 ? [
                     {
-                      id: "doc-1",
-                      title: "个人笔记.txt",
-                      status: "completed",
-                      created_at: "2026-10-29T01:00:00Z",
+                      id: "policy",
+                      title: "制度资料.pdf",
+                      status: "failed",
+                      created_at: "2026-11-04",
                       size: 20,
-                      shared,
+                      shared: false,
+                      can_manage: canManage,
                     },
                   ]
                 : [],
-            }),
-          );
-        }
-        if (path === "/api/public/library" && init?.method === "POST") {
-          expect((init.body as FormData).get("scope")).toBe("personal");
-          expect((init.body as FormData).get("file")).toBeInstanceOf(File);
-          expect(init.headers).toEqual({ "X-CSRF-Token": "csrf-token" });
-          uploaded = true;
-          return Promise.resolve(new Response(null, { status: 201 }));
-        }
-        if (path === "/api/public/library/doc-1/share") {
-          expect(init?.headers).toEqual({ "X-CSRF-Token": "csrf-token" });
-          shared = init?.method === "POST";
-          return Promise.resolve(new Response(null, { status: 204 }));
-        }
-        throw new Error(`unexpected request: ${path}`);
+          }),
+        );
       });
-    const user = userEvent.setup();
-    render(
-      <LibraryWorkspace
-        userRole="user"
-        getCsrfToken={() => "csrf-token"}
-        onBack={() => undefined}
-      />,
-    );
-    await screen.findByText(/这里还没有资料/);
-    expect(
-      screen.queryByRole("button", { name: "人力内部资料" }),
-    ).not.toBeInTheDocument();
-    await user.upload(
-      screen.getByLabelText("选择上传资料"),
-      new File(["内部笔记"], "个人笔记.txt", { type: "text/plain" }),
-    );
-    await screen.findByText("个人笔记.txt");
-    await user.click(screen.getByRole("button", { name: "共享给全员" }));
-    await screen.findByRole("button", { name: "取消共享" });
-    await user.click(screen.getByRole("button", { name: "取消共享" }));
-    await screen.findByRole("button", { name: "共享给全员" });
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/public/library/doc-1/share",
-      expect.objectContaining({ method: "DELETE" }),
-    );
-  });
+      const user = userEvent.setup();
+      render(
+        <LibraryWorkspace
+          userRole={userRole}
+          isSuperAdmin={isSuperAdmin}
+          getCsrfToken={() => "csrf"}
+          onBack={() => undefined}
+        />,
+      );
+      const title =
+        scope === "public"
+          ? "公共资料"
+          : scope === "hr_public"
+            ? "公开人力制度"
+            : "人力内部资料";
+      await user.click(screen.getByRole("button", { name: title }));
+      await screen.findByText("制度资料.pdf");
+      expect(screen.getByRole("button", { name: "下载" })).toBeEnabled();
+      for (const name of ["上传资料", "重试", "删除"]) {
+        if (canManage) {
+          expect(screen.getByRole("button", { name })).toBeEnabled();
+        } else {
+          expect(screen.queryByRole("button", { name })).toBeNull();
+        }
+      }
+      expect(screen.queryByRole("button", { name: "共享给全员" })).toBeNull();
+    },
+  );
 
   it("人力可以切换到独立内部区上传，公共资料浏览不显示上传按钮", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {

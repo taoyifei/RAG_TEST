@@ -298,6 +298,33 @@ def _app(
     )
 
 
+@pytest.mark.parametrize("owner_id", ["root", "other-owner"])
+def test_even_super_admin_cannot_publish_a_personal_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner_id: str
+) -> None:
+    monkeypatch.setattr(gateway_app, "register_auth_routes", lambda *_: None)
+    state = _NativeState()
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    profile = UserProfile("root", "root", "超级管理员", None, "admin", True)
+    app = _app(tmp_path, state, store, profile)
+    with sqlite3.connect(tmp_path / "gateway.sqlite3") as connection:
+        connection.execute(
+            "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES (?,?,?)",
+            ("private-kb", "personal", owner_id),
+        )
+    with TestClient(app) as browser:
+        response = browser.put(
+            "/kb/api/admin/public-app",
+            json=_save_body(
+                revision=0, model_id="model-a", kb_ids=["private-kb"]
+            ),
+        )
+    assert response.status_code == 403
+    assert "个人资料库" in response.json()["detail"]
+    assert not state.requests
+    assert store.public_app(deployment_id="candidate") is None
+
+
 class _ScopeNativeState(_NativeState):
     """提供私库解析状态和历史接口，直接检查最终原生检索目标。"""
 

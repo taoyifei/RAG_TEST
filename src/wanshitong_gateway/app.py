@@ -453,6 +453,11 @@ def create_app(  # noqa: PLR0913, PLR0915
             kb_ids = body.kb_ids()
             if library.hr_internal_kbs().intersection(kb_ids):
                 raise HTTPException(403, "人力内部资料不能发布到公共知识库。")
+            if any(
+                row["scope"] == "personal" and row["kb_id"] in kb_ids
+                for row in library.registered_kbs()
+            ):
+                raise HTTPException(403, "个人资料库不能发布到公共知识库。")
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         async with public_app_save_lock:

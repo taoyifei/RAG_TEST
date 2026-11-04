@@ -25,15 +25,17 @@ import { PublicApiError } from "./publicApi";
 const SCOPES: Record<LibraryScope, { title: string; description: string }> = {
   personal: {
     title: "个人资料",
-    description: "默认仅本人可检索；共享后全员可检索。系统管理员可后台管理。",
+    description:
+      "仅本人可查看、检索、下载和维护；管理员和超级管理员也不能访问他人的个人资料。",
   },
   public: {
     title: "公共资料",
-    description: "全员可检索的公共制度、操作指引和已共享资料。",
+    description: "所有同事可查看、检索和下载，由管理员和超级管理员维护。",
   },
   hr_public: {
     title: "公开人力制度",
-    description: "由人力维护，所有同事均可检索的人力制度。",
+    description:
+      "所有同事可查看、检索和下载，由管理员、人力角色和超级管理员维护。",
   },
   hr_internal: {
     title: "人力内部资料",
@@ -90,7 +92,7 @@ export function LibraryWorkspace({
   const scopes: LibraryScope[] = [
     "personal",
     "public",
-    ...(userRole !== "user" ? ["hr_public" as const] : []),
+    "hr_public",
     ...(userRole === "hr" || isSuperAdmin ? ["hr_internal" as const] : []),
   ];
   const visibleScope = scopes.includes(scope) ? scope : "personal";
@@ -443,6 +445,7 @@ function LibraryListing({
                           </button>
                         )}
                         {canManage &&
+                          data.can_share === true &&
                           scope === "personal" &&
                           (item.shared || READY_STATES.has(item.status)) && (
                             <button

@@ -20,6 +20,7 @@ export interface LibraryDocument {
 export interface LibraryResponse {
   scope: LibraryScope;
   can_manage: boolean;
+  can_share?: boolean;
   items: LibraryDocument[];
 }
 
