@@ -298,6 +298,45 @@ def _app(
     )
 
 
+@pytest.mark.parametrize("owner_id", ["root", "other-owner"])
+@pytest.mark.parametrize("historical", [False, True])
+def test_even_super_admin_cannot_publish_a_personal_library(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner_id: str,
+    historical: bool,
+) -> None:
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda *_args, **_kwargs: None
+    )
+    state = _NativeState()
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    profile = UserProfile("root", "root", "超级管理员", None, "admin", True)
+    app = _app(tmp_path, state, store, profile)
+    with sqlite3.connect(tmp_path / "gateway.sqlite3") as connection:
+        if historical:
+            connection.execute(
+                "INSERT INTO library_personal_kbs(kb_id,owner_id) VALUES (?,?)",
+                ("private-kb", owner_id),
+            )
+        else:
+            connection.execute(
+                "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES (?,?,?)",
+                ("private-kb", "personal", owner_id),
+            )
+    with TestClient(app) as browser:
+        response = browser.put(
+            "/kb/api/admin/public-app",
+            json=_save_body(
+                revision=0, model_id="model-a", kb_ids=["private-kb"]
+            ),
+        )
+    assert response.status_code == 403
+    assert "个人资料库" in response.json()["detail"]
+    assert not state.requests
+    assert store.public_app(deployment_id="candidate") is None
+
+
 class _ScopeNativeState(_NativeState):
     """提供私库解析状态和历史接口，直接检查最终原生检索目标。"""
 
@@ -330,7 +369,9 @@ class _ScopeNativeState(_NativeState):
 def _scope_browser(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: UserProfile
 ) -> tuple[TestClient, _ScopeNativeState, GatewayStore]:
-    monkeypatch.setattr(gateway_app, "register_auth_routes", lambda *_: None)
+    monkeypatch.setattr(
+        gateway_app, "register_auth_routes", lambda *_args, **_kwargs: None
+    )
     state = _ScopeNativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
     app = _app(tmp_path, state, store, profile)
@@ -346,6 +387,33 @@ def _scope_browser(
             ],
         )
     return TestClient(app), state, store
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [
+        UserProfile("u1", "u1", "普通用户", None, "user"),
+        UserProfile("u1", "u1", "人力", None, "hr"),
+        UserProfile("u1", "u1", "管理员", None, "admin"),
+        UserProfile("u1", "u1", "超级管理员", None, "admin", True),
+    ],
+)
+def test_app_disables_personal_sharing_for_every_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: UserProfile
+) -> None:
+    browser, state, _store = _scope_browser(tmp_path, monkeypatch, profile)
+    with browser:
+        listed = browser.get("/kb/api/public/library?scope=personal")
+        assert listed.status_code == 200
+        assert listed.json()["can_share"] is False
+        before = len(state.requests)
+        for method in ("POST", "DELETE"):
+            response = browser.request(
+                method, "/kb/api/public/library/scoped-document/share"
+            )
+            assert response.status_code == 403
+            assert "暂未开放" in response.json()["detail"]
+        assert len(state.requests) == before
 
 
 @pytest.mark.parametrize(
@@ -799,7 +867,7 @@ def test_custom_intent_prompts_survive_save_readback_and_page_edit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -844,7 +912,7 @@ def test_invalid_intent_override_does_not_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, custom: dict[str, str]
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -861,7 +929,7 @@ def test_publish_model_and_kb_changes_next_public_chat(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -986,7 +1054,7 @@ def test_publish_rejects_conflicts_key_mismatch_and_partial_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -1059,7 +1127,7 @@ def test_publish_requires_scoped_key_and_prompt_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -1084,7 +1152,7 @@ def test_publish_does_not_replace_agent_when_intent_templates_are_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     state.missing_intent_template = True
@@ -1113,7 +1181,7 @@ def test_loading_existing_prompt_uses_new_public_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first_line: str
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -1134,7 +1202,7 @@ def test_drift_requires_explicit_rebuild_without_reusing_old_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")
@@ -1174,7 +1242,7 @@ def test_page_switches_control_public_response_and_server_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gateway_app, "register_auth_routes", lambda _app, _auth: None
+        gateway_app, "register_auth_routes", lambda _app, _auth, **_kwargs: None
     )
     state = _NativeState()
     store = GatewayStore(tmp_path / "gateway.sqlite3")

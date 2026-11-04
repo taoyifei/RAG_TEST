@@ -33,6 +33,8 @@ docker build --pull=false --network=none -f deployment/wanshitong-v2/Dockerfile.
 
 从0.8.3升级到0.9.0时须完整备份PostgreSQL、网关SQLite、files、Redis和docreader临时文件，保留SSO密钥、部署ID、原生用户、角色、个人资料及历史，再按原生迁移执行118→134；网关SQLite不运行WeKnora Lite的SQLite迁移。当前已运行0.9.0，后续应用补丁不重复这次原生升级。会话重命名仅由网关增加可空 `custom_title` 列，不修改原生标题、消息或模型。切换前核对运行与排队问答，备份现场配置和网关数据库，保留应用镜像回退；数据库备份不能直接覆盖上线后的业务增量。
 
+个人额度及解析排队保存在网关SQLite的 `library_personal_limits`、`library_personal_jobs`，待投递原件位于同一gateway数据卷的 `personal-uploads/`。发布门禁还需检查个人任务的 `staging/queued/submitting/processing/uncertain` 状态；正常补丁在这些任务清空后切换，并成对备份SQLite与暂存目录。若投递中断，保留任务与原件，按原生接收标记恢复，不能用旧数据库或清理暂存目录来消除排队记录。此功能不调整WeKnora后台处理池、向量化或模型并发，也不对公共及人力资料新增个人额度限制。
+
 ## 模型与图片
 
 复用现有模型API，不新建GPU服务。当前生产与测试的LLM均通过 `http://10.242.180.60:18098/v1` 模型池，转发54:18000及57/58各8000、8001共五路现有Qwen3-8B；每路24576上下文、2个执行槽。embedding为Docker宿主8091，rerank经独立adapter转到宿主8092。网关各8条问答运行、8条等待，共享模型10个执行槽；模型白名单须覆盖实际模型池地址。

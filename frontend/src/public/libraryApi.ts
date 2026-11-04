@@ -20,7 +20,28 @@ export interface LibraryDocument {
 export interface LibraryResponse {
   scope: LibraryScope;
   can_manage: boolean;
+  can_share?: boolean;
+  quota?: PersonalLibraryQuota;
   items: LibraryDocument[];
+}
+
+export interface PersonalQuotaLimits {
+  max_bytes: number;
+  max_files: number;
+}
+
+export interface PersonalLibraryQuota extends PersonalQuotaLimits {
+  used_bytes: number;
+  used_files: number;
+  max_file_bytes: number;
+  warning: boolean;
+  full: boolean;
+  active_parses: number;
+  queued_parses: number;
+  max_active_parses: number;
+  max_queued_parses: number;
+  upload_allowed: boolean;
+  upload_block_reason: string | null;
 }
 
 export interface ManagedUser {
@@ -32,6 +53,8 @@ export interface ManagedUser {
   is_super_admin: boolean;
   editable_roles: UserRole[];
   role_edit_note: string | null;
+  personal_quota?: PersonalQuotaLimits;
+  can_edit_personal_quota?: boolean;
 }
 
 async function checkResponse(response: Response): Promise<Response> {
@@ -143,4 +166,28 @@ export async function updateUserRole(
       body: JSON.stringify({ role }),
     }),
   );
+}
+
+export async function updateUserPersonalQuota(
+  userId: string,
+  limits: PersonalQuotaLimits,
+  csrfToken: string,
+): Promise<PersonalQuotaLimits> {
+  const response = await checkResponse(
+    await fetch(
+      withAppBase(
+        `/api/ops/users/${encodeURIComponent(userId)}/personal-quota`,
+      ),
+      {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify(limits),
+      },
+    ),
+  );
+  return response.json() as Promise<PersonalQuotaLimits>;
 }

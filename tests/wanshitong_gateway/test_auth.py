@@ -580,6 +580,198 @@ def test_role_change_revokes_background_before_saving(
     assert current.role == ("hr" if sync_fails else "user")
 
 
+def _personal_quota_app(auth: GatewayAuth) -> tuple[FastAPI, list[str]]:
+    """额度管理只访问本地配置，不应访问任何个人原件或模型。"""
+    requests: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        raise AssertionError("额度配置不得访问原生资料服务。")
+
+    engine = EngineSettings(
+        base_url="http://native.test:8080",
+        tenant_id=8,
+        public_kb_ids=("kb-public",),
+        api_key_file=auth.settings.database_path.parent / "unused-api-key",
+        external_signing_key_file=auth.settings.database_path.parent
+        / "unused-signing",
+        admin_email="candidate@example.test",
+        admin_password_file=auth.settings.database_path.parent / "unused-pass",
+    )
+    transport = httpx.MockTransport(respond)
+    native = WeKnoraClient(
+        base_url=engine.base_url,
+        api_key="test-only-key",
+        signer=ExternalPrincipalSigner(
+            secret="test-signing",  # noqa: S106
+            tenant_id=engine.tenant_id,
+            deployment_id=auth.settings.deployment_id,
+        ),
+        transport=transport,
+    )
+    admin = NativeAdminClient(
+        base_url=engine.base_url,
+        email=engine.admin_email,
+        password="test-only-password",  # noqa: S106
+        tenant_id=engine.tenant_id,
+        transport=transport,
+    )
+    return create_app(
+        auth=auth, engine=engine, native=native, admin_native=admin
+    ), requests
+
+
+@pytest.mark.parametrize(
+    "actor_role,expected_status",
+    [("super", 200), ("admin", 403), ("hr", 401), ("user", 401)],
+)
+def test_personal_quota_management_requires_super_and_exposes_no_files(
+    gateway: tuple[GatewayAuth, TestClient],
+    monkeypatch: pytest.MonkeyPatch,
+    actor_role: str,
+    expected_status: int,
+) -> None:
+    auth, browser = gateway
+    session = _login_public(
+        browser,
+        monkeypatch,
+        username="quota_actor",
+        user_id="325" if actor_role == "super" else "1001",
+    )
+    assert auth.users is not None
+    if actor_role in {"admin", "hr"}:
+        auth.users.record_identity(
+            SsoIdentity(
+                user_id="325",
+                username="quota_owner",
+                nick_name="额度管理员",
+                dept_id=None,
+                roles=(),
+                permissions=(),
+            )
+        )
+        auth.users.set_role("1001", actor_role, actor_user_id="325")
+    auth.users.record_identity(
+        SsoIdentity(
+            user_id="1002",
+            username="quota_target",
+            nick_name="额度测试用户",
+            dept_id=None,
+            roles=(),
+            permissions=(),
+        )
+    )
+    app, native_requests = _personal_quota_app(auth)
+    headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
+    with TestClient(app, base_url=_ORIGIN) as client:
+        client.cookies.update(browser.cookies)
+        response = client.put(
+            "/kb/api/ops/users/1002/personal-quota",
+            json={"max_bytes": 1024, "max_files": 2},
+            headers=headers,
+        )
+        assert response.status_code == expected_status
+        if expected_status == 200:
+            assert response.json() == {"max_bytes": 1024, "max_files": 2}
+        if actor_role in {"super", "admin"}:
+            listed = client.get("/kb/api/ops/users").json()["items"]
+            target = next(row for row in listed if row["user_id"] == "1002")
+            assert target["can_edit_personal_quota"] is (actor_role == "super")
+            assert target["personal_quota"] == {
+                "max_bytes": 1024
+                if actor_role == "super"
+                else 250 * 1024 * 1024,
+                "max_files": 2 if actor_role == "super" else 50,
+            }
+            assert set(target["personal_quota"]) == {"max_bytes", "max_files"}
+        own_quota = client.get("/kb/api/public/library?scope=personal").json()[
+            "quota"
+        ]
+        assert own_quota["max_bytes"] == 250 * 1024 * 1024
+        assert own_quota["max_files"] == 50
+        assert own_quota["used_files"] == own_quota["used_bytes"] == 0
+    assert auth.users.get("1002").role == "user"
+    assert native_requests == []
+
+
+def test_personal_quota_update_preserves_csrf_and_strict_fields(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(
+        browser, monkeypatch, username="quota_owner", user_id="325"
+    )
+    app, native_requests = _personal_quota_app(auth)
+    path = "/kb/api/ops/users/325/personal-quota"
+    valid = {"max_bytes": 1024, "max_files": 2}
+    headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
+    with TestClient(app, base_url=_ORIGIN) as client:
+        assert client.put(path, json=valid, headers=headers).status_code == 401
+        client.cookies.update(browser.cookies)
+        for invalid_headers in (
+            {"Origin": _ORIGIN},
+            {"Origin": _ORIGIN, "X-CSRF-Token": "wrong"},
+            {
+                "Origin": "http://other.test",
+                "X-CSRF-Token": session["csrf_token"],
+            },
+        ):
+            assert (
+                client.put(
+                    path, json=valid, headers=invalid_headers
+                ).status_code
+                == 403
+            )
+        for body in (
+            {**valid, "max_bytes": 0},
+            {**valid, "max_files": -1},
+            {**valid, "max_bytes": True},
+            {**valid, "role": "admin"},
+        ):
+            assert (
+                client.put(path, json=body, headers=headers).status_code == 422
+            )
+        assert (
+            client.put(
+                "/kb/api/ops/users/missing/personal-quota",
+                json=valid,
+                headers=headers,
+            ).status_code
+            == 404
+        )
+        own_quota = client.get("/kb/api/public/library?scope=personal").json()[
+            "quota"
+        ]
+        assert own_quota["max_bytes"] == 250 * 1024 * 1024
+        assert own_quota["max_files"] == 50
+    assert native_requests == []
+
+
+def test_personal_native_upload_cannot_bypass_quota_or_queue(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(
+        browser, monkeypatch, username="quota_owner", user_id="325"
+    )
+    app, native_requests = _personal_quota_app(auth)
+    with sqlite3.connect(auth.settings.database_path) as connection:
+        connection.execute(
+            "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES (?,?,?)",
+            ("own-private", "personal", "325"),
+        )
+    with TestClient(app, base_url=_ORIGIN) as client:
+        client.cookies.update(browser.cookies)
+        response = client.post(
+            "/kb/api/engine-admin/api/v1/knowledge-bases/own-private/knowledge/file",
+            files={"file": ("probe.txt", b"not-admitted")},
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]},
+        )
+        assert response.status_code == 409
+        assert "我的资料" in response.json()["detail"]
+    assert native_requests == []
+
+
 def test_denied_role_change_cannot_stop_other_users_workbench(
     gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
 ) -> None:

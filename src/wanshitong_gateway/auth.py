@@ -274,6 +274,7 @@ def register_auth_routes(
     *,
     before_role_change: Callable[[UserProfile, Role], Awaitable[None]]
     | None = None,
+    personal_limits: Callable[[str], dict[str, int]] | None = None,
 ) -> None:
     """注册与现有湾事通页面兼容的公共和管理员会话路由。"""
     if auth.settings.sso.enabled:
@@ -344,7 +345,12 @@ def register_auth_routes(
         )
 
     _register_console_routes(app, auth)
-    _register_user_routes(app, auth, before_role_change=before_role_change)
+    _register_user_routes(
+        app,
+        auth,
+        before_role_change=before_role_change,
+        personal_limits=personal_limits,
+    )
 
 
 def _register_console_routes(app: FastAPI, auth: GatewayAuth) -> None:
@@ -429,6 +435,7 @@ def _register_user_routes(
     auth: GatewayAuth,
     *,
     before_role_change: Callable[[UserProfile, Role], Awaitable[None]] | None,
+    personal_limits: Callable[[str], dict[str, int]] | None = None,
 ) -> None:
     """注册角色管理；先撤后台执行权限，再提交新的业务角色。"""
     role_change_lock = asyncio.Lock()
@@ -445,6 +452,10 @@ def _register_user_routes(
             item: dict[str, object] = dict(profile.as_dict())
             item["editable_roles"] = list(editable_roles(actor, profile))
             item["role_edit_note"] = role_edit_note(actor, profile)
+            if personal_limits is not None:
+                # 额度配置不包含文件名称、内容或个人用量。
+                item["personal_quota"] = personal_limits(profile.user_id)
+                item["can_edit_personal_quota"] = actor.is_super_admin
             items.append(item)
         return {"items": items}
 

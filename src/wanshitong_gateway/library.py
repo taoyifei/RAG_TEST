@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import json
+import logging
+import os
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -28,6 +31,16 @@ from wanshitong_gateway.auth import GatewayAuth
 from wanshitong_gateway.compat.adapters.stores.sqlite_connection import (
     SqliteConnectionFactory,
 )
+from wanshitong_gateway.compat.core.errors import ProviderUnavailable
+from wanshitong_gateway.library_quota import (
+    ACTIVE_STATES,
+    MAX_FILE_BYTES,
+    SUBMISSION_LEASE_SECONDS,
+    PersonalJob,
+    PersonalQuotaStore,
+    native_pending,
+    native_revision,
+)
 from wanshitong_gateway.models import SEARCH_SCOPE_ORDER, SearchScope
 from wanshitong_gateway.roles import UserProfile, can_access_hr_internal
 from wanshitong_gateway.weknora.admin import (
@@ -37,7 +50,7 @@ from wanshitong_gateway.weknora.admin import (
 from wanshitong_gateway.weknora.client import NativeHttpError
 
 LibraryScope = Literal["personal", "public", "hr_public", "hr_internal"]
-_MAX_FILE_BYTES = 50 * 1024 * 1024
+_MAX_FILE_BYTES = MAX_FILE_BYTES
 _PAGE_SIZE = 100
 _DELETE_TIMEOUT_SECONDS = 30.0
 _DELETE_POLL_SECONDS = 0.25
@@ -60,6 +73,9 @@ _SCOPE_NAMES = {
     "hr_internal": "湾小度人力内部资料",
     "personal": "个人资料",
 }
+_LOGGER = logging.getLogger(__name__)
+_PERSONAL_POLL_SECONDS = 2.0
+_RETRY_CONFIRMATION_PENDING = "重试已提交，正在等待解析状态更新；原件仍可下载。"
 
 
 def _pdf_process_config() -> dict[str, Any]:
@@ -91,7 +107,7 @@ def _library_chunking_config(config: dict[str, Any]) -> dict[str, Any]:
 class LibraryService:
     """保存知识库归属及共享关系，不自行解析文件或建立索引。"""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - 服务依赖与独立能力开关保持显式注入。
         self,
         database_path: Path,
         native: NativeAdminClient,
@@ -99,14 +115,20 @@ class LibraryService:
         key_fingerprint: bytes,
         *,
         public_scope: Callable[[], tuple[str, ...]] | None = None,
+        personal_sharing_enabled: bool = False,
     ) -> None:
         self._connections = SqliteConnectionFactory(database_path)
         self._native = native
         self._initial_public_kb_ids = public_kb_ids
         self._public_scope = public_scope
+        self._personal_sharing_enabled = personal_sharing_enabled
         self._key_fingerprint = key_fingerprint
         self._creation_lock = asyncio.Lock()
         self._document_locks: dict[str, asyncio.Lock] = {}
+        self._personal_locks: dict[str, asyncio.Lock] = {}
+        self._personal_transfers = asyncio.Semaphore(2)
+        self._quota = PersonalQuotaStore(database_path)
+        self._personal_worker: asyncio.Task[None] | None = None
         with self._connections.transaction(write=True) as connection:
             connection.executescript(
                 "CREATE TABLE IF NOT EXISTS library_kbs ("
@@ -117,22 +139,383 @@ class LibraryService:
                 "native_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, "
                 "owner_name TEXT NOT NULL, source_id TEXT UNIQUE, "
                 "created_at TEXT NOT NULL);"
+                "CREATE TABLE IF NOT EXISTS library_personal_kbs ("
+                "kb_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL);"
+                "INSERT OR IGNORE INTO library_personal_kbs(kb_id,owner_id) "
+                "SELECT kb_id,owner_id FROM library_kbs WHERE scope='personal';"
                 "CREATE TABLE IF NOT EXISTS library_hr_internal_kbs ("
                 "kb_id TEXT PRIMARY KEY);"
                 "INSERT OR IGNORE INTO library_hr_internal_kbs(kb_id) "
                 "SELECT kb_id FROM library_kbs WHERE scope='hr_internal';"
             )
 
+    async def start(self) -> None:
+        """启动个人解析队列，原生全局解析并发保持原样。"""
+        if self._personal_worker is None or self._personal_worker.done():
+            self._personal_worker = asyncio.create_task(self._personal_loop())
+
+    async def close(self) -> None:
+        """停止本进程轮询，原件与投递状态保留供下次启动恢复。"""
+        task = self._personal_worker
+        self._personal_worker = None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    def personal_limits(self, user_id: str) -> dict[str, int]:
+        """额度配置不包含个人资料名称、用量或访问能力。"""
+        return self._quota.limits(user_id)
+
+    def set_personal_limits(
+        self, user_id: str, max_bytes: int, max_files: int
+    ) -> dict[str, int]:
+        """调用方核对超管身份后只修改额度，不读取或移除个人原件。"""
+        return self._quota.set_limits(user_id, max_bytes, max_files)
+
+    def _personal_lock(self, owner_id: str) -> asyncio.Lock:
+        return self._personal_locks.setdefault(owner_id, asyncio.Lock())
+
+    async def _personal_loop(self) -> None:
+        while True:
+            try:
+                owners = self._quota.owner_jobs()
+            except ProviderUnavailable:
+                _LOGGER.warning("个人资料队列数据库暂忙，稍后继续轮询。")
+                await asyncio.sleep(_PERSONAL_POLL_SECONDS)
+                continue
+            for owner_id in owners:
+                try:
+                    await self._advance_personal(owner_id)
+                except asyncio.CancelledError:
+                    raise
+                except (
+                    HTTPException,
+                    OSError,
+                    ValueError,
+                    ProviderUnavailable,
+                ):
+                    # 服务暂不可用时不释放未确认的活动槽，也不重复上传。
+                    _LOGGER.warning(
+                        "个人资料队列轮询暂未完成，状态及原件已保留。"
+                    )
+            await asyncio.sleep(_PERSONAL_POLL_SECONDS)
+
+    async def _personal_native_items(
+        self, owner_id: str
+    ) -> list[dict[str, Any]]:
+        kb_ids = [
+            row["kb_id"]
+            for row in self.registered_kbs()
+            if row["scope"] == "personal" and row["owner_id"] == owner_id
+        ]
+        items: list[dict[str, Any]] = []
+        for kb_id in kb_ids:
+            page = 1
+            while True:
+                try:
+                    payload = await self._request(
+                        "GET",
+                        f"knowledge-bases/{kb_id}/knowledge",
+                        query=f"page_size={_PAGE_SIZE}&page={page}",
+                    )
+                except HTTPException as error:
+                    if error.status_code == HTTPStatus.NOT_FOUND:
+                        break
+                    raise
+                batch = payload.get("data")
+                if not isinstance(batch, list) or any(
+                    not isinstance(item, dict) or not item.get("id")
+                    for item in batch
+                ):
+                    raise HTTPException(502, "个人资料列表格式无效。")
+                items.extend(batch)
+                if len(batch) < _PAGE_SIZE or page * _PAGE_SIZE >= payload.get(
+                    "total", page * _PAGE_SIZE + 1
+                ):
+                    break
+                page += 1
+        return items
+
+    @staticmethod
+    def _upload_marker(item: dict[str, Any]) -> str | None:
+        metadata = item.get("metadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except ValueError:
+                return None
+        if not isinstance(metadata, dict):
+            return None
+        marker = metadata.get("wxd_upload_id")
+        return marker if isinstance(marker, str) else None
+
+    def _spool_file(self, job_id: str) -> Path:
+        return self._quota.spool_path / job_id
+
+    def _remove_spool(self, job_id: str) -> None:
+        self._spool_file(job_id).unlink(missing_ok=True)
+        self._spool_file(job_id).with_suffix(".part").unlink(missing_ok=True)
+
+    async def _reconcile_personal(
+        self, owner_id: str, native_items: list[dict[str, Any]]
+    ) -> None:
+        by_id = {str(item["id"]): item for item in native_items}
+        markers = {self._upload_marker(item): item for item in native_items}
+        for job in self._quota.jobs(owner_id):
+            if job.state == "staging":
+                self._recover_staging(job)
+                continue
+            item = by_id.get(job.native_id or "") or markers.get(job.job_id)
+            if item is not None:
+                self._reconcile_personal_item(job, item)
+                continue
+            if job.native_id is not None:
+                try:
+                    item = await self._knowledge(job.native_id)
+                except HTTPException as error:
+                    if error.status_code != HTTPStatus.NOT_FOUND:
+                        raise
+                    for identifier in self._quota.mark_deleted(
+                        job.native_id, owner_id
+                    ):
+                        self._remove_spool(identifier)
+                    continue
+                if job.state in ACTIVE_STATES:
+                    self._reconcile_personal_item(job, item)
+            elif job.state == "submitting" and time.time() >= job.lease_until:
+                self._quota.set_state(
+                    job.job_id,
+                    "uncertain",
+                    error="原件投递结果待确认，已暂停本人的后续解析；原件已保留，请稍后重试。",
+                )
+
+    def _reconcile_personal_item(
+        self, job: PersonalJob, item: dict[str, Any]
+    ) -> None:
+        if self._unconfirmed_retry(job, item):
+            return
+        if job.native_id is None or job.state in ACTIVE_STATES:
+            self._quota.accept_native(job.job_id, item)
+            if job.kind == "upload" and job.native_id is None:
+                self._remember(str(item["id"]), self._job_profile(job))
+            self._remove_spool(job.job_id)
+
+    def _unconfirmed_retry(
+        self, job: PersonalJob, item: dict[str, Any]
+    ) -> bool:
+        if job.kind != "retry" or job.state not in {"submitting", "uncertain"}:
+            return False
+        if native_pending(item) or (
+            job.native_revision and native_revision(item) != job.native_revision
+        ):
+            return False
+        if time.time() >= job.lease_until and (
+            job.state == "submitting"
+            or job.error == _RETRY_CONFIRMATION_PENDING
+        ):
+            self._quota.set_state(
+                job.job_id,
+                "uncertain",
+                error="重试结果待确认，原件仍可下载；已暂停后续解析，请稍后重试。",
+            )
+        return True
+
+    def _recover_staging(self, job: PersonalJob) -> None:
+        if time.time() - job.updated_at < SUBMISSION_LEASE_SECONDS:
+            return
+        path = self._spool_file(job.job_id)
+        if path.is_file() and path.stat().st_size == job.size_bytes:
+            self._quota.set_state(job.job_id, "queued")
+        else:
+            self._quota.forget_staging(job.job_id)
+            self._remove_spool(job.job_id)
+
+    async def _advance_personal(
+        self, owner_id: str, *, wait_for_transfer: bool = True
+    ) -> None:
+        async with self._personal_lock(owner_id):
+            items = await self._personal_native_items(owner_id)
+            await self._reconcile_personal(owner_id, items)
+            if not wait_for_transfer and self._personal_transfers.locked():
+                return
+            async with self._personal_transfers:
+                job = self._quota.claim_next(owner_id, items)
+                if job is not None:
+                    await self._submit_personal(job)
+
+    @staticmethod
+    def _job_profile(job: PersonalJob) -> UserProfile:
+        # 个人资料权限只依赖稳定的本人 ID，排队期间切换角色不扩大范围。
+        return UserProfile(
+            job.owner_id, job.owner_id, job.owner_name, None, "user"
+        )
+
+    async def _submit_personal(self, job: PersonalJob) -> None:
+        sent = False
+        try:
+            if job.kind == "upload":
+                kb_id = await self._scope_kb("personal", self._job_profile(job))
+                content = await asyncio.to_thread(
+                    self._spool_file(job.job_id).read_bytes
+                )
+                multipart = self._multipart(
+                    job.filename,
+                    content,
+                    self._job_profile(job),
+                    upload_id=job.job_id,
+                )
+                method_path = f"knowledge-bases/{kb_id}/knowledge/file"
+                request_content = multipart.read()
+                content_type = multipart.headers["content-type"]
+            else:
+                item, scope = await self.document(
+                    str(job.native_id), self._job_profile(job), write=True
+                )
+                if scope["scope"] != "personal":
+                    raise HTTPException(403, "只能处理本人的个人资料。")
+                kb_id = str(item["knowledge_base_id"])
+                self._quota.set_retry_revision(job.job_id, item)
+                method_path = (
+                    f"knowledge/{quote(str(job.native_id), safe='')}/reparse"
+                )
+                request_content, content_type = b"{}", "application/json"
+            sent = True
+            response = await self._native.proxy(
+                method="POST",
+                path="api/v1/" + method_path,
+                query="",
+                content=request_content,
+                browser_headers={"Content-Type": content_type},
+            )
+            accepted_item = await self._personal_receipt(job, response, kb_id)
+            if accepted_item is None:
+                return
+            current = self._quota.job(job.job_id)
+            if current is not None and self._unconfirmed_retry(
+                current, accepted_item
+            ):
+                self._quota.set_state(
+                    job.job_id, "uncertain", error=_RETRY_CONFIRMATION_PENDING
+                )
+                return
+            self._quota.accept_native(job.job_id, accepted_item)
+            if job.kind == "upload":
+                self._remember(str(accepted_item["id"]), self._job_profile(job))
+                self._remove_spool(job.job_id)
+        except asyncio.CancelledError:
+            if sent:
+                self._quota.set_state(
+                    job.job_id,
+                    "uncertain",
+                    error="投递中断，原件已保留，正在核对原生处理结果。",
+                )
+            else:
+                self._quota.set_state(job.job_id, "queued")
+            raise
+        except (HTTPException, NativeHttpError, OSError, ValueError):
+            self._quota.set_state(
+                job.job_id,
+                "uncertain" if sent else "failed",
+                error="原件投递结果待确认，已暂停本人的后续解析；原件已保留，请稍后重试。"
+                if sent
+                else "原件暂未提交解析，请稍后重试；原件已保留。",
+            )
+
+    async def _personal_receipt(
+        self, job: PersonalJob, response: NativeAdminResponse, kb_id: str
+    ) -> dict[str, Any] | None:
+        """只有明确的原生接收回执才释放本地原件；不猜测错误响应。"""
+        if response.stream is not None:
+            await response.stream.aclose()
+            raise ValueError("原生上传响应不应为流。")
+        try:
+            payload = json.loads(response.content)
+        except ValueError:
+            payload = None
+        item = payload.get("data") if isinstance(payload, dict) else None
+        if response.status_code < HTTPStatus.BAD_REQUEST and (
+            not isinstance(payload, dict) or payload.get("success") is False
+        ):
+            raise ValueError("原生投递结果未确认。")
+        if response.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+            raise ValueError("原生投递结果未确认。")
+        if response.status_code >= HTTPStatus.BAD_REQUEST and not (
+            response.status_code == HTTPStatus.CONFLICT
+            and isinstance(item, dict)
+            and self._upload_marker(item) == job.job_id
+        ):
+            self._quota.set_state(
+                job.job_id,
+                "failed",
+                error="原生资料服务未接受原件，请检查文件后重试；原件已保留。",
+            )
+            return None
+        if (
+            not isinstance(item, dict)
+            or not item.get("id")
+            or str(item.get("knowledge_base_id")) != kb_id
+        ):
+            raise ValueError("原生原件归属未确认。")
+        return item
+
+    @staticmethod
+    def _job_status(job: PersonalJob) -> str:
+        if job.state == "uncertain":
+            return (
+                "pending"
+                if job.error == _RETRY_CONFIRMATION_PENDING
+                else "failed"
+            )
+        return (
+            "pending" if job.state in {"staging", "submitting"} else job.state
+        )
+
+    @staticmethod
+    def _job_response(job: PersonalJob) -> dict[str, Any]:
+        return {
+            "id": job.native_id or job.job_id,
+            "native_id": job.native_id,
+            "status": LibraryService._job_status(job),
+        }
+
+    def _job_item(self, job: PersonalJob) -> dict[str, Any]:
+        return {
+            "id": job.native_id or job.job_id,
+            "native_id": job.native_id,
+            "title": job.filename,
+            "status": self._job_status(job),
+            "created_at": datetime.fromtimestamp(
+                job.created_at, UTC
+            ).isoformat(),
+            "size": job.size_bytes,
+            "shared": False,
+            "owner_id": job.owner_id,
+            "owner_name": job.owner_name,
+            "error": job.error,
+            "can_manage": True,
+        }
+
     @property
     def public_kb_ids(self) -> tuple[str, ...]:
-        """读取当前已发布的公共范围，避免继续使用已撤销的旧绑定。"""
+        """读取有效公共绑定，个人及内部库即使误绑定也不能公开。"""
         candidates = (
             self._public_scope()
             if self._public_scope is not None
             else self._initial_public_kb_ids
         )
-        internal = self.hr_internal_kbs()
-        return tuple(kb_id for kb_id in candidates if kb_id not in internal)
+        private = self.hr_internal_kbs() | self.personal_kbs().keys()
+        return tuple(kb_id for kb_id in candidates if kb_id not in private)
+
+    def personal_kbs(self) -> dict[str, str]:
+        """保留个人库的历史归属，重建后旧记录也不能被视为公开资料。"""
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT kb_id,owner_id FROM library_personal_kbs UNION ALL "
+                "SELECT kb_id,owner_id FROM library_kbs WHERE scope='personal' "
+                "AND kb_id NOT IN (SELECT kb_id FROM library_personal_kbs)"
+            ).fetchall()
+        return {row["kb_id"]: row["owner_id"] for row in rows}
 
     def hr_internal_kbs(self) -> frozenset[str]:
         """内部区即使误选进公共绑定，也不能按公共资料对外提供。"""
@@ -144,11 +527,51 @@ class LibraryService:
         return frozenset(row["kb_id"] for row in rows)
 
     def restricted_kbs(self, profile: UserProfile) -> tuple[str, ...]:
-        """普通管理员也不能通过后台记录读取人力内部资料。"""
+        """后台、记录与导出同样排除他人私库及当前无权访问的内部库。"""
+        candidates = (
+            self.hr_internal_kbs()
+            | self.personal_kbs().keys()
+            | {row["kb_id"] for row in self.registered_kbs()}
+        )
+        return tuple(
+            sorted(
+                kb_id
+                for kb_id in candidates
+                if not self.can_read_kb(kb_id, profile)
+            )
+        )
+
+    @staticmethod
+    def can_manage_scope(scope: LibraryScope, profile: UserProfile) -> bool:
+        """资料区的写权限不由上传人或原生管理员身份推导。"""
+        if scope == "personal":
+            return True
+        if scope == "hr_internal":
+            return can_access_hr_internal(profile)
+        if scope == "hr_public":
+            return profile.role in {"admin", "hr"} or profile.is_super_admin
+        return profile.role == "admin" or profile.is_super_admin
+
+    @staticmethod
+    def _can_read_scope(scope: dict[str, Any], profile: UserProfile) -> bool:
+        if scope["scope"] == "personal":
+            return bool(scope["owner_id"] == profile.user_id)
+        if scope["scope"] == "hr_internal":
+            return can_access_hr_internal(profile)
+        return scope["scope"] in {"public", "hr_public"}
+
+    def can_read_kb(self, kb_id: str, profile: UserProfile) -> bool:
+        """库归属优先于公共绑定，超级管理员也没有他人私库读取特权。"""
+        scope = self._scope_for_kb(kb_id)
+        return scope is not None and self._can_read_scope(scope, profile)
+
+    def can_manage_kb(self, kb_id: str, profile: UserProfile) -> bool:
+        """读写使用同一归属，只有本人可以维护个人库。"""
+        scope = self._scope_for_kb(kb_id)
         return (
-            ()
-            if can_access_hr_internal(profile)
-            else tuple(sorted(self.hr_internal_kbs()))
+            scope is not None
+            and self._can_read_scope(scope, profile)
+            and self.can_manage_scope(scope["scope"], profile)
         )
 
     @staticmethod
@@ -176,7 +599,7 @@ class LibraryService:
         values = list(self.public_kb_ids) if "public" in scopes else []
         for row in self.registered_kbs():
             kind = row["scope"]
-            if (
+            if self._can_read_scope(row, profile) and (
                 (kind in {"public", "hr_public"} and "public" in scopes)
                 or (kind == "hr_public" and "hr_public" in scopes)
                 or (
@@ -243,16 +666,13 @@ class LibraryService:
             ]
 
     def readable_kbs(self, profile: UserProfile) -> tuple[str, ...]:
-        """每次问答根据当前角色确定检索范围，管理员问答也默认只用本人私库。"""
+        """每次问答重新核对资料归属，所有角色都只能检索本人私库。"""
         values = list(self.public_kb_ids)
-        for row in self.registered_kbs():
-            scope = row["scope"]
-            if (
-                scope in {"public", "hr_public"}
-                or (scope == "personal" and row["owner_id"] == profile.user_id)
-                or (scope == "hr_internal" and can_access_hr_internal(profile))
-            ):
-                values.append(row["kb_id"])
+        values.extend(
+            row["kb_id"]
+            for row in self.registered_kbs()
+            if self._can_read_scope(row, profile)
+        )
         return tuple(dict.fromkeys(values))
 
     def check_turn(self, profile: UserProfile, turn: dict[str, Any]) -> None:
@@ -271,12 +691,20 @@ class LibraryService:
             self.check_turn(profile, turn)
 
     def _scope_for_kb(self, kb_id: str) -> dict[str, Any] | None:
-        if kb_id in self.public_kb_ids:
-            return {"kb_id": kb_id, "scope": "public", "owner_id": ""}
-        return next(
+        owner_id = self.personal_kbs().get(kb_id)
+        if owner_id is not None:
+            return {"kb_id": kb_id, "scope": "personal", "owner_id": owner_id}
+        registered = next(
             (row for row in self.registered_kbs() if row["kb_id"] == kb_id),
             None,
         )
+        if registered is not None:
+            return registered
+        if kb_id in self.hr_internal_kbs():
+            return {"kb_id": kb_id, "scope": "hr_internal", "owner_id": ""}
+        if kb_id in self.public_kb_ids:
+            return {"kb_id": kb_id, "scope": "public", "owner_id": ""}
+        return None
 
     def _record(self, native_id: str) -> dict[str, Any] | None:
         with self._connections.transaction() as connection:
@@ -397,36 +825,36 @@ class LibraryService:
         *,
         write: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """所有文件操作先校验知识库归属，系统管理员可管理已登记的个人库。"""
+        """文件、原件、引用及修改均按资料区和本人归属核对，不绕过超管。"""
+        job = self._quota.job(native_id)
+        if job is not None:
+            if job.owner_id != profile.user_id:
+                raise HTTPException(403, "没有访问这份资料的权限。")
+            if job.state == "deleted":
+                raise HTTPException(404, "资料不存在或已删除。")
+            if job.native_id is None:
+                return {
+                    "id": job.job_id,
+                    "file_name": job.filename,
+                    "file_size": job.size_bytes,
+                    "knowledge_base_id": job.kb_id or "",
+                    "parse_status": job.state,
+                }, {
+                    "scope": "personal",
+                    "owner_id": job.owner_id,
+                    "kb_id": job.kb_id or "",
+                }
+            native_id = job.native_id
         item = await self._knowledge(native_id)
         kb_id = str(item.get("knowledge_base_id", ""))
         scope = self._scope_for_kb(kb_id)
         if scope is None:
             raise HTTPException(404, "资料不存在。")
-        if scope["scope"] == "hr_internal":
-            self._check_scope("hr_internal", profile)
-        if profile.role != "admin" and kb_id not in self.readable_kbs(profile):
+        if not self._can_read_scope(scope, profile):
             raise HTTPException(403, "没有访问这份资料的权限。")
-        if write and not self._can_manage(item, scope, profile):
-            raise HTTPException(403, "只能维护自己的资料或授权的人力资料。")
+        if write and not self.can_manage_kb(kb_id, profile):
+            raise HTTPException(403, "没有维护这份资料的权限。")
         return item, scope
-
-    def _can_manage(
-        self,
-        item: dict[str, Any],
-        scope: dict[str, Any],
-        profile: UserProfile,
-    ) -> bool:
-        if scope["scope"] == "hr_internal":
-            return can_access_hr_internal(profile)
-        if profile.role == "admin":
-            return True
-        if scope["scope"] in {"hr_public", "hr_internal"}:
-            return profile.role == "hr"
-        if scope["scope"] == "personal":
-            return bool(scope["owner_id"] == profile.user_id)
-        record = self._record(item["id"])
-        return bool(record and record["owner_id"] == profile.user_id)
 
     async def _scope_kb(
         self,
@@ -503,24 +931,26 @@ class LibraryService:
         kb_id = created["data"].get("id")
         if not isinstance(kb_id, str) or not kb_id:
             raise HTTPException(502, "原生资料库创建未返回有效 ID。")
-        if scope == "hr_internal":
+        if scope in {"hr_internal", "personal"}:
             with self._connections.transaction(write=True) as connection:
-                connection.execute(
-                    "INSERT OR IGNORE INTO library_hr_internal_kbs(kb_id) "
-                    "VALUES (?)",
-                    (kb_id,),
-                )
+                if scope == "personal":
+                    connection.execute(
+                        "INSERT OR IGNORE INTO library_personal_kbs"
+                        "(kb_id,owner_id) VALUES (?,?)",
+                        (kb_id, owner),
+                    )
+                else:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO library_hr_internal_kbs(kb_id) "
+                        "VALUES (?)",
+                        (kb_id,),
+                    )
         return kb_id
 
     @staticmethod
     def _check_scope(scope: LibraryScope, profile: UserProfile) -> None:
         if scope == "hr_internal" and not can_access_hr_internal(profile):
             raise HTTPException(403, "人力内部资料仅限人力和超级管理员访问。")
-        if scope == "hr_public" and profile.role not in {
-            "admin",
-            "hr",
-        }:
-            raise HTTPException(403, "该资料区仅供人力角色使用。")
 
     async def list_documents(
         self,
@@ -537,6 +967,7 @@ class LibraryService:
             ) or (scope == "public" and row["scope"] == "hr_public"):
                 kb_ids.append(row["kb_id"])
         items = []
+        personal_native: list[dict[str, Any]] = []
         for kb_id in dict.fromkeys(kb_ids):
             page = 1
             while True:
@@ -546,6 +977,8 @@ class LibraryService:
                     query=f"page_size={_PAGE_SIZE}&page={page}",
                 )
                 batch = result.get("data", [])
+                if scope == "personal":
+                    personal_native.extend(batch)
                 for item in batch:
                     record = self._record(item["id"])
                     kb_scope = self._scope_for_kb(kb_id)
@@ -566,9 +999,7 @@ class LibraryService:
                             "error": "解析失败，请重试。"
                             if item.get("parse_status") == "failed"
                             else None,
-                            "can_manage": self._can_manage(
-                                item, kb_scope, profile
-                            )
+                            "can_manage": self.can_manage_kb(kb_id, profile)
                             if kb_scope
                             else False,
                         }
@@ -578,13 +1009,38 @@ class LibraryService:
                 ):
                     break
                 page += 1
-        return {
+        result = {
             "scope": scope,
-            "can_manage": scope == "personal"
-            or profile.role == "admin"
-            or (profile.role == "hr" and scope in {"hr_public", "hr_internal"}),
+            "can_manage": self.can_manage_scope(scope, profile),
+            "can_share": self._personal_sharing_enabled
+            and scope == "personal"
+            and self.can_manage_scope("public", profile),
             "items": items,
         }
+        if scope == "personal":
+            result["quota"] = await self._personal_listing(
+                profile.user_id, items, personal_native
+            )
+        return result
+
+    async def _personal_listing(
+        self,
+        owner_id: str,
+        items: list[dict[str, Any]],
+        native_items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        await self._reconcile_personal(owner_id, native_items)
+        known_ids = {str(item["id"]) for item in items}
+        for job in self._quota.jobs(owner_id):
+            if job.native_id not in known_ids:
+                items.append(self._job_item(job))
+                known_ids.add(job.native_id or job.job_id)
+            elif job.kind == "retry" and job.state in {"queued", "uncertain"}:
+                for item in items:
+                    if item["id"] == job.native_id:
+                        item["status"] = self._job_status(job)
+                        item["error"] = job.error
+        return self._quota.summary(owner_id, native_items)
 
     async def upload(
         self,
@@ -596,9 +1052,11 @@ class LibraryService:
         source_id: str | None = None,
     ) -> dict[str, Any]:
         """上传到服务端决定的目标库，共享副本必须由当前用户已授权的原件产生。"""
+        if source_id is not None:
+            self._require_personal_sharing()
         self._check_scope(scope, profile)
-        if scope == "public" and profile.role != "admin" and source_id is None:
-            raise HTTPException(403, "请先上传个人资料，再主动共享给全员。")
+        if not self.can_manage_scope(scope, profile):
+            raise HTTPException(403, "没有向该资料区新增资料的权限。")
         filename = (
             filename.replace("\\", "/")
             .rsplit("/", 1)[-1]
@@ -612,8 +1070,75 @@ class LibraryService:
             )
         if not content or len(content) > _MAX_FILE_BYTES:
             raise HTTPException(413, "文件须非空且不超过 50MB。")
+        if scope == "personal":
+            async with self._personal_lock(profile.user_id):
+                # Key 或私库恢复失败必须在接收原件前返回，避免悄悄变成排队失败。
+                await self._scope_kb(scope, profile)
+                native_items = await self._personal_native_items(
+                    profile.user_id
+                )
+                await self._reconcile_personal(profile.user_id, native_items)
+                job = self._quota.reserve_upload(
+                    profile.user_id,
+                    profile.display_name,
+                    filename,
+                    len(content),
+                    native_items,
+                )
+                write_task = asyncio.create_task(
+                    asyncio.to_thread(self._write_spool, job, content)
+                )
+                try:
+                    await asyncio.shield(write_task)
+                except BaseException:
+                    # to_thread 取消不等于磁盘线程结束，先等写入结束才归还额度。
+                    with contextlib.suppress(OSError):
+                        await asyncio.shield(write_task)
+                    self._quota.forget_staging(job.job_id)
+                    self._remove_spool(job.job_id)
+                    raise
+                self._quota.set_state(job.job_id, "queued")
+            await self._advance_personal(
+                profile.user_id, wait_for_transfer=False
+            )
+            accepted = self._quota.job(job.job_id)
+            if accepted is None:
+                raise HTTPException(502, "原件上传状态未确认。")
+            return self._job_response(accepted)
         kb_id = await self._scope_kb(scope, profile)
-        multipart = httpx.Request(
+        multipart = self._multipart(
+            filename, content, profile, source_id=source_id
+        )
+        result = await self._request(
+            "POST",
+            f"knowledge-bases/{kb_id}/knowledge/file",
+            content=multipart.read(),
+            content_type=multipart.headers["content-type"],
+        )
+        item = result["data"]
+        self._remember(item["id"], profile, source_id)
+        return {"id": item["id"], "status": item.get("parse_status", "pending")}
+
+    def _write_spool(self, job: PersonalJob, content: bytes) -> None:
+        final = self._spool_file(job.job_id)
+        part = final.with_suffix(".part")
+        with part.open("xb") as stream:
+            part.chmod(0o600)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        part.replace(final)
+
+    @staticmethod
+    def _multipart(
+        filename: str,
+        content: bytes,
+        profile: UserProfile,
+        *,
+        source_id: str | None = None,
+        upload_id: str | None = None,
+    ) -> httpx.Request:
+        return httpx.Request(
             "POST",
             "http://native.invalid/",
             files={"file": (filename, content)},
@@ -629,6 +1154,7 @@ class LibraryService:
                 "metadata": json.dumps(
                     {
                         "wxd_owner_id": profile.user_id,
+                        **({"wxd_upload_id": upload_id} if upload_id else {}),
                         **(
                             {"wxd_source_id": source_id}
                             if source_id is not None
@@ -639,23 +1165,34 @@ class LibraryService:
                 ),
             },
         )
-        result = await self._request(
-            "POST",
-            f"knowledge-bases/{kb_id}/knowledge/file",
-            content=multipart.read(),
-            content_type=multipart.headers["content-type"],
-        )
-        item = result["data"]
-        self._remember(item["id"], profile, source_id)
-        return {"id": item["id"], "status": item.get("parse_status", "pending")}
 
     async def download(
         self, native_id: str, profile: UserProfile
     ) -> NativeAdminResponse:
         """原件下载沿用同一资料权限，浏览器无需接触原生管理凭据。"""
-        await self.document(native_id, profile)
+        item, _ = await self.document(native_id, profile)
+        job = self._quota.job(native_id)
+        if job is not None and job.native_id is None:
+            if job.state == "staging":
+                raise HTTPException(409, "原件尚未上传完成，请稍后下载。")
+            try:
+                content = await asyncio.to_thread(
+                    self._spool_file(job.job_id).read_bytes
+                )
+            except FileNotFoundError:
+                raise HTTPException(404, "原件暂不可用，请稍后重试。") from None
+            return NativeAdminResponse(
+                200,
+                content,
+                {
+                    "content-type": "application/octet-stream",
+                    "content-disposition": "attachment; filename*=UTF-8''"
+                    + quote(job.filename, safe=""),
+                    "Cache-Control": "private, no-store",
+                },
+            )
         response = await self._native_request(
-            "GET", f"knowledge/{quote(native_id, safe='')}/download"
+            "GET", f"knowledge/{quote(str(item['id']), safe='')}/download"
         )
         if not isinstance(response, NativeAdminResponse):
             raise HTTPException(502, "原生资料下载格式无效。")
@@ -668,17 +1205,127 @@ class LibraryService:
         return self._document_locks.setdefault(lock_id, asyncio.Lock())
 
     async def delete(self, native_id: str, profile: UserProfile) -> None:
-        """删除原件时撤回公开副本，与共享操作使用同一把原件锁。"""
-        async with self._document_lock(native_id):
-            await self.document(native_id, profile, write=True)
-            await self._unshare_locked(native_id)
-            await self._delete_native(native_id)
-            self._forget(native_id)
+        """删除本人原件不授予公共区写权限，已有公共副本由管理员维护。"""
+        _, initial_scope = await self.document(native_id, profile, write=True)
+        owner_lock = (
+            self._personal_lock(profile.user_id)
+            if initial_scope["scope"] == "personal"
+            else contextlib.nullcontext()
+        )
+        async with (
+            owner_lock,
+            self._document_lock(native_id),
+        ):
+            item, scope = await self.document(native_id, profile, write=True)
+            job = self._quota.job(native_id)
+            if job is not None and job.native_id is None:
+                native_items = await self._personal_native_items(
+                    profile.user_id
+                )
+                await self._reconcile_personal(profile.user_id, native_items)
+                job = self._quota.job(native_id)
+                if job is None or job.state == "deleted":
+                    return
+                if job.native_id is None:
+                    if job.state in {"staging", "submitting", "uncertain"} and (
+                        time.time()
+                        < (
+                            job.updated_at + SUBMISSION_LEASE_SECONDS
+                            if job.state == "staging"
+                            else job.lease_until
+                        )
+                        or any(native_pending(entry) for entry in native_items)
+                    ):
+                        raise HTTPException(
+                            409,
+                            "原件投递结果正在确认，暂不能删除，请稍后重试。",
+                        )
+                    for identifier in self._quota.mark_deleted(
+                        native_id, profile.user_id
+                    ):
+                        self._remove_spool(identifier)
+                    return
+                item, scope = await self.document(
+                    native_id, profile, write=True
+                )
+            effective_id = str(item["id"])
+            if scope["scope"] == "personal" and any(
+                entry.native_id == effective_id
+                and entry.state in {"submitting", "uncertain"}
+                and time.time() < entry.lease_until
+                for entry in self._quota.jobs(profile.user_id)
+            ):
+                raise HTTPException(
+                    409, "原件投递结果正在确认，暂不能删除，请稍后重试。"
+                )
+            if self._personal_sharing_enabled and self.can_manage_scope(
+                "public", profile
+            ):
+                await self._unshare_locked(effective_id)
+            await self._delete_native(effective_id)
+            self._forget(effective_id)
+            if scope["scope"] == "personal":
+                for identifier in self._quota.mark_deleted(
+                    effective_id, profile.user_id
+                ):
+                    self._remove_spool(identifier)
+
+    async def retry(
+        self, native_id: str, profile: UserProfile
+    ) -> dict[str, Any]:
+        """个人重试与上传共用解析槽；公共和人力资料保持原生直接重试。"""
+        item, scope = await self.document(native_id, profile, write=True)
+        if scope["scope"] != "personal":
+            return await self._request(
+                "POST",
+                f"knowledge/{quote(str(item['id']), safe='')}/reparse",
+                body={},
+            )
+        async with self._personal_lock(profile.user_id):
+            native_items = await self._personal_native_items(profile.user_id)
+            await self._reconcile_personal(profile.user_id, native_items)
+            job = self._quota.job(native_id)
+            if job is None:
+                job = next(
+                    (
+                        entry
+                        for entry in self._quota.jobs(profile.user_id)
+                        if entry.native_id == str(item["id"])
+                        and entry.kind == "retry"
+                        and entry.state == "uncertain"
+                    ),
+                    None,
+                )
+            if (
+                job is not None
+                and job.kind == "retry"
+                and job.state == "uncertain"
+            ):
+                self._quota.reset_retry(job, native_items)
+                queued = job
+            elif job is not None and job.native_id is None:
+                if not self._spool_file(job.job_id).is_file():
+                    raise HTTPException(404, "暂存原件不存在，请重新上传。")
+                self._quota.reset_retry(job, native_items)
+                queued = job
+            else:
+                item, _ = await self.document(native_id, profile, write=True)
+                queued = self._quota.reserve_retry(
+                    profile.user_id, profile.display_name, item, native_items
+                )
+        await self._advance_personal(profile.user_id, wait_for_transfer=False)
+        accepted = self._quota.job(queued.job_id)
+        if accepted is None:
+            raise HTTPException(502, "重试状态未确认。")
+        return self._job_response(accepted)
 
     async def share(
         self, native_id: str, profile: UserProfile
     ) -> dict[str, Any]:
         """显式发布个人原件副本，不扩大整个个人知识库的权限。"""
+        self._require_personal_sharing()
+        if not self.can_manage_scope("public", profile):
+            raise HTTPException(403, "只有管理员和超级管理员可以发布公共资料。")
         async with self._document_lock(native_id):
             item, scope = await self.document(native_id, profile, write=True)
             if scope["scope"] != "personal":
@@ -698,9 +1345,17 @@ class LibraryService:
 
     async def unshare(self, native_id: str, profile: UserProfile) -> None:
         """撤回共享保留原件，已被阅读的回答不作伪造性抹除。"""
+        self._require_personal_sharing()
+        if not self.can_manage_scope("public", profile):
+            raise HTTPException(403, "只有管理员和超级管理员可以撤回公共资料。")
         async with self._document_lock(native_id):
             await self.document(native_id, profile, write=True)
             await self._unshare_locked(native_id)
+
+    def _require_personal_sharing(self) -> None:
+        """共享暂不开放，保留实现供以后显式启用。"""
+        if not self._personal_sharing_enabled:
+            raise HTTPException(403, "个人资料共享暂未开放。")
 
     async def _delete_native(self, native_id: str) -> None:
         """等待原生异步删除实际完成，提交任务不等于撤回已生效。"""
@@ -786,12 +1441,7 @@ def register_library_routes(
 
     @app.post("/api/public/library/{native_id}/retry")
     async def retry_library(native_id: str, request: Request) -> dict[str, Any]:
-        await service.document(
-            native_id, auth.require_profile(request), write=True
-        )
-        return await service._request(
-            "POST", f"knowledge/{quote(native_id, safe='')}/reparse", body={}
-        )
+        return await service.retry(native_id, auth.require_profile(request))
 
     @app.post("/api/public/library/{native_id}/share")
     async def share_library(native_id: str, request: Request) -> dict[str, Any]:
