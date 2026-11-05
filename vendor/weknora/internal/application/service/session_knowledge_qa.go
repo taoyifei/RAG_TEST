@@ -1149,7 +1149,7 @@ func buildFallbackMessages(chatManage *types.ChatManage, promptContent string) [
 		messages = append(messages, chat.Message{
 			Role: "system",
 			Content: promptContent + "\n\n" + types.SourceDataBoundaryPrompt +
-				"\n\n" + types.SourcedAnswerOutputPrompt + "\n\n" + types.PersonalFactBoundaryPrompt,
+				"\n\n" + types.SourcedAnswerOutputPrompt,
 		})
 	}
 

@@ -197,7 +197,7 @@ def test_only_current_non_code_source_identifiers_count(
             '不知道。<kb chunk_id="chunk-a"/>',
             "model_insufficient",
         ),
-        ("unknown", '按流程提交。<kb chunk_id="chunk-a"/>', "model_unverified"),
+        ("unknown", '按流程提交。<kb chunk_id="chunk-a"/>', "knowledge"),
         ("insufficient", "资料未提供这个人的家庭地址。", "model_insufficient"),
     ],
 )

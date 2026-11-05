@@ -138,9 +138,7 @@ class AnswerOriginTracker:
             return "unknown"
         if self._support == "insufficient":
             return "model_insufficient"
-        if self._support != "unknown" and answer_cites_references(
-            answer, citations
-        ):
+        if answer_cites_references(answer, citations):
             return "knowledge"
         if self._zero_results and not self._found_results and not citations:
             return "model_no_results"

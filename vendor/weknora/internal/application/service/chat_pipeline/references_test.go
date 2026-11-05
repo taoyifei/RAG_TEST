@@ -32,6 +32,8 @@ func TestPrepareMessagesWithModelContextUsesChunkCentricContext(t *testing.T) {
 	require.Len(t, messages, 2)
 	require.Contains(t, messages[0].Content, "Source handling protocol")
 	require.Contains(t, messages[0].Content, answerSupportPrompt)
+	require.Contains(t, messages[1].Content, answerSupportReminder)
+	require.Contains(t, messages[1].Content, "用户本轮原始问题：question")
 	require.Contains(t, messages[1].Content, `<document id="doc://1" kb="kb://1" title="Doc">`)
 	require.Contains(t, messages[1].Content, `<chunk id="chunk://1" index="1" view="full">`)
 	require.Contains(t, messages[1].Content, `<chunk id="chunk://2" index="2" view="full">`)

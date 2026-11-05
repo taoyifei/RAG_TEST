@@ -80,7 +80,6 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 		"contexts": chatManage.RenderedContexts,
 	})
 	systemPrompt += "\n\n" + types.SourceDataBoundaryPrompt + "\n\n" + types.SourcedAnswerOutputPrompt
-	systemPrompt += "\n\n" + types.PersonalFactBoundaryPrompt
 	// Memory goes at the end of the system prompt, after the retrieved-context
 	// placeholders have been rendered, so a remembered sentence can never be
 	// substituted into prompt structure.

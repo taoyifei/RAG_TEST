@@ -113,6 +113,7 @@ func prepareMessagesWithModelContext(
 		ids := chatManage.ContextImageChunkIDs[:count]
 		messages[last].Content += registry.ImageSourcesNote(ids, len(chatManage.Images))
 	}
+	messages[last].Content += "\n\n用户本轮原始问题：" + chatManage.Query + "\n\n" + answerSupportReminder
 	return messages, registry
 }
 
