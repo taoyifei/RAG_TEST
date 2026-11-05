@@ -96,7 +96,8 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 	userMsg := chat.Message{Role: "user", Content: chatManage.UserContent}
 	if len(chatManage.MergeResult) > 0 {
 		userMsg.Content += "\n\n【回答来源】先按原规则完整回答原问题“" + chatManage.Query +
-			"”。回答结束后，核对主要答案在当前资料中是否有依据（整理、归纳或转述资料也算）。\n" +
+			"”。回答结束后，核对主要答案在当前资料中是否有依据（整理、归纳或转述资料也算）。" +
+			"只看到相关背景，或只发现资料没有提到所问内容，都不算找到答案依据。\n" +
 			"最后单独一行只写一个来源：有资料依据写“来源：知识库”；" +
 			"没有资料依据，包括只凭常识或资料不足时，写“来源：模型生成”。"
 	}
