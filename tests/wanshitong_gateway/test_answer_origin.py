@@ -9,7 +9,6 @@ import pytest
 
 from wanshitong_gateway.weknora.answer_origin import (
     answer_cites_references,
-    answer_origin_fields,
     answer_origin_from_events,
 )
 from wanshitong_gateway.weknora.stream import BridgeStream, NativeEvent
@@ -31,20 +30,20 @@ def _result(count: Any, *, success: bool = True) -> dict[str, Any]:  # noqa: ANN
     [
         ([_result(0)], [], "completed", "资料不足", "model_no_results"),
         ([], [], "completed", "加油", "model_unreferenced"),
-        ([_result(3)], [], "completed", "回答", "model_unverified"),
+        ([_result(3)], [], "completed", "回答", "model_unreferenced"),
         (
             [_result(3), _result(0)],
             [],
             "completed",
             "回答",
-            "model_unverified",
+            "model_unreferenced",
         ),
         (
             [_result(0)],
             [{"document_name": "文件.docx"}],
             "completed",
             "回答",
-            "model_unverified",
+            "model_unreferenced",
         ),
         ([_result(False)], [], "completed", "回答", "model_unreferenced"),
         ([_result(-1)], [], "completed", "回答", "model_unreferenced"),
@@ -77,7 +76,7 @@ def test_history_uses_retrieval_evidence_without_guessing(
 
 
 def test_stream_and_history_agree_for_no_results_and_late_references() -> None:
-    """晚到的检索候选不能把没有正文引用的回答标成知识库答案。"""
+    """晚到的检索候选不会把未引用的回答变成知识库回答。"""
     bridge = BridgeStream(
         trace_id="trace-origin",
         session_id="session-origin",
@@ -100,7 +99,6 @@ def test_stream_and_history_agree_for_no_results_and_late_references() -> None:
             )
         )
     assert wire[1]["answer_origin"] == "model_no_results"
-    assert wire[-1]["answer_basis"] == "model_unverified"
     assert wire[-1]["answer_origin"] == "model_unreferenced"
     assert (
         answer_origin_from_events(
@@ -109,7 +107,7 @@ def test_stream_and_history_agree_for_no_results_and_late_references() -> None:
             status="completed",
             answer=bridge.answer,
         )
-        == wire[-1]["answer_basis"]
+        == wire[-1]["answer_origin"]
     )
 
 
@@ -132,8 +130,8 @@ def test_nested_native_retrieval_count_is_supported() -> None:
     ("count", "references", "expected"),
     [
         (0, [], "model_no_results"),
-        (3, [], "model_unverified"),
-        (3, [{"document_name": "原引用.docx"}], "model_unverified"),
+        (3, [], "model_unreferenced"),
+        (3, [{"document_name": "原引用.docx"}], "model_unreferenced"),
     ],
 )
 def test_recovery_keeps_prior_evidence_without_repeating_answer(
@@ -157,70 +155,65 @@ def test_recovery_keeps_prior_evidence_without_repeating_answer(
     )
     final = json.loads(frames[0].decode().split("data: ", 1)[1])
     assert final["answer"] == "恢复后正文"
-    assert final["answer_basis"] == expected
+    assert final["answer_origin"] == expected
     assert final["citations"] == references
 
 
 @pytest.mark.parametrize(
     ("answer", "expected"),
     [
-        ('流程是需求人提交。<kb chunk_id="chunk-a" kb_id="kb-a"/>', True),
-        ('<kb chunk_id="chunk-b" kb_id="kb-a"/>', False),
+        ('流程按要求提交。<kb chunk_id="chunk-a" kb_id="kb-a"/>', True),
+        ('<kb chunk_id="other" kb_id="kb-a"/>', False),
+        ('<kb chunk_id="child-a" kb_id="kb-a"/>', True),
         ('<kb chunk_id="chunk-a" kb_id="other-kb"/>', False),
         ('<kb doc="文件.docx"/>', False),
         ('`<kb chunk_id="chunk-a"/>`', False),
         ('```xml\n<kb chunk_id="chunk-a"/>\n```', False),
         ('~~~\n<kb chunk_id="chunk-a"/>\n~~~', False),
-        ('```\n示例\n```\n真正依据<kb chunk_id="chunk-a"/>', True),
+        ('```\n示例\n```\n真正来源<kb chunk_id="chunk-a"/>', True),
+        ("![原图](resource://original-image)", True),
+        ("![其他图](resource://other-image)", False),
+        ("原图地址：resource://original-image", False),
+        ("![未完成的图片](resource://original-image", False),
+        ("`![图片示例](resource://original-image)`", False),
     ],
 )
-def test_only_current_non_code_source_identifiers_count(
+def test_source_ids_and_displayed_images_match_current_references(
     answer: str, expected: bool
 ) -> None:
     references = [
         {
             "document_name": "文件.docx",
             "native_chunk_id": "chunk-a",
-            "native_reference": {"knowledge_base_id": "kb-a"},
+            "native_reference": {
+                "knowledge_base_id": "kb-a",
+                "sub_chunk_id": ["child-a"],
+                "image_info": '[{"url":"resource://original-image"}]',
+            },
         }
     ]
     assert answer_cites_references(answer, references) is expected
 
 
 @pytest.mark.parametrize(
-    ("support", "answer", "expected"),
+    ("answer", "expected"),
     [
-        ("supported", '按流程提交。<kb chunk_id="chunk-a"/>', "knowledge"),
-        ("supported", "按流程提交。", "model_unverified"),
-        (
-            "insufficient",
-            '不知道。<kb chunk_id="chunk-a"/>',
-            "model_insufficient",
-        ),
-        ("unknown", '按流程提交。<kb chunk_id="chunk-a"/>', "knowledge"),
-        ("insufficient", "资料未提供这个人的家庭地址。", "model_insufficient"),
+        ('有依据的回答。<kb chunk_id="chunk-a"/>', "knowledge"),
+        ("没有这个问题的资料。", "model_unreferenced"),
     ],
 )
-def test_explicit_support_and_inline_citation_agree_in_stream_and_history(
-    support: str, answer: str, expected: str
+def test_stream_and_history_use_the_same_actual_reference_rule(
+    answer: str, expected: str
 ) -> None:
     references = [{"document_name": "文件.docx", "native_chunk_id": "chunk-a"}]
     bridge = BridgeStream(
-        trace_id="trace-support",
-        session_id="session-support",
+        trace_id="trace-reference",
+        session_id="session-reference",
         reference_mapper=lambda item: item,
     )
     payloads = [
         _result(3),
         {"response_type": "references", "knowledge_references": references},
-        {
-            "response_type": "tool_result",
-            "data": {
-                "tool_name": "answer_support",
-                "success": support != "unknown",
-                "data": {"status": support},
-            },
-        },
         {"response_type": "answer", "content": answer},
         {"response_type": "complete"},
     ]
@@ -230,11 +223,7 @@ def test_explicit_support_and_inline_citation_agree_in_stream_and_history(
             bridge.accept(NativeEvent(event="message", payload=payload))
         )
     final = json.loads(frames[-1].decode().split("data: ", 1)[1])
-    assert final["answer_basis"] == expected
-    assert (
-        final["answer_origin"]
-        == answer_origin_fields(expected)["answer_origin"]
-    )
+    assert final["answer_origin"] == expected
     assert final["answer"] == answer
     assert final["citations"] == references
     assert (
@@ -246,27 +235,3 @@ def test_explicit_support_and_inline_citation_agree_in_stream_and_history(
         )
         == expected
     )
-
-
-def test_native_handler_flattened_support_metadata_is_preserved() -> None:
-    """原生Handler会把ToolResult.Data字段平铺到SSE.data。"""
-    origin = answer_origin_from_events(
-        [
-            {
-                "payload": {
-                    "native": {
-                        "response_type": "tool_result",
-                        "data": {
-                            "tool_name": "answer_support",
-                            "success": True,
-                            "status": "insufficient",
-                        },
-                    }
-                }
-            }
-        ],
-        citations=[{"document_name": "园区手册.docx"}],
-        status="completed",
-        answer="资料未提供你的家庭住址。",
-    )
-    assert origin == "model_insufficient"

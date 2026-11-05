@@ -1335,7 +1335,7 @@ func emitKnowledgeReferencesEvent(ctx context.Context, chatManage *types.ChatMan
 		Type:      types.EventType(event.EventAgentReferences),
 		SessionID: chatManage.SessionID,
 		Data: event.AgentReferencesData{
-			References: chatpipeline.AnswerReferenceCandidates(chatManage),
+			References: chatManage.MergeResult,
 		},
 	}); err != nil {
 		logger.Errorf(ctx, "Failed to emit references event: %v", err)

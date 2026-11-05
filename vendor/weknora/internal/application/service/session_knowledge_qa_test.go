@@ -79,13 +79,6 @@ func TestEmitKnowledgeReferencesEventIgnoresCitationOutputSetting(t *testing.T) 
 	cm.CitationEnabled = &enabled
 	emitKnowledgeReferencesEvent(context.Background(), cm)
 	require.Len(t, emitted, 2)
-
-	// 模型引用扩展上下文中的真实子片段时，前端必须收到同一个ID。
-	child := &types.SearchResult{ID: "child-1", KnowledgeTitle: "Doc", Content: "原文"}
-	cm.MergeResult = []*types.SearchResult{{ID: "parent-expanded", ContentRewritten: true, CitationSources: []*types.SearchResult{child}}}
-	emitKnowledgeReferencesEvent(context.Background(), cm)
-	require.Len(t, emitted, 3)
-	require.Equal(t, []*types.SearchResult{child}, emitted[2].Data.(event.AgentReferencesData).References)
 }
 
 func (s *stubModelService) CreateModel(context.Context, *types.Model) error {

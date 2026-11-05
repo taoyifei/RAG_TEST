@@ -113,6 +113,4 @@ const SourcedAnswerOutputPrompt = `Answer presentation:
 	`Use ASCII half-width parentheses as ![alt](url); never invent, shorten, or replace its URL.
 - Before finishing, silently verify that the answer follows the requested format, supports ` +
 	`its factual claims, and accurately distinguishes completed actions from remaining work. ` +
-	`Source citation formatting is controlled by the runtime protocol.
-- Do not turn background context, examples or earlier model replies into unstated facts. ` +
-	`Friendly everyday conversation may use warm subjective language without inventing facts.`
+	`Source citation formatting is controlled by the runtime protocol.`

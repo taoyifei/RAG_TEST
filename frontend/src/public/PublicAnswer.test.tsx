@@ -15,7 +15,7 @@ it.each([
     origin: "model_no_results" as const,
     count: 0,
     citation: false,
-    notice: "未找到相关资料，以下内容由大模型生成，仅供参考。",
+    notice: "未引用知识库资料，以下内容由大模型生成，仅供参考。",
   },
   {
     name: "恢复的无引用历史回答",
@@ -31,7 +31,7 @@ it.each([
     origin: "model_unreferenced" as const,
     count: 3,
     citation: false,
-    notice: "已检索知识库，但尚未确认回答的资料依据。以下内容由大模型生成，仅供参考。",
+    notice: "未引用知识库资料，以下内容由大模型生成，仅供参考。",
   },
   {
     name: "明确命中时不沿用旧的零结果标识",
@@ -39,7 +39,7 @@ it.each([
     origin: "model_no_results" as const,
     count: 3,
     citation: false,
-    notice: "已检索知识库，但尚未确认回答的资料依据。以下内容由大模型生成，仅供参考。",
+    notice: "未引用知识库资料，以下内容由大模型生成，仅供参考。",
   },
   {
     name: "正在生成且尚未收到引用时不猜测零结果",
@@ -55,7 +55,7 @@ it.each([
     origin: "model_no_results" as const,
     count: 0,
     citation: true,
-    notice: "已检索知识库，但尚未确认回答的资料依据。以下内容由大模型生成，仅供参考。",
+    notice: "未引用知识库资料，以下内容由大模型生成，仅供参考。",
   },
   {
     name: "失败的部分回答不冒充完整模型回答",

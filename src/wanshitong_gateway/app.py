@@ -61,7 +61,6 @@ from wanshitong_gateway.roles import UserProfile
 from wanshitong_gateway.settings import GatewayAuthSettings
 from wanshitong_gateway.store import GatewayStore
 from wanshitong_gateway.weknora.admin import NativeAdminClient
-from wanshitong_gateway.weknora.answer_origin import answer_origin_fields
 from wanshitong_gateway.weknora.client import NativeHttpError, WeKnoraClient
 from wanshitong_gateway.weknora.principal import ExternalPrincipalSigner
 from wanshitong_gateway.weknora.references import (
@@ -2023,13 +2022,11 @@ def create_app(  # noqa: PLR0913, PLR0915
                     else None,
                     "answer": answer if isinstance(answer, str) else None,
                     "citations": json.loads(turn["references_json"]),
-                    **answer_origin_fields(
-                        store.turn_answer_origin(
-                            turn["trace_id"],
-                            citations=json.loads(turn["references_json"]),
-                            status=status,
-                            answer=answer if isinstance(answer, str) else None,
-                        )
+                    "answer_origin": store.turn_answer_origin(
+                        turn["trace_id"],
+                        citations=json.loads(turn["references_json"]),
+                        status=status,
+                        answer=answer if isinstance(answer, str) else None,
                     ),
                     "partial": status
                     in {

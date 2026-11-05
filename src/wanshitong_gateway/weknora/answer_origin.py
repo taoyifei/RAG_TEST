@@ -1,8 +1,9 @@
-"""区分检索候选、正文实际引用及模型报告的证据不足。"""
+"""按回答实际引用标注来源，不把检索候选当作回答依据。"""
 
 from __future__ import annotations
 
 import html
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
@@ -11,8 +12,6 @@ AnswerOrigin = Literal[
     "knowledge",
     "model_no_results",
     "model_unreferenced",
-    "model_insufficient",
-    "model_unverified",
     "unknown",
 ]
 
@@ -20,18 +19,28 @@ _KB_TAG = re.compile(r"<kb\b([^<>]*?)/?>", re.IGNORECASE)
 _ATTRIBUTE = re.compile(r"""([\w-]+)\s*=\s*(["'])(.*?)\2""")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _INLINE_CODE = re.compile(r"(`+).*?\1")
+_RESOURCE_URL = re.compile(r"""(?:resource|https?)://[^\s<>"'\\)\]]+""")
+_IMAGE = re.compile(
+    r"""!\[[^\]\n]*\]\(\s*<?((?:resource|https?)://[^\s<>)]*)>?"""
+    r"""(?:\s+["'][^"']*["'])?\s*\)"""
+)
 
 
-def answer_origin_fields(origin: str) -> dict[str, str]:
-    """保留旧页面能识别的来源字段，通过可选字段补充细分状态。"""
-    return {
-        "answer_origin": (
-            "model_unreferenced"
-            if origin in {"model_insufficient", "model_unverified"}
-            else origin
-        ),
-        "answer_basis": origin,
-    }
+def _reference_chunk_ids(reference: Mapping[str, Any]) -> set[str]:
+    identifiers = (
+        {str(reference["native_chunk_id"])}
+        if reference.get("native_chunk_id")
+        else set()
+    )
+    native = reference.get("native_reference")
+    children = (
+        native.get("sub_chunk_id") if isinstance(native, Mapping) else None
+    )
+    if isinstance(children, list):
+        identifiers.update(
+            item for item in children if isinstance(item, str) and item
+        )
+    return identifiers
 
 
 def answer_cites_references(
@@ -39,9 +48,9 @@ def answer_cites_references(
 ) -> bool:
     """只接受正文中指向本轮检索片段的原生引用，排除代码示例。"""
     available = {
-        str(item["native_chunk_id"]): item
+        chunk_id: item
         for item in references
-        if item.get("native_chunk_id")
+        for chunk_id in _reference_chunk_ids(item)
     }
     fence = ""
     for line in answer.splitlines():
@@ -55,17 +64,34 @@ def answer_cites_references(
             continue
         if fence:
             continue
-        for tag in _KB_TAG.finditer(_INLINE_CODE.sub("", line)):
+        text = _INLINE_CODE.sub("", line)
+        images = {match[1] for match in _IMAGE.finditer(text)}
+        if images:
+            for reference in references:
+                native = reference.get("native_reference")
+                image_info = (
+                    native.get("image_info")
+                    if isinstance(native, Mapping)
+                    else None
+                )
+                sources = (
+                    str(reference.get("quote", ""))
+                    + "\n"
+                    + json.dumps(image_info)
+                )
+                if images.intersection(_RESOURCE_URL.findall(sources)):
+                    return True
+        for tag in _KB_TAG.finditer(text):
             attributes = {
                 match[1]: html.unescape(match[3])
                 for match in _ATTRIBUTE.finditer(tag[1])
             }
             chunk = attributes.get("chunk_id", attributes.get("chunkId", ""))
-            reference = available.get(chunk)
-            if reference is None:
+            cited_reference = available.get(chunk)
+            if cited_reference is None:
                 continue
             supplied_kb = attributes.get("kb_id")
-            native = reference.get("native_reference")
+            native = cited_reference.get("native_reference")
             expected_kb = (
                 native.get("knowledge_base_id")
                 if isinstance(native, Mapping)
@@ -83,7 +109,6 @@ class AnswerOriginTracker:
     def __init__(self) -> None:
         self._found_results = False
         self._zero_results = False
-        self._support: str | None = None
 
     def accept(self, payload: Mapping[str, Any]) -> None:
         """只采信成功的知识检索工具计数，不把调用或错误当作零结果。"""
@@ -91,15 +116,6 @@ class AnswerOriginTracker:
             return
         data = payload.get("data")
         if not isinstance(data, dict):
-            return
-        if data.get("tool_name") == "answer_support":
-            details = data.get("data", data)
-            if isinstance(details, dict) and details.get("status") in (
-                "supported",
-                "insufficient",
-                "unknown",
-            ):
-                self._support = details["status"]
             return
         if (
             data.get("tool_name") != "knowledge_search"
@@ -133,22 +149,16 @@ class AnswerOriginTracker:
         answer: str,
         completed: bool,
     ) -> AnswerOrigin:
-        """检索命中不代表答案可被支持；明确的证据不足优先于引用。"""
+        """只核对本轮实际引用；不改写正文，也不追加模型判断。"""
         if not answer.strip():
             return "unknown"
-        if self._support == "insufficient":
-            return "model_insufficient"
         if answer_cites_references(answer, citations):
             return "knowledge"
         if self._zero_results and not self._found_results and not citations:
             return "model_no_results"
         if not completed:
             return "unknown"
-        return (
-            "model_unverified"
-            if citations or self._found_results
-            else "model_unreferenced"
-        )
+        return "model_unreferenced"
 
 
 def answer_origin_from_events(

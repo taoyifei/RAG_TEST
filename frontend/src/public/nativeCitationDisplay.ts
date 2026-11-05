@@ -4,6 +4,18 @@ const KB_TAG = /<kb\b([^>]*?)\s*\/?>/gi;
 const ATTRIBUTE = /([\w-]+)\s*=\s*"([^"]*)"/g;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const INLINE_CODE = /(`+)([\s\S]*?)\1/g;
+const RESOURCE_URL = /(?:resource|https?):\/\/[^\s<>"'\\)\]]+/g;
+const SOURCE_IMAGE =
+  /!\[[^\]\n]*\]\(\s*<?((?:resource|https?):\/\/[^\s<>)]*)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+
+function matchesChunk(citation: PublicCitation, chunk: string): boolean {
+  const children = citation.native_reference?.sub_chunk_id;
+  return (
+    (citation.native_chunk_id != null &&
+      String(citation.native_chunk_id) === chunk) ||
+    (Array.isArray(children) && children.includes(chunk))
+  );
+}
 
 /** 实际引用必须指向本轮已返回的片段；代码中的引用示例不计为依据。 */
 export function referencedCitations(
@@ -21,7 +33,25 @@ export function referencedCitations(
       continue;
     }
     if (fence) continue;
-    for (const tag of line.replace(INLINE_CODE, "").matchAll(KB_TAG)) {
+    const text = line.replace(INLINE_CODE, "");
+    const images = new Set(
+      [...text.matchAll(SOURCE_IMAGE)].map((image) => image[1]),
+    );
+    if (images.size > 0) {
+      for (const citation of citations) {
+        const sources =
+          (citation.quote ?? "") +
+          "\n" +
+          JSON.stringify(citation.native_reference?.image_info ?? null);
+        if (
+          [...sources.matchAll(RESOURCE_URL)].some((match) =>
+            images.has(match[0]),
+          )
+        )
+          used.add(citation);
+      }
+    }
+    for (const tag of text.matchAll(KB_TAG)) {
       const attributes = Object.fromEntries(
         [...tag[1].matchAll(ATTRIBUTE)].map((attribute) => [
           attribute[1],
@@ -32,7 +62,7 @@ export function referencedCitations(
       const citation = citations.find(
         (item) =>
           chunk &&
-          String(item.native_chunk_id) === chunk &&
+          matchesChunk(item, chunk) &&
           (!attributes.kb_id ||
             attributes.kb_id === item.native_reference?.knowledge_base_id),
       );
@@ -50,7 +80,7 @@ function displayMarker(tag: string, citations: PublicCitation[]): string {
   const documentName = attributes.doc ?? "";
   const citationIndex = citations.findIndex(
     (citation) =>
-      (chunkId && String(citation.native_chunk_id) === chunkId) ||
+      (chunkId && matchesChunk(citation, chunkId)) ||
       (!chunkId && citation.document_name === documentName),
   );
   return citationIndex >= 0

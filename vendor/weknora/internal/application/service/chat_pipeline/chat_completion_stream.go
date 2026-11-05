@@ -125,7 +125,6 @@ func (p *PluginChatCompletionStream) OnEvent(ctx context.Context,
 	// and the upstream channel is not closed promptly.
 	go func() {
 		answerDecoder := modelContext.StreamDecoder()
-		supportDecoder := newAnswerSupportDecoder(ctx, chatManage)
 		thinkingDecoder := modelContext.StreamDecoder()
 		thinkingID := fmt.Sprintf("%s-thinking", uuid.New().String()[:8])
 		answerID := fmt.Sprintf("%s-answer", uuid.New().String()[:8])
@@ -163,7 +162,7 @@ func (p *PluginChatCompletionStream) OnEvent(ctx context.Context,
 					Data:      event.AgentThoughtData{Content: thinkingTail},
 				})
 			}
-			answerTail := supportDecoder.Feed(answerDecoder.Flush()) + supportDecoder.Flush()
+			answerTail := answerDecoder.Flush()
 			if answerTail != "" {
 				_ = eventBus.Emit(ctx, types.Event{
 					ID:        answerID,
@@ -252,9 +251,8 @@ func (p *PluginChatCompletionStream) OnEvent(ctx context.Context,
 						continue
 					}
 					response.Content = answerDecoder.Feed(response.Content)
-					response.Content = supportDecoder.Feed(response.Content)
 					if response.Done {
-						response.Content += supportDecoder.Feed(answerDecoder.Flush()) + supportDecoder.Flush()
+						response.Content += answerDecoder.Flush()
 						answerCompleted = true
 					}
 					if strings.TrimSpace(response.Content) != "" {
