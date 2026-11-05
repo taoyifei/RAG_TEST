@@ -11,9 +11,11 @@ afterEach(() => vi.restoreAllMocks());
 it("人力在公共列表更新公开人力文件时保留真正资料区", async () => {
   const user = userEvent.setup();
   let uploadScope: FormDataEntryValue | null = null;
+  let uploadedKind: FormDataEntryValue | null = null;
   vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
     if (init?.body instanceof FormData) {
       uploadScope = init.body.get("scope");
+      uploadedKind = init.body.get("kind");
       return Promise.resolve(
         Response.json({ id: "next", status: "pending", message: "新版已接收" }),
       );
@@ -30,6 +32,7 @@ it("人力在公共列表更新公开人力文件时保留真正资料区", asyn
                 id: "hr-doc",
                 scope: "hr_public",
                 title: "公开人力制度.docx",
+                kind: "template",
                 status: "completed",
                 created_at: "",
                 size: 10,
@@ -59,6 +62,7 @@ it("人力在公共列表更新公开人力文件时保留真正资料区", asyn
   );
   await screen.findByText("新版已接收");
   expect(uploadScope).toBe("hr_public");
+  expect(uploadedKind).toBe("template");
 });
 
 function requestPath(input: RequestInfo | URL): string {
@@ -434,7 +438,7 @@ describe("用户资料和角色", () => {
     expect(fetch).toHaveBeenCalledTimes(requests);
   });
 
-  it("上传用途与列表用途筛选独立，清除筛选不改变本次上传选择", async () => {
+  it("页面仅保留用途筛选，筛选不改变新资料默认用途或增加上传步骤", async () => {
     let uploadedKind: FormDataEntryValue | null = null;
     vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
       if (init?.body instanceof FormData) {
@@ -472,23 +476,22 @@ describe("用户资料和角色", () => {
       />,
     );
     await screen.findByText("个人原表.xlsx");
-    const uploadKind = screen.getByRole("combobox", { name: "上传资料用途" });
     const listKind = screen.getByRole("combobox", { name: "资料用途" });
-    expect(uploadKind.closest("label")).toHaveTextContent("上传用途");
-    await user.selectOptions(uploadKind, "illustration");
+    expect(screen.queryByRole("combobox", { name: "上传资料用途" })).toBeNull();
+    expect(screen.queryByText("上传用途")).toBeNull();
     expect(listKind).toHaveValue("all");
     expect(screen.getByText("个人原表.xlsx")).toBeVisible();
     await user.selectOptions(listKind, "template");
-    expect(uploadKind).toHaveValue("illustration");
-    await user.click(screen.getByRole("button", { name: "清除筛选" }));
-    expect(listKind).toHaveValue("all");
-    expect(uploadKind).toHaveValue("illustration");
+    expect(listKind).toHaveValue("template");
     await user.upload(
       screen.getByLabelText("选择上传资料"),
       new File(["example"], "操作示例.docx"),
     );
     await screen.findByText("已上传，正在准备解析。解析完成后即可提问。");
-    expect(uploadedKind).toBe("illustration");
+    expect(uploadedKind).toBe("policy");
+    expect(listKind).toHaveValue("template");
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(listKind).toHaveValue("all");
   });
 
   it("按名称和准备状态查找资料，清除筛选后恢复完整列表和时间排序", async () => {

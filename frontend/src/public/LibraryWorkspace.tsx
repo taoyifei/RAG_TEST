@@ -173,7 +173,6 @@ function LibraryListing({
   const [versionFilter, setVersionFilter] = useState("current");
   const [kindFilter, setKindFilter] = useState<"all" | DocumentKind>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [uploadKind, setUploadKind] = useState<DocumentKind>("policy");
   const [versionFor, setVersionFor] = useState<LibraryDocument>();
   const [assetFor, setAssetFor] = useState<LibraryDocument>();
   const [assetRelation, setAssetRelation] =
@@ -334,7 +333,7 @@ function LibraryListing({
           csrf,
           {
             replacesId: versionFor?.id,
-            kind: versionFor?.kind ?? uploadKind,
+            kind: versionFor?.kind ?? "policy",
           },
         );
         setVersionFor(undefined);
@@ -395,22 +394,6 @@ function LibraryListing({
           </button>
           {data?.can_manage && (
             <>
-              <label className="wst-document-meta">
-                上传用途{" "}
-                <select
-                  aria-label="上传资料用途"
-                  value={uploadKind}
-                  onChange={(event) =>
-                    setUploadKind(event.currentTarget.value as DocumentKind)
-                  }
-                >
-                  {Object.entries(DOCUMENT_KIND_NAMES).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <input
                 ref={fileInput}
                 type="file"
