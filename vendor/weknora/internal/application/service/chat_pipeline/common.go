@@ -96,7 +96,7 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 	userMsg := chat.Message{Role: "user", Content: chatManage.UserContent}
 	if len(chatManage.MergeResult) > 0 {
 		userMsg.Content += "\n\n【来源说明】当前用户的原始问题是：" + chatManage.Query +
-			"\n只看资料是否直接回答了这个问题。若不能确认原问题的答案，即使能补充相关背景，也必须先单独输出这一句原文：" +
+			"\n仅判断当前检索资料里有没有明确写出这个问题的答案。模型自己知道的常识、推断或相关背景都不算知识库依据。资料没写到，即使你自己知道答案，也必须先单独输出这一句原文：" +
 			"未引用知识库资料，以下内容由大模型生成，仅供参考。\n然后照常答复。资料明确回答了问题时不加提示。"
 	}
 	if chatManage.ChatModelSupportsVision && len(chatManage.Images)+len(chatManage.ContextImages) > 0 {
