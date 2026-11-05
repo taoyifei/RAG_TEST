@@ -1149,7 +1149,7 @@ func buildFallbackMessages(chatManage *types.ChatManage, promptContent string) [
 		messages = append(messages, chat.Message{
 			Role: "system",
 			Content: promptContent + "\n\n" + types.SourceDataBoundaryPrompt +
-				"\n\n" + types.SourcedAnswerOutputPrompt,
+				"\n\n" + types.SourcedAnswerOutputPrompt + "\n\n" + types.PersonalFactBoundaryPrompt,
 		})
 	}
 
@@ -1335,7 +1335,7 @@ func emitKnowledgeReferencesEvent(ctx context.Context, chatManage *types.ChatMan
 		Type:      types.EventType(event.EventAgentReferences),
 		SessionID: chatManage.SessionID,
 		Data: event.AgentReferencesData{
-			References: chatManage.MergeResult,
+			References: chatpipeline.AnswerReferenceCandidates(chatManage),
 		},
 	}); err != nil {
 		logger.Errorf(ctx, "Failed to emit references event: %v", err)

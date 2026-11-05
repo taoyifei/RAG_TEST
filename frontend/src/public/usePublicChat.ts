@@ -250,7 +250,7 @@ function restoreNaturalTurn(
     conversationId,
     searchScopes: item.search_scopes ?? ["public"],
     targetDocuments: item.target_documents ?? [],
-    answerOrigin: item.answer_origin,
+    answerOrigin: item.answer_basis ?? item.answer_origin,
     question: item.question,
     status,
     stageHistory: [],
@@ -856,10 +856,10 @@ export function usePublicChat() {
             return !tracker.terminal;
           }
           tracker.lastSequence = event.sequence;
-          if ("answer_origin" in event && event.answer_origin) {
+          if (event.answer_basis ?? event.answer_origin) {
             batch.push((turn) => ({
               ...turn,
-              answerOrigin: event.answer_origin,
+              answerOrigin: event.answer_basis ?? event.answer_origin,
             }));
           }
           const traceId =

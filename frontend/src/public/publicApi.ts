@@ -143,6 +143,8 @@ export type PublicAnswerOrigin =
   | "knowledge"
   | "model_no_results"
   | "model_unreferenced"
+  | "model_insufficient"
+  | "model_unverified"
   | "unknown";
 
 export interface PublicTargetDocument {
@@ -169,6 +171,7 @@ export interface PublicNaturalHistoryTurn {
   knowledge_ids?: string[];
   target_documents?: PublicTargetDocument[];
   answer_origin?: PublicAnswerOrigin;
+  answer_basis?: PublicAnswerOrigin;
 }
 
 export interface PublicNaturalSession {

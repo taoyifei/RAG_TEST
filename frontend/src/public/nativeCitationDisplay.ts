@@ -5,6 +5,43 @@ const ATTRIBUTE = /([\w-]+)\s*=\s*"([^"]*)"/g;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const INLINE_CODE = /(`+)([\s\S]*?)\1/g;
 
+/** 实际引用必须指向本轮已返回的片段；代码中的引用示例不计为依据。 */
+export function referencedCitations(
+  content: string,
+  citations: PublicCitation[],
+): PublicCitation[] {
+  const used = new Set<PublicCitation>();
+  let fence = "";
+  for (const line of content.split("\n")) {
+    const marker = FENCE.exec(line)?.[1];
+    if (marker) {
+      if (!fence) fence = marker;
+      else if (marker[0] === fence[0] && marker.length >= fence.length)
+        fence = "";
+      continue;
+    }
+    if (fence) continue;
+    for (const tag of line.replace(INLINE_CODE, "").matchAll(KB_TAG)) {
+      const attributes = Object.fromEntries(
+        [...tag[1].matchAll(ATTRIBUTE)].map((attribute) => [
+          attribute[1],
+          attribute[2],
+        ]),
+      );
+      const chunk = attributes.chunk_id ?? attributes.chunkId;
+      const citation = citations.find(
+        (item) =>
+          chunk &&
+          String(item.native_chunk_id) === chunk &&
+          (!attributes.kb_id ||
+            attributes.kb_id === item.native_reference?.knowledge_base_id),
+      );
+      if (citation) used.add(citation);
+    }
+  }
+  return citations.filter((citation) => used.has(citation));
+}
+
 function displayMarker(tag: string, citations: PublicCitation[]): string {
   const attributes: Record<string, string> = {};
   ATTRIBUTE.lastIndex = 0;

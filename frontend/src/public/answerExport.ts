@@ -4,6 +4,7 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 
 import { nativeCitationDisplay } from "./nativeCitationDisplay";
+import { answerEvidence, answerOriginNotice } from "./answerEvidence";
 import type { PublicSearchScope } from "./publicApi";
 import type { PublicTurn } from "./usePublicChat";
 
@@ -255,6 +256,7 @@ export function canExportAnswer(turn: PublicTurn): boolean {
 /** 从完成的可见回答建立导出模型，不读取任何原生事件、令牌或内部ID。 */
 export function buildAnswerExport(turn: PublicTurn): AnswerExportContent {
   if (!canExportAnswer(turn)) throw new Error("尚无可导出的最终回答。");
+  const evidence = answerEvidence(turn);
   const content = nativeCitationDisplay(
     turn.answer ?? "",
     turn.citations,
@@ -279,8 +281,8 @@ export function buildAnswerExport(turn: PublicTurn): AnswerExportContent {
       ? turn.searchScopes.map((scope) => SCOPE_LABELS[scope])
       : ["本次记录未保存资料范围"],
     blocks: blocksFromNodes(parser.parse(content).children),
-    references: turn.citations.map((citation, index) => ({
-      number: index + 1,
+    references: evidence.map((citation) => ({
+      number: turn.citations.indexOf(citation) + 1,
       title: humanMarkdown(
         citation.document_title?.trim() || citation.document_name || "资料来源",
       ),
@@ -310,9 +312,13 @@ export function answerClipboardText(
     .map((block) => blockText(block))
     .join("\n\n")
     .trim();
-  const notice = content.truncated
-    ? "\n\n说明：知识库提示本次回答已截断。"
-    : "";
+  const notice = [
+    turn.nativeProtocol ? answerOriginNotice(turn) : undefined,
+    content.truncated ? "说明：知识库提示本次回答已截断。" : undefined,
+  ]
+    .filter(Boolean)
+    .map((text) => "\n\n" + text)
+    .join("");
   if (!includeSources) return answer + notice;
   const sources = content.references.map(
     (reference) =>

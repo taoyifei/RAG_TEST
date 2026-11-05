@@ -258,7 +258,8 @@ describe("问答范围选择与会话隔离", () => {
                 trace_id: `trace_${"a".repeat(32)}`,
                 question: "文件的问题",
                 answer: "模型回答",
-                answer_origin: "model_no_results",
+                answer_origin: "model_unreferenced",
+                answer_basis: "model_insufficient",
                 status: "completed",
                 citations: [],
                 created_at: "2026-11-04T01:00:00Z",
@@ -272,7 +273,7 @@ describe("问答范围选择与会话隔离", () => {
     const { result } = renderHook(() => usePublicChat());
     await waitFor(() => expect(result.current.sessionReady).toBe(true));
     expect(result.current.targetDocuments).toEqual(documents);
-    expect(result.current.turns[0]?.answerOrigin).toBe("model_no_results");
+    expect(result.current.turns[0]?.answerOrigin).toBe("model_insufficient");
     act(() => result.current.retry("old-targeted", "文件的问题", originalId));
     await waitFor(() =>
       expect(result.current.turns.at(-1)?.status).toBe("completed"),
@@ -291,7 +292,8 @@ describe("问答范围选择与会话隔离", () => {
             answer: "模型回答",
             citations: [],
             truncated: false,
-            answer_origin: "model_no_results",
+            answer_origin: "model_unreferenced",
+            answer_basis: "model_insufficient",
           }),
         ),
     });
@@ -308,7 +310,7 @@ describe("问答范围选择与会话隔离", () => {
     await waitFor(() =>
       expect(result.current.turns[0]?.status).toBe("completed"),
     );
-    expect(result.current.turns[0]?.answerOrigin).toBe("model_no_results");
+    expect(result.current.turns[0]?.answerOrigin).toBe("model_insufficient");
     expect(result.current.targetDocuments).toEqual([]);
   });
 

@@ -9,7 +9,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from wanshitong_gateway.weknora.answer_origin import AnswerOriginTracker
+from wanshitong_gateway.weknora.answer_origin import (
+    AnswerOriginTracker,
+    answer_origin_fields,
+)
 from wanshitong_gateway.weknora.client import classify_native_error
 
 PROTOCOL = "wanshitong-weknora-sse-v1"
@@ -306,12 +309,14 @@ class BridgeStream:
 
     def _answer_origin(self, *, completed: bool) -> str:
         return self._origin.origin(
-            has_citations=bool(self._references),
-            has_answer=bool(self.answer.strip()),
+            citations=self._references,
+            answer=self.answer,
             completed=completed,
         )
 
     def _emit(self, event_type: str, data: Mapping[str, Any]) -> bytes:
+        if isinstance(data.get("answer_origin"), str):
+            data = {**data, **answer_origin_fields(str(data["answer_origin"]))}
         frame = encode_event(
             event_type,
             {

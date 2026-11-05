@@ -63,6 +63,7 @@ export function PublicCitations({
   onDownloadReference,
   onReadReference,
   imageContext,
+  heading = "引用依据",
 }: {
   allowSourceDownload?: boolean;
   citations: PublicCitation[];
@@ -73,6 +74,7 @@ export function PublicCitations({
   ) => Promise<void>;
   onReadReference?: (referenceId: string) => Promise<string>;
   imageContext?: PublicNaturalImageContext;
+  heading?: string;
 }) {
   const [downloadError, setDownloadError] = useState<{
     groupKey: string;
@@ -98,7 +100,9 @@ export function PublicCitations({
   return (
     <>
       <details className="wst-citations">
-        <summary>引用依据（{visible.length}段）</summary>
+        <summary>
+          {heading}（{visible.length}段）
+        </summary>
         <div className="wst-citation-list">
           {groups.map((group) => {
             const documentIds = [

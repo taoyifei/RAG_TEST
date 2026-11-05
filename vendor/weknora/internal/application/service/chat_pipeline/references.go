@@ -25,6 +25,9 @@ func prepareMessagesWithModelContext(
 	messages := prepareMessagesWithHistory(chatManage)
 	if len(messages) > 0 {
 		messages[0].Content = strings.TrimRight(messages[0].Content, " \t\r\n") + registry.ProtocolPrompt()
+		if len(chatManage.MergeResult) > 0 {
+			messages[0].Content += "\n\n" + answerSupportPrompt
+		}
 	}
 	if len(chatManage.MergeResult) == 0 || len(messages) == 0 {
 		return messages, registry
@@ -140,6 +143,11 @@ func orderedPipelineReferences(chatManage *types.ChatManage) []*types.SearchResu
 		}
 	}
 	return ordered
+}
+
+// AnswerReferenceCandidates 与模型上下文共用真实片段ID，不把扩展上下文冒充原始引用。
+func AnswerReferenceCandidates(chatManage *types.ChatManage) []*types.SearchResult {
+	return expandCitationSources(orderedPipelineReferences(chatManage))
 }
 
 func firstPipelineTitle(result *types.SearchResult) string {

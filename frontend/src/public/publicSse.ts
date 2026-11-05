@@ -28,6 +28,7 @@ interface PublicEventBase {
   native_message_id?: string | null;
   native_session_id?: string | null;
   answer_origin?: PublicAnswerOrigin;
+  answer_basis?: PublicAnswerOrigin;
 }
 
 export const WEKNORA_STREAM_PROTOCOL = "wanshitong-weknora-sse-v1" as const;
@@ -287,8 +288,24 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
         "knowledge",
         "model_no_results",
         "model_unreferenced",
+        "model_insufficient",
+        "model_unverified",
         "unknown",
       ].includes(value.answer_origin))
+  ) {
+    throw new PublicSseParseError();
+  }
+  if (
+    value.answer_basis !== undefined &&
+    (typeof value.answer_basis !== "string" ||
+      ![
+        "knowledge",
+        "model_no_results",
+        "model_unreferenced",
+        "model_insufficient",
+        "model_unverified",
+        "unknown",
+      ].includes(value.answer_basis))
   ) {
     throw new PublicSseParseError();
   }

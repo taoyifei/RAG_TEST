@@ -68,6 +68,8 @@ func (p *PluginChatCompletion) OnEvent(
 		return ErrModelCall.WithError(err)
 	}
 	modelContext.DecodeResponse(chatResponse)
+	supportDecoder := newAnswerSupportDecoder(ctx, chatManage)
+	chatResponse.Content = supportDecoder.Feed(chatResponse.Content) + supportDecoder.Flush()
 	if orphans := modelContext.OrphanResourceHandles(chatResponse.Content); len(orphans) > 0 {
 		pipelineWarn(ctx, "Completion", "orphan_resource_handles", map[string]interface{}{
 			"session_id": chatManage.SessionID,

@@ -114,3 +114,6 @@ const SourcedAnswerOutputPrompt = `Answer presentation:
 - Before finishing, silently verify that the answer follows the requested format, supports ` +
 	`its factual claims, and accurately distinguishes completed actions from remaining work. ` +
 	`Source citation formatting is controlled by the runtime protocol.`
+
+// PersonalFactBoundaryPrompt 同时约束检索问答、闲聊和零结果兜底。
+const PersonalFactBoundaryPrompt = `事实边界：不能仅凭用户的单位、园区手册、同名信息或历史助手回答，推断其身份、职务、家庭住址或当前位置。没有明确依据时说清楚不知道，不能猜测。轻松闲聊、祝福和主观评价可以友好正向、适度风趣，使用主观表达，不编造具体外貌、经历等个人事实。`

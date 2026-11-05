@@ -236,7 +236,9 @@ def test_file_target_is_enforced_upstream_and_survives_history(
     }
     assert browser.post(base, json=selected).status_code == 200
     assert state.chats[-1]["knowledge_ids"] == ["doc-personal"]
-    assert state.chats[-1].get("knowledge_ids_use_kb_thresholds", False) is False
+    assert (
+        state.chats[-1].get("knowledge_ids_use_kb_thresholds", False) is False
+    )
     assert "knowledge_base_ids" not in state.chats[-1]
     history = browser.get("/kb/api/public/conversations/file-chat").json()
     assert history["turns"][0]["knowledge_ids"] == ["doc-personal"]
@@ -365,7 +367,7 @@ def test_staged_and_archived_versions_are_excluded_and_old_target_stops(
     ("question", "origin"),
     [
         ("没有对应资料", "model_no_results"),
-        ("有命中但未引用", "model_unreferenced"),
+        ("有命中但未引用", "model_unverified"),
     ],
 )
 def test_model_origin_is_identical_in_stream_and_restored_history(
@@ -384,9 +386,10 @@ def test_model_origin_is_identical_in_stream_and_restored_history(
         for frame in response.text.strip().split("\n\n")
     ]
     assert frames[-1]["type"] == "final"
-    assert frames[-1]["answer_origin"] == origin
+    assert frames[-1]["answer_basis"] == origin
     history = browser.get("/kb/api/public/conversations/origin").json()
-    assert history["turns"][0]["answer_origin"] == origin
+    assert history["turns"][0]["answer_basis"] == origin
+    assert history["turns"][0]["answer_origin"] == frames[-1]["answer_origin"]
 
 
 def test_full_scope_old_citation_requires_new_chat_but_keeps_history(

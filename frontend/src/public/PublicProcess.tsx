@@ -65,15 +65,15 @@ export function PublicProcess({ turn }: { turn: PublicTurn }) {
         ? "已停止"
         : turn.status === "stop_requested"
           ? "停止请求已接收"
-        : searched
-          ? citationsCount > 0
-            ? `检索完成 · 引用了 ${citationsCount} 篇文档`
-            : "检索完成"
-          : turn.status === "completed"
-            ? "回答完成"
-            : searching
-              ? "正在检索知识库"
-              : "正在处理问题";
+          : searched
+            ? citationsCount > 0
+              ? `检索完成 · 找到 ${citationsCount} 篇参考资料`
+              : "检索完成"
+            : turn.status === "completed"
+              ? "回答完成"
+              : searching
+                ? "正在检索知识库"
+                : "正在处理问题";
 
   return (
     <details

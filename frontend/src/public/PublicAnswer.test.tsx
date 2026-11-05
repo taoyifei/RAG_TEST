@@ -31,7 +31,7 @@ it.each([
     origin: "model_unreferenced" as const,
     count: 3,
     citation: false,
-    notice: "未引用知识库资料，以下内容由大模型生成，仅供参考。",
+    notice: "已检索知识库，但尚未确认回答的资料依据。以下内容由大模型生成，仅供参考。",
   },
   {
     name: "明确命中时不沿用旧的零结果标识",
@@ -39,7 +39,7 @@ it.each([
     origin: "model_no_results" as const,
     count: 3,
     citation: false,
-    notice: "未引用知识库资料，以下内容由大模型生成，仅供参考。",
+    notice: "已检索知识库，但尚未确认回答的资料依据。以下内容由大模型生成，仅供参考。",
   },
   {
     name: "正在生成且尚未收到引用时不猜测零结果",
@@ -50,12 +50,12 @@ it.each([
     notice: undefined,
   },
   {
-    name: "有引用时不显示模型自行回答标识",
+    name: "有检索候选但没有正文依据时仍提示引用待核对",
     status: "completed" as const,
     origin: "model_no_results" as const,
     count: 0,
     citation: true,
-    notice: undefined,
+    notice: "已检索知识库，但尚未确认回答的资料依据。以下内容由大模型生成，仅供参考。",
   },
   {
     name: "失败的部分回答不冒充完整模型回答",
@@ -263,13 +263,13 @@ it("原生流只显示检索过程和实时答案，不暴露事件正文", () =
     feedback: "idle",
   };
   render(<PublicAnswer onFeedback={vi.fn()} onRetry={vi.fn()} turn={turn} />);
-  expect(screen.getByText("检索完成 · 引用了 2 篇文档")).toBeVisible();
+  expect(screen.getByText("检索完成 · 找到 2 篇参考资料")).toBeVisible();
   expect(screen.getByText("已完成问题理解")).toBeVisible();
   expect(screen.getByText("检索知识库 · 找到 6 个结果")).toBeVisible();
   expect(screen.getByText("研发项目").tagName).toBe("STRONG");
   expect(screen.queryByText("原生事件详情")).not.toBeInTheDocument();
   expect(screen.queryByText("不应显示的检索详情")).not.toBeInTheDocument();
-  expect(screen.getByText("引用依据（3段）")).toBeInTheDocument();
+  expect(screen.getByText("检索参考（3段）")).toBeInTheDocument();
 });
 
 it("原生消息资源图片在完成后走同源会话鉴权地址", () => {
