@@ -4,72 +4,12 @@ const KB_TAG = /<kb\b([^>]*?)\s*\/?>/gi;
 const ATTRIBUTE = /([\w-]+)\s*=\s*"([^"]*)"/g;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const INLINE_CODE = /(`+)([\s\S]*?)\1/g;
-const RESOURCE_URL = /(?:resource|https?):\/\/[^\s<>"'\\)\]]+/g;
-const SOURCE_IMAGE =
-  /!\[[^\]\n]*\]\(\s*<?((?:resource|https?):\/\/[^\s<>)]*)>?(?:\s+["'][^"']*["'])?\s*\)/g;
 
-function matchesChunk(citation: PublicCitation, chunk: string): boolean {
-  const children = citation.native_reference?.sub_chunk_id;
-  return (
-    (citation.native_chunk_id != null &&
-      String(citation.native_chunk_id) === chunk) ||
-    (Array.isArray(children) && children.includes(chunk))
-  );
-}
+export const MODEL_GENERATED_NOTICE =
+  "未引用知识库资料，以下内容由大模型生成，仅供参考。";
 
-/** 实际引用必须指向本轮已返回的片段；代码中的引用示例不计为依据。 */
-export function referencedCitations(
-  content: string,
-  citations: PublicCitation[],
-): PublicCitation[] {
-  const used = new Set<PublicCitation>();
-  let fence = "";
-  for (const line of content.split("\n")) {
-    const marker = FENCE.exec(line)?.[1];
-    if (marker) {
-      if (!fence) fence = marker;
-      else if (marker[0] === fence[0] && marker.length >= fence.length)
-        fence = "";
-      continue;
-    }
-    if (fence) continue;
-    const text = line.replace(INLINE_CODE, "");
-    const images = new Set(
-      [...text.matchAll(SOURCE_IMAGE)].map((image) => image[1]),
-    );
-    if (images.size > 0) {
-      for (const citation of citations) {
-        const sources =
-          (citation.quote ?? "") +
-          "\n" +
-          JSON.stringify(citation.native_reference?.image_info ?? null);
-        if (
-          [...sources.matchAll(RESOURCE_URL)].some((match) =>
-            images.has(match[0]),
-          )
-        )
-          used.add(citation);
-      }
-    }
-    for (const tag of text.matchAll(KB_TAG)) {
-      const attributes = Object.fromEntries(
-        [...tag[1].matchAll(ATTRIBUTE)].map((attribute) => [
-          attribute[1],
-          attribute[2],
-        ]),
-      );
-      const chunk = attributes.chunk_id ?? attributes.chunkId;
-      const citation = citations.find(
-        (item) =>
-          chunk &&
-          matchesChunk(item, chunk) &&
-          (!attributes.kb_id ||
-            attributes.kb_id === item.native_reference?.knowledge_base_id),
-      );
-      if (citation) used.add(citation);
-    }
-  }
-  return citations.filter((citation) => used.has(citation));
+export function hasModelNotice(content: string): boolean {
+  return content.trimStart().startsWith(MODEL_GENERATED_NOTICE);
 }
 
 function displayMarker(tag: string, citations: PublicCitation[]): string {
@@ -80,7 +20,7 @@ function displayMarker(tag: string, citations: PublicCitation[]): string {
   const documentName = attributes.doc ?? "";
   const citationIndex = citations.findIndex(
     (citation) =>
-      (chunkId && matchesChunk(citation, chunkId)) ||
+      (chunkId && String(citation.native_chunk_id) === chunkId) ||
       (!chunkId && citation.document_name === documentName),
   );
   return citationIndex >= 0
@@ -114,6 +54,12 @@ export function nativeCitationDisplay(
   content: string,
   citations: PublicCitation[],
 ): string {
+  if (hasModelNotice(content)) {
+    content = content
+      .trimStart()
+      .slice(MODEL_GENERATED_NOTICE.length)
+      .trimStart();
+  }
   let fenceCharacter = "";
   let fenceLength = 0;
   return content

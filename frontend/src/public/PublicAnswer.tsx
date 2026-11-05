@@ -12,7 +12,7 @@ import { ImagePreview } from "./ImagePreview";
 import { PublicFeedback } from "./PublicFeedback";
 import { PublicProcess } from "./PublicProcess";
 import { nativeCitationDisplay } from "./nativeCitationDisplay";
-import { answerEvidence, answerOriginNotice } from "./answerEvidence";
+import { answerOriginNotice } from "./answerEvidence";
 import { PUBLIC_STAGE_LABELS } from "./publicSse";
 import {
   publicNaturalImageUrl,
@@ -216,8 +216,6 @@ export function PublicAnswer({
     signalAgeSeconds,
   );
   const originNotice = answerOriginNotice(turn);
-  const evidence = answerEvidence(turn);
-  const retrieved = turn.citations.filter((item) => !evidence.includes(item));
 
   useEffect(() => {
     if (!active) return;
@@ -340,17 +338,11 @@ export function PublicAnswer({
             )}
           </div>
         )}
-        {[
-          { heading: "引用依据", citations: evidence },
-          { heading: "检索参考", citations: retrieved },
-        ]
-          .filter((group) => group.citations.length > 0)
-          .map((group) => (
+        {turn.citations.length > 0 && (
+          <>
             <PublicCitations
-              key={group.heading}
-              heading={group.heading}
               allowSourceDownload={allowSourceDownload}
-              citations={group.citations}
+              citations={turn.citations}
               onDownloadReference={onDownloadReference}
               onReadReference={onReadReference}
               imageContext={
@@ -362,7 +354,8 @@ export function PublicAnswer({
                   : undefined
               }
             />
-          ))}
+          </>
+        )}
         {turn.status === "completed" && (
           <AnswerActions beforeExport={beforeExport} turn={turn} />
         )}

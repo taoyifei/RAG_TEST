@@ -1,96 +1,58 @@
 import { render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-
-import { answerEvidence, answerOriginNotice } from "./answerEvidence";
+import { answerOriginNotice } from "./answerEvidence";
 import { answerClipboardText } from "./answerExport";
+import { MODEL_GENERATED_NOTICE } from "./nativeCitationDisplay";
 import { PublicAnswer } from "./PublicAnswer";
 import type { PublicTurn } from "./usePublicChat";
 
-const citation = {
-  document_name: "园区服务手册.docx",
-  native_chunk_id: "chunk-a",
-  native_reference: { knowledge_base_id: "kb-a", sub_chunk_id: ["child-a"] },
-  quote: "员工食堂在服务中心。",
-};
 const turn: PublicTurn = {
   id: "t",
   conversationId: "c",
-  question: "我家在哪里",
+  question: "测试问题",
   status: "completed",
   nativeProtocol: true,
-  answerOrigin: "model_unreferenced",
-  answer: "资料未提供你的家庭地址。",
+  answerOrigin: "knowledge",
+  answer: "食堂位于服务中心A座1楼。",
   startedAt: 1,
   stageStartedAt: 1,
   lastSignalAt: 1,
   stageHistory: [],
   claims: [],
-  citations: [citation],
+  citations: [
+    { document_name: "服务手册.docx", quote: "食堂位于服务中心A座1楼。" },
+  ],
   partial: false,
   feedback: "idle",
 };
 
-it("有检索候选但资料不足时提示，并把候选放在检索参考里", () => {
+it("正常业务回答没有正文引用标号时也不误加模型生成提示", () => {
+  expect(answerOriginNotice(turn)).toBeUndefined();
   render(<PublicAnswer turn={turn} onFeedback={vi.fn()} onRetry={vi.fn()} />);
-  expect(screen.getByRole("note")).toHaveTextContent(
-    "未引用知识库资料，以下内容由大模型生成，仅供参考。",
-  );
-  expect(screen.getByText("检索参考（1段）")).toBeInTheDocument();
-  expect(screen.queryByText("引用依据（1段）")).not.toBeInTheDocument();
+  expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  expect(screen.getByText("食堂位于服务中心A座1楼。")).toBeInTheDocument();
 });
 
-it.each([
-  ['实际引用<kb chunk_id="chunk-a" kb_id="kb-a"/>', 1],
-  ['<kb chunk_id="other"/>', 0],
-  ['<kb chunk_id="child-a" kb_id="kb-a"/>', 1],
-  ['<kb chunk_id="chunk-a" kb_id="other-kb"/>', 0],
-  ['<kb doc="园区服务手册.docx"/>', 0],
-  ['`<kb chunk_id="chunk-a"/>`', 0],
-  ['```xml\n<kb chunk_id="chunk-a"/>\n```', 0],
-])("正文引用必须与本轮片段对应：%s", (answer, count) => {
-  expect(
-    answerEvidence({ ...turn, answerOrigin: "knowledge", answer }),
-  ).toHaveLength(count);
-});
-
-it("使用真实引用时不被旧的来源标记覆盖", () => {
-  const value = { ...turn, answer: '食堂在服务中心。<kb chunk_id="chunk-a"/>' };
-  expect(answerEvidence(value)).toEqual([citation]);
-  expect(answerOriginNotice(value)).toBeUndefined();
-});
-
-it("充分依据显示引用；其他检索候选仍单独保留", () => {
+it("明确无依据时统一显示一次提示，并保留检索参考及下载入口", () => {
   const value: PublicTurn = {
     ...turn,
-    answerOrigin: "knowledge",
-    answer: '食堂在服务中心。<kb chunk_id="chunk-a"/>',
-    citations: [
-      citation,
-      { document_name: "发票指引.docx", native_chunk_id: "chunk-b" },
-    ],
+    answerOrigin: "model_unreferenced",
+    answer: MODEL_GENERATED_NOTICE + "\n\n当前资料没有提供所问的信息。",
   };
   render(<PublicAnswer turn={value} onFeedback={vi.fn()} onRetry={vi.fn()} />);
-  expect(screen.queryByRole("note")).not.toBeInTheDocument();
-  expect(screen.getByText("引用依据（1段）")).toBeInTheDocument();
+  expect(screen.getByRole("note")).toHaveTextContent(MODEL_GENERATED_NOTICE);
+  expect(screen.getAllByText(MODEL_GENERATED_NOTICE)).toHaveLength(1);
   expect(screen.getByText("检索参考（1段）")).toBeInTheDocument();
+  expect(screen.getByText("当前资料没有提供所问的信息。")).toBeInTheDocument();
 });
 
-it("复制含来源时保留提示，不把无关检索结果列为回答来源", () => {
-  const text = answerClipboardText(turn, true);
-  expect(text).toContain("未引用知识库资料，以下内容由大模型生成，仅供参考。");
-  expect(text).not.toContain("园区服务手册.docx");
-});
-
-it("实际展示的知识库原图也属于引用，单独提到图片地址不算", () => {
-  const picture = { ...citation, quote: "![原图](resource://source-picture)" };
-  const value = {
+it("复制模型答复保留提示一次，不附上无关检索候选作为答复来源", () => {
+  const value: PublicTurn = {
     ...turn,
-    citations: [picture],
-    answer: "![原图](resource://source-picture)",
+    answerOrigin: "model_unreferenced",
+    answer: MODEL_GENERATED_NOTICE + "\n\n这是一句友好的答复。",
   };
-  expect(answerEvidence(value)).toEqual([picture]);
-  expect(answerOriginNotice(value)).toBeUndefined();
-  expect(
-    answerEvidence({ ...value, answer: "地址resource://source-picture" }),
-  ).toEqual([]);
+  const text = answerClipboardText(value, true);
+  expect(text.split(MODEL_GENERATED_NOTICE)).toHaveLength(2);
+  expect(text).not.toContain("服务手册.docx");
 });

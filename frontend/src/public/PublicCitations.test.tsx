@@ -38,7 +38,7 @@ it("展开原生引用文档后才加载对应附件，旧引用不猜测文件�
     />,
   );
   expect(screen.queryByText("关联附件：doc-actual")).not.toBeInTheDocument();
-  await user.click(screen.getByText("引用依据（4段）"));
+  await user.click(screen.getByText("检索参考（4段）"));
   const groups = screen.getAllByRole("article");
   await user.click(within(groups[0]).getByText("展开全部片段"));
   expect(await screen.findByText("关联附件：doc-actual")).toBeVisible();
@@ -71,7 +71,7 @@ it("按完整来源身份分组并保留全部片段和原始顺序", async () =
 
   const { container } = render(<PublicCitations citations={citations} />);
 
-  const panelSummary = screen.getByText("引用依据（5段）");
+  const panelSummary = screen.getByText("检索参考（5段）");
   const panel = container.querySelector(".wst-citations");
   expect(panel).not.toHaveAttribute("open");
   panelSummary.focus();
@@ -167,7 +167,7 @@ it("空引用不渲染，旧响应缺少可选字段时仍可展开", () => {
 
   rerender(<PublicCitations citations={[{ document_name: "旧版合成资料" }]} />);
 
-  expect(screen.getByText("引用依据（1段）")).toBeInTheDocument();
+  expect(screen.getByText("检索参考（1段）")).toBeInTheDocument();
   expect(screen.getByText("旧版合成资料")).toBeInTheDocument();
   expect(screen.getByText("1段")).toBeInTheDocument();
 });
@@ -223,7 +223,7 @@ it("原生引用的片段与原件分别使用明确入口", async () => {
       onDownloadReference={onDownload}
     />,
   );
-  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByText("检索参考（1段）"));
   await user.click(screen.getByText("开发中心三种工作模式"));
   await user.click(screen.getByRole("button", { name: /^下载原件：/ }));
   expect(onDownload).toHaveBeenCalledWith(
@@ -253,7 +253,7 @@ it("同一文件多段只在标题旁提供一次下载，折叠时也可用并�
       onReadReference={reader}
     />,
   );
-  await user.click(screen.getByText("引用依据（3段）"));
+  await user.click(screen.getByText("检索参考（3段）"));
   const group = screen.getByRole("article");
   const button = within(group).getByRole("button", {
     name: "下载原件：操作流程",
@@ -306,7 +306,7 @@ it("下载中阻止重复请求，失败时折叠状态仍显示提示并可重�
       onDownloadReference={download}
     />,
   );
-  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByText("检索参考（1段）"));
   const button = screen.getByRole("button", { name: /^下载原件：/ });
   await user.dblClick(button);
   expect(download).toHaveBeenCalledOnce();
@@ -340,7 +340,7 @@ it("旧版原件入口同样放在文件标题旁，每文件只下载一次", a
       onDownloadReference={download}
     />,
   );
-  await user.click(screen.getByText("引用依据（2段）"));
+  await user.click(screen.getByText("检索参考（2段）"));
   const buttons = screen.getAllByRole("button", { name: /^下载原件：/ });
   expect(buttons).toHaveLength(1);
   await user.click(buttons[0]);
@@ -371,7 +371,7 @@ it("关闭原件下载时保留原生引用片段和依据，隐藏新旧原件�
       onDownloadReference={() => Promise.resolve()}
     />,
   );
-  await user.click(screen.getByText("引用依据（2段）"));
+  await user.click(screen.getByText("检索参考（2段）"));
   for (const group of screen.getAllByRole("article")) {
     const summary = group.querySelector(".wst-citation-heading");
     if (summary) await user.click(summary);
@@ -410,7 +410,7 @@ it("点击文档名在旁边阅读来源，保留答案与原下载权限检查"
       />
     </div>,
   );
-  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByText("检索参考（1段）"));
   const trigger = screen.getByRole("button", {
     name: "阅读来源：开发中心三种工作模式",
   });
@@ -448,7 +448,7 @@ it("阅读原文不触发下载，原件下载仍传递original标记", async ()
       onDownloadReference={download}
     />,
   );
-  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByText("检索参考（1段）"));
   await user.click(screen.getByText("展开全部片段"));
   await user.click(screen.getByRole("button", { name: /^下载原件：/ }));
   expect(download).toHaveBeenCalledExactlyOnceWith(
@@ -491,7 +491,7 @@ it("关闭后切换来源，旧读取迟到不会覆盖新的来源", async () =
       onReadReference={reader}
     />,
   );
-  await user.click(screen.getByText("引用依据（2段）"));
+  await user.click(screen.getByText("检索参考（2段）"));
   await user.click(screen.getByRole("button", { name: "阅读来源：甲文件" }));
   await waitFor(() => expect(reader).toHaveBeenCalledWith("first"));
   await user.click(screen.getByRole("button", { name: "关闭来源阅读" }));

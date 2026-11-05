@@ -1,106 +1,15 @@
-"""按回答实际引用标注来源，不把检索候选当作回答依据。"""
+"""根据真实引用与检索事件标注回答来源，不推断或改写回答内容。"""
 
 from __future__ import annotations
 
-import html
-import json
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
 
+MODEL_GENERATED_NOTICE = "未引用知识库资料，以下内容由大模型生成，仅供参考。"
+
 AnswerOrigin = Literal[
-    "knowledge",
-    "model_no_results",
-    "model_unreferenced",
-    "unknown",
+    "knowledge", "model_no_results", "model_unreferenced", "unknown"
 ]
-
-_KB_TAG = re.compile(r"<kb\b([^<>]*?)/?>", re.IGNORECASE)
-_ATTRIBUTE = re.compile(r"""([\w-]+)\s*=\s*(["'])(.*?)\2""")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-_INLINE_CODE = re.compile(r"(`+).*?\1")
-_RESOURCE_URL = re.compile(r"""(?:resource|https?)://[^\s<>"'\\)\]]+""")
-_IMAGE = re.compile(
-    r"""!\[[^\]\n]*\]\(\s*<?((?:resource|https?)://[^\s<>)]*)>?"""
-    r"""(?:\s+["'][^"']*["'])?\s*\)"""
-)
-
-
-def _reference_chunk_ids(reference: Mapping[str, Any]) -> set[str]:
-    identifiers = (
-        {str(reference["native_chunk_id"])}
-        if reference.get("native_chunk_id")
-        else set()
-    )
-    native = reference.get("native_reference")
-    children = (
-        native.get("sub_chunk_id") if isinstance(native, Mapping) else None
-    )
-    if isinstance(children, list):
-        identifiers.update(
-            item for item in children if isinstance(item, str) and item
-        )
-    return identifiers
-
-
-def answer_cites_references(
-    answer: str, references: Sequence[Mapping[str, Any]]
-) -> bool:
-    """只接受正文中指向本轮检索片段的原生引用，排除代码示例。"""
-    available = {
-        chunk_id: item
-        for item in references
-        for chunk_id in _reference_chunk_ids(item)
-    }
-    fence = ""
-    for line in answer.splitlines():
-        marker = _FENCE.match(line)
-        if marker:
-            current = marker[1]
-            if not fence:
-                fence = current
-            elif current[0] == fence[0] and len(current) >= len(fence):
-                fence = ""
-            continue
-        if fence:
-            continue
-        text = _INLINE_CODE.sub("", line)
-        images = {match[1] for match in _IMAGE.finditer(text)}
-        if images:
-            for reference in references:
-                native = reference.get("native_reference")
-                image_info = (
-                    native.get("image_info")
-                    if isinstance(native, Mapping)
-                    else None
-                )
-                sources = (
-                    str(reference.get("quote", ""))
-                    + "\n"
-                    + json.dumps(image_info)
-                )
-                if images.intersection(_RESOURCE_URL.findall(sources)):
-                    return True
-        for tag in _KB_TAG.finditer(text):
-            attributes = {
-                match[1]: html.unescape(match[3])
-                for match in _ATTRIBUTE.finditer(tag[1])
-            }
-            chunk = attributes.get("chunk_id", attributes.get("chunkId", ""))
-            cited_reference = available.get(chunk)
-            if cited_reference is None:
-                continue
-            supplied_kb = attributes.get("kb_id")
-            native = cited_reference.get("native_reference")
-            expected_kb = (
-                native.get("knowledge_base_id")
-                if isinstance(native, Mapping)
-                else None
-            )
-            if supplied_kb and supplied_kb != expected_kb:
-                continue
-            return True
-    return False
 
 
 class AnswerOriginTracker:
@@ -145,20 +54,22 @@ class AnswerOriginTracker:
     def origin(
         self,
         *,
-        citations: Sequence[Mapping[str, Any]],
-        answer: str,
+        has_citations: bool,
+        has_answer: bool,
         completed: bool,
+        answer: str = "",
     ) -> AnswerOrigin:
-        """只核对本轮实际引用；不改写正文，也不追加模型判断。"""
-        if not answer.strip():
-            return "unknown"
-        if answer_cites_references(answer, citations):
+        """沿用原生来源；模型明确说明资料不足时显示统一提示。"""
+        if answer.lstrip().startswith(MODEL_GENERATED_NOTICE):
+            return "model_unreferenced"
+        if has_citations:
             return "knowledge"
-        if self._zero_results and not self._found_results and not citations:
-            return "model_no_results"
-        if not completed:
+        if not has_answer:
             return "unknown"
-        return "model_unreferenced"
+        if self._zero_results and not self._found_results:
+            return "model_no_results"
+        # 未结束且未观察到零结果时，引用仍可能在正文之后到达。
+        return "model_unreferenced" if completed else "unknown"
 
 
 def answer_origin_from_events(
@@ -185,7 +96,8 @@ def answer_origin_from_events(
     tracker = AnswerOriginTracker()
     tracker.restore(events)
     return tracker.origin(
-        citations=citations,
-        answer=answer or "",
+        has_citations=bool(citations),
+        has_answer=bool(answer and answer.strip()),
         completed=True,
+        answer=answer or "",
     )

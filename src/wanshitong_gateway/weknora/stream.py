@@ -306,9 +306,10 @@ class BridgeStream:
 
     def _answer_origin(self, *, completed: bool) -> str:
         return self._origin.origin(
-            citations=self._references,
-            answer=self.answer,
+            has_citations=bool(self._references),
+            has_answer=bool(self.answer.strip()),
             completed=completed,
+            answer=self.answer,
         )
 
     def _emit(self, event_type: str, data: Mapping[str, Any]) -> bytes:

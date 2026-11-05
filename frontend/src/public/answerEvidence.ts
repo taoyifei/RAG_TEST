@@ -1,23 +1,29 @@
-import { referencedCitations } from "./nativeCitationDisplay";
+import {
+  hasModelNotice,
+  MODEL_GENERATED_NOTICE,
+} from "./nativeCitationDisplay";
 import type { PublicTurn } from "./usePublicChat";
 
 export function answerEvidence(turn: PublicTurn) {
-  if (!turn.nativeProtocol) return turn.citations;
-  return referencedCitations(
-    turn.answer ?? turn.provisionalAnswer ?? "",
-    turn.citations,
-  );
+  return hasModelNotice(turn.answer ?? turn.provisionalAnswer ?? "") ||
+    turn.answerOrigin === "model_unreferenced" ||
+    turn.answerOrigin === "model_no_results"
+    ? []
+    : turn.citations;
 }
 
 export function answerOriginNotice(turn: PublicTurn): string | undefined {
   if (
-    (turn.status !== "completed" &&
-      !(
-        turn.status === "streaming" && turn.answerOrigin === "model_no_results"
-      )) ||
+    (turn.status !== "completed" && turn.status !== "streaming") ||
     !(turn.answer ?? turn.provisionalAnswer)?.trim()
   )
     return undefined;
-  if (answerEvidence(turn).length > 0) return undefined;
-  return "未引用知识库资料，以下内容由大模型生成，仅供参考。";
+  if (
+    hasModelNotice(turn.answer ?? turn.provisionalAnswer ?? "") ||
+    turn.answerOrigin === "model_unreferenced" ||
+    turn.answerOrigin === "model_no_results" ||
+    (turn.status === "completed" && turn.citations.length === 0)
+  )
+    return MODEL_GENERATED_NOTICE;
+  return undefined;
 }

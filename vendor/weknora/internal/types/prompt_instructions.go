@@ -113,4 +113,6 @@ const SourcedAnswerOutputPrompt = `Answer presentation:
 	`Use ASCII half-width parentheses as ![alt](url); never invent, shorten, or replace its URL.
 - Before finishing, silently verify that the answer follows the requested format, supports ` +
 	`its factual claims, and accurately distinguishes completed actions from remaining work. ` +
-	`Source citation formatting is controlled by the runtime protocol.`
+	`Source citation formatting is controlled by the runtime protocol.
+- 仅当当前资料不能直接支持本次回答时，先单独输出这一句原文：未引用知识库资料，以下内容由大模型生成，仅供参考。
+  然后照常回答或说明未知；相近的背景资料不能代替直接依据。有资料依据时正常回答，不加这句提示。`

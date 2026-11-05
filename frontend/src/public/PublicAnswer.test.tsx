@@ -213,7 +213,7 @@ it("实时正文与引用可同时显示，且不宣称内容已核验", () => {
   };
   render(<PublicAnswer onFeedback={vi.fn()} onRetry={vi.fn()} turn={turn} />);
   expect(screen.getByText("实时正文").tagName).toBe("STRONG");
-  expect(screen.getByText("引用依据（1段）")).toBeInTheDocument();
+  expect(screen.getByText("检索参考（1段）")).toBeInTheDocument();
   expect(screen.queryByText(/已核验/)).not.toBeInTheDocument();
 });
 
@@ -327,7 +327,7 @@ it("把原生知识库引用标记显示为序号，保留原始引用和代码�
     <PublicAnswer onFeedback={vi.fn()} onRetry={vi.fn()} turn={turn} />,
   );
   expect(screen.getByText(/次月开始折旧。〔1〕/)).toBeInTheDocument();
-  expect(screen.getByText("引用依据（1段）")).toBeInTheDocument();
+  expect(screen.getByText("检索参考（1段）")).toBeInTheDocument();
   expect(container.querySelector("code")?.textContent).toContain(tag);
   expect(
     container.querySelector(".wst-final-answer")?.textContent,
@@ -421,7 +421,7 @@ it("答案把来源读取回调透传到阅读抽屉", async () => {
       }}
     />,
   );
-  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByText("检索参考（1段）"));
   await user.click(screen.getByRole("button", { name: "阅读来源：现行制度" }));
   expect(await screen.findByText("来自受保护接口的引用原文")).toBeVisible();
   expect(reader).toHaveBeenCalledExactlyOnceWith("ref-1");
@@ -453,7 +453,7 @@ it("回答没有配图时，引用独有图片仍透传本条会话身份并可�
     />,
   );
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
-  await user.click(screen.getByText("引用依据（1段）"));
+  await user.click(screen.getByText("检索参考（1段）"));
   await user.click(screen.getByRole("button", { name: "阅读来源：操作说明" }));
   const source = screen.getByRole("dialog", { name: "来源阅读：操作说明" });
   const thumb = await within(source).findByRole("img", {
