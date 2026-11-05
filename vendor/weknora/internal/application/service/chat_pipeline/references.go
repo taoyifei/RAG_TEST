@@ -29,6 +29,10 @@ func prepareMessagesWithModelContext(
 	if len(chatManage.MergeResult) == 0 || len(messages) == 0 {
 		return messages, registry
 	}
+	messages[0].Content += "\n\n【回答来源】先核对当前资料是否有能回答用户原问题的具体文字或图片。" +
+		"有依据：直接据此回答，不加来源提示。" +
+		"无依据：第一行原样写‘未引用知识库资料，以下内容由大模型生成，仅供参考。’，然后正常答复。" +
+		"只凭模型常识作答也属于无依据。"
 
 	ordered := expandCitationSources(orderedPipelineReferences(chatManage))
 	knowledgeResults := make([]*types.SearchResult, 0, len(ordered))

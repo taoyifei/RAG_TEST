@@ -94,12 +94,6 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 	// Add current user message. Only include images when the chat model supports
 	// vision; non-vision models rely on the text description in UserContent.
 	userMsg := chat.Message{Role: "user", Content: chatManage.UserContent}
-	if len(chatManage.MergeResult) > 0 {
-		userMsg.Content += "\n\n【来源说明】当前用户的原始问题是：" + chatManage.Query +
-			"\n如果答案要点能从以上资料中找到，直接依据资料正常回答，不加无依据提示；" +
-			"如果资料中没有答案要点，只能凭模型常识、推测或自行组织答复，则先单独写：" +
-			"未引用知识库资料，以下内容由大模型生成，仅供参考。\n然后照常答复。"
-	}
 	if chatManage.ChatModelSupportsVision && len(chatManage.Images)+len(chatManage.ContextImages) > 0 {
 		// The user's own images first, then the retrieved ones the content
 		// says are attached.
