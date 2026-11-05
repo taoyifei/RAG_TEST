@@ -9,6 +9,7 @@ import pytest
 
 from wanshitong_gateway.weknora.answer_origin import (
     MODEL_GENERATED_NOTICE,
+    MODEL_GENERATED_SOURCE,
     answer_origin_from_events,
 )
 from wanshitong_gateway.weknora.stream import BridgeStream, NativeEvent
@@ -160,12 +161,18 @@ def test_recovery_keeps_prior_evidence_without_repeating_answer(
 
 
 @pytest.mark.parametrize("count", [0, 3])
+@pytest.mark.parametrize(
+    "answer",
+    [
+        MODEL_GENERATED_NOTICE + "\n\n资料没有提供所问的信息。",
+        "资料没有提供所问的信息。\n\n" + MODEL_GENERATED_SOURCE,
+    ],
+)
 def test_no_basis_notice_overrides_candidates(
-    count: int,
+    count: int, answer: str,
 ) -> None:
     """模型明确说明没有依据时，即使检索到了候选也提示模型生成。"""
     references = [{"document_name": "参考资料.docx"}]
-    answer = MODEL_GENERATED_NOTICE + "\n\n资料没有提供所问的信息。"
     assert (
         answer_origin_from_events(
             [{"payload": {"native": _result(count)}}],

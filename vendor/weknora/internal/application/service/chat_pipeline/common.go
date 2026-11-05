@@ -95,10 +95,10 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 	// vision; non-vision models rely on the text description in UserContent.
 	userMsg := chat.Message{Role: "user", Content: chatManage.UserContent}
 	if len(chatManage.MergeResult) > 0 {
-		userMsg.Content += "\n\n【回答来源】请先核对原问题“" + chatManage.Query +
-			"”。资料里有答案要点，就直接依据资料答，不加提示。" +
-			"资料里找不到答案要点，即使你自己知道答案，也必须把下面这句作为第一行：\n" +
-			"未引用知识库资料，以下内容由大模型生成，仅供参考。\n然后照常回答。"
+		userMsg.Content += "\n\n【回答来源】先按原规则完整回答原问题“" + chatManage.Query +
+			"”。回答结束后，核对主要答案在当前资料中是否有依据（整理、归纳或转述资料也算）。\n" +
+			"最后单独一行只写一个来源：有资料依据写“来源：知识库”；" +
+			"没有资料依据，包括只凭常识或资料不足时，写“来源：模型生成”。"
 	}
 	if chatManage.ChatModelSupportsVision && len(chatManage.Images)+len(chatManage.ContextImages) > 0 {
 		// The user's own images first, then the retrieved ones the content

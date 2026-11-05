@@ -7,9 +7,19 @@ const INLINE_CODE = /(`+)([\s\S]*?)\1/g;
 
 export const MODEL_GENERATED_NOTICE =
   "未引用知识库资料，以下内容由大模型生成，仅供参考。";
+const MODEL_GENERATED_SOURCE = "来源：模型生成";
+const KNOWLEDGE_SOURCE = "来源：知识库";
+
+function sourceFooter(content: string): string {
+  const answer = content.trimEnd();
+  return answer.slice(answer.lastIndexOf("\n") + 1).trim();
+}
 
 export function hasModelNotice(content: string): boolean {
-  return content.trimStart().startsWith(MODEL_GENERATED_NOTICE);
+  return (
+    content.trimStart().startsWith(MODEL_GENERATED_NOTICE) ||
+    sourceFooter(content) === MODEL_GENERATED_SOURCE
+  );
 }
 
 function displayMarker(tag: string, citations: PublicCitation[]): string {
@@ -54,11 +64,16 @@ export function nativeCitationDisplay(
   content: string,
   citations: PublicCitation[],
 ): string {
-  if (hasModelNotice(content)) {
+  if (content.trimStart().startsWith(MODEL_GENERATED_NOTICE)) {
     content = content
       .trimStart()
       .slice(MODEL_GENERATED_NOTICE.length)
       .trimStart();
+  }
+  const footer = sourceFooter(content);
+  if (footer === MODEL_GENERATED_SOURCE || footer === KNOWLEDGE_SOURCE) {
+    const answer = content.trimEnd();
+    content = answer.slice(0, answer.lastIndexOf("\n") + 1).trimEnd();
   }
   let fenceCharacter = "";
   let fenceLength = 0;

@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
 
 MODEL_GENERATED_NOTICE = "未引用知识库资料，以下内容由大模型生成，仅供参考。"
+MODEL_GENERATED_SOURCE = "来源：模型生成"
 
 AnswerOrigin = Literal[
     "knowledge", "model_no_results", "model_unreferenced", "unknown"
@@ -60,7 +61,11 @@ class AnswerOriginTracker:
         answer: str = "",
     ) -> AnswerOrigin:
         """沿用原生来源；模型明确说明资料不足时显示统一提示。"""
-        if answer.lstrip().startswith(MODEL_GENERATED_NOTICE):
+        source = answer.rstrip().rpartition("\n")[2].strip()
+        if (
+            answer.lstrip().startswith(MODEL_GENERATED_NOTICE)
+            or source == MODEL_GENERATED_SOURCE
+        ):
             return "model_unreferenced"
         if has_citations:
             return "knowledge"
