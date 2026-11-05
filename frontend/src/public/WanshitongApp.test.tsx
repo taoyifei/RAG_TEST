@@ -465,7 +465,7 @@ describe("湾事通公共应用", () => {
     await ask("文档依据是什么？");
     await screen.findByText("已按原生知识库回答。");
     const user = userEvent.setup();
-    await user.click(screen.getByText("引用依据（1段）"));
+    await user.click(screen.getByText("检索参考（1段）"));
     await user.click(screen.getByText("办事指南.docx"));
     const sourceReader = screen.getByRole("dialog", {
       name: "来源阅读：办事指南.docx",
@@ -1404,7 +1404,7 @@ describe("湾事通公共应用", () => {
     );
     await openHome();
     const user = await ask();
-    const summary = await screen.findByText("引用依据（1段）");
+    const summary = await screen.findByText("检索参考（1段）");
     await user.click(summary);
     const groupSummary = screen.getByText("展开全部片段").closest("summary");
     expect(groupSummary).not.toBeNull();

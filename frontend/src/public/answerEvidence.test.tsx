@@ -30,7 +30,11 @@ it("正常业务回答没有正文引用标号时也不误加模型生成提示"
   expect(answerOriginNotice(turn)).toBeUndefined();
   render(<PublicAnswer turn={turn} onFeedback={vi.fn()} onRetry={vi.fn()} />);
   expect(screen.queryByRole("note")).not.toBeInTheDocument();
-  expect(screen.getByText("食堂位于服务中心A座1楼。")).toBeInTheDocument();
+  expect(
+    screen.getByText("食堂位于服务中心A座1楼。", {
+      selector: ".wst-final-answer p",
+    }),
+  ).toBeInTheDocument();
 });
 
 it("明确无依据时统一显示一次提示，并保留检索参考及下载入口", () => {
