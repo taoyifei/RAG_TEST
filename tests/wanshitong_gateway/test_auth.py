@@ -54,6 +54,7 @@ def gateway(tmp_path: Path) -> Iterator[tuple[GatewayAuth, TestClient]]:
             "RAG_MASTER_KEY_FILE": str(master),
             "RAG_ADMIN_BOOTSTRAP_TOKEN_FILE": str(bootstrap),
             "RAG_TRUSTED_ORIGINS": _ORIGIN,
+            "WANSHITONG_BLOCKED_DEPT_IDS": "300, 301",
             "RAG_WANSHITONG_AUTH_MODE": "sso",
             "RAG_WANSHITONG_SSO_DEPLOYMENT_ID": "candidate_8289",
             "RAG_WANSHITONG_SSO_ENTRIES": json.dumps(
@@ -90,14 +91,15 @@ def gateway(tmp_path: Path) -> Iterator[tuple[GatewayAuth, TestClient]]:
         yield auth, browser
 
 
-def _login_public(
+def _sso_callback(
     browser: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     *,
     username: str = "tester",
     user_id: str = "1001",
     dept_id: str | None = None,
-) -> dict:
+) -> httpx.Response:
+    """使用已核验的合成身份完成实际登录回调。"""
     entry = browser.get(
         "/kb/sso/entry",
         params={"return_to": "/kb/"},
@@ -124,10 +126,27 @@ def _login_public(
         )
 
     monkeypatch.setattr(SsoClient, "validate", validate)
-    callback = browser.get(
+    return browser.get(
         "/kb/sso/callback",
         params={"ticket": _TICKET, "state": state},
         follow_redirects=False,
+    )
+
+
+def _login_public(
+    browser: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    username: str = "tester",
+    user_id: str = "1001",
+    dept_id: str | None = None,
+) -> dict:
+    callback = _sso_callback(
+        browser,
+        monkeypatch,
+        username=username,
+        user_id=user_id,
+        dept_id=dept_id,
     )
     assert callback.status_code == 303
     session = browser.post(
@@ -135,6 +154,46 @@ def _login_public(
     )
     assert session.status_code == 200
     return session.json()
+
+
+@pytest.mark.parametrize(
+    ("dept_id", "expected_status"),
+    [("300", 403), ("301", 403), (None, 303), ("208", 303), ("3000", 303)],
+)
+def test_department_access_policy_on_sso_callback(
+    gateway: tuple[GatewayAuth, TestClient],
+    monkeypatch: pytest.MonkeyPatch,
+    dept_id: str | None,
+    expected_status: int,
+) -> None:
+    auth, browser = gateway
+    callback = _sso_callback(browser, monkeypatch, dept_id=dept_id)
+    assert callback.status_code == expected_status
+    assert (auth.public_sessions.cookie_name in browser.cookies) == (
+        expected_status == 303
+    )
+    if expected_status == 403:
+        assert "你的部门暂未开通湾小度" in callback.text
+    session = browser.post(
+        "/kb/api/public/session", headers={"Origin": _ORIGIN}
+    )
+    assert session.status_code == (200 if expected_status == 303 else 401)
+
+
+def test_department_change_applies_to_an_existing_session(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _auth, browser = gateway
+    session = _login_public(browser, monkeypatch, dept_id="208")
+    with TestClient(browser.app, base_url=_ORIGIN) as new_browser:
+        callback = _sso_callback(new_browser, monkeypatch, dept_id="301")
+        assert callback.status_code == 403
+    denied = browser.post(
+        "/kb/api/public/probe",
+        headers={"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]},
+    )
+    assert denied.status_code == 403
+    assert "你的部门暂未开通湾小度" in denied.json()["detail"]
 
 
 def test_sso_public_cookie_does_not_grant_admin(
@@ -527,6 +586,86 @@ def test_local_role_change_applies_to_existing_sso_session(
     )
     resumed = browser.post(
         "/kb/api/public/session", headers={"Origin": _ORIGIN}
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["user"]["role"] == "hr"
+
+
+def test_account_access_enforces_role_hierarchy_and_preserves_role(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, staff_browser = gateway
+    staff = _login_public(staff_browser, monkeypatch)
+    staff_headers = {"Origin": _ORIGIN, "X-CSRF-Token": staff["csrf_token"]}
+    app = staff_browser.app
+    with (
+        TestClient(app, base_url=_ORIGIN) as owner_browser,
+        TestClient(app, base_url=_ORIGIN) as admin_browser,
+        TestClient(app, base_url=_ORIGIN) as peer_browser,
+    ):
+        owner = _login_public(owner_browser, monkeypatch, user_id="325")
+        admin = _login_public(admin_browser, monkeypatch, user_id="1002")
+        _login_public(peer_browser, monkeypatch, user_id="1003")
+        assert auth.users is not None
+        for user_id, role in (
+            ("1001", "hr"),
+            ("1002", "admin"),
+            ("1003", "admin"),
+        ):
+            auth.users.set_role(user_id, role, actor_user_id="325")
+        owner_headers = {"Origin": _ORIGIN, "X-CSRF-Token": owner["csrf_token"]}
+        admin_headers = {"Origin": _ORIGIN, "X-CSRF-Token": admin["csrf_token"]}
+        for target in ("325", "1002", "1003"):
+            assert (
+                admin_browser.put(
+                    f"/kb/api/ops/users/{target}/access",
+                    json={"blocked": True},
+                    headers=admin_headers,
+                ).status_code
+                == 403
+            )
+        path = "/kb/api/ops/users/1001/access"
+        assert (
+            staff_browser.put(
+                path, json={"blocked": True}, headers=staff_headers
+            ).status_code
+            == 401
+        )
+        banned = admin_browser.put(
+            path, json={"blocked": True}, headers=admin_headers
+        )
+        assert banned.status_code == 200
+        assert banned.json() == {
+            "access_blocked": True,
+            "access_block_reason": "account",
+        }
+        denied = staff_browser.post(
+            "/kb/api/public/probe", headers=staff_headers
+        )
+        assert denied.status_code == 403
+        assert "当前账号已被禁止访问" in denied.json()["detail"]
+        with TestClient(app, base_url=_ORIGIN) as new_browser:
+            assert _sso_callback(new_browser, monkeypatch).status_code == 403
+            assert auth.public_sessions.cookie_name not in new_browser.cookies
+        restored = owner_browser.put(
+            path, json={"blocked": False}, headers=owner_headers
+        )
+        assert restored.json() == {
+            "access_blocked": False,
+            "access_block_reason": None,
+        }
+        assert (
+            owner_browser.put(
+                "/kb/api/ops/users/1002/access",
+                json={"blocked": True},
+                headers=owner_headers,
+            ).status_code
+            == 200
+        )
+        assert admin_browser.get("/kb/api/ops/users").status_code == 403
+        assert admin_browser.get("/kb/api/admin/entry").status_code == 403
+    resumed = staff_browser.post(
+        "/kb/api/public/session", headers=staff_headers
     )
     assert resumed.status_code == 200
     assert resumed.json()["user"]["role"] == "hr"

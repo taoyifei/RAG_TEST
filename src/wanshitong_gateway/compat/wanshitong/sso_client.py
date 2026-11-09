@@ -184,7 +184,8 @@ def _identifier(payload: Mapping[str, object], key: str) -> str:
 
 
 def _optional_identifier(payload: Mapping[str, object], key: str) -> str | None:
-    if payload.get(key) is None:
+    value = payload.get(key)
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     return _identifier(payload, key)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -14,11 +14,16 @@ from wanshitong_gateway.compat.adapters.stores.sqlite_connection import (
 from wanshitong_gateway.compat.wanshitong.sso_session import SsoIdentity
 
 Role = Literal["admin", "hr", "user"]
+AccessBlockReason = Literal["department", "account"]
 _ROLES = frozenset({"admin", "hr", "user"})
 
 
 class RoleChangeDeniedError(PermissionError):
     """操作者无权修改目标用户或授予指定角色。"""
+
+
+class AccessChangeDeniedError(PermissionError):
+    """操作者无权修改目标账号的访问状态。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +36,7 @@ class UserProfile:
     dept_id: str | None
     role: Role
     is_super_admin: bool = False
+    access_blocked: bool = False
 
     def as_dict(self) -> dict[str, str | bool | None]:
         """返回前端可见的用户信息。"""
@@ -96,9 +102,11 @@ class UserStore:
         *,
         admin_usernames: tuple[str, ...] | None = None,
         super_admin_user_ids: tuple[str, ...] | None = None,
+        blocked_department_ids: frozenset[str] = frozenset(),
     ) -> None:
         """在当前测试网关数据库初始化用户表。"""
         self._connections = SqliteConnectionFactory(database_path)
+        self._blocked_department_ids = blocked_department_ids
         names = (
             tuple(
                 os.environ.get("WANSHITONG_ADMIN_USERNAMES", "taoyifei").split(
@@ -136,6 +144,25 @@ class UserStore:
                 "created_at TEXT NOT NULL DEFAULT "
                 "(strftime('%Y-%m-%dT%H:%M:%fZ','now')))"
             )
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(user_profiles)"
+                )
+            }
+            if "access_blocked" not in columns:
+                connection.execute(
+                    "ALTER TABLE user_profiles ADD COLUMN access_blocked "
+                    "INTEGER NOT NULL DEFAULT 0 CHECK(access_blocked IN (0,1))"
+                )
+
+    def access_block_reason(
+        self, profile: UserProfile
+    ) -> AccessBlockReason | None:
+        """部门限制按登录系统同步的 ID 精确匹配，空值沿用原访问权限。"""
+        if profile.dept_id in self._blocked_department_ids:
+            return "department"
+        return "account" if profile.access_blocked else None
 
     def record_identity(self, identity: SsoIdentity) -> UserProfile:
         """同步已核验的登录信息，保留管理员手工设置的角色。"""
@@ -295,6 +322,8 @@ class UserStore:
                 raise RoleChangeDeniedError("操作者身份不存在。")
             actor = self._profile(actor_row)
             target = self._profile(target_row)
+            if self.access_block_reason(actor) is not None:
+                raise RoleChangeDeniedError("当前账号已被禁止访问。")
             if role not in editable_roles(actor, target):
                 raise RoleChangeDeniedError(
                     role_edit_note(actor, target)
@@ -318,6 +347,34 @@ class UserStore:
             raise AssertionError("角色更新后用户信息不存在。")
         return self._profile(row)
 
+    def set_access_blocked(
+        self, user_id: str, blocked: bool, *, actor_user_id: str
+    ) -> UserProfile:
+        """按当前角色层级设置账号限制，恢复时保留原角色。"""
+        with self._connections.transaction(write=True) as connection:
+            profiles = {
+                row["user_id"]: self._profile(row)
+                for row in connection.execute(
+                    "SELECT * FROM user_profiles WHERE user_id IN (?,?)",
+                    (actor_user_id, user_id),
+                )
+            }
+            target = profiles.get(user_id)
+            if target is None:
+                raise KeyError(user_id)
+            actor = profiles.get(actor_user_id)
+            if (
+                actor is None
+                or self.access_block_reason(actor) is not None
+                or not editable_roles(actor, target)
+            ):
+                raise AccessChangeDeniedError("你无权修改这个账号的访问权限。")
+            connection.execute(
+                "UPDATE user_profiles SET access_blocked=? WHERE user_id=?",
+                (int(blocked), user_id),
+            )
+            return replace(target, access_blocked=blocked)
+
     def _profile(self, row: sqlite3.Row) -> UserProfile:
         """超级管理员绑定可信 userId，其有效角色不受历史角色值影响。"""
         user_id = str(row["user_id"])
@@ -329,4 +386,5 @@ class UserStore:
             dept_id=None if row["dept_id"] is None else str(row["dept_id"]),
             role="admin" if is_super_admin else cast(Role, str(row["role"])),
             is_super_admin=is_super_admin,
+            access_blocked=bool(row["access_blocked"]),
         )

@@ -25,6 +25,50 @@ function managedUser(overrides: Partial<ManagedUser> = {}): ManagedUser {
   };
 }
 
+it("可独立禁止和恢复账号访问并立即更新界面", async () => {
+  const request = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation((_, init) => {
+      if (init?.method === "PUT" && typeof init.body === "string") {
+        const { blocked } = JSON.parse(init.body) as {
+          blocked: boolean;
+        };
+        return Promise.resolve(
+          Response.json({
+            access_blocked: blocked,
+            access_block_reason: blocked ? "account" : null,
+          }),
+        );
+      }
+      return Promise.resolve(
+        Response.json({ items: [managedUser({ can_edit_access: true })] }),
+      );
+    });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const user = userEvent.setup();
+  render(<UserRolesWorkspace getCsrfToken={() => "csrf"} onBack={() => {}} />);
+  const role = await screen.findByRole("combobox", { name: "测试同事的角色" });
+  await user.selectOptions(role, "hr");
+  await user.click(screen.getByRole("button", { name: "禁止访问" }));
+  expect(await screen.findByText("已禁止访问")).toBeVisible();
+  expect(role).toHaveValue("hr");
+  await user.click(screen.getByRole("button", { name: "恢复访问" }));
+  expect(await screen.findByText("可访问")).toBeVisible();
+  expect(role).toHaveValue("hr");
+  expect(
+    request.mock.calls.filter(([, init]) => init?.method === "PUT"),
+  ).toEqual([
+    [
+      expect.stringContaining("/api/ops/users/1001/access"),
+      expect.objectContaining({ body: '{"blocked":true}' }),
+    ],
+    [
+      expect.stringContaining("/api/ops/users/1001/access"),
+      expect.objectContaining({ body: '{"blocked":false}' }),
+    ],
+  ]);
+});
+
 describe("个人资料额度管理", () => {
   it("普通管理员只能读额度，不能编辑他人个人额度", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

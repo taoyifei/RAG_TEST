@@ -9,7 +9,7 @@ import secrets
 import time
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from wanshitong_gateway.compat.adapters.stores.sqlite_connection import (
@@ -207,10 +207,10 @@ def register_admin_entry_routes(app: FastAPI, auth: GatewayAuth) -> None:
             raise _error(400, "管理后台入口不接受额外跳转参数。")
         try:
             principal = auth.require_public(request, csrf=False)
-        except HTTPException:
+        except HTTPException as error:
+            if error.status_code == status.HTTP_403_FORBIDDEN:
+                raise _error(403, str(error.detail)) from None
             raise _error(401, "请先登录湾小度再进入管理后台。") from None
-        if auth.profile_for_principal(principal).role != "admin":
-            raise _error(403, "仅管理员可以进入管理后台。")
         cookie = request.cookies.get(sessions.cookie_name)
         issue = _admin_issue(auth, sessions, cookie)
         if entry.origin == target.origin:

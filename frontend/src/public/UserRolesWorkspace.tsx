@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { redirectToSso } from "./authNavigation";
 import {
   listUsers,
+  updateUserAccess,
   updateUserPersonalQuota,
   updateUserRole,
   type ManagedUser,
@@ -88,6 +89,38 @@ export function UserRolesWorkspace({
       setBusy(undefined);
     }
   };
+  const saveAccess = async (user: ManagedUser) => {
+    const csrf = getCsrfToken();
+    if (!csrf) {
+      redirectToSso();
+      return;
+    }
+    const name = user.display_name || user.username;
+    const blocked = !user.access_blocked;
+    if (blocked && !window.confirm(`禁止“${name}”访问湾小度？`)) return;
+    setBusy(`access:${user.user_id}`);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const saved = await updateUserAccess(user.user_id, blocked, csrf);
+      setUsers((current) =>
+        current?.map((item) =>
+          item.user_id === user.user_id ? { ...item, ...saved } : item,
+        ),
+      );
+      setNotice(
+        saved.access_blocked
+          ? `已禁止 ${name} 访问湾小度。`
+          : saved.access_block_reason === "department"
+            ? `已解除 ${name} 的账号限制。该部门暂未开通访问。`
+            : `已恢复 ${name} 的访问。`,
+      );
+    } catch (failure) {
+      setError(workspaceErrorMessage(failure));
+    } finally {
+      setBusy(undefined);
+    }
+  };
   return (
     <main className="wst-workspace" id="main-content">
       <header className="wst-workspace-heading">
@@ -143,6 +176,7 @@ export function UserRolesWorkspace({
                   <th scope="col">用户</th>
                   <th scope="col">所属部门</th>
                   <th scope="col">角色</th>
+                  <th scope="col">访问权限</th>
                   <th scope="col">个人资料额度</th>
                 </tr>
               </thead>
@@ -157,6 +191,9 @@ export function UserRolesWorkspace({
                     }}
                     onSaveQuota={(limits) => {
                       void saveQuota(user, limits);
+                    }}
+                    onToggleAccess={() => {
+                      void saveAccess(user);
                     }}
                   />
                 ))}
@@ -174,13 +211,16 @@ function UserRoleRow({
   busy,
   onSave,
   onSaveQuota,
+  onToggleAccess,
 }: {
   user: ManagedUser;
   busy: boolean;
   onSave: (role: UserRole) => void;
   onSaveQuota: (limits: PersonalQuotaLimits) => void;
+  onToggleAccess: () => void;
 }) {
   const [role, setRole] = useState(user.role);
+  const departmentBlocked = user.access_block_reason === "department";
   return (
     <tr>
       <td>
@@ -226,6 +266,24 @@ function UserRoleRow({
               保存
             </button>
           </div>
+        )}
+      </td>
+      <td>
+        <div className="wst-document-meta">
+          {departmentBlocked
+            ? "部门限制"
+            : user.access_blocked
+              ? "已禁止访问"
+              : "可访问"}
+        </div>
+        {user.can_edit_access && (
+          <button type="button" disabled={busy} onClick={onToggleAccess}>
+            {user.access_blocked
+              ? departmentBlocked
+                ? "解除账号限制"
+                : "恢复访问"
+              : "禁止访问"}
+          </button>
         )}
       </td>
       <td>

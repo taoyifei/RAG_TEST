@@ -41,6 +41,7 @@ from wanshitong_gateway.compat.wanshitong.public_session import (
 from wanshitong_gateway.compat.wanshitong.sso_api import register_sso_routes
 from wanshitong_gateway.compat.wanshitong.sso_client import (
     SsoClient,
+    SsoValidationError,
     load_client_secret,
 )
 from wanshitong_gateway.compat.wanshitong.sso_session import (
@@ -48,6 +49,7 @@ from wanshitong_gateway.compat.wanshitong.sso_session import (
     SsoSessionService,
 )
 from wanshitong_gateway.roles import (
+    AccessChangeDeniedError,
     Role,
     RoleChangeDeniedError,
     UserProfile,
@@ -60,6 +62,10 @@ from wanshitong_gateway.weknora.client import NativeHttpError
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _NO_STORE = "no-store"
+_ACCESS_DENIAL_MESSAGES = {
+    "department": "你的部门暂未开通湾小度，请联系管理员。",
+    "account": "当前账号已被禁止访问湾小度，请联系管理员。",
+}
 
 
 class _AdminLoginRequest(BaseModel):
@@ -76,6 +82,14 @@ class _RoleUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: Role
+
+
+class _AccessUpdateRequest(BaseModel):
+    """独立设置账号的禁止访问状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    blocked: bool = Field(strict=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +119,10 @@ class GatewayAuth:
     def __post_init__(self) -> None:
         """认证和业务用户共用当前网关的独立数据库。"""
         if self.users is None:
-            self.users = UserStore(self.settings.database_path)
+            self.users = UserStore(
+                self.settings.database_path,
+                blocked_department_ids=self.settings.blocked_department_ids,
+            )
         self.users.backfill_usage_users(
             deployment_id=self.settings.deployment_id
         )
@@ -121,25 +138,42 @@ class GatewayAuth:
         if self.users is None:
             raise AssertionError("用户资料库未初始化。")
         profile = self.users.get(principal.user_id)
-        if profile is not None:
-            return profile
-        return self.users.record_identity(
-            SsoIdentity(
-                user_id=principal.user_id,
-                username=principal.username,
-                nick_name=principal.nick_name,
-                dept_id=principal.dept_id,
-                roles=(),
-                permissions=(),
+        if profile is None:
+            profile = self.users.record_identity(
+                SsoIdentity(
+                    user_id=principal.user_id,
+                    username=principal.username,
+                    nick_name=principal.nick_name,
+                    dept_id=principal.dept_id,
+                    roles=(),
+                    permissions=(),
+                )
             )
+        reason = self.users.access_block_reason(profile)
+        if reason is not None:
+            raise HTTPException(403, _ACCESS_DENIAL_MESSAGES[reason])
+        return profile
+
+    def record_login(self, identity: SsoIdentity) -> None:
+        """先同步可信部门和账号状态，通过后才能签发员工会话。"""
+        if self.users is None:
+            raise AssertionError("用户资料库未初始化。")
+        reason = self.users.access_block_reason(
+            self.users.record_identity(identity)
         )
+        if reason is not None:
+            raise SsoValidationError(
+                "AUTH_ACCESS_DENIED",
+                _ACCESS_DENIAL_MESSAGES[reason],
+                status_code=403,
+            )
 
     def require_profile(
         self, request: Request, *, csrf: bool | None = None
     ) -> UserProfile:
         """认证真实员工，并在每次请求读取最新角色。"""
         return self.profile_for_principal(
-            self.require_public(request, csrf=csrf)
+            self._authenticate_public(request, csrf=csrf)
         )
 
     @classmethod
@@ -207,7 +241,16 @@ class GatewayAuth:
     def require_public(
         self, request: Request, *, csrf: bool | None = None
     ) -> PublicSessionPrincipal:
-        """验证公共 Cookie，并按路由要求核对页面内存中的 CSRF。"""
+        """认证公共会话，并核对已登录员工的最新访问权限。"""
+        principal = self._authenticate_public(request, csrf=csrf)
+        if principal.user_id is not None:
+            self.profile_for_principal(principal)
+        return principal
+
+    def _authenticate_public(
+        self, request: Request, *, csrf: bool | None
+    ) -> PublicSessionPrincipal:
+        """验证公共 Cookie 和路由要求的 CSRF。"""
         self.verify_origin(request)
         cookie = request.cookies.get(self.public_sessions.cookie_name)
         if cookie is None:
@@ -244,12 +287,12 @@ class GatewayAuth:
         self.verify_origin(request)
         cookie = request.cookies.get(self.settings.admin_cookie_name)
         if cookie is None:
-            principal = self.require_public(request, csrf=False)
+            principal = self._authenticate_public(request, csrf=False)
             if self.profile_for_principal(principal).role != "admin":
                 raise HTTPException(
                     status_code=401, detail="admin session required"
                 )
-            self.require_public(request, csrf=csrf)
+            self._authenticate_public(request, csrf=csrf)
             return AdminPrincipal(session_id=principal.session_id)
         check_csrf = (
             request.method not in _SAFE_METHODS if csrf is None else csrf
@@ -288,9 +331,7 @@ def register_auth_routes(
             sessions=auth.public_sessions,
             client=auth.sso_client,
             trusted_proxies=auth.settings.trusted_proxies,
-            on_identity=(
-                auth.users.record_identity if auth.users is not None else None
-            ),
+            on_identity=auth.record_login,
         )
 
     register_admin_entry_routes(app, auth)
@@ -430,15 +471,15 @@ def _register_console_routes(app: FastAPI, auth: GatewayAuth) -> None:
         return response
 
 
-def _register_user_routes(
+def _register_user_routes(  # noqa: PLR0915 - 角色与访问状态共用用户变更锁。
     app: FastAPI,
     auth: GatewayAuth,
     *,
     before_role_change: Callable[[UserProfile, Role], Awaitable[None]] | None,
     personal_limits: Callable[[str], dict[str, int]] | None = None,
 ) -> None:
-    """注册角色管理；先撤后台执行权限，再提交新的业务角色。"""
-    role_change_lock = asyncio.Lock()
+    """注册角色和访问状态管理，串行执行用户权限变更。"""
+    user_change_lock = asyncio.Lock()
 
     @app.get("/api/ops/users")
     def list_users(request: Request, response: Response) -> dict[str, object]:
@@ -450,8 +491,14 @@ def _register_user_routes(
         items: list[dict[str, object]] = []
         for profile in auth.users.list_users():
             item: dict[str, object] = dict(profile.as_dict())
-            item["editable_roles"] = list(editable_roles(actor, profile))
+            roles = editable_roles(actor, profile)
+            item["editable_roles"] = list(roles)
             item["role_edit_note"] = role_edit_note(actor, profile)
+            item["access_blocked"] = profile.access_blocked
+            item["access_block_reason"] = auth.users.access_block_reason(
+                profile
+            )
+            item["can_edit_access"] = bool(roles)
             if personal_limits is not None:
                 # 额度配置不包含文件名称、内容或个人用量。
                 item["personal_quota"] = personal_limits(profile.user_id)
@@ -467,11 +514,11 @@ def _register_user_routes(
         response: Response,
     ) -> dict[str, str | bool | None]:
         auth.require_admin(request)
-        actor = auth.require_profile(request)
         if auth.users is None:
             raise AssertionError("用户资料库未初始化。")
         try:
-            async with role_change_lock:
+            async with user_change_lock:
+                actor = auth.require_profile(request)
                 target = auth.users.get(user_id)
                 if target is None:
                     raise KeyError(user_id)
@@ -499,6 +546,33 @@ def _register_user_routes(
             ) from None
         response.headers["Cache-Control"] = _NO_STORE
         return profile.as_dict()
+
+    @app.put("/api/ops/users/{user_id}/access")
+    async def set_user_access(
+        user_id: str,
+        body: _AccessUpdateRequest,
+        request: Request,
+        response: Response,
+    ) -> dict[str, str | bool | None]:
+        """沿用角色管理层级独立设置账号限制。"""
+        auth.require_admin(request)
+        if auth.users is None:
+            raise AssertionError("用户资料库未初始化。")
+        try:
+            async with user_change_lock:
+                actor = auth.require_profile(request)
+                profile = auth.users.set_access_blocked(
+                    user_id, body.blocked, actor_user_id=actor.user_id
+                )
+        except AccessChangeDeniedError as error:
+            raise HTTPException(403, str(error)) from None
+        except KeyError:
+            raise HTTPException(404, "用户不存在。") from None
+        response.headers["Cache-Control"] = _NO_STORE
+        return {
+            "access_blocked": profile.access_blocked,
+            "access_block_reason": auth.users.access_block_reason(profile),
+        }
 
 
 def _initialize_admin_schema(connections: SqliteConnectionFactory) -> None:

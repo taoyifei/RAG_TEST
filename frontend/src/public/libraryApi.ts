@@ -92,8 +92,16 @@ export interface ManagedUser {
   is_super_admin: boolean;
   editable_roles: UserRole[];
   role_edit_note: string | null;
+  access_blocked?: boolean;
+  access_block_reason?: UserAccessState["access_block_reason"];
+  can_edit_access?: boolean;
   personal_quota?: PersonalQuotaLimits;
   can_edit_personal_quota?: boolean;
+}
+
+export interface UserAccessState {
+  access_blocked: boolean;
+  access_block_reason: "department" | "account" | null;
 }
 
 async function checkResponse(response: Response): Promise<Response> {
@@ -303,6 +311,28 @@ export async function updateUserRole(
       body: JSON.stringify({ role }),
     }),
   );
+}
+
+export async function updateUserAccess(
+  userId: string,
+  blocked: boolean,
+  csrfToken: string,
+): Promise<UserAccessState> {
+  const response = await checkResponse(
+    await fetch(
+      withAppBase(`/api/ops/users/${encodeURIComponent(userId)}/access`),
+      {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ blocked }),
+      },
+    ),
+  );
+  return (await response.json()) as UserAccessState;
 }
 
 export async function updateUserPersonalQuota(

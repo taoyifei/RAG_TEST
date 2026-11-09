@@ -656,9 +656,11 @@ export function usePublicChat() {
         setSessionReady(false);
         setPhase("failed");
         setSessionError(
-          error instanceof TypeError
-            ? "暂时无法连接湾小度，请检查网络后重试。"
-            : "湾小度暂时无法初始化，请重试。",
+          error instanceof PublicApiError && error.status === 403
+            ? publicErrorMessage(error)
+            : error instanceof TypeError
+              ? "暂时无法连接湾小度，请检查网络后重试。"
+              : "湾小度暂时无法初始化，请重试。",
         );
       });
   }, [clearLocalSession, initializeSession]);

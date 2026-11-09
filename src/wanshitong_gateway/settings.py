@@ -31,6 +31,7 @@ class GatewayAuthSettings:
     trusted_proxies: frozenset[str]
     sso: SsoSettings
     root_path: str = "/kb"
+    blocked_department_ids: frozenset[str] = frozenset()
 
     @property
     def database_path(self) -> Path:
@@ -88,6 +89,20 @@ class GatewayAuthSettings:
         trusted_proxies = _trusted_proxies(
             source.get("RAG_TRUSTED_PROXIES", "")
         )
+        blocked_department_ids = frozenset(
+            dept_id.strip()
+            for dept_id in source.get("WANSHITONG_BLOCKED_DEPT_IDS", "").split(
+                ","
+            )
+            if dept_id.strip()
+        )
+        if any(
+            not dept_id.isascii() or not dept_id.isdecimal()
+            for dept_id in blocked_department_ids
+        ):
+            raise ValueError(
+                "WANSHITONG_BLOCKED_DEPT_IDS 必须是逗号分隔的部门 ID。"
+            )
         return cls(
             data_dir=data_dir,
             master_key_file=master_key_file,
@@ -97,6 +112,7 @@ class GatewayAuthSettings:
             trusted_proxies=trusted_proxies,
             sso=sso,
             root_path=root_path,
+            blocked_department_ids=blocked_department_ids,
         )
 
 
