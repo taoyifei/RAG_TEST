@@ -11,29 +11,52 @@ from typing import Literal, TypedDict
 _EDITABLE_FORMATS = {"doc", "docx", "xls", "xlsx", "ppt", "pptx"}
 _FILE_WORDS = re.compile(
     r"模板|表格|清单|[个份张][^，。！？?]{0,8}表|空白|空表|样表|现成|原件|"
-    r"电子版|可编辑|可填写|能改|"
-    r"可套|能套|可以套|套用|下载|ppt|excel|xlsx|word|docx",
+    r"电子版|可编辑|可填写|能.{0,3}(?:改|填|编辑|套)|确认单|"
+    r"可套|可以套|套用|下载|ppt|excel|xlsx|word|docx",
     re.I,
 )
 _FILE_REQUEST = re.compile(
     r"有|求|想|要|发|给|找|拿|哪|来一?[份张个]|下载|能套|可以套|套用"
 )
 _ASK_FOR_DETAILS = re.compile(
-    r"怎么|怎样|如何|包含|哪些|哪几|为什么|谁审批|什么流程|有什么要求"
+    r"怎么|怎样|如何|包含|哪些|哪几|为什么|谁审批|哪[里处儿].{0,5}签字|"
+    r"什么(?:流程|要求|内容|材料|步骤)|"
+    r"(?:写|讲|填|交|放|说明|准备|注意)(?:什么|啥)"
 )
 _GET_FILE = re.compile(
     r"下载|哪里找|在哪[儿里]?[？?。 ]*$|[发给]我|从哪.{0,8}[拿下]|"
-    r"有现成|能套|可以套"
+    r"有现成|能.{0,3}套|可以套"
 )
 _VERSION = re.compile(r"[（(](?:20\d{2}年\d{1,2}月版|[vV][\d.]+)[）)]")
 _CHECKLIST = "采购需求标准化清单"
 _MIN_TITLE_LENGTH = 4
+_PURCHASE_REPORT = "采购需求的?汇报"
+_PAYMENT_ON_BEHALF = (
+    "代报",
+    "代付",
+    "代垫",
+    "垫(?:付|钱|的)",
+    "先付",
+    "帮我付",
+    "替我付",
+    "付款确认",
+)
 
 # 业务说法和目录中的稳定标题片段关联。实际文件及版本仍来自当轮目录。
 _BUSINESS_NAMES: dict[str, tuple[tuple[str, ...], ...]] = {
-    "项目采购需求的汇报": (
+    _PURCHASE_REPORT: (
         ("采购", "要买", "这次买", "买什么", "为什么买", "买设备", "买东西"),
-        ("上会", "汇报", "立项会", "跟领导讲", "给领导讲", "ppt", "演示"),
+        (
+            "上会",
+            "会上讲",
+            "汇报",
+            "立项会",
+            "评审会",
+            "跟领导讲",
+            "给领导讲",
+            "ppt",
+            "演示",
+        ),
     ),
     _CHECKLIST: (
         ("采购", "要买", "这次买"),
@@ -41,15 +64,15 @@ _BUSINESS_NAMES: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
     "采购订单到货情况确认表": (
         ("采购", "订单"),
-        ("到货", "货到了", "货已经到", "货到齐", "东西到了"),
+        ("到货", "(?:货|东西|设备).{0,8}(?:到了|到齐|已经到)", "送(?:到|达)"),
     ),
     "代报账付款确认单（会议、培训及成本类）": (
-        ("会议", "培训", "成本类"),
-        ("代报", "垫付", "先付", "帮我付", "替我付", "付款确认"),
+        ("会议", "会务", "开会", "办会", "培训", "成本类"),
+        _PAYMENT_ON_BEHALF,
     ),
     "工程类代报账付款确认单": (
         ("工程", "施工"),
-        ("代报", "垫付", "先付", "帮我付", "替我付", "付款确认"),
+        _PAYMENT_ON_BEHALF,
     ),
     "工程项目付款申请审批表": (
         ("工程", "施工"),
@@ -57,7 +80,8 @@ _BUSINESS_NAMES: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
     "工程项目考核成绩汇总表": (
         ("工程", "施工"),
-        ("考核成绩", "考核分数", "考核结果", "考核得分", "打分汇总"),
+        ("考核", "考评", "评分", "打分"),
+        ("成绩", "分数", "结果", "得分", "汇总", "合到", "合在"),
     ),
     "工程项目初验与终验报告": (
         ("工程", "施工"),
@@ -77,7 +101,7 @@ _TOPICS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
     "采购": (
         "采购|要买|这次买|买设备|买东西",
         (
-            ("项目采购需求的汇报", "做采购需求汇报"),
+            (_PURCHASE_REPORT, "做采购需求汇报"),
             (_CHECKLIST, "核对采购需求"),
             ("采购订单到货情况确认表", "确认到货"),
         ),
@@ -91,7 +115,7 @@ _TOPICS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
         ),
     ),
     "代报账": (
-        "代报|垫付|先付|付款确认|代付",
+        "|".join(_PAYMENT_ON_BEHALF),
         (
             (
                 "代报账付款确认单（会议、培训及成本类）",
@@ -184,8 +208,10 @@ def template_file(
 
 def _matches_business(filename: str, question: str) -> bool:
     return any(
-        name in filename
-        and all(any(term in question for term in group) for group in groups)
+        re.search(name, filename)
+        and all(
+            any(re.search(term, question) for term in group) for group in groups
+        )
         for name, groups in _BUSINESS_NAMES.items()
     )
 
@@ -254,7 +280,7 @@ def lookup_template(
         options = [
             label
             for key, label in choices
-            if any(key in file["filename"] for file in files)
+            if any(re.search(key, file["filename"]) for file in files)
         ]
         if options:
             examples = "、".join(options)

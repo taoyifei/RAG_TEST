@@ -317,6 +317,10 @@ def test_template_lookup_clarifies_in_same_conversation_and_restores(
     assert checklist["template_lookup"]["file"]["kind"] == "checklist"
     ordinary = ask("采购需求汇报模板应该包含哪些内容？", "business-qa")
     assert "template_lookup" not in ordinary and len(state.chats) == 1
+    has_template = ask(
+        "我拿到采购的汇报PPT了，上会主要要讲什么？", "template-in-use"
+    )
+    assert "template_lookup" not in has_template and len(state.chats) == 2
 
     catalogue.stage("doc-new", "public", "doc-public")
     catalogue.publish("doc-new", "public", "doc-public")
@@ -335,7 +339,7 @@ def test_template_lookup_respects_selected_documents_and_permissions(
         item["file_name"] = "工程项目考核成绩汇总表填写模板.xlsx"
         catalogue.annotate(identity, item["knowledge_base_id"], kind="template")
 
-    question = "能给我个表汇总工程考核分数吗？"
+    question = "工程那边要把考核的分数合到一起，能发个表吗？"
     for conversation, selection in (
         ("selected", {"knowledge_ids": ["doc-other"]}),
         ("personal", {"search_scopes": ["personal"]}),
