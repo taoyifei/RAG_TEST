@@ -54,6 +54,14 @@ it("把可填写原件放在回答开头并使用资料下载入口", async () =
 
 it.each([
   {
+    name: "应用身份说明没有模型生成提示",
+    status: "completed" as const,
+    origin: "application" as const,
+    count: undefined,
+    citation: false,
+    notice: undefined,
+  },
+  {
     name: "检索零结果的实时回答",
     status: "streaming" as const,
     origin: "model_no_results" as const,

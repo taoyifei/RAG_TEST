@@ -54,6 +54,7 @@ from wanshitong_gateway.public_app import (
     branded_intent_prompts,
     branded_system_prompt,
     config_digest,
+    public_identity_answer,
     uses_public_scope,
     validate_binding,
 )
@@ -1348,15 +1349,22 @@ def create_app(  # noqa: PLR0913, PLR0915
                 else None
             )
             pending_topic = pending.get("topic") if pending else None
+            identity_answer = public_identity_answer(body.query)
             template_reply = None
             if (
-                wants_template_lookup(body.query, pending_topic)
+                identity_answer is None
+                and wants_template_lookup(body.query, pending_topic)
                 and page_settings().allow_source_download
             ):
                 template_reply = _find_template_reply(
                     library, documents, body.query, pending_topic
                 )
-            if template_reply is None:
+            local_engine = None
+            if identity_answer is not None:
+                local_engine = "application"
+            elif template_reply is not None:
+                local_engine = "template_catalogue"
+            else:
                 slot = await _admit_qa(request, qa_queue)
             native_session_id = store.native_session(
                 deployment_id=auth.settings.deployment_id,
@@ -1368,7 +1376,7 @@ def create_app(  # noqa: PLR0913, PLR0915
                     await native.create_session(
                         user_id, title=body.query.strip()[:60]
                     )
-                    if template_reply is not None
+                    if local_engine is not None
                     else await native.create_session(user_id)
                 )
             native_session_id = store.bind_session(
@@ -1431,13 +1439,15 @@ def create_app(  # noqa: PLR0913, PLR0915
         async def generate() -> AsyncIterator[bytes]:  # noqa: PLR0912, PLR0915 - 单次流的终态统一落库。
             status = "streaming"
             try:
-                meta = bridge.meta(
-                    engine="template_catalogue" if template_reply else "weknora"
-                )
+                meta = bridge.meta(engine=local_engine or "weknora")
                 _record_frame(store, trace_id, meta)
                 yield meta
-                if template_reply is not None:
+                final = None
+                if identity_answer is not None:
+                    final = bridge.identity_final(identity_answer)
+                elif template_reply is not None:
                     final = bridge.template_final(template_reply)
+                if final is not None:
                     _record_frame(store, trace_id, final)
                     status = "completed"
                     yield final
@@ -2114,7 +2124,9 @@ def create_app(  # noqa: PLR0913, PLR0915
                 template_lookup["file"] = None
                 answer = "这份原件已更新或当前不可用，请重新提问。"
             citations = json.loads(turn["references_json"])
-            if template_lookup is None:
+            if status == "completed" and turn["finish_reason"] == "identity":
+                answer_origin = "application"
+            elif template_lookup is None:
                 answer_origin = store.turn_answer_origin(
                     turn["trace_id"],
                     citations=citations,

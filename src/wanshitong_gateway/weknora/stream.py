@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from wanshitong_gateway.template_lookup import TemplateReply
-from wanshitong_gateway.weknora.answer_origin import AnswerOriginTracker
+from wanshitong_gateway.weknora.answer_origin import (
+    AnswerOrigin,
+    AnswerOriginTracker,
+)
 from wanshitong_gateway.weknora.client import classify_native_error
 
 PROTOCOL = "wanshitong-weknora-sse-v1"
@@ -151,8 +154,29 @@ class BridgeStream:
 
     def template_final(self, reply: TemplateReply) -> bytes:
         """目录结果独立落库，不伪造原生检索或模型生成事件。"""
-        self._answer.append(reply.answer)
-        self._finish_reason = "template_lookup"
+        return self._local_final(
+            reply.answer,
+            finish_reason="template_lookup",
+            answer_origin="knowledge" if reply.file else "unknown",
+            template_lookup={"file": reply.file, "topic": reply.topic},
+        )
+
+    def identity_final(self, answer: str) -> bytes:
+        """应用自己的身份说明与原生模型回答分开记录。"""
+        return self._local_final(
+            answer, finish_reason="identity", answer_origin="application"
+        )
+
+    def _local_final(
+        self,
+        answer: str,
+        *,
+        finish_reason: str,
+        answer_origin: AnswerOrigin,
+        template_lookup: Mapping[str, Any] | None = None,
+    ) -> bytes:
+        self._answer.append(answer)
+        self._finish_reason = finish_reason
         self.terminal = True
         self.terminal_type = "complete"
         return self._emit(
@@ -164,8 +188,12 @@ class BridgeStream:
                 "native_session_id": self.session_id,
                 "finish_reason": self._finish_reason,
                 "truncated": False,
-                "answer_origin": "knowledge" if reply.file else "unknown",
-                "template_lookup": {"file": reply.file, "topic": reply.topic},
+                "answer_origin": answer_origin,
+                **(
+                    {"template_lookup": template_lookup}
+                    if template_lookup
+                    else {}
+                ),
             },
         )
 

@@ -276,6 +276,56 @@ def test_file_target_is_enforced_upstream_and_survives_history(
     assert "测试回答" not in hidden.text
 
 
+def test_public_identity_is_fixed_and_preserved_in_history(
+    document_chat: tuple[TestClient, _Native, DocumentCatalogue],
+) -> None:
+    """独立身份问题直接回答，普通业务和引用句子仍进入原生问答。"""
+    browser, state, _catalogue = document_chat
+    conversation = "identity-chat"
+
+    def ask(question: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        response = browser.post(
+            "/kb/api/public/chat",
+            json={"conversation_id": conversation, "query": question},
+        )
+        assert response.status_code == 200
+        frames = [
+            json.loads(frame.split("data: ", 1)[1])
+            for frame in response.text.strip().split("\n\n")
+        ]
+        return frames[0], frames[-1]
+
+    identity_questions = (
+        "你是什么模型",
+        "请问，你是谁呀？",
+        "您用的是什么大模型？",
+        "你叫什么名字？",
+        "你能简单自我介绍一下吗？",
+    )
+    for question in identity_questions:
+        meta, reply = ask(question)
+        assert meta["engine"] == "application"
+        assert reply["answer"].startswith("我是湾小度")
+        assert (
+            reply["answer_origin"] == "application" and not reply["citations"]
+        )
+    assert not state.chats and state.sessions == 1
+    history = browser.get(f"/kb/api/public/conversations/{conversation}").json()
+    assert [row["question"] for row in history["turns"]] == list(
+        identity_questions
+    )
+    assert all(
+        row["answer"].startswith("我是湾小度")
+        and row["answer_origin"] == "application"
+        for row in history["turns"]
+    )
+
+    for question in ("模型与解析在哪里配置？", "把‘你是什么模型’翻译成英文"):
+        meta, reply = ask(question)
+        assert meta["engine"] == "weknora" and reply["answer"] == "测试回答"
+    assert len(state.chats) == 2
+
+
 def test_template_lookup_clarifies_in_same_conversation_and_restores(
     document_chat: tuple[TestClient, _Native, DocumentCatalogue],
 ) -> None:

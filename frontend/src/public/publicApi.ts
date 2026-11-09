@@ -141,6 +141,7 @@ const PUBLIC_POPULAR_QUESTIONS_PATH = "/api/public/popular-questions";
 
 export type PublicAnswerOrigin =
   | "knowledge"
+  | "application"
   | "model_no_results"
   | "model_unreferenced"
   | "unknown";

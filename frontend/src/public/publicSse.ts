@@ -304,6 +304,7 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
     (typeof value.answer_origin !== "string" ||
       ![
         "knowledge",
+        "application",
         "model_no_results",
         "model_unreferenced",
         "unknown",

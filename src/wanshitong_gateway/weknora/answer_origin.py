@@ -9,7 +9,11 @@ MODEL_GENERATED_NOTICE = "未引用知识库资料，以下内容由大模型生
 MODEL_GENERATED_SOURCE = "来源：模型生成"
 
 AnswerOrigin = Literal[
-    "knowledge", "model_no_results", "model_unreferenced", "unknown"
+    "knowledge",
+    "model_no_results",
+    "model_unreferenced",
+    "application",
+    "unknown",
 ]
 
 

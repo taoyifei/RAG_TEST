@@ -15,6 +15,7 @@ export function answerEvidence(turn: PublicTurn) {
 export function answerOriginNotice(turn: PublicTurn): string | undefined {
   if (
     turn.templateLookup ||
+    turn.answerOrigin === "application" ||
     (turn.status !== "completed" && turn.status !== "streaming") ||
     !(turn.answer ?? turn.provisionalAnswer)?.trim()
   )

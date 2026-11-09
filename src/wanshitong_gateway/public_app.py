@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Literal, Self
 
 from pydantic import (
@@ -21,6 +22,18 @@ APPLICATION_ID = "wanshitong-public"
 APPLICATION_NAME = "湾小度用户问答"
 PUBLIC_IDENTITY_LINE = (
     "你是湾小度，中国移动（广东）湾区研究院（GMCII）的知识库问答助手。"
+)
+_PUBLIC_IDENTITY_REPLY = (
+    "我是湾小度，湾区研究院的内部知识助手。"
+    "我可以帮你查院内制度和办事流程，也可以帮你找资料和模板。"
+)
+_PUBLIC_IDENTITY_QUESTION = re.compile(
+    r"(?:请问[，,]?)?"
+    r"(?:(?:你|您)(?:是谁|叫什么(?:名字)?|叫啥(?:名字)?|的(?:名字|身份)是什么|"
+    r"(?:是|(?:使用|用)(?:的是|的)?)(?:什么|哪个|哪种|哪款)"
+    r"(?:模型|大模型|大语言模型|助手)|是湾小度)|"
+    r"(?:请|你能)?(?:简单)?(?:自我介绍(?:一下)?|介绍(?:一下)?(?:你自己|自己|你)))"
+    r"[吗么呀啊呢]?"
 )
 _INTENT_IDS = frozenset(
     {
@@ -158,6 +171,14 @@ def branded_system_prompt(prompt: str) -> str:
     if first_line.startswith(("You are WeKnora", "你是湾事通（Wanshitong）")):
         return PUBLIC_IDENTITY_LINE + separator + remainder
     return prompt
+
+
+def public_identity_answer(question: str) -> str | None:
+    """仅对独立的自我介绍请求返回湾小度的产品身份。"""
+    text = re.sub(r"\s+", "", question).strip("？?。！!")
+    if _PUBLIC_IDENTITY_QUESTION.fullmatch(text):
+        return _PUBLIC_IDENTITY_REPLY
+    return None
 
 
 def branded_intent_prompts(
