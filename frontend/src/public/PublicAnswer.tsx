@@ -7,6 +7,7 @@ import ReactMarkdown, {
 import remarkGfm from "remark-gfm";
 
 import { PublicCitations } from "./PublicCitations";
+import { TemplateDownload } from "./DocumentAttachments";
 import { AnswerActions } from "./AnswerActions";
 import { ImagePreview } from "./ImagePreview";
 import { PublicFeedback } from "./PublicFeedback";
@@ -235,7 +236,7 @@ export function PublicAnswer({
         湾
       </div>
       <div className="wst-answer-body">
-        {nativeProcess && <PublicProcess turn={turn} />}
+        {nativeProcess && !turn.templateLookup && <PublicProcess turn={turn} />}
         {!nativeProcess && active && turn.stageMessage && (
           <div className="wst-progress">
             <p className="wst-stage">
@@ -276,6 +277,9 @@ export function PublicAnswer({
               </p>
             )}
           </div>
+        )}
+        {allowSourceDownload && turn.templateLookup?.file && (
+          <TemplateDownload file={turn.templateLookup.file} />
         )}
         {originNotice && (
           <p className="wst-answer-origin" role="note">

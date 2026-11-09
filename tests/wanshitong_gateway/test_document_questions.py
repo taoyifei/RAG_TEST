@@ -236,7 +236,9 @@ def test_file_target_is_enforced_upstream_and_survives_history(
     }
     assert browser.post(base, json=selected).status_code == 200
     assert state.chats[-1]["knowledge_ids"] == ["doc-personal"]
-    assert state.chats[-1].get("knowledge_ids_use_kb_thresholds", False) is False
+    assert (
+        state.chats[-1].get("knowledge_ids_use_kb_thresholds", False) is False
+    )
     assert "knowledge_base_ids" not in state.chats[-1]
     history = browser.get("/kb/api/public/conversations/file-chat").json()
     assert history["turns"][0]["knowledge_ids"] == ["doc-personal"]
@@ -272,6 +274,96 @@ def test_file_target_is_enforced_upstream_and_survives_history(
     hidden = browser.get("/kb/api/public/conversations/file-chat")
     assert hidden.status_code == 403
     assert "测试回答" not in hidden.text
+
+
+def test_template_lookup_clarifies_in_same_conversation_and_restores(
+    document_chat: tuple[TestClient, _Native, DocumentCatalogue],
+) -> None:
+    """确认当前可编辑原件和采购核对清单用途不同。"""
+    browser, state, catalogue = document_chat
+    state.documents["doc-public"]["file_name"] = (
+        "附件2：关于XXXX项目采购需求的汇报-模板（2026年11月版）.pptx"
+    )
+    state.documents["doc-other"]["file_name"] = (
+        "湾区研究院采购需求标准化清单.xlsx"
+    )
+    catalogue.annotate("doc-public", "public", kind="template")
+    catalogue.annotate("doc-other", "public", kind="policy")
+
+    def ask(query: str, conversation: str = "template-chat") -> dict[str, Any]:
+        response = browser.post(
+            "/kb/api/public/chat",
+            json={"conversation_id": conversation, "query": query},
+        )
+        assert response.status_code == 200
+        return json.loads(
+            response.text.strip().split("\n\n")[-1].split("data: ", 1)[1]
+        )
+
+    first = ask("要走采购，能发我个表吗？")
+    assert first["template_lookup"] == {"file": None, "topic": "采购"}
+    assert "核对采购需求" in first["answer"]
+    second = ask("就是拿去上会讲的那份，我要能改的。")
+    file = second["template_lookup"]["file"]
+    assert file["document_id"] == "doc-public"
+    assert file["kind"] == "template" and file["format"] == "PPTX"
+    assert first["native_session_id"] == second["native_session_id"]
+    assert state.chats == []
+    history = browser.get("/kb/api/public/conversations/template-chat").json()
+    assert history["turns"][1]["template_lookup"]["file"] == file
+    assert not history["turns"][1]["native_message_id"]
+
+    checklist = ask("采购提交前，能给我一张核对的表吗？", "checklist")
+    assert checklist["template_lookup"]["file"]["kind"] == "checklist"
+    ordinary = ask("采购需求汇报模板应该包含哪些内容？", "business-qa")
+    assert "template_lookup" not in ordinary and len(state.chats) == 1
+
+    catalogue.stage("doc-new", "public", "doc-public")
+    catalogue.publish("doc-new", "public", "doc-public")
+    history = browser.get("/kb/api/public/conversations/template-chat").json()
+    assert history["turns"][1]["template_lookup"]["file"] is None
+    assert "重新提问" in history["turns"][1]["answer"]
+
+
+def test_template_lookup_respects_selected_documents_and_permissions(
+    document_chat: tuple[TestClient, _Native, DocumentCatalogue],
+) -> None:
+    """选中别的资料或只有个人区时，不发送范围外的模板。"""
+    browser, state, catalogue = document_chat
+    for identity in ("doc-public", "doc-foreign", "doc-hr"):
+        item = state.documents[identity]
+        item["file_name"] = "工程项目考核成绩汇总表填写模板.xlsx"
+        catalogue.annotate(identity, item["knowledge_base_id"], kind="template")
+
+    question = "能给我个表汇总工程考核分数吗？"
+    for conversation, selection in (
+        ("selected", {"knowledge_ids": ["doc-other"]}),
+        ("personal", {"search_scopes": ["personal"]}),
+    ):
+        response = browser.post(
+            "/kb/api/public/chat",
+            json={
+                "conversation_id": conversation,
+                "query": question,
+                **selection,
+            },
+        )
+        assert (
+            response.status_code == 200
+            and "template_lookup" not in response.text
+        )
+    public = browser.post(
+        "/kb/api/public/chat",
+        json={"conversation_id": "all-public", "query": question},
+    )
+    assert (
+        public.status_code == 200
+        and '"document_id":"doc-public"' in public.text
+    )
+    assert all(
+        identifier not in public.text
+        for identifier in ("doc-foreign", "doc-hr")
+    )
 
 
 @pytest.mark.parametrize(

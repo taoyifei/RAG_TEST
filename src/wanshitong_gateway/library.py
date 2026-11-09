@@ -1096,17 +1096,25 @@ class LibraryService:
         self, kb_ids: tuple[str, ...]
     ) -> tuple[str, ...]:
         """原生知识 ID 过滤快照排除待发布及旧版，不改变检索排序。"""
+        return tuple(
+            str(item["id"]) for item in await self.searchable_documents(kb_ids)
+        )
+
+    async def searchable_documents(
+        self, kb_ids: tuple[str, ...]
+    ) -> list[dict[str, Any]]:
+        """取已授权范围内可检索的当前文件，供原生检索和模板直达共用。"""
         async with self._workflow_lock:
             items = await self._items_in_kbs(kb_ids)
-            return tuple(
-                str(item["id"])
+            return [
+                item
                 for item in items
                 if (
                     item.get("parse_status") == "completed"
                     and item.get("enable_status", "enabled") == "enabled"
                     and self.catalogue.searchable(str(item["id"]))
                 )
-            )
+            ]
 
     async def _items_in_kbs(
         self, kb_ids: tuple[str, ...]

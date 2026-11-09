@@ -92,11 +92,11 @@ class WeKnoraClient:
             raise NativeHttpError(502, "公共 Key 无法读取已绑定应用。")
         return data
 
-    async def create_session(self, user_id: str) -> str:
+    async def create_session(self, user_id: str, *, title: str = "") -> str:
         """为已认证用户创建原生会话。"""
         response = await self._http.post(
             "/api/v1/sessions",
-            json={},
+            json={"title": title} if title else {},
             headers=self._headers(user_id),
         )
         payload = _require_success(response)

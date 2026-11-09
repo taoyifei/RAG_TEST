@@ -4,9 +4,53 @@ import { renderToString } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { PublicAnswer } from "./PublicAnswer";
+import * as libraryApi from "./libraryApi";
 import type { PublicTurn } from "./usePublicChat";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("把可填写原件放在回答开头并使用资料下载入口", async () => {
+  const now = Date.now();
+  const filename = "项目采购需求汇报（2026年11月版）.pptx";
+  const download = vi.spyOn(libraryApi, "downloadDocument").mockResolvedValue();
+  render(
+    <PublicAnswer
+      onFeedback={vi.fn()}
+      onRetry={vi.fn()}
+      turn={{
+        id: "template",
+        conversationId: "chat",
+        question: "上会要讲采购，有现成的能改吗？",
+        status: "completed",
+        nativeProtocol: true,
+        stageHistory: [],
+        startedAt: now,
+        stageStartedAt: now,
+        lastSignalAt: now,
+        claims: [],
+        answer: "这是当前发布的原件，可以直接下载。",
+        citations: [],
+        partial: false,
+        feedback: "idle",
+        templateLookup: {
+          file: {
+            document_id: "pptx-1",
+            filename,
+            kind: "template",
+            format: "PPTX",
+          },
+          topic: null,
+        },
+      }}
+    />,
+  );
+  const card = screen.getByRole("region", { name: "文件直达" });
+  expect(card).toHaveTextContent(filename);
+  expect(card.nextElementSibling).toHaveTextContent("这是当前发布的原件");
+  expect(screen.queryByRole("note")).toBeNull();
+  await userEvent.click(within(card).getByRole("button", { name: "下载原件" }));
+  expect(download).toHaveBeenCalledWith("pptx-1", filename);
+});
 
 it.each([
   {

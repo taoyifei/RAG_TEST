@@ -11,7 +11,7 @@ import os
 import re
 import secrets
 import sqlite3
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -60,6 +60,12 @@ from wanshitong_gateway.public_app import (
 from wanshitong_gateway.roles import UserProfile
 from wanshitong_gateway.settings import GatewayAuthSettings
 from wanshitong_gateway.store import GatewayStore
+from wanshitong_gateway.template_lookup import (
+    TemplateReply,
+    lookup_template,
+    template_file,
+    wants_template_lookup,
+)
 from wanshitong_gateway.weknora.admin import NativeAdminClient
 from wanshitong_gateway.weknora.client import NativeHttpError, WeKnoraClient
 from wanshitong_gateway.weknora.principal import ExternalPrincipalSigner
@@ -134,6 +140,46 @@ async def _target_documents(
             "title": str(item.get("file_name") or item.get("title") or "资料"),
         }
     return tuple(targets[key] for key in sorted(targets))
+
+
+def _find_template_reply(
+    library: LibraryService,
+    documents: Sequence[Mapping[str, Any]],
+    question: str,
+    pending_topic: str | None,
+) -> TemplateReply | None:
+    """只在本轮已授权的当前文件内匹配可编辑原件。"""
+    files = []
+    for item in documents:
+        document_id = str(item["id"])
+        candidate = template_file(
+            document_id,
+            str(item.get("file_name") or item.get("title") or ""),
+            library.catalogue.entry(document_id).get("kind", ""),
+        )
+        if candidate is not None:
+            files.append(candidate)
+    return lookup_template(question, files, pending_topic)
+
+
+async def _template_download_available(
+    library: LibraryService,
+    profile: UserProfile,
+    document_id: str,
+    kb_ids: list[str],
+) -> bool:
+    """重新打开历史时核对原件当前权限和状态。"""
+    if not library.catalogue.searchable(document_id):
+        return False
+    try:
+        item, _ = await library.document(document_id, profile)
+    except HTTPException:
+        return False
+    return (
+        item.get("knowledge_base_id") in kb_ids
+        and item.get("parse_status") == "completed"
+        and item.get("enable_status", "enabled") == "enabled"
+    )
 
 
 def _history_cursor(key: bytes, context: str, after: tuple[str, str]) -> str:
@@ -1259,10 +1305,11 @@ def create_app(  # noqa: PLR0913, PLR0915
             item["id"] for item in original_targets
         ):
             raise HTTPException(409, "指定资料已变化，请新建对话。")
-        # 当前文档白名单既排除归档/待发布版本，也防止排队时意外纳入新原件。
-        native_knowledge_ids = (
-            knowledge_ids or await library.searchable_document_ids(kb_ids)
+        # 目录直达与原生问答使用同一份文件范围和当前版本快照。
+        documents = knowledge_targets or await library.searchable_documents(
+            kb_ids
         )
+        native_knowledge_ids = tuple(str(item["id"]) for item in documents)
         if not native_knowledge_ids:
             raise HTTPException(409, "当前范围暂无可问答的资料。")
         client_context = _usage_context(body.client_context)
@@ -1288,14 +1335,42 @@ def create_app(  # noqa: PLR0913, PLR0915
                 conversation_id=conversation_id,
             ):
                 raise HTTPException(404, "会话已删除，请新建对话。")
-            slot = await _admit_qa(request, qa_queue)
+            latest = store.list_turns(
+                deployment_id=auth.settings.deployment_id,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+            )
+            previous = latest[-1] if latest else {}
+            pending = (
+                store.turn_template_lookup(previous["trace_id"])
+                if previous.get("finish_reason") == "template_lookup"
+                and previous.get("status") == "completed"
+                else None
+            )
+            pending_topic = pending.get("topic") if pending else None
+            template_reply = None
+            if (
+                wants_template_lookup(body.query, pending_topic)
+                and page_settings().allow_source_download
+            ):
+                template_reply = _find_template_reply(
+                    library, documents, body.query, pending_topic
+                )
+            if template_reply is None:
+                slot = await _admit_qa(request, qa_queue)
             native_session_id = store.native_session(
                 deployment_id=auth.settings.deployment_id,
                 owner_id=owner_id,
                 conversation_id=conversation_id,
             )
             if native_session_id is None:
-                native_session_id = await native.create_session(user_id)
+                native_session_id = (
+                    await native.create_session(
+                        user_id, title=body.query.strip()[:60]
+                    )
+                    if template_reply is not None
+                    else await native.create_session(user_id)
+                )
             native_session_id = store.bind_session(
                 deployment_id=auth.settings.deployment_id,
                 owner_id=owner_id,
@@ -1336,8 +1411,6 @@ def create_app(  # noqa: PLR0913, PLR0915
                 slot.release()
             lock.release()
             raise
-        slot = _ready_slot(slot)
-
         bridge = BridgeStream(
             trace_id=trace_id,
             session_id=native_session_id,
@@ -1352,14 +1425,23 @@ def create_app(  # noqa: PLR0913, PLR0915
                 try:
                     lock.release()
                 finally:
-                    slot.release()
+                    if slot is not None:
+                        slot.release()
 
         async def generate() -> AsyncIterator[bytes]:  # noqa: PLR0912, PLR0915 - 单次流的终态统一落库。
             status = "streaming"
             try:
-                meta = bridge.meta()
+                meta = bridge.meta(
+                    engine="template_catalogue" if template_reply else "weknora"
+                )
                 _record_frame(store, trace_id, meta)
                 yield meta
+                if template_reply is not None:
+                    final = bridge.template_final(template_reply)
+                    _record_frame(store, trace_id, final)
+                    status = "completed"
+                    yield final
+                    return
                 decoder = NativeSseDecoder()
                 async for chunk in native.knowledge_chat(
                     user_id=user_id,
@@ -1912,7 +1994,7 @@ def create_app(  # noqa: PLR0913, PLR0915
         return record
 
     @app.get("/api/public/conversations/{conversation_id}")
-    async def conversation_history(
+    async def conversation_history(  # noqa: PLR0912, PLR0915 - 授权与历史状态一起恢复。
         conversation_id: str, request: Request
     ) -> dict[str, Any]:
         """从原生消息读回正文，本地仅保留归属与 Trace 映射。"""
@@ -2010,6 +2092,39 @@ def create_app(  # noqa: PLR0913, PLR0915
             )
             if status == "SOURCE_UNAVAILABLE":
                 answer = None
+            template_lookup = (
+                store.turn_template_lookup(turn["trace_id"])
+                if status == "completed"
+                and turn["finish_reason"] == "template_lookup"
+                else None
+            )
+            if (
+                template_lookup
+                and template_lookup["file"]
+                and (
+                    not page_settings().allow_source_download
+                    or not await _template_download_available(
+                        library,
+                        auth.require_profile(request),
+                        template_lookup["file"]["document_id"],
+                        json.loads(turn["kb_scope_json"]),
+                    )
+                )
+            ):
+                template_lookup["file"] = None
+                answer = "这份原件已更新或当前不可用，请重新提问。"
+            citations = json.loads(turn["references_json"])
+            if template_lookup is None:
+                answer_origin = store.turn_answer_origin(
+                    turn["trace_id"],
+                    citations=citations,
+                    status=status,
+                    answer=answer if isinstance(answer, str) else None,
+                )
+            else:
+                answer_origin = (
+                    "knowledge" if template_lookup["file"] else "unknown"
+                )
             turns.append(
                 {
                     "turn_id": turn["trace_id"],
@@ -2021,13 +2136,9 @@ def create_app(  # noqa: PLR0913, PLR0915
                     if native_message is not None
                     else None,
                     "answer": answer if isinstance(answer, str) else None,
-                    "citations": json.loads(turn["references_json"]),
-                    "answer_origin": store.turn_answer_origin(
-                        turn["trace_id"],
-                        citations=json.loads(turn["references_json"]),
-                        status=status,
-                        answer=answer if isinstance(answer, str) else None,
-                    ),
+                    "citations": citations,
+                    "template_lookup": template_lookup,
+                    "answer_origin": answer_origin,
                     "partial": status
                     in {
                         "failed",

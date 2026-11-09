@@ -150,6 +150,16 @@ export interface PublicTargetDocument {
   title: string;
 }
 
+export interface PublicTemplateLookup {
+  file: {
+    document_id: string;
+    filename: string;
+    format: string;
+    kind: "template" | "checklist";
+  } | null;
+  topic: string | null;
+}
+
 export interface PublicNaturalHistoryTurn {
   turn_id: string;
   trace_id: string;
@@ -169,6 +179,7 @@ export interface PublicNaturalHistoryTurn {
   knowledge_ids?: string[];
   target_documents?: PublicTargetDocument[];
   answer_origin?: PublicAnswerOrigin;
+  template_lookup?: PublicTemplateLookup | null;
 }
 
 export interface PublicNaturalSession {

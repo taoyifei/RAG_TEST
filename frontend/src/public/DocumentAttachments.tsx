@@ -2,11 +2,13 @@ import { Download, FileText } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
+  downloadDocument,
   downloadDocumentAsset,
   getDocumentDetails,
   type DocumentAsset,
   type DocumentDetails,
 } from "./libraryApi";
+import type { PublicTemplateLookup } from "./publicApi";
 import "./documentWorkflows.css";
 
 export const DOCUMENT_KIND_NAMES = {
@@ -14,6 +16,51 @@ export const DOCUMENT_KIND_NAMES = {
   illustration: "操作图示",
   template: "可填写模板",
 };
+
+export function TemplateDownload({
+  file,
+}: {
+  file: NonNullable<PublicTemplateLookup["file"]>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  return (
+    <section className="wst-document-related" aria-label="文件直达">
+      <span className="wst-document-kind">
+        {file.kind === "template" ? "可填写模板" : "采购需求核对清单"} ·{" "}
+        {file.format}
+      </span>
+      <strong>{file.filename}</strong>
+      <div className="wst-document-assets">
+        <button
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setError(undefined);
+            void downloadDocument(file.document_id, file.filename)
+              .catch((failure: unknown) =>
+                setError(
+                  failure instanceof Error
+                    ? failure.message
+                    : "下载失败，请重试。",
+                ),
+              )
+              .finally(() => setBusy(false));
+          }}
+          type="button"
+        >
+          <Download size={16} aria-hidden="true" />
+          下载原件
+        </button>
+      </div>
+      {error && (
+        <p role="alert" className="wst-document-error">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
 
 export function DocumentAssetButtons({
   documentId,

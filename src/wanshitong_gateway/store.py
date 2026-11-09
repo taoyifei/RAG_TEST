@@ -473,6 +473,22 @@ class GatewayStore:
             ).fetchall()
         return [{"payload": json.loads(row["payload_json"])} for row in rows]
 
+    def turn_template_lookup(self, trace_id: str) -> dict[str, Any] | None:
+        """读回本人轮次的模板卡片或待澄清场景，调用方先检查轮次归属。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM gateway_events "
+                "WHERE trace_id=? AND event_type='final' "
+                "ORDER BY sequence DESC LIMIT 1",
+                (trace_id,),
+            ).fetchone()
+        data = (
+            json.loads(row["payload_json"]).get("template_lookup")
+            if row
+            else None
+        )
+        return data if isinstance(data, dict) else None
+
     def conversation_search_scopes(
         self, *, deployment_id: str, owner_id: str, conversation_id: str
     ) -> tuple[str, ...] | None:
@@ -623,7 +639,7 @@ class GatewayStore:
         client_context: Mapping[str, Any] | None = None,
         kb_scope: tuple[str, ...] = (),
     ) -> None:
-        """记录一次已实际发起的原生生成。"""
+        """记录已接受的问答轮次及其资料范围。"""
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO gateway_turns "

@@ -28,6 +28,7 @@ import {
   type PublicSearchScopeOption,
   type PublicTargetDocument,
   type PublicAnswerOrigin,
+  type PublicTemplateLookup,
 } from "./publicApi";
 import { availableSearchScopes, orderedSearchScopes } from "./searchScopes";
 import * as authNavigation from "./authNavigation";
@@ -102,6 +103,7 @@ export interface PublicTurn {
   searchScopes?: PublicSearchScope[];
   targetDocuments?: PublicTargetDocument[];
   answerOrigin?: PublicAnswerOrigin;
+  templateLookup?: PublicTemplateLookup;
   question: string;
   status:
     | "submitting"
@@ -251,6 +253,7 @@ function restoreNaturalTurn(
     searchScopes: item.search_scopes ?? ["public"],
     targetDocuments: item.target_documents ?? [],
     answerOrigin: item.answer_origin,
+    templateLookup: item.template_lookup ?? undefined,
     question: item.question,
     status,
     stageHistory: [],
@@ -970,6 +973,7 @@ export function usePublicChat() {
               traceId: traceId ?? turn.traceId,
               truncated: event.truncated,
               finishReason: event.finish_reason,
+              templateLookup: event.template_lookup,
               nativeMessageId: event.native_message_id ?? turn.nativeMessageId,
               nativeRequestId: event.native_request_id ?? turn.nativeRequestId,
             }));

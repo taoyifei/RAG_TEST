@@ -1,4 +1,4 @@
-import type { PublicAnswerOrigin } from "./publicApi";
+import type { PublicAnswerOrigin, PublicTemplateLookup } from "./publicApi";
 
 export interface PublicCitation {
   document_name: string;
@@ -60,6 +60,7 @@ export interface PublicFinalEvent extends PublicEventBase {
   validation_level?: string;
   truncated?: boolean;
   finish_reason?: string | null;
+  template_lookup?: PublicTemplateLookup;
 }
 
 export interface PublicAnswerDeltaEvent extends PublicEventBase {
@@ -178,6 +179,24 @@ const EVENT_TYPES = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isTemplateLookup(value: unknown): value is PublicTemplateLookup {
+  if (
+    !isRecord(value) ||
+    (value.topic !== null && typeof value.topic !== "string")
+  ) {
+    return false;
+  }
+  const { file } = value;
+  return (
+    file === null ||
+    (isRecord(file) &&
+      typeof file.document_id === "string" &&
+      typeof file.filename === "string" &&
+      typeof file.format === "string" &&
+      (file.kind === "template" || file.kind === "checklist"))
+  );
 }
 
 function isCitation(value: unknown): value is PublicCitation {
@@ -330,6 +349,8 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
     ((value.answer !== null && typeof value.answer !== "string") ||
       !Array.isArray(value.citations) ||
       !value.citations.every(isCitation) ||
+      (value.template_lookup !== undefined &&
+        (!weknora || !isTemplateLookup(value.template_lookup))) ||
       (value.user_message !== undefined &&
         typeof value.user_message !== "string"))
   ) {

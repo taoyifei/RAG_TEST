@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from wanshitong_gateway.template_lookup import TemplateReply
 from wanshitong_gateway.weknora.answer_origin import AnswerOriginTracker
 from wanshitong_gateway.weknora.client import classify_native_error
 
@@ -141,11 +142,31 @@ class BridgeStream:
         """原生结束原因，未返回时保持空值。"""
         return self._finish_reason
 
-    def meta(self) -> bytes:
-        """在原生请求前发送本轮映射信息。"""
+    def meta(self, *, engine: str = "weknora") -> bytes:
+        """发送本轮会话映射和实际回答来源。"""
         return self._emit(
             "meta",
-            {"native_session_id": self.session_id, "engine": "weknora"},
+            {"native_session_id": self.session_id, "engine": engine},
+        )
+
+    def template_final(self, reply: TemplateReply) -> bytes:
+        """目录结果独立落库，不伪造原生检索或模型生成事件。"""
+        self._answer.append(reply.answer)
+        self._finish_reason = "template_lookup"
+        self.terminal = True
+        self.terminal_type = "complete"
+        return self._emit(
+            "final",
+            {
+                "status": "completed",
+                "answer": self.answer,
+                "citations": [],
+                "native_session_id": self.session_id,
+                "finish_reason": self._finish_reason,
+                "truncated": False,
+                "answer_origin": "knowledge" if reply.file else "unknown",
+                "template_lookup": {"file": reply.file, "topic": reply.topic},
+            },
         )
 
     def accept(self, native: NativeEvent) -> list[bytes]:  # noqa: PLR0911, PLR0912 - 原生事件逐类保留独立终态。
