@@ -297,13 +297,6 @@
 .wst-quota-message {
   color: var(--wst-quota-fill);
 }
-.wst-user-table {
-  min-width: 900px;
-}
-.wst-user-table td:first-child {
-  width: 26%;
-  max-width: 280px;
-}
 .wst-quota-limit-editor {
   min-width: 220px;
 }
@@ -357,6 +350,39 @@
   max-width: 460px;
   overflow-wrap: anywhere;
 }
+.wst-user-table {
+  min-width: 900px;
+}
+.wst-user-table td:first-child {
+  width: 26%;
+  max-width: 280px;
+}
+.wst-user-access {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.wst-user-access-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 7em;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--wst-accent);
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.wst-user-access-status::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
 .wst-workspace-table td strong {
   font-weight: 550;
 }
@@ -380,14 +406,16 @@
   margin-top: 7px;
 }
 .wst-document-status.failed,
-.wst-document-error {
+.wst-document-error,
+.wst-user-access-status[data-restricted="true"] {
   color: #ffb3a9;
 }
 .wst-document-error {
   margin-bottom: 0;
   font-size: 12px;
 }
-.wst-document-actions button {
+.wst-document-actions button,
+.wst-user-access button {
   min-height: 32px;
   padding: 6px 8px;
   font-size: 12px;
@@ -419,6 +447,7 @@
 .wst-root[data-theme="light"] .wst-document-status.failed,
 .wst-root[data-theme="light"] .wst-document-error,
 .wst-root[data-theme="light"] .wst-document-delete,
+.wst-root[data-theme="light"] .wst-user-access-status[data-restricted="true"],
 .wst-root[data-theme="light"] .wst-workspace-error {
   color: #a33024;
 }

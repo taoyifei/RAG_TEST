@@ -269,22 +269,27 @@ function UserRoleRow({
         )}
       </td>
       <td>
-        <div className="wst-document-meta">
-          {departmentBlocked
-            ? "部门限制"
-            : user.access_blocked
-              ? "已禁止访问"
-              : "可访问"}
+        <div className="wst-user-access">
+          <span
+            className="wst-user-access-status"
+            data-restricted={departmentBlocked || user.access_blocked === true}
+          >
+            {departmentBlocked
+              ? "部门限制"
+              : user.access_blocked
+                ? "已禁止访问"
+                : "可访问"}
+          </span>
+          {user.can_edit_access && (
+            <button type="button" disabled={busy} onClick={onToggleAccess}>
+              {user.access_blocked
+                ? departmentBlocked
+                  ? "解除账号限制"
+                  : "恢复访问"
+                : "禁止访问"}
+            </button>
+          )}
         </div>
-        {user.can_edit_access && (
-          <button type="button" disabled={busy} onClick={onToggleAccess}>
-            {user.access_blocked
-              ? departmentBlocked
-                ? "解除账号限制"
-                : "恢复访问"
-              : "禁止访问"}
-          </button>
-        )}
       </td>
       <td>
         {user.personal_quota ? (
