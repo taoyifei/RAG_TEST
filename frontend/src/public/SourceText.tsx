@@ -76,7 +76,7 @@ const TEXT_COMPONENTS: Components = {
   /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- 横向滚动的命名区域需要键盘聚焦，才能用方向键读完整表格。 */
   table: ({ children }) => (
     <div
-      className="wst-source-table-scroll"
+      className="ia-source-table-scroll"
       role="region"
       aria-label="原文表格"
       tabIndex={0}
@@ -111,9 +111,9 @@ function SourceImage({
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   return (
-    <span className="wst-source-image">
+    <span className="ia-source-image">
       {failed ? (
-        <span className="wst-source-image-error" role="status">
+        <span className="ia-source-image-error" role="status">
           <span>{alt}暂时无法显示。</span>
           <button
             type="button"
@@ -129,7 +129,7 @@ function SourceImage({
         <>
           <button
             aria-label={`放大图片：${alt}`}
-            className="wst-source-image-button"
+            className="ia-source-image-button"
             type="button"
             title="点击放大图片"
             onClick={(event) =>
@@ -145,7 +145,7 @@ function SourceImage({
               onError={() => setFailed(true)}
             />
           </button>
-          <span className="wst-source-image-hint">点击图片可放大</span>
+          <span className="ia-source-image-hint">点击图片可放大</span>
         </>
       )}
     </span>
@@ -175,7 +175,7 @@ export function SourceText({
           !onPreviewImage
         )
           return (
-            <span className="wst-source-image-hint">
+            <span className="ia-source-image-hint">
               {alt ? `${sourceDisplayText(alt)}：` : ""}
               {IMAGE_HINT}
             </span>
@@ -194,7 +194,7 @@ export function SourceText({
     [conversationId, traceId, onPreviewImage],
   );
   return (
-    <div className="wst-source-text">
+    <div className="ia-source-text">
       <ReactMarkdown
         skipHtml
         remarkPlugins={[remarkGfm, readableResources]}

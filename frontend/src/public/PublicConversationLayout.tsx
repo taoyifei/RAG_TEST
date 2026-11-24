@@ -28,7 +28,7 @@ import { AnchoredPopover } from "./AnchoredPopover";
 import { RenameConversationDialog } from "./RenameConversationDialog";
 
 const COMPACT_QUERY = "(max-width: 900px)";
-const COLLAPSED_KEY = "wanshitong-sidebar-collapsed";
+const COLLAPSED_KEY = "industrial_agent-sidebar-collapsed";
 
 function subscribeViewport(callback: () => void) {
   const media = window.matchMedia?.(COMPACT_QUERY);
@@ -101,11 +101,11 @@ const ConversationItem = memo(function ConversationItem({
   );
   const id = useId();
   return (
-    <div className="wst-sidebar-session-row">
+    <div className="ia-sidebar-session-row">
       <button
         aria-current={selected ? "page" : undefined}
         aria-label={item.title}
-        className="wst-sidebar-session"
+        className="ia-sidebar-session"
         disabled={disabled}
         onClick={() => {
           void onSelect(item.conversation_id);
@@ -122,7 +122,7 @@ const ConversationItem = memo(function ConversationItem({
             aria-label={`会话操作：${item.title}`}
             aria-controls={id}
             aria-expanded={open}
-            className="wst-sidebar-session-actions wst-sidebar-icon"
+            className="ia-sidebar-session-actions ia-sidebar-icon"
             disabled={disabled}
             onClick={() => setMenu((value) => ({ active, open: !value.open }))}
             ref={trigger}
@@ -136,7 +136,7 @@ const ConversationItem = memo(function ConversationItem({
             onDismiss={dismiss}
             triggerRef={trigger}
             label={`操作：${item.title}`}
-            className="wst-sidebar-session-popover"
+            className="ia-sidebar-session-popover"
             id={id}
             role="group"
             width={176}
@@ -328,7 +328,7 @@ export function PublicConversationLayout({
       cancelAnimationFrame(focusFrameRef.current);
     focusFrameRef.current = requestAnimationFrame(() => {
       document
-        .querySelector<HTMLTextAreaElement>(".wst-composer textarea")
+        .querySelector<HTMLTextAreaElement>(".ia-composer textarea")
         ?.focus();
     });
   }, []);
@@ -552,13 +552,13 @@ export function PublicConversationLayout({
 
   return (
     <div
-      className={`wst-app-layout${!expanded ? " is-sidebar-collapsed" : ""}${compact ? " is-compact" : ""}`}
+      className={`ia-app-layout${!expanded ? " is-sidebar-collapsed" : ""}${compact ? " is-compact" : ""}`}
     >
       {compact && (
         <button
           aria-hidden={!expanded}
           aria-label="关闭会话侧栏遮罩"
-          className="wst-sidebar-backdrop"
+          className="ia-sidebar-backdrop"
           onClick={() => changeExpanded(false)}
           tabIndex={-1}
           type="button"
@@ -569,18 +569,18 @@ export function PublicConversationLayout({
         aria-hidden={!expanded}
         aria-modal={compact && expanded ? true : undefined}
         inert={!expanded ? true : undefined}
-        className="wst-conversation-sidebar"
+        className="ia-conversation-sidebar"
         id={sidebarId}
         ref={panelRef}
         role={compact ? "dialog" : undefined}
       >
-        <div className="wst-sidebar-heading">
-          <span className="wst-sidebar-brand">
-            <span aria-hidden="true">湾</span>湾小度
+        <div className="ia-sidebar-heading">
+          <span className="ia-sidebar-brand">
+            <span aria-hidden="true">工</span>工业智能体
           </span>
           <button
             aria-label={compact ? "关闭侧栏" : "收起会话侧栏"}
-            className="wst-sidebar-icon"
+            className="ia-sidebar-icon"
             onClick={() => changeExpanded(false)}
             ref={closeRef}
             title="收起侧栏"
@@ -590,7 +590,7 @@ export function PublicConversationLayout({
           </button>
         </div>
         <button
-          className="wst-sidebar-new"
+          className="ia-sidebar-new"
           disabled={busy || historyActionBusy || !!actionId}
           onClick={newTopic}
           type="button"
@@ -599,7 +599,7 @@ export function PublicConversationLayout({
           新对话
         </button>
         {navigation.length > 0 && (
-          <nav aria-label="工作区导航" className="wst-sidebar-navigation">
+          <nav aria-label="工作区导航" className="ia-sidebar-navigation">
             {navigation.map((item) =>
               item.href ? (
                 <a
@@ -631,7 +631,7 @@ export function PublicConversationLayout({
         )}
         {historyEnabled && (
           <>
-            <div className="wst-sidebar-search">
+            <div className="ia-sidebar-search">
               <Search aria-hidden="true" size={16} />
               <input
                 aria-label="搜索历史会话"
@@ -646,7 +646,7 @@ export function PublicConversationLayout({
                 <button
                   aria-label="清空会话搜索"
                   disabled={historyActionBusy || !!actionId}
-                  className="wst-sidebar-icon"
+                  className="ia-sidebar-icon"
                   onClick={() => setQuery("")}
                   type="button"
                 >
@@ -654,8 +654,8 @@ export function PublicConversationLayout({
                 </button>
               )}
             </div>
-            <div className="wst-sidebar-history-heading">
-              <h2 className="wst-sidebar-label">
+            <div className="ia-sidebar-history-heading">
+              <h2 className="ia-sidebar-label">
                 {historyArchived ? "已归档" : "历史会话"}
               </h2>
               {onHistoryViewChange && (
@@ -664,7 +664,7 @@ export function PublicConversationLayout({
                     historyArchived ? "返回历史会话" : "查看已归档会话"
                   }
                   aria-pressed={historyArchived}
-                  className="wst-sidebar-archive-toggle"
+                  className="ia-sidebar-archive-toggle"
                   disabled={historyActionBusy || !!actionId || !!openingId}
                   onClick={() => {
                     void changeHistoryView();
@@ -678,7 +678,7 @@ export function PublicConversationLayout({
               )}
             </div>
             {(error || historyError) && (
-              <p className="wst-sidebar-error" role="alert">
+              <p className="ia-sidebar-error" role="alert">
                 {error ?? historyError}
                 {onRetryHistory && (
                   <button
@@ -697,12 +697,12 @@ export function PublicConversationLayout({
               </p>
             )}
             {notice && (
-              <p className="wst-sidebar-footnote" role="status">
+              <p className="ia-sidebar-footnote" role="status">
                 {notice}
               </p>
             )}
             {(historyActionBusy || actionId) && (
-              <p className="wst-sidebar-footnote" role="status">
+              <p className="ia-sidebar-footnote" role="status">
                 正在更新会话…
               </p>
             )}
@@ -711,14 +711,14 @@ export function PublicConversationLayout({
               aria-busy={
                 !!openingId || historyLoading || historyActionBusy || !!actionId
               }
-              className="wst-sidebar-history"
+              className="ia-sidebar-history"
             >
               {historyLoading ? (
-                <p className="wst-sidebar-empty" role="status">
+                <p className="ia-sidebar-empty" role="status">
                   {keyword ? "正在搜索历史对话…" : "正在加载会话…"}
                 </p>
               ) : count === 0 ? (
-                <p className="wst-sidebar-empty">
+                <p className="ia-sidebar-empty">
                   {keyword
                     ? "没有匹配的会话，试试其他关键词。"
                     : historyArchived
@@ -727,7 +727,7 @@ export function PublicConversationLayout({
                 </p>
               ) : (
                 [...groups].map(([label, items]) => (
-                  <section className="wst-sidebar-group" key={label}>
+                  <section className="ia-sidebar-group" key={label}>
                     <h3>{label}</h3>
                     {items.map((item) => (
                       <ConversationItem
@@ -751,7 +751,7 @@ export function PublicConversationLayout({
               )}
               {onLoadMoreHistory && !historyLoading && historyHasMore && (
                 <button
-                  className="wst-sidebar-load-more"
+                  className="ia-sidebar-load-more"
                   type="button"
                   disabled={
                     historyLoadingMore || historyActionBusy || !!actionId
@@ -772,7 +772,7 @@ export function PublicConversationLayout({
                 </button>
               )}
             </nav>
-            <p className="wst-sidebar-footnote">
+            <p className="ia-sidebar-footnote">
               {onHistorySearch
                 ? keyword
                   ? `正在查看“${query.trim()}”的历史对话`
@@ -791,20 +791,20 @@ export function PublicConversationLayout({
       <div
         aria-hidden={compact && expanded ? true : undefined}
         aria-busy={historyActionBusy || !!actionId}
-        className="wst-main-pane"
+        className="ia-main-pane"
         inert={
           (compact && expanded) || historyActionBusy || actionId
             ? true
             : undefined
         }
       >
-        <header className="wst-app-header">
-          <div className="wst-app-header-heading">
+        <header className="ia-app-header">
+          <div className="ia-app-header-heading">
             <button
               aria-controls={sidebarId}
               aria-expanded={expanded}
               aria-label={expanded ? "收起会话侧栏" : "展开会话侧栏"}
-              className="wst-sidebar-icon"
+              className="ia-sidebar-icon"
               hidden={expanded}
               onClick={() => changeExpanded(!expanded)}
               ref={triggerRef}
@@ -815,7 +815,7 @@ export function PublicConversationLayout({
             {!expanded && (
               <button
                 aria-label="新对话"
-                className="wst-sidebar-icon"
+                className="ia-sidebar-icon"
                 disabled={busy || historyActionBusy || !!actionId}
                 onClick={newTopic}
                 title="新对话"
@@ -824,13 +824,13 @@ export function PublicConversationLayout({
                 <Plus aria-hidden="true" size={20} />
               </button>
             )}
-            <span className="wst-app-view-label" title={viewLabel}>
+            <span className="ia-app-view-label" title={viewLabel}>
               {viewLabel}
             </span>
           </div>
           {toolbar}
         </header>
-        <div className="wst-content-pane">{children}</div>
+        <div className="ia-content-pane">{children}</div>
       </div>
       {renaming && onRename && (
         <RenameConversationDialog

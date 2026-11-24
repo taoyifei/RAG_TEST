@@ -49,13 +49,13 @@ export function SuggestedQuestionCarousel({
   if (questions.length === 0) return null;
 
   return (
-    <section className="wst-suggestions" aria-label={heading}>
-      <div className="wst-suggestions-heading">
+    <section className="ia-suggestions" aria-label={heading}>
+      <div className="ia-suggestions-heading">
         <span>{heading}</span>
-        <div className="wst-suggestions-controls">
+        <div className="ia-suggestions-controls">
           <button
             aria-label="换一换推荐问题"
-            className="wst-suggestions-refresh"
+            className="ia-suggestions-refresh"
             disabled={busy}
             onClick={onRefresh}
             type="button"
@@ -65,7 +65,7 @@ export function SuggestedQuestionCarousel({
           </button>
           <button
             aria-label="向左浏览问题"
-            className="wst-suggestions-arrow"
+            className="ia-suggestions-arrow"
             disabled={!canScrollLeft}
             onClick={() => scroll(-1)}
             type="button"
@@ -74,7 +74,7 @@ export function SuggestedQuestionCarousel({
           </button>
           <button
             aria-label="向右浏览问题"
-            className="wst-suggestions-arrow"
+            className="ia-suggestions-arrow"
             disabled={!canScrollRight}
             onClick={() => scroll(1)}
             type="button"
@@ -84,7 +84,7 @@ export function SuggestedQuestionCarousel({
         </div>
       </div>
       <div
-        className="wst-suggestions-track"
+        className="ia-suggestions-track"
         onScroll={() => {
           const track = trackRef.current;
           if (!track) return;
@@ -97,7 +97,7 @@ export function SuggestedQuestionCarousel({
       >
         {questions.map((item) => (
           <button
-            className="wst-suggestion"
+            className="ia-suggestion"
             disabled={busy}
             key={item.id}
             onClick={() => onSubmit(item)}

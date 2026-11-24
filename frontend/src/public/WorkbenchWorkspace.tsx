@@ -68,7 +68,7 @@ export function WorkbenchWorkspace({
 
   const syncTheme = () => {
     frame.current?.contentWindow?.postMessage(
-      { type: "wanshitong-workbench-theme", theme },
+      { type: "industrial_agent-workbench-theme", theme },
       window.location.origin,
     );
   };
@@ -87,8 +87,8 @@ export function WorkbenchWorkspace({
   const changed = selectedScopes.join(",") !== requested.join(",");
 
   return (
-    <section className="wst-workbench" aria-label="工作助手">
-      <div className="wst-workbench-toolbar">
+    <section className="ia-workbench" aria-label="工作助手">
+      <div className="ia-workbench-toolbar">
         <div>
           <h1>工作助手</h1>
           <p>整理、对比所选资料。助手只读资料，自动化任务由你手工创建。</p>
@@ -125,7 +125,7 @@ export function WorkbenchWorkspace({
         </form>
       </div>
       {changed ? (
-        <p className="wst-workbench-notice" role="status">
+        <p className="ia-workbench-notice" role="status">
           点击“切换范围”后，将打开对应的独立工作区。
         </p>
       ) : null}
@@ -133,13 +133,13 @@ export function WorkbenchWorkspace({
         <iframe
           key={workspace.workspace_id}
           ref={frame}
-          title={`湾小度工作助手 · ${workspace.scope_label}`}
+          title={`工业智能体工作助手 · ${workspace.scope_label}`}
           src={withAppBase(`/workbench/${workspace.workspace_id}/`)}
           onLoad={syncTheme}
-          className="wst-workbench-frame"
+          className="ia-workbench-frame"
         />
       ) : (
-        <div className="wst-workbench-state">
+        <div className="ia-workbench-state">
           {permissionError || error ? (
             <>
               <p role="alert">{permissionError ?? error}</p>

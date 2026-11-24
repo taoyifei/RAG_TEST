@@ -1,0 +1,23 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "KnowledgeEngine Lite",
+  "outputfilename": "KnowledgeEngine Lite",
+  "frontend:dir": "../../frontend",
+  "wailsjsdir": "../../frontend/src",
+  "build:tags": "desktop",
+  "author": {
+    "name": "KnowledgeEngine Team",
+    "email": ""
+  },
+  "info": {
+    "companyName": "Tencent",
+    "productName": "KnowledgeEngine Lite",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright 2026 Tencent",
+    "comments": "KnowledgeEngine Desktop Edition"
+  },
+  "mac": {
+    "category": "public.app-category.productivity",
+    "titlebar": "hiddenInset"
+  }
+}

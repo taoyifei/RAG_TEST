@@ -52,10 +52,10 @@ export function PublicQuestionTabs({
   if (!hasPopular && !hasSuggestions) return null;
 
   return (
-    <section className="wst-question-tabs" aria-label={heading ?? "推荐问题"}>
+    <section className="ia-question-tabs" aria-label={heading ?? "推荐问题"}>
       {heading && <h2>{heading}</h2>}
-      <div className="wst-question-tab-heading">
-        <div className="wst-question-tab-buttons" role="tablist">
+      <div className="ia-question-tab-heading">
+        <div className="ia-question-tab-buttons" role="tablist">
           <button
             aria-selected={activeTab === "suggested"}
             disabled={!hasSuggestions}
@@ -78,7 +78,7 @@ export function PublicQuestionTabs({
         {activeTab === "popular" && popular.items.length > previewCount && (
           <button
             aria-expanded={expanded}
-            className="wst-popular-more"
+            className="ia-popular-more"
             onClick={() => {
               setExpanded((value) => !value);
               setCategory("all");
@@ -98,9 +98,9 @@ export function PublicQuestionTabs({
           questions={suggestions}
         />
       ) : (
-        <div aria-label="大家常问" className="wst-popular" role="tabpanel">
+        <div aria-label="大家常问" className="ia-popular" role="tabpanel">
           {expanded && categories.length > 1 && (
-            <div aria-label="问题分类" className="wst-popular-categories" role="group">
+            <div aria-label="问题分类" className="ia-popular-categories" role="group">
               {["all", ...categories].map((value) => (
                 <button
                   aria-pressed={selectedCategory === value}
@@ -113,13 +113,13 @@ export function PublicQuestionTabs({
               ))}
             </div>
           )}
-          <div className="wst-popular-list">
+          <div className="ia-popular-list">
             {visibleItems.map((item) => {
               const rank = popular.items.indexOf(item);
               return (
                 <button
                   aria-label={item.question}
-                  className="wst-popular-item"
+                  className="ia-popular-item"
                   disabled={busy}
                   key={item.id}
                   onClick={() => onPopularSubmit(item)}
@@ -127,12 +127,12 @@ export function PublicQuestionTabs({
                 >
                   <span
                     aria-hidden="true"
-                    className={`wst-popular-rank${rank < 3 ? " is-top" : ""}`}
+                    className={`ia-popular-rank${rank < 3 ? " is-top" : ""}`}
                   >
                     {String(rank + 1).padStart(2, "0")}
                   </span>
-                  <span className="wst-popular-question">{item.question}</span>
-                  <span aria-hidden="true" className="wst-popular-topic">
+                  <span className="ia-popular-question">{item.question}</span>
+                  <span aria-hidden="true" className="ia-popular-topic">
                     {item.topic_key}
                   </span>
                   <ArrowUpRight aria-hidden="true" size={16} />

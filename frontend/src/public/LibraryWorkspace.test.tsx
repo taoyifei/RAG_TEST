@@ -1040,7 +1040,7 @@ describe("用户资料和角色", () => {
         items: [
           {
             user_id: "325",
-            username: "taoyifei",
+            username: "example_admin",
             display_name: "超级管理员同事",
             dept_id: "208",
             role: "admin",
@@ -1060,7 +1060,7 @@ describe("用户资料和角色", () => {
           },
           {
             user_id: "138",
-            username: "luoyang",
+            username: "example_user",
             display_name: "普通同事",
             dept_id: "208",
             role: "user",

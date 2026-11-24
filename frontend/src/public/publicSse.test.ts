@@ -18,7 +18,7 @@ function body(...chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
-describe("湾事通 SSE parser", () => {
+describe("工业智能体 SSE parser", () => {
   it("跨网络 chunk 组装一个完整事件", () => {
     const parser = new PublicSseParser();
     expect(parser.push('event: stage\ndata: {"type":"sta')).toEqual([]);
@@ -129,9 +129,9 @@ describe("湾事通 SSE parser", () => {
     const seen: string[] = [];
     await consumePublicSse(
       body(
-        'event: answer_delta\ndata: {"protocol":"wanshitong-natural-sse-v1","type":"answer_delta","sequence":1,"text":"第","provisional":true}\n\n' +
-          'event: answer_delta\ndata: {"protocol":"wanshitong-natural-sse-v1","type":"answer_delta","sequence":2,"text":"一段","provisional":true}\n\n' +
-          'event: final\ndata: {"protocol":"wanshitong-natural-sse-v1","type":"final","sequence":3,"status":"ANSWERED","published":true,"answer":"第一段","citation_status":"valid","citations":[{"document_name":"依据.docx"}]}\n\n',
+        'event: answer_delta\ndata: {"protocol":"industrial_agent-natural-sse-v1","type":"answer_delta","sequence":1,"text":"第","provisional":true}\n\n' +
+          'event: answer_delta\ndata: {"protocol":"industrial_agent-natural-sse-v1","type":"answer_delta","sequence":2,"text":"一段","provisional":true}\n\n' +
+          'event: final\ndata: {"protocol":"industrial_agent-natural-sse-v1","type":"final","sequence":3,"status":"ANSWERED","published":true,"answer":"第一段","citation_status":"valid","citations":[{"document_name":"依据.docx"}]}\n\n',
       ),
       (event) => {
         seen.push(event.type === "answer_delta" ? event.text : event.type);
@@ -139,7 +139,7 @@ describe("湾事通 SSE parser", () => {
       controller.signal,
     );
     expect(seen).toEqual(["第", "一段", "final"]);
-    for (const protocol of ["wanshitong-public-sse-v1", "future-v2"]) {
+    for (const protocol of ["industrial-agent-public-sse-v1", "future-v2"]) {
       await expect(
         consumePublicSse(
           body(
@@ -152,10 +152,10 @@ describe("湾事通 SSE parser", () => {
     }
   });
 
-  it("WeKnora 流保留原生正文与引用顺序，并接受诊断事件", async () => {
+  it("KnowledgeEngine 流保留原生正文与引用顺序，并接受诊断事件", async () => {
     const controller = new AbortController();
     const seen: unknown[] = [];
-    const protocol = "wanshitong-weknora-sse-v1";
+    const protocol = "industrial_agent-knowledgeengine-sse-v1";
     const citation = {
       document_name: "政策.md",
       reference_id: `ref_${"a".repeat(32)}`,
@@ -208,12 +208,12 @@ describe("湾事通 SSE parser", () => {
     });
   });
 
-  it("WeKnora 流缺少原生终态字段时拒绝伪造 final", async () => {
+  it("KnowledgeEngine 流缺少原生终态字段时拒绝伪造 final", async () => {
     const controller = new AbortController();
     await expect(
       consumePublicSse(
         body(
-          'event: final\ndata: {"protocol":"wanshitong-weknora-sse-v1","type":"final","sequence":1,"answer":"正文","citations":[],"published":true}\n\n',
+          'event: final\ndata: {"protocol":"industrial_agent-knowledgeengine-sse-v1","type":"final","sequence":1,"answer":"正文","citations":[],"published":true}\n\n',
         ),
         vi.fn(),
         controller.signal,

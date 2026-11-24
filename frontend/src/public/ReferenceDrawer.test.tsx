@@ -19,7 +19,7 @@ const citation: PublicCitation = {
   locator: "新建委托单 / 操作入口",
   quote: "从供应链菜单发起线上委托单。",
   reference_id: "ref-private-handle",
-  source_kind: "weknora",
+  source_kind: "knowledgeengine",
   source_available: true,
 };
 
@@ -36,7 +36,7 @@ function Harness({
 }) {
   const [trigger, setTrigger] = useState<HTMLElement>();
   return (
-    <div className="wst-root" data-theme="light" data-testid="theme-root">
+    <div className="ia-root" data-theme="light" data-testid="theme-root">
       <main data-testid="background">
         <p>已有回答保持可见</p>
         <button
@@ -296,7 +296,7 @@ it.each([false, true])(
     const source = screen.getByRole("dialog", {
       name: "来源阅读：委托单操作指引.docx",
     });
-    const scroll = source.querySelector<HTMLElement>(".wst-reading-body")!;
+    const scroll = source.querySelector<HTMLElement>(".ia-reading-body")!;
     scroll.scrollTop = 140;
     const imageButton = await screen.findByRole("button", {
       name: "放大图片：菜单图",

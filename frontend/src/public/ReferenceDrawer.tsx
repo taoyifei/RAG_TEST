@@ -53,7 +53,7 @@ function ReferenceContent({
   return (
     <>
       {quote?.trim() && !sameText && (
-        <section aria-label="本次引用片段" className="wst-reference-excerpt">
+        <section aria-label="本次引用片段" className="ia-reference-excerpt">
           <h3>本次引用片段</h3>
           <blockquote>
             <SourceText
@@ -64,11 +64,11 @@ function ReferenceContent({
           </blockquote>
         </section>
       )}
-      <section aria-label="引用原文" className="wst-reference-source">
+      <section aria-label="引用原文" className="ia-reference-source">
         <h3>引用原文</h3>
         {result.status === "loading" && <p role="status">正在读取引用原文…</p>}
         {result.status === "error" && (
-          <div className="wst-reading-error" role="alert">
+          <div className="ia-reading-error" role="alert">
             <p>原文暂时读不到，资料可能已更新或访问权限已变化。</p>
             <button onClick={onRetry} type="button">
               重新读取
@@ -83,12 +83,12 @@ function ReferenceContent({
               onPreviewImage={onPreviewImage}
             />
           ) : (
-            <p className="wst-reading-muted">
+            <p className="ia-reading-muted">
               这条引用暂未提供更多原文，可以先参考上方片段。
             </p>
           ))}
         {result.status === "unavailable" && (
-          <p className="wst-reading-muted">
+          <p className="ia-reading-muted">
             这条引用没有可读取的原文，可以先参考本次片段。
           </p>
         )}
@@ -167,10 +167,10 @@ export function ReferenceDrawer({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const returnToSource = useCallback(() => {
     const close = closeButtonRef.current;
-    const panel = close?.closest(".wst-reference-panel");
+    const panel = close?.closest(".ia-reference-panel");
     // 原文完成加载或缩略图读取失败时，原按钮可能已被替换。
     const matching = panel?.querySelectorAll<HTMLButtonElement>(
-      ".wst-source-image-button",
+      ".ia-source-image-button",
     );
     return (
       [...(matching ?? [])].find(
@@ -196,14 +196,14 @@ export function ReferenceDrawer({
         returnFocusTo={returnFocusTo}
         suspended={Boolean(preview)}
       >
-        <header className="wst-reading-header">
+        <header className="ia-reading-header">
           <div>
-            <p className="wst-reading-eyebrow">来源阅读</p>
+            <p className="ia-reading-eyebrow">来源阅读</p>
             <h2>{title}</h2>
           </div>
           <button
             aria-label="关闭来源阅读"
-            className="wst-reading-close"
+            className="ia-reading-close"
             ref={closeButtonRef}
             onClick={onClose}
             type="button"
@@ -211,9 +211,9 @@ export function ReferenceDrawer({
             <X aria-hidden="true" size={20} />
           </button>
         </header>
-        <div className="wst-reading-body">
+        <div className="ia-reading-body">
           {citation.locator && (
-            <p className="wst-reading-location">
+            <p className="ia-reading-location">
               {sourceDisplayText(citation.locator)}
             </p>
           )}

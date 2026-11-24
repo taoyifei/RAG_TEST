@@ -33,7 +33,7 @@ it("正常业务回答没有正文引用标号时也不误加模型生成提示"
   expect(screen.queryByText("来源：知识库")).not.toBeInTheDocument();
   expect(
     screen.getByText("食堂位于服务中心A座1楼。", {
-      selector: ".wst-final-answer p",
+      selector: ".ia-final-answer p",
     }),
   ).toBeInTheDocument();
 });

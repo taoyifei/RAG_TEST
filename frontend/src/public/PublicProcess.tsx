@@ -77,7 +77,7 @@ export function PublicProcess({ turn }: { turn: PublicTurn }) {
 
   return (
     <details
-      className="wst-native-process"
+      className="ia-native-process"
       onToggle={(event) => setOpen(event.currentTarget.open)}
       open={open}
     >

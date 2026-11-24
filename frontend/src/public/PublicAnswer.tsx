@@ -114,7 +114,7 @@ const MarkdownAnswer = memo(function MarkdownAnswer({
         return (
           <button
             aria-label={`放大图片：${alt || "回答中的图片"}`}
-            className="wst-answer-image-button"
+            className="ia-answer-image-button"
             onClick={(event) =>
               setPreview({
                 src: imageSource,
@@ -139,7 +139,7 @@ const MarkdownAnswer = memo(function MarkdownAnswer({
   );
   return (
     <>
-      <div className="wst-final-answer">
+      <div className="ia-final-answer">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           urlTransform={(url, key, node) =>
@@ -231,26 +231,26 @@ export function PublicAnswer({
   }, [active, turn.startedAt]);
 
   return (
-    <section className="wst-answer" aria-label="湾小度回答">
-      <div className="wst-answer-brand" aria-hidden="true">
+    <section className="ia-answer" aria-label="工业智能体回答">
+      <div className="ia-answer-brand" aria-hidden="true">
         湾
       </div>
-      <div className="wst-answer-body">
+      <div className="ia-answer-body">
         {nativeProcess && !turn.templateLookup && <PublicProcess turn={turn} />}
         {!nativeProcess && active && turn.stageMessage && (
-          <div className="wst-progress">
-            <p className="wst-stage">
-              <span aria-hidden="true" className="wst-stage-dot" />
+          <div className="ia-progress">
+            <p className="ia-stage">
+              <span aria-hidden="true" className="ia-stage-dot" />
               <span>{turn.stageMessage}</span>
-              <span aria-hidden="true" className="wst-elapsed">
+              <span aria-hidden="true" className="ia-elapsed">
                 {elapsedSeconds} 秒
               </span>
             </p>
             {waitingForGeneration && (
-              <div aria-hidden="true" className="wst-progress-motion" />
+              <div aria-hidden="true" className="ia-progress-motion" />
             )}
             {turn.stageHistory.length > 0 && (
-              <ol className="wst-stage-history" aria-label="处理进度">
+              <ol className="ia-stage-history" aria-label="处理进度">
                 {PROGRESS_STAGES.map((stage) => (
                   <li
                     className={
@@ -272,7 +272,7 @@ export function PublicAnswer({
               </ol>
             )}
             {hint && (
-              <p aria-live="polite" className="wst-progress-hint">
+              <p aria-live="polite" className="ia-progress-hint">
                 {hint}
               </p>
             )}
@@ -282,7 +282,7 @@ export function PublicAnswer({
           <TemplateDownload file={turn.templateLookup.file} />
         )}
         {originNotice && (
-          <p className="wst-answer-origin" role="note">
+          <p className="ia-answer-origin" role="note">
             <Info aria-hidden="true" size={16} />
             <span>{originNotice}</span>
           </p>
@@ -292,7 +292,7 @@ export function PublicAnswer({
         ) : turn.provisionalAnswer ? (
           <div
             className={
-              nativeProcess && active ? "wst-streaming-answer" : "wst-claims"
+              nativeProcess && active ? "ia-streaming-answer" : "ia-claims"
             }
           >
             {!nativeProcess && (
@@ -306,10 +306,10 @@ export function PublicAnswer({
           </div>
         ) : (
           turn.claims.length > 0 && (
-            <div className="wst-claims">
+            <div className="ia-claims">
               <p>已收到 {turn.claims.length} 条内容 · 暂非最终答案</p>
               {turn.claims.map((claim) => (
-                <div className="wst-claim" key={claim.claimIndex}>
+                <div className="ia-claim" key={claim.claimIndex}>
                   {claim.text}
                 </div>
               ))}
@@ -317,17 +317,17 @@ export function PublicAnswer({
           )
         )}
         {turn.truncated && turn.status === "completed" && (
-          <p className="wst-answer-notice">知识库提示本次回答已截断。</p>
+          <p className="ia-answer-notice">知识库提示本次回答已截断。</p>
         )}
         {turn.errorMessage && (
           <div
-            className={`wst-answer-notice ${turn.partial ? "is-partial" : ""}`}
+            className={`ia-answer-notice ${turn.partial ? "is-partial" : ""}`}
           >
             <p>{turn.errorMessage}</p>
             {(turn.status === "failed" ||
               turn.status === "pending_confirmation" ||
               turn.status === "stop_requested") && (
-              <div className="wst-answer-actions">
+              <div className="ia-answer-actions">
                 {turn.nativeProtocol && turn.nativeMessageId && onRecover && (
                   <button onClick={onRecover} type="button">
                     <RotateCcw aria-hidden="true" size={15} />

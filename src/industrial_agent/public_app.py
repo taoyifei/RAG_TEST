@@ -1,0 +1,278 @@
+"""单一公共问答应用的发布契约与原生配置核对。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from typing import Any, Literal, Self
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
+
+from industrial_agent.knowledge_engine.admin import NativeAdminClient
+from industrial_agent.knowledge_engine.client import (
+    KnowledgeEngineClient,
+    NativeHttpError,
+)
+
+APPLICATION_ID = "industrial-agent-public"
+APPLICATION_NAME = "工业智能体用户问答"
+PUBLIC_IDENTITY_LINE = (
+    "你是工业智能体，帮助用户检索和理解有权访问的工业知识资料。"
+)
+_PUBLIC_IDENTITY_REPLY = (
+    "我是工业智能体，面向工业场景的知识助手。"
+    "我可以帮你查设备手册、操作规程和故障案例，并定位原文与附件。"
+)
+_PUBLIC_IDENTITY_QUESTION = re.compile(
+    r"(?:请问[，,]?)?"
+    r"(?:(?:你|您)(?:是谁|叫什么(?:名字)?|叫啥(?:名字)?|的(?:名字|身份)是什么|"
+    r"(?:是|(?:使用|用)(?:的是|的)?)(?:什么|哪个|哪种|哪款)"
+    r"(?:模型|大模型|大语言模型|助手)|是工业智能体)|"
+    r"(?:请|你能)?(?:简单)?(?:自我介绍(?:一下)?|介绍(?:一下)?(?:你自己|自己|你)))"
+    r"[吗么呀啊呢]?"
+)
+_INTENT_IDS = frozenset(
+    {
+        "greeting",
+        "chitchat",
+        "follow_up",
+        "image_only",
+        "summarize",
+        "web_search",
+        "doc_only",
+    }
+)
+_MAX_KB_ID_LENGTH = 128
+
+
+class PageSettings(BaseModel):
+    """只允许公开页面展示和已有网关能力的有限开关。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    welcome_text: str = Field(default="", max_length=500)
+    input_placeholder: str = Field(default="", max_length=200)
+    show_recommendations: bool = True
+    show_history: bool = True
+    allow_feedback: bool = True
+    allow_source_download: bool = True
+
+
+class AnswerSettings(BaseModel):
+    """显式复制现行回答参数，避免原生 EnsureDefaults 悄悄改值。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str = Field(min_length=1, max_length=128)
+    rerank_model_id: str = Field(max_length=128)
+    system_prompt_id: str = Field(min_length=1, max_length=128)
+    system_prompt: str
+    context_template_id: str = Field(min_length=1, max_length=128)
+    context_template: str
+    temperature: float = Field(ge=0, le=1)
+    max_completion_tokens: int = Field(ge=0)
+    thinking: bool
+    citation_enabled: bool
+    multi_turn_enabled: bool
+    history_turns: int = Field(ge=1)
+    embedding_top_k: int = Field(ge=1)
+    keyword_threshold: float = Field(gt=0, le=1)
+    vector_threshold: float = Field(gt=0, le=1)
+    rerank_top_k: int = Field(ge=1)
+    rerank_threshold: float = Field(ge=0, le=1)
+    enable_rewrite: bool
+    enable_query_expansion: bool
+    rewrite_prompt_system: str
+    rewrite_prompt_user: str
+    fallback_strategy: Literal["fixed", "model"]
+    fallback_response: str
+    fallback_prompt: str
+    intent_prompts: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_prompt_snapshot(self) -> Self:
+        """保存已核实的原生模板正文，避免隐式继承以后发生漂移。"""
+        if not self.system_prompt.strip() or not self.context_template.strip():
+            raise ValueError("system and context prompts must be verified")
+        if self.enable_rewrite and (
+            not self.rewrite_prompt_system.strip()
+            or not self.rewrite_prompt_user.strip()
+        ):
+            raise ValueError("rewrite prompts must be verified")
+        if any(
+            intent_id not in _INTENT_IDS or not content.strip()
+            for intent_id, content in self.intent_prompts.items()
+        ):
+            raise ValueError("自定义意图提示词必须使用已知意图且正文非空。")
+        return self
+
+    def native_config(self, kb_ids: tuple[str, ...]) -> dict[str, Any]:
+        """形成可回读的原生 quick-answer 配置，固定关闭旁路能力。"""
+        return {
+            **self.model_dump(),
+            "agent_mode": "quick-answer",
+            "kb_selection_mode": "selected",
+            "knowledge_bases": list(kb_ids),
+            "retrieve_kb_only_when_mentioned": False,
+            "web_search_enabled": False,
+            "web_fetch_enabled": False,
+            "mcp_selection_mode": "none",
+            "mcp_services": [],
+            "skills_selection_mode": "none",
+            "selected_skills": [],
+            "sandbox_config_id": "",
+            "memory_enabled": False,
+        }
+
+
+class SavePublicAppRequest(BaseModel):
+    """全量保存；首次绑定须由管理员明确确认运行值已核实。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+    migration_confirmed: bool = False
+    knowledge_base_ids: list[str] = Field(min_length=1)
+    answer_settings: AnswerSettings
+    page_settings: PageSettings
+
+    def kb_ids(self) -> tuple[str, ...]:
+        """不接受空值、路径片段或重复 ID。"""
+        values = tuple(item.strip() for item in self.knowledge_base_ids)
+        if (
+            any(
+                not item
+                or len(item) > _MAX_KB_ID_LENGTH
+                or "/" in item
+                or "\\" in item
+                for item in values
+            )
+            or len(values) != len(set(values))
+        ):
+            raise ValueError("invalid knowledge base scope")
+        return values
+
+
+def config_digest(config: dict[str, Any]) -> str:
+    """对原生保存后的完整配置建立非秘密内容摘要。"""
+    encoded = json.dumps(
+        config, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def branded_system_prompt(prompt: str) -> str:
+    """管理员载入原生默认模板时，避免保存后恢复原厂身份首句。"""
+    first_line, separator, remainder = prompt.partition("\n")
+    if first_line.startswith(
+        ("You are KnowledgeEngine", "你是工业智能体（IndustrialAgent）")
+    ):
+        return PUBLIC_IDENTITY_LINE + separator + remainder
+    return prompt
+
+
+def public_identity_answer(question: str) -> str | None:
+    """仅对独立的自我介绍请求返回工业智能体的产品身份。"""
+    text = re.sub(r"\s+", "", question).strip("？?。！!")
+    if _PUBLIC_IDENTITY_QUESTION.fullmatch(text):
+        return _PUBLIC_IDENTITY_REPLY
+    return None
+
+
+def branded_intent_prompts(
+    templates: dict[str, Any], overrides: dict[str, str] | None = None
+) -> dict[str, str]:
+    """保留显式意图提示词，缺省项采用已核实的原生品牌模板。"""
+    source = templates.get("intent_prompts")
+    if not isinstance(source, list):
+        raise NativeHttpError(502, "原生意图提示词模板不可用。")
+    result: dict[str, str] = {}
+    for item in source:
+        if not isinstance(item, dict) or item.get("id") not in _INTENT_IDS:
+            continue
+        content = item.get("content")
+        if not isinstance(content, str):
+            raise NativeHttpError(502, "原生意图提示词正文无效。")
+        first_line, separator, remainder = content.partition("\n")
+        if not separator or not first_line.startswith(
+            "You are KnowledgeEngine"
+        ):
+            raise NativeHttpError(502, "原生意图提示词身份格式已变化。")
+        result[item["id"]] = PUBLIC_IDENTITY_LINE + separator + remainder
+    if result.keys() != _INTENT_IDS:
+        raise NativeHttpError(502, "原生意图提示词不完整。")
+    for intent_id, content in (overrides or {}).items():
+        if intent_id not in _INTENT_IDS or not content.strip():
+            raise ValueError("自定义意图提示词必须使用已知意图且正文非空。")
+        result[intent_id] = branded_system_prompt(content)
+    return result
+
+
+def answer_from_config(config: dict[str, Any]) -> AnswerSettings:
+    """原生回读必须含所有受控字段，不用本地默认掩盖缺项。"""
+    try:
+        fields = {
+            key: config[key]
+            for key in AnswerSettings.model_fields
+            if key in config
+        }
+        return AnswerSettings.model_validate(fields)
+    except ValidationError as error:
+        raise NativeHttpError(503, "原生应用缺少回答设置。") from error
+
+
+def uses_public_scope(
+    config: dict[str, Any], kb_ids: tuple[str, ...]
+) -> bool:
+    """原生回读必须保持 KB 范围和关闭的外部执行能力。"""
+    return (
+        config.get("agent_mode") == "quick-answer"
+        and config.get("kb_selection_mode") == "selected"
+        and config.get("knowledge_bases") == list(kb_ids)
+        and config.get("retrieve_kb_only_when_mentioned") is False
+        and config.get("web_search_enabled") is False
+        and config.get("web_fetch_enabled") is False
+        and config.get("mcp_selection_mode") == "none"
+        and config.get("skills_selection_mode") == "none"
+        and config.get("sandbox_config_id", "") == ""
+        and config.get("memory_enabled") is False
+    )
+
+
+async def validate_binding(
+    native: KnowledgeEngineClient,
+    admin_native: NativeAdminClient,
+    binding: dict[str, Any],
+) -> tuple[str, tuple[str, ...], dict[str, Any]]:
+    """每次新请求核对公共 Key、原生 Agent 与已发布范围。"""
+    agent_id = binding["native_agent_id"]
+    kb_ids = binding["knowledge_base_ids"]
+    if (
+        not isinstance(agent_id, str)
+        or not isinstance(kb_ids, tuple)
+        or not kb_ids
+    ):
+        raise NativeHttpError(503, "公共应用绑定无效。")
+    agent = await native.public_agent(agent_id)
+    config = agent.get("config")
+    if not isinstance(config, dict):
+        raise NativeHttpError(503, "公共应用原生配置不可用。")
+    if (
+        config_digest(config) != binding["native_config_digest"]
+        or not uses_public_scope(config, kb_ids)
+        or not config.get("model_id")
+    ):
+        raise NativeHttpError(503, "公共应用配置已漂移。")
+    key_scope = await admin_native.public_key_scope(
+        native.api_key_fingerprint()
+    )
+    if not set(kb_ids).issubset(key_scope.knowledge_base_ids):
+        raise NativeHttpError(503, "公共 Key 无权读取已发布资料。")
+    return agent_id, kb_ids, config

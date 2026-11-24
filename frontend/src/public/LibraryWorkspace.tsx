@@ -117,17 +117,17 @@ export function LibraryWorkspace({
   ];
   const visibleScope = scopes.includes(scope) ? scope : "personal";
   return (
-    <main className="wst-workspace" id="main-content">
-      <header className="wst-workspace-heading">
+    <main className="ia-workspace" id="main-content">
+      <header className="ia-workspace-heading">
         <div>
-          <button className="wst-text-action" type="button" onClick={onBack}>
+          <button className="ia-text-action" type="button" onClick={onBack}>
             ← 返回问答
           </button>
           <h1>我的资料</h1>
-          <p>上传资料，解析完成后就可以向湾小度提问。</p>
+          <p>上传资料，解析完成后就可以向工业智能体提问。</p>
         </div>
       </header>
-      <nav className="wst-workspace-tabs" aria-label="资料范围">
+      <nav className="ia-workspace-tabs" aria-label="资料范围">
         {scopes.map((item) => (
           <button
             key={item}
@@ -366,7 +366,7 @@ function LibraryListing({
   };
 
   return (
-    <section className="wst-library-panel" aria-label={SCOPES[scope].title}>
+    <section className="ia-library-panel" aria-label={SCOPES[scope].title}>
       <input
         ref={versionInput}
         type="file"
@@ -379,8 +379,8 @@ function LibraryListing({
           if (file) upload(file);
         }}
       />
-      <div className="wst-library-toolbar">
-        <div className="wst-library-actions">
+      <div className="ia-library-toolbar">
+        <div className="ia-library-actions">
           <button
             type="button"
             onClick={() => {
@@ -408,7 +408,7 @@ function LibraryListing({
                 }}
               />
               <button
-                className="wst-workspace-primary"
+                className="ia-workspace-primary"
                 type="button"
                 disabled={!!busy || uploadBlocked}
                 onClick={() => {
@@ -458,31 +458,31 @@ function LibraryListing({
       </div>
       {quota && <PersonalQuotaPanel quota={quota} />}
       {data?.can_manage && (
-        <p className="wst-document-meta">
+        <p className="ia-document-meta">
           支持 Word、Excel、PowerPoint、PDF 和文本文件；PDF
           建议使用可选中文字的版本。
         </p>
       )}
       {(error || loadError) && (
-        <p className="wst-workspace-error" role="alert">
+        <p className="ia-workspace-error" role="alert">
           {error || loadError}
         </p>
       )}
       {notice && (
-        <p className="wst-workspace-notice" role="status">
+        <p className="ia-workspace-notice" role="status">
           {notice}
         </p>
       )}
       {assetFor && (
         <div
-          className="wst-asset-editor"
+          className="ia-asset-editor"
           role="region"
           aria-label="关联原始附件"
         >
           <p>
             <strong>给“{assetFor.title}”关联文件</strong>
           </p>
-          <p className="wst-document-meta">
+          <p className="ia-document-meta">
             请提供真正可编辑的原始附件或完整指引。截图文档请选择操作图示，不作为可填写模板。
           </p>
           <select
@@ -541,8 +541,8 @@ function LibraryListing({
       )}
       {data && data.items.length > 0 && (
         <>
-          <div className="wst-library-filters" aria-label="查找资料">
-            <label className="wst-library-search">
+          <div className="ia-library-filters" aria-label="查找资料">
+            <label className="ia-library-search">
               <Search size={16} aria-hidden="true" />
               <span className="sr-only">搜索资料名称</span>
               <input
@@ -613,7 +613,7 @@ function LibraryListing({
               </button>
             )}
           </div>
-          <div className="wst-document-selection">
+          <div className="ia-document-selection">
             <button
               type="button"
               disabled={!!busy || !chosen.length}
@@ -632,11 +632,11 @@ function LibraryListing({
                 取消选择
               </button>
             )}
-            <span className="wst-document-meta">
+            <span className="ia-document-meta">
               可选1—20份，只在选中的资料中查找。
             </span>
           </div>
-          <p className="wst-library-result-count" role="status">
+          <p className="ia-library-result-count" role="status">
             {hasFilters
               ? `找到 ${filteredItems.length} 份资料，共 ${versionFilter === "archived" ? archivedCount : currentCount} 份`
               : `共 ${currentCount} 份资料${archivedCount ? `，另有 ${archivedCount} 份已归档旧版` : ""}`}
@@ -644,12 +644,12 @@ function LibraryListing({
         </>
       )}
       {!data && !error && !loadError && (
-        <p className="wst-workspace-empty" role="status">
+        <p className="ia-workspace-empty" role="status">
           正在加载资料…
         </p>
       )}
       {data?.items.length === 0 && (
-        <p className="wst-workspace-empty">
+        <p className="ia-workspace-empty">
           这里还没有资料。
           {data.can_manage
             ? uploadBlocked
@@ -659,13 +659,13 @@ function LibraryListing({
         </p>
       )}
       {data && data.items.length > 0 && filteredItems.length === 0 && (
-        <p className="wst-workspace-empty">
+        <p className="ia-workspace-empty">
           没有找到相关资料，换个名称或清除筛选试试。
         </p>
       )}
       {data && filteredItems.length > 0 && (
-        <div className="wst-workspace-table-scroll">
-          <table className="wst-workspace-table">
+        <div className="ia-workspace-table-scroll">
+          <table className="ia-workspace-table">
             <thead>
               <tr>
                 <th scope="col">文档</th>
@@ -680,7 +680,7 @@ function LibraryListing({
                 return (
                   <tr key={item.id}>
                     <td>
-                      <div className="wst-document-choice">
+                      <div className="ia-document-choice">
                         <input
                           type="checkbox"
                           aria-label={`选择${item.title}`}
@@ -701,31 +701,31 @@ function LibraryListing({
                         />
                         <strong>{item.title}</strong>
                       </div>
-                      <span className="wst-document-kind">
+                      <span className="ia-document-kind">
                         {DOCUMENT_KIND_NAMES[item.kind ?? "policy"]}
                       </span>
                       {item.version_state === "staging" && (
-                        <span className="wst-document-meta">
+                        <span className="ia-document-meta">
                           新版本待发布，现有版本继续使用
                         </span>
                       )}
                       {item.version_state === "archived" && (
-                        <span className="wst-document-meta">
+                        <span className="ia-document-meta">
                           已归档，不参与新问答
                         </span>
                       )}
-                      <div className="wst-document-meta">
+                      <div className="ia-document-meta">
                         {formatSize(item.size)}
                         {item.created_at &&
                           ` · ${new Date(item.created_at).toLocaleString("zh-CN")}`}
                         {item.owner_name && ` · ${item.owner_name}`}
                       </div>
                       {item.error && (
-                        <p className="wst-document-error">{item.error}</p>
+                        <p className="ia-document-error">{item.error}</p>
                       )}
                       {item.health && (
                         <span
-                          className={`wst-document-health ${item.health.ready ? "" : "issue"}`}
+                          className={`ia-document-health ${item.health.ready ? "" : "issue"}`}
                         >
                           {item.health.ready
                             ? "原件及解析已检查"
@@ -747,18 +747,18 @@ function LibraryListing({
                     </td>
                     <td>
                       <span
-                        className={`wst-document-status ${failed ? "failed" : READY_STATES.has(item.status) ? "ready" : "parsing"}`}
+                        className={`ia-document-status ${failed ? "failed" : READY_STATES.has(item.status) ? "ready" : "parsing"}`}
                       >
                         {statusLabel(item.status)}
                       </span>
                       {scope === "personal" &&
                         data.can_share === true &&
                         item.shared && (
-                          <span className="wst-shared-label">已共享</span>
+                          <span className="ia-shared-label">已共享</span>
                         )}
                     </td>
                     <td>
-                      <div className="wst-document-actions">
+                      <div className="ia-document-actions">
                         {askable(item) && (
                           <button
                             type="button"
@@ -869,7 +869,7 @@ function LibraryListing({
                           )}
                         {canManage && (
                           <button
-                            className="wst-document-delete"
+                            className="ia-document-delete"
                             type="button"
                             disabled={!!busy}
                             onClick={() => mutate(item, "delete")}
@@ -896,12 +896,12 @@ function PersonalQuotaPanel({ quota }: { quota: PersonalLibraryQuota }) {
   const files = `${quota.used_files} / ${quota.max_files} 份`;
   return (
     <section
-      className={`wst-personal-quota ${quota.full || quota.warning ? "warning" : ""}`}
+      className={`ia-personal-quota ${quota.full || quota.warning ? "warning" : ""}`}
       aria-label="个人资料额度"
     >
-      <div className="wst-quota-meters">
+      <div className="ia-quota-meters">
         <div>
-          <div className="wst-quota-heading">
+          <div className="ia-quota-heading">
             <span>个人空间</span>
             <strong>{capacity}</strong>
           </div>
@@ -913,7 +913,7 @@ function PersonalQuotaPanel({ quota }: { quota: PersonalLibraryQuota }) {
           />
         </div>
         <div>
-          <div className="wst-quota-heading">
+          <div className="ia-quota-heading">
             <span>资料份数</span>
             <strong>{files}</strong>
           </div>
@@ -925,12 +925,12 @@ function PersonalQuotaPanel({ quota }: { quota: PersonalLibraryQuota }) {
           />
         </div>
       </div>
-      <p className="wst-quota-parsing" role="status">
+      <p className="ia-quota-parsing" role="status">
         {`正在解析 ${quota.active_parses} 份 · 等待 ${quota.queued_parses} / ${quota.max_queued_parses} 份`}
         <span>{`每人同时解析 ${quota.max_active_parses} 份，单文件最多 ${formatCapacity(quota.max_file_bytes)}。`}</span>
       </p>
       {(quota.warning || !quota.upload_allowed) && (
-        <p className="wst-quota-message" role="status">
+        <p className="ia-quota-message" role="status">
           {!quota.upload_allowed
             ? quota.upload_block_reason ||
               "个人资料已达额度上限，暂时无法新增。"

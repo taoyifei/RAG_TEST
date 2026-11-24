@@ -3,9 +3,9 @@ requires = ["setuptools==79.0.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wanxiaodu-gateway"
+name = "industrial-agent-gateway"
 version = "2.0.0"
-description = "湾小度知识库：研发管理系统登录、资料权限与 WeKnora 网关。"
+description = "工业智能体知识库：知识问答、资料管理和身份接入网关。"
 requires-python = ">=3.11,<3.12"
 dependencies = [
   "cryptography==50.0.1",
@@ -18,7 +18,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["wanshitong_gateway*"]
+include = ["industrial_agent*"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
@@ -77,5 +77,5 @@ ignore = [
 python_version = "3.11"
 strict = true
 mypy_path = "src"
-packages = ["wanshitong_gateway"]
+packages = ["industrial_agent"]
 exclude = ["^tests/"]

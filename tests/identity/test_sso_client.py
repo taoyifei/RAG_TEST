@@ -9,14 +9,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from wanshitong_gateway.compat.wanshitong.sso_client import (
+from industrial_agent.compat.portal.sso_client import (
     SsoClient,
     SsoValidationError,
     load_client_secret,
 )
 
 _TICKET = "a" * 32
-_SERVICE = "http://kb.test:8289/kb/sso/callback"
+_SERVICE = "http://kb.test:18300/kb/sso/callback"
 _STATE = "b" * 64
 
 

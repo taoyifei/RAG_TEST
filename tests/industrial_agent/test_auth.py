@@ -1,0 +1,947 @@
+"""独立网关复用 RDMS SSO 与候选管理员会话的合同测试。"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from collections.abc import Iterator
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+import httpx
+import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+
+from industrial_agent.app import create_app
+from industrial_agent.auth import GatewayAuth, register_auth_routes
+from industrial_agent.compat.portal.sso_client import SsoClient
+from industrial_agent.compat.portal.sso_session import (
+    SsoIdentity,
+    SsoSessionService,
+)
+from industrial_agent.engine_settings import EngineSettings
+from industrial_agent.roles import Role, UserProfile
+from industrial_agent.settings import GatewayAuthSettings
+from industrial_agent.store import GatewayStore
+from industrial_agent.knowledge_engine.admin import NativeAdminClient
+from industrial_agent.knowledge_engine.client import NativeHttpError, KnowledgeEngineClient
+from industrial_agent.knowledge_engine.principal import ExternalPrincipalSigner
+
+_ORIGIN = "http://candidate.test:18300"
+_TICKET = "a" * 32
+_BOOTSTRAP_TOKEN = "synthetic-admin-bootstrap-token"  # noqa: S105
+
+
+@pytest.fixture
+def gateway(tmp_path: Path) -> Iterator[tuple[GatewayAuth, TestClient]]:
+    secrets_dir = tmp_path / "secrets"
+    secrets_dir.mkdir()
+    master = secrets_dir / "master-key"
+    master.write_bytes(b"m" * 32)
+    master.chmod(0o600)
+    bootstrap = secrets_dir / "bootstrap-token"
+    bootstrap.write_text(_BOOTSTRAP_TOKEN, encoding="utf-8")
+    bootstrap.chmod(0o600)
+    sso_secret = secrets_dir / "sso-secret"
+    sso_secret.write_text("synthetic-sso-client-secret", encoding="utf-8")
+    sso_secret.chmod(0o600)
+    settings = GatewayAuthSettings.from_environment(
+        {
+            "INDUSTRIAL_AGENT_GATEWAY_DATA_DIR": str(tmp_path / "gateway-data"),
+            "INDUSTRIAL_AGENT_GATEWAY_DEPLOYMENT_ID": "candidate_8289",
+            "RAG_ROOT_PATH": "/kb",
+            "RAG_MASTER_KEY_FILE": str(master),
+            "RAG_ADMIN_BOOTSTRAP_TOKEN_FILE": str(bootstrap),
+            "RAG_TRUSTED_ORIGINS": _ORIGIN,
+            "INDUSTRIAL_AGENT_BLOCKED_DEPT_IDS": "300, 301",
+            "RAG_INDUSTRIAL_AGENT_AUTH_MODE": "sso",
+            "RAG_INDUSTRIAL_AGENT_SSO_DEPLOYMENT_ID": "candidate_8289",
+            "RAG_INDUSTRIAL_AGENT_SSO_ENTRIES": json.dumps(
+                [
+                    {
+                        "id": "candidate",
+                        "origin": _ORIGIN,
+                        "authorize_url": "http://rdms.test/sso/authorize",
+                    }
+                ]
+            ),
+            "RAG_INDUSTRIAL_AGENT_SSO_VALIDATE_URL": (
+                "http://rdms-backend.test/sso/validate"
+            ),
+            "RAG_INDUSTRIAL_AGENT_SSO_CLIENT_ID": "kb",
+            "RAG_INDUSTRIAL_AGENT_SSO_CLIENT_SECRET_FILE": str(sso_secret),
+        }
+    )
+    auth = GatewayAuth.from_settings(settings)
+    app = FastAPI(root_path="/kb")
+    register_auth_routes(app, auth)
+
+    @app.post("/api/public/probe")
+    def public_probe(request: Request) -> dict[str, str]:
+        principal = auth.require_public(request)
+        return {"owner_id": principal.owner_id}
+
+    @app.post("/api/engine-admin/probe")
+    def admin_probe(request: Request) -> dict[str, str]:
+        principal = auth.require_admin(request)
+        return {"audit_actor": principal.audit_actor}
+
+    with TestClient(app, base_url=_ORIGIN) as browser:
+        yield auth, browser
+
+
+def _sso_callback(
+    browser: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    username: str = "tester",
+    user_id: str = "1001",
+    dept_id: str | None = None,
+) -> httpx.Response:
+    """使用已核验的合成身份完成实际登录回调。"""
+    entry = browser.get(
+        "/kb/sso/entry",
+        params={"return_to": "/kb/"},
+        follow_redirects=False,
+    )
+    assert entry.status_code == 302
+    query = parse_qs(urlsplit(entry.headers["location"]).query)
+    state = query["state"][0]
+    assert query["service"] == [f"{_ORIGIN}/kb/sso/callback"]
+
+    def validate(
+        _self: SsoClient, *, ticket: str, service: str, state: str
+    ) -> SsoIdentity:
+        assert ticket == _TICKET
+        assert service == f"{_ORIGIN}/kb/sso/callback"
+        assert state
+        return SsoIdentity(
+            user_id=user_id,
+            username=username,
+            nick_name="测试用户",
+            dept_id=dept_id,
+            roles=("admin",),
+            permissions=("*:*:*",),
+        )
+
+    monkeypatch.setattr(SsoClient, "validate", validate)
+    return browser.get(
+        "/kb/sso/callback",
+        params={"ticket": _TICKET, "state": state},
+        follow_redirects=False,
+    )
+
+
+def _login_public(
+    browser: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    username: str = "tester",
+    user_id: str = "1001",
+    dept_id: str | None = None,
+) -> dict:
+    callback = _sso_callback(
+        browser,
+        monkeypatch,
+        username=username,
+        user_id=user_id,
+        dept_id=dept_id,
+    )
+    assert callback.status_code == 303
+    session = browser.post(
+        "/kb/api/public/session", headers={"Origin": _ORIGIN}
+    )
+    assert session.status_code == 200
+    return session.json()
+
+
+@pytest.mark.parametrize(
+    ("dept_id", "expected_status"),
+    [("300", 403), ("301", 403), (None, 303), ("208", 303), ("3000", 303)],
+)
+def test_department_access_policy_on_sso_callback(
+    gateway: tuple[GatewayAuth, TestClient],
+    monkeypatch: pytest.MonkeyPatch,
+    dept_id: str | None,
+    expected_status: int,
+) -> None:
+    auth, browser = gateway
+    callback = _sso_callback(browser, monkeypatch, dept_id=dept_id)
+    assert callback.status_code == expected_status
+    assert (auth.public_sessions.cookie_name in browser.cookies) == (
+        expected_status == 303
+    )
+    if expected_status == 403:
+        assert "你的部门暂未开通工业智能体" in callback.text
+    session = browser.post(
+        "/kb/api/public/session", headers={"Origin": _ORIGIN}
+    )
+    assert session.status_code == (200 if expected_status == 303 else 401)
+
+
+def test_department_change_applies_to_an_existing_session(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _auth, browser = gateway
+    session = _login_public(browser, monkeypatch, dept_id="208")
+    with TestClient(browser.app, base_url=_ORIGIN) as new_browser:
+        callback = _sso_callback(new_browser, monkeypatch, dept_id="301")
+        assert callback.status_code == 403
+    denied = browser.post(
+        "/kb/api/public/probe",
+        headers={"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]},
+    )
+    assert denied.status_code == 403
+    assert "你的部门暂未开通工业智能体" in denied.json()["detail"]
+
+
+def test_sso_public_cookie_does_not_grant_admin(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(browser, monkeypatch)
+    assert session["user"] == {
+        "user_id": "1001",
+        "display_name": "测试用户",
+        "username": "tester",
+        "dept_id": None,
+        "is_super_admin": False,
+        "role": "user",
+    }
+    assert session["deployment_id"] == "candidate_8289"
+    public = browser.post(
+        "/kb/api/public/probe",
+        headers={"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]},
+    )
+    assert public.status_code == 200
+    assert public.json() == {"owner_id": "rdms:1001"}
+    assert (
+        browser.post(
+            "/kb/api/engine-admin/probe",
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]},
+        ).status_code
+        == 401
+    )
+    assert auth.settings.admin_cookie_name not in browser.cookies
+
+
+def test_rename_requires_authenticated_public_cookie_and_current_csrf(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(browser, monkeypatch)
+    store = GatewayStore(auth.settings.database_path)
+    scope = {
+        "deployment_id": auth.settings.deployment_id,
+        "owner_id": "rdms:candidate_8289:1001",
+        "conversation_id": "csrf-rename",
+    }
+    store.bind_session(**scope, native_session_id="native-csrf")
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/sessions/native-csrf"
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    engine = EngineSettings(
+        base_url="http://native.test:8080",
+        tenant_id=8,
+        public_kb_ids=("kb-public",),
+        api_key_file=auth.settings.database_path.parent / "unused-api-key",
+        external_signing_key_file=(
+            auth.settings.database_path.parent / "unused-signing-key"
+        ),
+        admin_email="candidate@example.test",
+        admin_password_file=auth.settings.database_path.parent / "unused-pass",
+    )
+    transport = httpx.MockTransport(respond)
+    native = KnowledgeEngineClient(
+        base_url=engine.base_url,
+        api_key="test-only-key",
+        signer=ExternalPrincipalSigner(
+            secret="test-signing",  # noqa: S106
+            tenant_id=engine.tenant_id,
+            deployment_id=auth.settings.deployment_id,
+        ),
+        transport=transport,
+    )
+    admin = NativeAdminClient(
+        base_url=engine.base_url,
+        email=engine.admin_email,
+        password="test-only-password",  # noqa: S106
+        tenant_id=engine.tenant_id,
+        transport=transport,
+    )
+    app = create_app(
+        auth=auth, store=store, engine=engine, native=native, admin_native=admin
+    )
+    path = "/kb/api/public/conversations/csrf-rename/rename"
+    with TestClient(app, base_url=_ORIGIN) as client:
+        assert client.post(path, json={"title": "缺少登录"}).status_code == 401
+        client.cookies.update(browser.cookies)
+        for headers in (
+            {"Origin": _ORIGIN},
+            {"Origin": _ORIGIN, "X-CSRF-Token": "invalid"},
+            {
+                "Origin": "http://other.test",
+                "X-CSRF-Token": session["csrf_token"],
+            },
+        ):
+            assert (
+                client.post(
+                    path, json={"title": "不得保存"}, headers=headers
+                ).status_code
+                == 403
+            )
+        assert requests == []
+        assert store.conversation_title(**scope) is None
+        response = client.post(
+            path,
+            json={"title": "本人有效会话"},
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]},
+        )
+        assert response.status_code == 200
+    assert store.conversation_title(**scope) == "本人有效会话"
+    assert len(requests) == 1
+
+
+def test_admin_session_is_independent_and_csrf_protected(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    public = _login_public(browser, monkeypatch)
+    login = browser.post(
+        "/kb/api/v1/console/session",
+        json={"bootstrap_token": _BOOTSTRAP_TOKEN},
+        headers={"Origin": _ORIGIN},
+    )
+    assert login.status_code == 200
+    assert auth.settings.admin_cookie_name in browser.cookies
+    assert "rag_console_session" not in browser.cookies
+    assert "path=/kb" in login.headers["set-cookie"].lower()
+    assert "httponly" in login.headers["set-cookie"].lower()
+    assert public["csrf_token"] != login.json()["csrf_token"]
+
+    no_csrf = browser.post(
+        "/kb/api/engine-admin/probe", headers={"Origin": _ORIGIN}
+    )
+    assert no_csrf.status_code == 403
+    cross_site = browser.post(
+        "/kb/api/engine-admin/probe",
+        headers={
+            "Origin": "http://other.test:18300",
+            "X-CSRF-Token": login.json()["csrf_token"],
+        },
+    )
+    assert cross_site.status_code == 403
+    allowed = browser.post(
+        "/kb/api/engine-admin/probe",
+        headers={"Origin": _ORIGIN, "X-CSRF-Token": login.json()["csrf_token"]},
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["audit_actor"].startswith("admin_session:")
+
+    logout = browser.delete(
+        "/kb/api/v1/console/session",
+        headers={"Origin": _ORIGIN, "X-CSRF-Token": login.json()["csrf_token"]},
+    )
+    assert logout.status_code == 204
+    assert (
+        browser.post(
+            "/kb/api/engine-admin/probe",
+            headers={
+                "Origin": _ORIGIN,
+                "X-CSRF-Token": login.json()["csrf_token"],
+            },
+        ).status_code
+        == 401
+    )
+
+
+def test_expired_sso_or_wrong_state_cannot_bootstrap(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    entry = browser.get("/kb/sso/entry", follow_redirects=False)
+    assert entry.status_code == 302
+    wrong_state = browser.get(
+        "/kb/sso/callback",
+        params={"ticket": _TICKET, "state": "b" * 64},
+        follow_redirects=False,
+    )
+    assert wrong_state.status_code == 403
+    assert (
+        browser.post(
+            "/kb/api/public/session", headers={"Origin": _ORIGIN}
+        ).status_code
+        == 401
+    )
+    _login_public(browser, monkeypatch)
+    sessions = auth.public_sessions
+    assert isinstance(sessions, SsoSessionService)
+    now = int(sessions._clock())
+    monkeypatch.setattr(sessions, "_clock", lambda: now + 7201)
+    assert (
+        browser.post(
+            "/kb/api/public/session", headers={"Origin": _ORIGIN}
+        ).status_code
+        == 401
+    )
+
+
+def test_settings_require_isolated_data_dir(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="INDUSTRIAL_AGENT_GATEWAY_DATA_DIR"):
+        GatewayAuthSettings.from_environment(
+            {
+                "RAG_ROOT_PATH": "/kb",
+                "RAG_MASTER_KEY_FILE": str(tmp_path / "master"),
+                "RAG_ADMIN_BOOTSTRAP_TOKEN_FILE": str(tmp_path / "bootstrap"),
+            }
+        )
+
+
+def test_example_admin_sso_admin_uses_console_and_keeps_department(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(
+        browser, monkeypatch, username="example_admin", user_id="900001", dept_id="42"
+    )
+    assert session["user"]["role"] == "admin"
+    assert session["user"]["is_super_admin"] is True
+    assert session["user"]["dept_id"] == "42"
+    assert auth.users is not None
+    assert auth.users.get("900001").dept_id == "42"
+    assert auth.settings.admin_cookie_name not in browser.cookies
+
+    resumed = browser.get("/kb/api/v1/console/session")
+    assert resumed.status_code == 200
+    assert resumed.json()["authenticated"] is True
+    assert resumed.json()["csrf_token"] == session["csrf_token"]
+    assert resumed.json()["session_id"] == session["session_id"]
+    assert auth.settings.admin_cookie_name not in browser.cookies
+
+    headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
+    assert (
+        browser.post("/kb/api/v1/console/session", headers=headers).status_code
+        == 200
+    )
+    assert (
+        browser.post(
+            "/kb/api/v1/console/session:rotate", headers=headers
+        ).status_code
+        == 200
+    )
+    assert (
+        browser.delete(
+            "/kb/api/v1/console/session", headers=headers
+        ).status_code
+        == 204
+    )
+    assert browser.get("/kb/api/v1/console/session").status_code == 401
+
+
+def test_startup_backfills_history_users_for_role_api_and_sso_enrichment(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_auth, _original_browser = gateway
+    database = original_auth.settings.database_path
+    GatewayStore(database)
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            "INSERT INTO gateway_turns "
+            "(trace_id,deployment_id,owner_id,asker_name,created_at,"
+            "conversation_id,native_session_id,question,status) "
+            "VALUES (?,'candidate_8289',?,?,'2026-10-01',"
+            "'history','native','合成旧问题','completed')",
+            (
+                ("old-" + uid, "rdms:candidate_8289:" + uid, "历史用户" + uid)
+                for uid in ("1001", "201", "202")
+            ),
+        )
+    assert original_auth.users is not None
+    assert original_auth.users.get("1001") is None
+    auth = GatewayAuth.from_settings(original_auth.settings)
+    assert auth.users is not None
+    assert auth.users.get("1001") is not None
+    app = FastAPI(root_path="/kb")
+    register_auth_routes(app, auth)
+    with TestClient(app, base_url=_ORIGIN) as owner_browser:
+        owner = _login_public(
+            owner_browser, monkeypatch, username="example_admin", user_id="900001"
+        )
+        headers = {"Origin": _ORIGIN, "X-CSRF-Token": owner["csrf_token"]}
+        listed = owner_browser.get("/kb/api/ops/users")
+        assert listed.status_code == 200
+        rows = {row["user_id"]: row for row in listed.json()["items"]}
+        assert rows["1001"]["username"] == "1001"
+        assert rows["1001"]["display_name"] == "历史用户1001"
+        assert rows["1001"]["dept_id"] is None
+        for user_id, role in (
+            ("1001", "hr"),
+            ("201", "admin"),
+            ("202", "admin"),
+        ):
+            assert (
+                owner_browser.patch(
+                    "/kb/api/ops/users/" + user_id,
+                    json={"role": role},
+                    headers=headers,
+                ).status_code
+                == 200
+            )
+        with TestClient(app, base_url=_ORIGIN) as staff_browser:
+            staff = _login_public(
+                staff_browser,
+                monkeypatch,
+                username="real_staff",
+                user_id="1001",
+                dept_id="42",
+            )
+            assert staff["user"]["username"] == "real_staff"
+            assert staff["user"]["dept_id"] == "42"
+            assert staff["user"]["role"] == "hr"
+        with TestClient(app, base_url=_ORIGIN) as admin_browser:
+            admin = _login_public(
+                admin_browser, monkeypatch, username="real_admin", user_id="201"
+            )
+            admin_headers = {
+                "Origin": _ORIGIN,
+                "X-CSRF-Token": admin["csrf_token"],
+            }
+            for target, role in (
+                ("202", "user"),
+                ("900001", "user"),
+                ("201", "user"),
+                ("1001", "admin"),
+            ):
+                assert (
+                    admin_browser.patch(
+                        "/kb/api/ops/users/" + target,
+                        json={"role": role},
+                        headers=admin_headers,
+                    ).status_code
+                    == 403
+                )
+
+
+def test_local_role_change_applies_to_existing_sso_session(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(browser, monkeypatch)
+    assert browser.get("/kb/api/ops/users").status_code == 401
+    assert auth.users is not None
+    with TestClient(browser.app, base_url=_ORIGIN) as owner_browser:
+        owner_session = _login_public(
+            owner_browser, monkeypatch, username="example_admin", user_id="900001"
+        )
+        owner_headers = {
+            "Origin": _ORIGIN,
+            "X-CSRF-Token": owner_session["csrf_token"],
+        }
+        assert (
+            owner_browser.patch(
+                "/kb/api/ops/users/1001",
+                json={"role": "admin"},
+                headers=owner_headers,
+            ).status_code
+            == 200
+        )
+        assert browser.get("/kb/api/v1/console/session").status_code == 200
+        listing = browser.get("/kb/api/ops/users")
+        assert listing.status_code == 200
+        listed = {item["user_id"]: item for item in listing.json()["items"]}
+        assert listed["900001"]["is_super_admin"] is True
+        assert listed["900001"]["editable_roles"] == []
+        assert listed["1001"]["editable_roles"] == []
+
+        headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
+        assert (
+            browser.patch(
+                "/kb/api/ops/users/1001", json={"role": "hr"}, headers=headers
+            ).status_code
+            == 403
+        )
+        assert (
+            browser.patch(
+                "/kb/api/ops/users/900001", json={"role": "user"}, headers=headers
+            ).status_code
+            == 403
+        )
+        changed = owner_browser.patch(
+            "/kb/api/ops/users/1001", json={"role": "hr"}, headers=owner_headers
+        )
+        assert changed.status_code == 200
+        assert changed.json()["role"] == "hr"
+    assert browser.get("/kb/api/v1/console/session").status_code == 401
+    assert (
+        browser.patch(
+            "/kb/api/ops/users/1001", json={"role": "admin"}, headers=headers
+        ).status_code
+        == 401
+    )
+    resumed = browser.post(
+        "/kb/api/public/session", headers={"Origin": _ORIGIN}
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["user"]["role"] == "hr"
+
+
+def test_account_access_enforces_role_hierarchy_and_preserves_role(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, staff_browser = gateway
+    staff = _login_public(staff_browser, monkeypatch)
+    staff_headers = {"Origin": _ORIGIN, "X-CSRF-Token": staff["csrf_token"]}
+    app = staff_browser.app
+    with (
+        TestClient(app, base_url=_ORIGIN) as owner_browser,
+        TestClient(app, base_url=_ORIGIN) as admin_browser,
+        TestClient(app, base_url=_ORIGIN) as peer_browser,
+    ):
+        owner = _login_public(owner_browser, monkeypatch, user_id="900001")
+        admin = _login_public(admin_browser, monkeypatch, user_id="1002")
+        _login_public(peer_browser, monkeypatch, user_id="1003")
+        assert auth.users is not None
+        for user_id, role in (
+            ("1001", "hr"),
+            ("1002", "admin"),
+            ("1003", "admin"),
+        ):
+            auth.users.set_role(user_id, role, actor_user_id="900001")
+        owner_headers = {"Origin": _ORIGIN, "X-CSRF-Token": owner["csrf_token"]}
+        admin_headers = {"Origin": _ORIGIN, "X-CSRF-Token": admin["csrf_token"]}
+        for target in ("900001", "1002", "1003"):
+            assert (
+                admin_browser.put(
+                    f"/kb/api/ops/users/{target}/access",
+                    json={"blocked": True},
+                    headers=admin_headers,
+                ).status_code
+                == 403
+            )
+        path = "/kb/api/ops/users/1001/access"
+        assert (
+            staff_browser.put(
+                path, json={"blocked": True}, headers=staff_headers
+            ).status_code
+            == 401
+        )
+        banned = admin_browser.put(
+            path, json={"blocked": True}, headers=admin_headers
+        )
+        assert banned.status_code == 200
+        assert banned.json() == {
+            "access_blocked": True,
+            "access_block_reason": "account",
+        }
+        denied = staff_browser.post(
+            "/kb/api/public/probe", headers=staff_headers
+        )
+        assert denied.status_code == 403
+        assert "当前账号已被禁止访问" in denied.json()["detail"]
+        with TestClient(app, base_url=_ORIGIN) as new_browser:
+            assert _sso_callback(new_browser, monkeypatch).status_code == 403
+            assert auth.public_sessions.cookie_name not in new_browser.cookies
+        restored = owner_browser.put(
+            path, json={"blocked": False}, headers=owner_headers
+        )
+        assert restored.json() == {
+            "access_blocked": False,
+            "access_block_reason": None,
+        }
+        assert (
+            owner_browser.put(
+                "/kb/api/ops/users/1002/access",
+                json={"blocked": True},
+                headers=owner_headers,
+            ).status_code
+            == 200
+        )
+        assert admin_browser.get("/kb/api/ops/users").status_code == 403
+        assert admin_browser.get("/kb/api/admin/entry").status_code == 403
+    resumed = staff_browser.post(
+        "/kb/api/public/session", headers=staff_headers
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["user"]["role"] == "hr"
+
+
+@pytest.mark.parametrize("sync_fails", [False, True])
+def test_role_change_revokes_background_before_saving(
+    gateway: tuple[GatewayAuth, TestClient],
+    monkeypatch: pytest.MonkeyPatch,
+    sync_fails: bool,
+) -> None:
+    auth, existing_browser = gateway
+    owner = _login_public(
+        existing_browser, monkeypatch, username="example_admin", user_id="900001"
+    )
+    assert auth.users is not None
+    auth.users.record_identity(
+        SsoIdentity(
+            user_id="138",
+            username="site_member",
+            nick_name="普通用户",
+            dept_id="208",
+            roles=(),
+            permissions=(),
+        )
+    )
+    auth.users.set_role("138", "hr", actor_user_id="900001")
+    observed: list[tuple[str, str, str]] = []
+
+    async def revoke(target: UserProfile, new_role: Role) -> None:
+        assert auth.users is not None
+        current = auth.users.get(target.user_id)
+        assert current is not None
+        observed.append((target.user_id, current.role, new_role))
+        if sync_fails:
+            raise NativeHttpError(502, "synthetic unavailable")
+
+    app = FastAPI(root_path="/kb")
+    register_auth_routes(app, auth, before_role_change=revoke)
+    with TestClient(app, base_url=_ORIGIN) as browser:
+        browser.cookies.update(existing_browser.cookies)
+        result = browser.patch(
+            "/kb/api/ops/users/138",
+            json={"role": "user"},
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": owner["csrf_token"]},
+        )
+    assert observed == [("138", "hr", "user")]
+    assert result.status_code == (503 if sync_fails else 200)
+    current = auth.users.get("138")
+    assert current is not None
+    assert current.role == ("hr" if sync_fails else "user")
+
+
+def _personal_quota_app(auth: GatewayAuth) -> tuple[FastAPI, list[str]]:
+    """额度管理只访问本地配置，不应访问任何个人原件或模型。"""
+    requests: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        raise AssertionError("额度配置不得访问原生资料服务。")
+
+    engine = EngineSettings(
+        base_url="http://native.test:8080",
+        tenant_id=8,
+        public_kb_ids=("kb-public",),
+        api_key_file=auth.settings.database_path.parent / "unused-api-key",
+        external_signing_key_file=auth.settings.database_path.parent
+        / "unused-signing",
+        admin_email="candidate@example.test",
+        admin_password_file=auth.settings.database_path.parent / "unused-pass",
+    )
+    transport = httpx.MockTransport(respond)
+    native = KnowledgeEngineClient(
+        base_url=engine.base_url,
+        api_key="test-only-key",
+        signer=ExternalPrincipalSigner(
+            secret="test-signing",  # noqa: S106
+            tenant_id=engine.tenant_id,
+            deployment_id=auth.settings.deployment_id,
+        ),
+        transport=transport,
+    )
+    admin = NativeAdminClient(
+        base_url=engine.base_url,
+        email=engine.admin_email,
+        password="test-only-password",  # noqa: S106
+        tenant_id=engine.tenant_id,
+        transport=transport,
+    )
+    return create_app(
+        auth=auth, engine=engine, native=native, admin_native=admin
+    ), requests
+
+
+@pytest.mark.parametrize(
+    "actor_role,expected_status",
+    [("super", 200), ("admin", 403), ("hr", 401), ("user", 401)],
+)
+def test_personal_quota_management_requires_super_and_exposes_no_files(
+    gateway: tuple[GatewayAuth, TestClient],
+    monkeypatch: pytest.MonkeyPatch,
+    actor_role: str,
+    expected_status: int,
+) -> None:
+    auth, browser = gateway
+    session = _login_public(
+        browser,
+        monkeypatch,
+        username="quota_actor",
+        user_id="900001" if actor_role == "super" else "1001",
+    )
+    assert auth.users is not None
+    if actor_role in {"admin", "hr"}:
+        auth.users.record_identity(
+            SsoIdentity(
+                user_id="900001",
+                username="quota_owner",
+                nick_name="额度管理员",
+                dept_id=None,
+                roles=(),
+                permissions=(),
+            )
+        )
+        auth.users.set_role("1001", actor_role, actor_user_id="900001")
+    auth.users.record_identity(
+        SsoIdentity(
+            user_id="1002",
+            username="quota_target",
+            nick_name="额度测试用户",
+            dept_id=None,
+            roles=(),
+            permissions=(),
+        )
+    )
+    app, native_requests = _personal_quota_app(auth)
+    headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
+    with TestClient(app, base_url=_ORIGIN) as client:
+        client.cookies.update(browser.cookies)
+        response = client.put(
+            "/kb/api/ops/users/1002/personal-quota",
+            json={"max_bytes": 1024, "max_files": 2},
+            headers=headers,
+        )
+        assert response.status_code == expected_status
+        if expected_status == 200:
+            assert response.json() == {"max_bytes": 1024, "max_files": 2}
+        if actor_role in {"super", "admin"}:
+            listed = client.get("/kb/api/ops/users").json()["items"]
+            target = next(row for row in listed if row["user_id"] == "1002")
+            assert target["can_edit_personal_quota"] is (actor_role == "super")
+            assert target["personal_quota"] == {
+                "max_bytes": 1024
+                if actor_role == "super"
+                else 250 * 1024 * 1024,
+                "max_files": 2 if actor_role == "super" else 50,
+            }
+            assert set(target["personal_quota"]) == {"max_bytes", "max_files"}
+        own_quota = client.get("/kb/api/public/library?scope=personal").json()[
+            "quota"
+        ]
+        assert own_quota["max_bytes"] == 250 * 1024 * 1024
+        assert own_quota["max_files"] == 50
+        assert own_quota["used_files"] == own_quota["used_bytes"] == 0
+    assert auth.users.get("1002").role == "user"
+    assert native_requests == []
+
+
+def test_personal_quota_update_preserves_csrf_and_strict_fields(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(
+        browser, monkeypatch, username="quota_owner", user_id="900001"
+    )
+    app, native_requests = _personal_quota_app(auth)
+    path = "/kb/api/ops/users/900001/personal-quota"
+    valid = {"max_bytes": 1024, "max_files": 2}
+    headers = {"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]}
+    with TestClient(app, base_url=_ORIGIN) as client:
+        assert client.put(path, json=valid, headers=headers).status_code == 401
+        client.cookies.update(browser.cookies)
+        for invalid_headers in (
+            {"Origin": _ORIGIN},
+            {"Origin": _ORIGIN, "X-CSRF-Token": "wrong"},
+            {
+                "Origin": "http://other.test",
+                "X-CSRF-Token": session["csrf_token"],
+            },
+        ):
+            assert (
+                client.put(
+                    path, json=valid, headers=invalid_headers
+                ).status_code
+                == 403
+            )
+        for body in (
+            {**valid, "max_bytes": 0},
+            {**valid, "max_files": -1},
+            {**valid, "max_bytes": True},
+            {**valid, "role": "admin"},
+        ):
+            assert (
+                client.put(path, json=body, headers=headers).status_code == 422
+            )
+        assert (
+            client.put(
+                "/kb/api/ops/users/missing/personal-quota",
+                json=valid,
+                headers=headers,
+            ).status_code
+            == 404
+        )
+        own_quota = client.get("/kb/api/public/library?scope=personal").json()[
+            "quota"
+        ]
+        assert own_quota["max_bytes"] == 250 * 1024 * 1024
+        assert own_quota["max_files"] == 50
+    assert native_requests == []
+
+
+def test_personal_native_upload_cannot_bypass_quota_or_queue(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, browser = gateway
+    session = _login_public(
+        browser, monkeypatch, username="quota_owner", user_id="900001"
+    )
+    app, native_requests = _personal_quota_app(auth)
+    with sqlite3.connect(auth.settings.database_path) as connection:
+        connection.execute(
+            "INSERT INTO library_kbs(kb_id,scope,owner_id) VALUES (?,?,?)",
+            ("own-private", "personal", "900001"),
+        )
+    with TestClient(app, base_url=_ORIGIN) as client:
+        client.cookies.update(browser.cookies)
+        response = client.post(
+            "/kb/api/engine-admin/api/v1/knowledge-bases/own-private/knowledge/file",
+            files={"file": ("probe.txt", b"not-admitted")},
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": session["csrf_token"]},
+        )
+        assert response.status_code == 409
+        assert "我的资料" in response.json()["detail"]
+    assert native_requests == []
+
+
+def test_denied_role_change_cannot_stop_other_users_workbench(
+    gateway: tuple[GatewayAuth, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth, existing_browser = gateway
+    assert auth.users is not None
+    auth.users.record_identity(
+        SsoIdentity(
+            user_id="900001",
+            username="example_admin",
+            nick_name="超管",
+            dept_id="208",
+            roles=(),
+            permissions=(),
+        )
+    )
+    actor = _login_public(existing_browser, monkeypatch, user_id="138")
+    auth.users.set_role("138", "admin", actor_user_id="900001")
+    called: list[str] = []
+
+    async def revoke(target: UserProfile, _new_role: Role) -> None:
+        called.append(target.user_id)
+
+    app = FastAPI(root_path="/kb")
+    register_auth_routes(app, auth, before_role_change=revoke)
+    with TestClient(app, base_url=_ORIGIN) as browser:
+        browser.cookies.update(existing_browser.cookies)
+        result = browser.patch(
+            "/kb/api/ops/users/900001",
+            json={"role": "user"},
+            headers={"Origin": _ORIGIN, "X-CSRF-Token": actor["csrf_token"]},
+        )
+    assert result.status_code == 403
+    assert called == []
+    assert auth.users.get("900001").is_super_admin

@@ -83,8 +83,8 @@ export function AnswerActions({
   }
 
   return (
-    <div className="wst-completed-answer-actions">
-      <div className="wst-answer-export-buttons" aria-label="回答操作">
+    <div className="ia-completed-answer-actions">
+      <div className="ia-answer-export-buttons" aria-label="回答操作">
         <button
           type="button"
           disabled={Boolean(busy)}

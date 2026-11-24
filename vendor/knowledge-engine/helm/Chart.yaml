@@ -1,0 +1,26 @@
+apiVersion: v2
+name: knowledgeengine
+description: |
+  KnowledgeEngine - AI-powered Knowledge RAG Platform for building intelligent knowledge bases
+  with document parsing, vector search, and LLM integration.
+type: application
+version: 0.1.0
+appVersion: "0.9.0"
+kubeVersion: ">=1.25.0-0"
+home: https://industrial-agent.example/source
+icon: https://industrial-agent.example/source/main/docs/images/logo.png
+sources:
+  - https://industrial-agent.example/source
+keywords:
+  - ai
+  - rag
+  - knowledge-base
+  - llm
+  - document-parsing
+  - vector-search
+  - chatbot
+maintainers:
+  - name: KnowledgeEngine Community
+    url: https://industrial-agent.example/source
+annotations:
+  artifacthub.io/license: MIT

@@ -66,7 +66,7 @@ function Harness({
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   return (
-    <div className="wst-root" data-testid="theme-root" data-theme={theme}>
+    <div className="ia-root" data-testid="theme-root" data-theme={theme}>
       <div data-testid="clipping-parent" style={{ overflow: "hidden" }}>
         <button
           aria-expanded={open}
@@ -133,7 +133,7 @@ beforeEach(() => {
   );
   vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
     function (this: HTMLElement) {
-      return this.classList.contains("wst-anchored-popover")
+      return this.classList.contains("ia-anchored-popover")
         ? contentHeight
         : 0;
     },
@@ -141,7 +141,7 @@ beforeEach(() => {
   for (const property of ["clientHeight", "offsetHeight"] as const) {
     vi.spyOn(HTMLElement.prototype, property, "get").mockImplementation(
       function (this: HTMLElement) {
-        return this.classList.contains("wst-anchored-popover")
+        return this.classList.contains("ia-anchored-popover")
           ? renderedHeight(this)
           : 0;
       },
@@ -171,7 +171,7 @@ describe("跟随触发器的浮层", () => {
       expect(screen.getByTestId("clipping-parent")).not.toContainElement(
         popover,
       );
-      expect(popover).toHaveClass("wst-anchored-popover", "scope-options");
+      expect(popover).toHaveClass("ia-anchored-popover", "scope-options");
       expect(popover).toHaveStyle({ position: "fixed", visibility: "visible" });
     },
   );

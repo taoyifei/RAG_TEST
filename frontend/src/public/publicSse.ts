@@ -30,7 +30,7 @@ interface PublicEventBase {
   answer_origin?: PublicAnswerOrigin;
 }
 
-export const WEKNORA_STREAM_PROTOCOL = "wanshitong-weknora-sse-v1" as const;
+export const KNOWLEDGE_ENGINE_STREAM_PROTOCOL = "industrial_agent-knowledgeengine-sse-v1" as const;
 
 export interface PublicMetaEvent extends PublicEventBase {
   type: "meta";
@@ -271,26 +271,26 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
     throw new PublicSseParseError();
   }
   const type = typeof value.type === "string" ? value.type : frame.event;
-  const natural = value.protocol === "wanshitong-natural-sse-v1";
-  const weknora = value.protocol === WEKNORA_STREAM_PROTOCOL;
+  const natural = value.protocol === "industrial_agent-natural-sse-v1";
+  const knowledgeengine = value.protocol === KNOWLEDGE_ENGINE_STREAM_PROTOCOL;
   if (
     value.protocol !== undefined &&
-    value.protocol !== "wanshitong-public-sse-v1" &&
+    value.protocol !== "industrial-agent-public-sse-v1" &&
     !natural &&
-    !weknora
+    !knowledgeengine
   ) {
     throw new PublicSseParseError();
   }
-  if ((natural || weknora) && type === "claim") throw new PublicSseParseError();
-  if (weknora && type === "stage") throw new PublicSseParseError();
+  if ((natural || knowledgeengine) && type === "claim") throw new PublicSseParseError();
+  if (knowledgeengine && type === "stage") throw new PublicSseParseError();
   if (
     (type === "answer_delta" || type === "references") &&
     !natural &&
-    !weknora
+    !knowledgeengine
   ) {
     throw new PublicSseParseError();
   }
-  if (type === "native_event" && !weknora) throw new PublicSseParseError();
+  if (type === "native_event" && !knowledgeengine) throw new PublicSseParseError();
   const sequence = value.sequence;
   if (
     type !== frame.event ||
@@ -326,8 +326,8 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
   if (
     type === "answer_delta" &&
     (typeof value.text !== "string" ||
-      (!weknora && value.provisional !== true) ||
-      (weknora &&
+      (!knowledgeengine && value.provisional !== true) ||
+      (knowledgeengine &&
         value.truncated !== undefined &&
         typeof value.truncated !== "boolean"))
   ) {
@@ -351,7 +351,7 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
       !Array.isArray(value.citations) ||
       !value.citations.every(isCitation) ||
       (value.template_lookup !== undefined &&
-        (!weknora || !isTemplateLookup(value.template_lookup))) ||
+        (!knowledgeengine || !isTemplateLookup(value.template_lookup))) ||
       (value.user_message !== undefined &&
         typeof value.user_message !== "string"))
   ) {
@@ -378,7 +378,7 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
   }
   if (
     type === "final" &&
-    weknora &&
+    knowledgeengine &&
     (typeof value.answer !== "string" ||
       typeof value.truncated !== "boolean" ||
       (value.finish_reason !== undefined &&
@@ -387,7 +387,7 @@ function decodePublicEvent(frame: SseFrame): PublicStreamEvent | undefined {
   ) {
     throw new PublicSseParseError();
   }
-  if (weknora) {
+  if (knowledgeengine) {
     for (const key of [
       "native_request_id",
       "native_message_id",

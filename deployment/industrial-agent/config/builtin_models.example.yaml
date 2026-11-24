@@ -1,0 +1,46 @@
+# 示例配置。将 base_url 改为部署时能访问的模型服务地址。
+# 示例给出协议和参数形状，模型及其上下文长度需要与实际服务一致。
+builtin_models:
+  - id: industrial-qwen3-8b-awq
+    type: KnowledgeQA
+    source: remote
+    is_default: true
+    name: Qwen/Qwen3-8B-AWQ
+    parameters:
+      base_url: http://host.docker.internal:8090/v1
+      provider: generic
+      context_window: 24576
+      max_output_tokens: 2048
+
+  - id: industrial-qwen3-embedding-0-6b
+    type: Embedding
+    source: remote
+    is_default: true
+    name: Qwen3-Embedding-0.6B
+    parameters:
+      base_url: http://host.docker.internal:8091/v1
+      provider: generic
+      embedding_parameters:
+        dimension: 1024
+        truncate_prompt_tokens: 0
+
+  - id: industrial-qwen3-reranker-0-6b
+    type: Rerank
+    source: remote
+    is_default: true
+    name: Qwen3-Reranker-0.6B
+    parameters:
+      base_url: http://rerank-adapter:8080
+      provider: generic
+      extra_config:
+        score_scale: probability
+
+  - id: ia-paddleocr-vl
+    type: VLLM
+    source: remote
+    is_default: true
+    name: PaddleOCR-VL-1.6-0.9B
+    parameters:
+      base_url: http://host.docker.internal:18095/v1
+      provider: generic
+      interface_type: openai

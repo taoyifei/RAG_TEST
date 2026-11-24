@@ -2,7 +2,7 @@
 .env.*
 !.env.example
 !**/.env.example
-!/vendor/weknora/.env.lite.example
+!/vendor/knowledge-engine/.env.lite.example
 .venv/
 .venv-*/
 __pycache__/
@@ -28,7 +28,7 @@ output/
 *Zone.Identifier*
 **/secrets*/
 
-# 旧项目资料与本地验收记录不随湾小度源码发布。
+# 旧项目资料与本地验收记录不随工业智能体源码发布。
 /.wb*/
 /corpus-manifests/
 /evaluation/

@@ -1,5 +1,5 @@
-import { WanshitongApp } from "./public/WanshitongApp";
+import { IndustrialAgentApp } from "./public/IndustrialAgentApp";
 
 export default function App() {
-  return <WanshitongApp />;
+  return <IndustrialAgentApp />;
 }

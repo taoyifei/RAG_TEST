@@ -82,13 +82,13 @@ export function RenameConversationDialog({
         }}
       >
         <h2>重命名会话</h2>
-        <label htmlFor="wst-conversation-title">会话名称</label>
+        <label htmlFor="ia-conversation-title">会话名称</label>
         <input
-          aria-describedby={error ? "wst-rename-error" : "wst-rename-hint"}
+          aria-describedby={error ? "ia-rename-error" : "ia-rename-hint"}
           aria-invalid={Boolean(error)}
           autoComplete="off"
           disabled={saving}
-          id="wst-conversation-title"
+          id="ia-conversation-title"
           maxLength={120}
           onChange={(event) => {
             setValue(event.target.value);
@@ -101,15 +101,15 @@ export function RenameConversationDialog({
           ref={input}
           value={value}
         />
-        <p className="wst-rename-hint" id="wst-rename-hint">
+        <p className="ia-rename-hint" id="ia-rename-hint">
           最多120个字符
         </p>
         {error && (
-          <p className="wst-rename-error" id="wst-rename-error" role="alert">
+          <p className="ia-rename-error" id="ia-rename-error" role="alert">
             {error}
           </p>
         )}
-        <div className="wst-rename-actions">
+        <div className="ia-rename-actions">
           <button disabled={saving} onClick={close} type="button">
             取消
           </button>

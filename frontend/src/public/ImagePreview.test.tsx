@@ -18,7 +18,7 @@ const IMAGE =
 function Harness() {
   const [trigger, setTrigger] = useState<HTMLElement>();
   return (
-    <div className="wst-root" data-theme="dark" data-testid="theme-root">
+    <div className="ia-root" data-theme="dark" data-testid="theme-root">
       <main data-testid="background">
         <button
           onClick={(event) => setTrigger(event.currentTarget)}

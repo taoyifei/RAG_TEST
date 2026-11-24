@@ -1,0 +1,604 @@
+"""普通管理员的原生后台绕过、人力内部区与历史会话边界。"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+from fastapi import HTTPException
+
+from industrial_agent.admin_scope import AdminScopeGuard
+from industrial_agent.library import LibraryService
+from industrial_agent.roles import UserProfile
+from industrial_agent.store import GatewayStore
+from industrial_agent.knowledge_engine.admin import NativeAdminResponse
+
+_ADMIN = UserProfile("admin", "admin", "管理员", None, "admin")
+_SUPER = UserProfile("root", "root", "超管", None, "admin", True)
+_HR = UserProfile("hr", "hr", "人力", None, "hr")
+_HR_KB_ID = "kb-hr-internal"
+
+
+class _Library(LibraryService):
+    """只提供守卫需要的归属读取，服务器请求不在本专项中执行。"""
+
+    public_kb_ids = ("kb-public",)
+
+    def __init__(self) -> None:
+        """用固定归属运行真实权限方法，不建立数据库或原生连接。"""
+
+    @staticmethod
+    def registered_kbs() -> list[dict[str, str]]:
+        return [
+            {"kb_id": _HR_KB_ID, "scope": "hr_internal", "owner_id": ""},
+            {"kb_id": "kb-hr-public", "scope": "hr_public", "owner_id": ""},
+            {"kb_id": "kb-personal", "scope": "personal", "owner_id": "owner"},
+            {
+                "kb_id": "kb-admin-personal",
+                "scope": "personal",
+                "owner_id": "admin",
+            },
+            {
+                "kb_id": "kb-root-personal",
+                "scope": "personal",
+                "owner_id": "root",
+            },
+        ]
+
+    @staticmethod
+    def hr_internal_kbs() -> frozenset[str]:
+        return frozenset({_HR_KB_ID})
+
+    def personal_kbs(self) -> dict[str, str]:
+        return {
+            row["kb_id"]: row["owner_id"]
+            for row in self.registered_kbs()
+            if row["scope"] == "personal"
+        }
+
+    @staticmethod
+    async def _knowledge(identifier: str) -> dict[str, Any]:
+        mapping = {
+            "hr-doc": _HR_KB_ID,
+            "hr-public-doc": "kb-hr-public",
+            "public-doc": "kb-public",
+            "private-doc": "kb-personal",
+            "admin-doc": "kb-admin-personal",
+            "root-doc": "kb-root-personal",
+        }
+        if identifier not in mapping:
+            raise HTTPException(404, "资料不存在。")
+        return {
+            "id": identifier,
+            "knowledge_base_id": mapping[identifier],
+        }
+
+    @staticmethod
+    async def _request(method: str, path: str) -> dict[str, Any]:
+        assert method == "GET"
+        return {
+            "data": {
+                "knowledge_id": {
+                    "hr-chunk": "hr-doc",
+                    "private-chunk": "private-doc",
+                }.get(path.rsplit("/", 1)[-1], "public-doc")
+            }
+        }
+
+
+@pytest.fixture
+def guard(tmp_path: Path) -> tuple[AdminScopeGuard, GatewayStore]:
+    store = GatewayStore(tmp_path / "gateway.sqlite3")
+    return AdminScopeGuard(cast(LibraryService, _Library()), store), store
+
+
+async def _check(  # noqa: PLR0913 - 测试代理请求显式覆盖协议字段。
+    guard: AdminScopeGuard,
+    path: str,
+    *,
+    body: object = None,
+    query: str = "",
+    profile: UserProfile = _ADMIN,
+    method: str = "GET",
+    content_type: str = "application/json",
+) -> None:
+    await guard.check_request(
+        profile,
+        method,
+        path,
+        query,
+        json.dumps(body).encode() if body is not None else b"",
+        {"Content-Type": content_type},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"api/v1/knowledge-bases/{_HR_KB_ID}",
+        f"api/v1/knowledge-bases/{_HR_KB_ID}/knowledge/file",
+        f"api/v1/knowledge-bases/{_HR_KB_ID}/files",
+        f"api/v1/knowledgebase/{_HR_KB_ID}/wiki/pages/secret",
+        "api/v1/knowledge/hr-doc",
+        "api/v1/knowledge/hr-doc/download",
+        "api/v1/knowledge/manual/hr-doc",
+        "api/v1/chunks/hr-doc",
+        "api/v1/chunks/by-id/hr-chunk",
+    ],
+)
+async def test_hr_content_paths_reject_plain_admin(
+    guard: tuple[AdminScopeGuard, GatewayStore], path: str
+) -> None:
+    with pytest.raises(HTTPException) as denied:
+        await _check(guard[0], path)
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [_HR, _SUPER])
+async def test_hr_and_super_admin_remain_authorized(
+    guard: tuple[AdminScopeGuard, GatewayStore], profile: UserProfile
+) -> None:
+    await _check(
+        guard[0], f"api/v1/knowledge-bases/{_HR_KB_ID}", profile=profile
+    )
+
+
+@pytest.mark.asyncio
+async def test_public_management_and_own_personal_read_stay_available(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    for identifier in ("public-doc", "hr-public-doc", "admin-doc"):
+        await _check(guard[0], f"api/v1/knowledge/{identifier}/download")
+    for identifier in ("public-doc", "hr-public-doc"):
+        await _check(
+            guard[0],
+            f"api/v1/chunks/{identifier}/chunk-1",
+            method="PUT",
+            body={"content": "更新"},
+        )
+    await _check(
+        guard[0],
+        "api/v1/knowledge-bases/kb-public/knowledge/file",
+        method="POST",
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_copy_and_explicit_search_check_body_targets(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    for path, body in (
+        (
+            "api/v1/knowledge/batch-delete",
+            {"kb_id": "kb-public", "ids": ["hr-doc"]},
+        ),
+        (
+            "api/v1/knowledge-bases/copy",
+            {"source_id": _HR_KB_ID, "target_id": "kb-public"},
+        ),
+        (
+            "api/v1/knowledge-search",
+            {"knowledge_base_ids": [_HR_KB_ID], "query": "查资料"},
+        ),
+        (
+            "api/v1/knowledge-search",
+            {"knowledge_ids": ["hr-doc"], "query": "查资料"},
+        ),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await _check(
+                guard[0],
+                path,
+                method="POST",
+                body=body,
+                content_type="text/plain",
+            )
+        assert denied.value.status_code == 403
+    await _check(
+        guard[0], "api/v1/knowledge/batch", query="ids=public-doc,admin-doc"
+    )
+    await _check(
+        guard[0],
+        "api/v1/knowledge-search",
+        method="POST",
+        body={"knowledge_base_ids": ["kb-public"], "query": "查资料"},
+    )
+    await _check(
+        guard[0],
+        "api/v1/knowledge/tags",
+        method="PUT",
+        body={"updates": {"public-doc": ["tag-1"]}},
+    )
+    with pytest.raises(HTTPException) as denied:
+        await _check(
+            guard[0],
+            "api/v1/knowledge/tags",
+            method="PUT",
+            body={"updates": {"hr-doc": ["tag-1"]}},
+        )
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "files",
+        "api/v1/knowledge/search",
+        "api/v1/knowledge-search",
+        "api/v1/tenants/10000/api-principal-config",
+        "api/v1/tenants/10000/api-principal-test-token",
+        "api/v1/tenants/10000/api-keys",
+        "api/v1/tenants/10000/audit-log",
+        "api/v1/tenants/all",
+        "api/v1/tenants/kv/storage-engine-config",
+        "api/v1/artifacts",
+        "api/v1/knowledge-chat/session",
+        "api/v1/agent-chat/session",
+        "api/v1/agent/session",
+        "api/v1/organizations",
+        "api/v1/datasource",
+    ],
+)
+async def test_unscoped_content_and_owner_credential_routes_are_denied(
+    guard: tuple[AdminScopeGuard, GatewayStore], path: str
+) -> None:
+    with pytest.raises(HTTPException) as denied:
+        await _check(guard[0], path)
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_normal_settings_routes_remain_available(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    for path in (
+        "api/v1/models",
+        "api/v1/system/info",
+        "api/v1/tenants/kv/prompt-templates",
+    ):
+        await _check(guard[0], path)
+
+
+@pytest.mark.asyncio
+async def test_plain_admin_can_read_and_validate_image_pipeline_config(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    await _check(guard[0], "api/v1/image-pipelines")
+    # 参数组合是否可用由原生规则回答，网关只校验配置接口的边界。
+    await _check(
+        guard[0],
+        "api/v1/image-pipelines/validate",
+        method="POST",
+        body={
+            "pipeline_id": "default",
+            "params": {"caption_enabled": False, "ocr_enabled": False},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "query", "body"),
+    [
+        ("GET", "api/v1/image-pipelines", "kb_id=kb-public", None),
+        ("GET", "api/v1/image-pipelines", "", {"kb_id": _HR_KB_ID}),
+        ("GET", "api/v1/image-pipelines/validate", "", None),
+        ("POST", "api/v1/image-pipelines/validate/extra", "", {}),
+        (
+            "POST",
+            "api/v1/image-pipelines/validate",
+            "knowledge_id=hr-doc",
+            {"pipeline_id": "default", "params": {}},
+        ),
+        (
+            "POST",
+            "api/v1/image-pipelines/validate",
+            "",
+            {"pipeline_id": "default", "params": {"kb_id": _HR_KB_ID}},
+        ),
+    ],
+)
+async def test_image_pipeline_config_rejects_resource_targets(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+    method: str,
+    path: str,
+    query: str,
+    body: object,
+) -> None:
+    with pytest.raises(HTTPException) as denied:
+        await _check(guard[0], path, method=method, query=query, body=body)
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        {},
+        {"pipeline_id": "", "params": {}},
+        {"pipeline_id": "default", "params": []},
+        {"pipeline_id": "default", "params": {}, "knowledge_id": "hr-doc"},
+    ],
+)
+async def test_image_pipeline_validation_requires_native_config_shape(
+    guard: tuple[AdminScopeGuard, GatewayStore], body: object
+) -> None:
+    with pytest.raises(HTTPException) as denied:
+        await _check(
+            guard[0],
+            "api/v1/image-pipelines/validate",
+            method="POST",
+            body=body,
+        )
+    assert denied.value.status_code == 422
+
+
+def _remember_session(
+    store: GatewayStore, identifier: str, kb_scope: tuple[str, ...]
+) -> None:
+    store.bind_session(
+        deployment_id="test",
+        owner_id="owner",
+        conversation_id=identifier,
+        native_session_id=identifier,
+    )
+    store.start_turn(
+        trace_id="trace_" + identifier,
+        deployment_id="test",
+        owner_id="owner",
+        conversation_id=identifier,
+        native_session_id=identifier,
+        question="问题",
+        kb_scope=kb_scope,
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_session_must_have_known_non_hr_history(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    protector, store = guard
+    _remember_session(store, "public-session", ("kb-public",))
+    _remember_session(store, "hr-session", (_HR_KB_ID, "kb-public"))
+    _remember_session(store, "old-session", ("deleted-hr-kb",))
+    await _check(protector, "api/v1/messages/public-session/load")
+    for path in (
+        "api/v1/sessions/hr-session",
+        "api/v1/messages/hr-session/load",
+        "api/v1/sessions/unknown/messages/message/files",
+        "api/v1/sessions/old-session",
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await _check(protector, path)
+        assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_kb_list_filters_internal_items_and_counts(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    upstream = NativeAdminResponse(
+        200,
+        json.dumps(
+            {
+                "success": True,
+                "total": 3,
+                "data": [
+                    {"id": "kb-public", "name": "公共"},
+                    {"id": _HR_KB_ID, "name": "人力内部"},
+                    {"id": "kb-personal", "name": "个人"},
+                ],
+            }
+        ).encode(),
+        {"content-type": "application/json"},
+    )
+    result = await guard[0].filter_response(
+        _ADMIN, "api/v1/knowledge-bases", upstream
+    )
+    payload = json.loads(result.content)
+    assert payload["total"] == 1
+    assert [row["id"] for row in payload["data"]] == [
+        "kb-public",
+    ]
+    assert _HR_KB_ID.encode() not in result.content
+    super_result = await guard[0].filter_response(
+        _SUPER, "api/v1/knowledge-bases", upstream
+    )
+    assert [row["id"] for row in json.loads(super_result.content)["data"]] == [
+        "kb-public",
+        _HR_KB_ID,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_native_session_list_omits_internal_and_unknown_sessions(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    protector, store = guard
+    _remember_session(store, "public-session", ("kb-public",))
+    _remember_session(store, "hr-session", (_HR_KB_ID,))
+    upstream = NativeAdminResponse(
+        200,
+        json.dumps(
+            {
+                "data": [
+                    {"id": "public-session"},
+                    {"id": "hr-session"},
+                    {"id": "untracked"},
+                ],
+                "total": 3,
+            }
+        ).encode(),
+        {"content-type": "application/json"},
+    )
+    result = await protector.filter_response(
+        _ADMIN, "api/v1/sessions", upstream
+    )
+    assert json.loads(result.content)["data"] == [{"id": "public-session"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [_ADMIN, _SUPER])
+@pytest.mark.parametrize(
+    "method,path,body,query",
+    [
+        ("GET", "api/v1/knowledge-bases/kb-personal", None, ""),
+        ("DELETE", "api/v1/knowledge-bases/kb-personal", None, ""),
+        ("POST", "api/v1/knowledge-bases/kb-personal/knowledge/file", None, ""),
+        ("GET", "api/v1/knowledge/private-doc/download", None, ""),
+        ("DELETE", "api/v1/knowledge/private-doc", None, ""),
+        ("GET", "api/v1/chunks/private-doc", None, ""),
+        ("GET", "api/v1/chunks/by-id/private-chunk", None, ""),
+        ("GET", "api/v1/knowledge/batch", None, "ids=public-doc,private-doc"),
+        ("POST", "api/v1/knowledge/batch-delete", {"ids": ["private-doc"]}, ""),
+        (
+            "POST",
+            "api/v1/knowledge-bases/copy",
+            {"source_id": "kb-personal", "target_id": "kb-public"},
+            "",
+        ),
+        (
+            "POST",
+            "api/v1/knowledge-search",
+            {"knowledge_ids": ["private-doc"]},
+            "",
+        ),
+    ],
+)
+async def test_admin_and_super_cannot_read_or_mutate_other_personal_data(  # noqa: PLR0913, PLR0917 - 矩阵显式覆盖完整代理请求。
+    guard: tuple[AdminScopeGuard, GatewayStore],
+    profile: UserProfile,
+    method: str,
+    path: str,
+    body: object,
+    query: str,
+) -> None:
+    with pytest.raises(HTTPException) as denied:
+        await _check(
+            guard[0],
+            path,
+            method=method,
+            profile=profile,
+            body=body,
+            query=query,
+        )
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_super_private_history_respects_owner(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    protector, store = guard
+    await _check(
+        protector, "api/v1/knowledge/root-doc/download", profile=_SUPER
+    )
+    with pytest.raises(HTTPException) as denied_write:
+        await _check(
+            protector,
+            "api/v1/knowledge/root-doc",
+            method="DELETE",
+            profile=_SUPER,
+        )
+    assert denied_write.value.status_code == 409
+    _remember_session(store, "private-session", ("kb-personal",))
+    _remember_session(store, "own-session", ("kb-root-personal",))
+    with pytest.raises(HTTPException) as denied:
+        await _check(
+            protector, "api/v1/messages/private-session/load", profile=_SUPER
+        )
+    assert denied.value.status_code == 403
+    await _check(protector, "api/v1/messages/own-session/load", profile=_SUPER)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [_ADMIN, _SUPER])
+async def test_native_kb_list_omits_unknown_and_other_private_libraries(
+    guard: tuple[AdminScopeGuard, GatewayStore], profile: UserProfile
+) -> None:
+    upstream = NativeAdminResponse(
+        200,
+        json.dumps(
+            {
+                "data": [
+                    {"id": "kb-public"},
+                    {"id": "kb-hr-public"},
+                    {"id": "kb-personal"},
+                    {"id": "kb-admin-personal"},
+                    {"id": "kb-root-personal"},
+                    {"id": "kb-unregistered"},
+                ]
+            }
+        ).encode(),
+        {"content-type": "application/json"},
+    )
+    filtered = await guard[0].filter_response(
+        profile, "api/v1/knowledge-bases", upstream
+    )
+    assert {row["id"] for row in json.loads(filtered.content)["data"]} == {
+        "kb-public",
+        "kb-hr-public",
+        f"kb-{profile.user_id}-personal",
+    }
+
+
+@pytest.mark.asyncio
+async def test_private_parameters_and_unknown_target_rejected_before_write(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+) -> None:
+    for body in (
+        {"target_kb_id": "kb-personal"},
+        {"target_kb_id": "kb-unregistered"},
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await _check(
+                guard[0],
+                "api/v1/knowledge/public-doc",
+                method="PUT",
+                body=body,
+            )
+        assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "profile,doc,kb",
+    [
+        (_ADMIN, "admin-doc", "kb-admin-personal"),
+        (_SUPER, "root-doc", "kb-root-personal"),
+    ],
+)
+async def test_private_native_writes_require_personal_workbench(
+    guard: tuple[AdminScopeGuard, GatewayStore],
+    profile: UserProfile,
+    doc: str,
+    kb: str,
+) -> None:
+    for method, path, body in (
+        ("POST", f"api/v1/knowledge-bases/{kb}/knowledge/file", None),
+        (
+            "POST",
+            f"api/v1/knowledge-bases/{kb}/knowledge/manual",
+            {"content": "x"},
+        ),
+        ("POST", f"api/v1/knowledge/{doc}/reparse", {}),
+        ("DELETE", f"api/v1/knowledge/{doc}", None),
+        ("PUT", f"api/v1/chunks/{doc}/chunk", {"content": "x"}),
+        (
+            "POST",
+            "api/v1/knowledge-bases/copy",
+            {"source_id": "kb-public", "target_id": kb},
+        ),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await _check(
+                guard[0], path, method=method, profile=profile, body=body
+            )
+        assert denied.value.status_code == 409
+        assert "我的资料" in denied.value.detail

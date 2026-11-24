@@ -12,7 +12,7 @@ function event(
   fields: Record<string, unknown> = {},
 ) {
   return `event: ${type}\ndata: ${JSON.stringify({
-    protocol: "wanshitong-public-sse-v1",
+    protocol: "industrial-agent-public-sse-v1",
     type,
     trace_id: `trace_${String(sequence + 1).padStart(32, "1")}`,
     sequence,
@@ -26,18 +26,18 @@ function naturalEvent(
   fields: Record<string, unknown> = {},
 ) {
   return event(type, sequence, {
-    protocol: "wanshitong-natural-sse-v1",
+    protocol: "industrial_agent-natural-sse-v1",
     ...fields,
   });
 }
 
-function weknoraEvent(
+function knowledgeengineEvent(
   type: string,
   sequence: number,
   fields: Record<string, unknown> = {},
 ) {
   return event(type, sequence, {
-    protocol: "wanshitong-weknora-sse-v1",
+    protocol: "industrial_agent-knowledgeengine-sse-v1",
     ...fields,
   });
 }
@@ -93,7 +93,7 @@ function installFetch(
     if (path === "/api/public/session") {
       return Promise.resolve(
         Response.json({
-          session_id: "wstsid_11111111111111111111111111111111",
+          session_id: "iasid_11111111111111111111111111111111",
           csrf_token: "a".repeat(64),
           expires_in: 3600,
           deployment_id: "candidate_8289",
@@ -104,9 +104,9 @@ function installFetch(
     if (path === "/api/public/capabilities") {
       return Promise.resolve(
         Response.json({
-          mode: "wanshitong",
+          mode: "industrial_agent",
           stream: true,
-          stream_protocol: "wanshitong-public-sse-v1",
+          stream_protocol: "industrial-agent-public-sse-v1",
           document_visibility: "all_internal",
           feedback: true,
           shortcuts: [],
@@ -156,7 +156,7 @@ function installScopeFetch(
     if (path === "/api/public/session")
       return Promise.resolve(
         Response.json({
-          session_id: "wstsid_11111111111111111111111111111111",
+          session_id: "iasid_11111111111111111111111111111111",
           csrf_token: "a".repeat(64),
           expires_in: 3600,
           deployment_id: "candidate_8289",
@@ -171,10 +171,10 @@ function installScopeFetch(
     if (path === "/api/public/capabilities")
       return Promise.resolve(
         Response.json({
-          mode: "wanshitong",
+          mode: "industrial_agent",
           stream: true,
-          stream_protocol: "wanshitong-weknora-sse-v1",
-          natural_stream_protocol: "wanshitong-weknora-sse-v1",
+          stream_protocol: "industrial_agent-knowledgeengine-sse-v1",
+          natural_stream_protocol: "industrial_agent-knowledgeengine-sse-v1",
           document_visibility: "all_internal",
           feedback: true,
           request_usage_context: true,
@@ -200,7 +200,7 @@ function installScopeFetch(
       return Promise.resolve(
         options.chat?.() ??
           streamResponse(
-            weknoraEvent("final", 0, {
+            knowledgeengineEvent("final", 0, {
               answer: "范围内回答",
               citations: [],
               truncated: false,
@@ -246,7 +246,7 @@ describe("问答范围选择与会话隔离", () => {
     const originalId = "saved-targeted";
     const documents = [{ id: "selected-doc", title: "选择的制度.docx" }];
     window.sessionStorage.setItem(
-      "wst-natural-conversation:candidate_8289:1001",
+      "ia-natural-conversation:candidate_8289:1001",
       originalId,
     );
     const fetchMock = installScopeFetch({
@@ -287,7 +287,7 @@ describe("问答范围选择与会话隔离", () => {
     installScopeFetch({
       chat: () =>
         streamResponse(
-          weknoraEvent("final", 0, {
+          knowledgeengineEvent("final", 0, {
             answer: "模型回答",
             citations: [],
             truncated: false,
@@ -360,7 +360,7 @@ describe("问答范围选择与会话隔离", () => {
     async (scope) => {
       const originalId = `saved-${scope}`;
       window.sessionStorage.setItem(
-        "wst-natural-conversation:candidate_8289:1001",
+        "ia-natural-conversation:candidate_8289:1001",
         originalId,
       );
       const fetchMock = installScopeFetch({
@@ -428,7 +428,7 @@ describe("问答范围选择与会话隔离", () => {
   });
 });
 
-describe("WeKnora 问答流", () => {
+describe("KnowledgeEngine 问答流", () => {
   function installGatewayFetch(
     chat: () => Response,
     options?: {
@@ -441,7 +441,7 @@ describe("WeKnora 问答流", () => {
       if (path === "/api/public/session") {
         return Promise.resolve(
           Response.json({
-            session_id: "wstsid_11111111111111111111111111111111",
+            session_id: "iasid_11111111111111111111111111111111",
             csrf_token: "a".repeat(64),
             expires_in: 3600,
             deployment_id: "candidate_8289",
@@ -452,10 +452,10 @@ describe("WeKnora 问答流", () => {
       if (path === "/api/public/capabilities") {
         return Promise.resolve(
           Response.json({
-            mode: "wanshitong",
+            mode: "industrial_agent",
             stream: true,
-            stream_protocol: "wanshitong-weknora-sse-v1",
-            natural_stream_protocol: "wanshitong-weknora-sse-v1",
+            stream_protocol: "industrial_agent-knowledgeengine-sse-v1",
+            natural_stream_protocol: "industrial_agent-knowledgeengine-sse-v1",
             document_visibility: "all_internal",
             feedback: true,
             request_usage_context: true,
@@ -484,7 +484,7 @@ describe("WeKnora 问答流", () => {
     const citation = {
       document_name: "依据.md",
       reference_id: `ref_${"b".repeat(32)}`,
-      source_kind: "weknora",
+      source_kind: "knowledgeengine",
       native_chunk_id: "chunk-1",
       quote: "引文",
     };
@@ -496,10 +496,10 @@ describe("WeKnora 问答流", () => {
               streamController = controller;
               controller.enqueue(
                 encoder.encode(
-                  weknoraEvent("meta", 0, { native_session_id: "session-1" }) +
-                    weknoraEvent("answer_delta", 1, { text: "# 标题\n" }) +
-                    weknoraEvent("references", 2, { items: [citation] }) +
-                    weknoraEvent("native_event", 3, {
+                  knowledgeengineEvent("meta", 0, { native_session_id: "session-1" }) +
+                    knowledgeengineEvent("answer_delta", 1, { text: "# 标题\n" }) +
+                    knowledgeengineEvent("references", 2, { items: [citation] }) +
+                    knowledgeengineEvent("native_event", 3, {
                       response_type: "thinking",
                       native: {
                         response_type: "thinking",
@@ -525,13 +525,13 @@ describe("WeKnora 问答流", () => {
       ([input]) => pathOf(input) === "/api/public/chat",
     );
     expect(
-      new Headers(chatCall?.[1]?.headers).get("X-Wanshitong-Stream-Protocol"),
-    ).toBe("wanshitong-weknora-sse-v1");
+      new Headers(chatCall?.[1]?.headers).get("X-IndustrialAgent-Stream-Protocol"),
+    ).toBe("industrial_agent-knowledgeengine-sse-v1");
 
     act(() => {
       streamController.enqueue(
         encoder.encode(
-          weknoraEvent("final", 4, {
+          knowledgeengineEvent("final", 4, {
             answer: "# 标题\n",
             citations: [citation],
             truncated: true,
@@ -559,9 +559,9 @@ describe("WeKnora 问答流", () => {
   it("原生流只给局部 done、EOF 无 complete 时标记失败", async () => {
     installGatewayFetch(() =>
       streamResponse(
-        weknoraEvent("meta", 0) +
-          weknoraEvent("answer_delta", 1, { text: "未完成正文" }) +
-          weknoraEvent("native_event", 2, {
+        knowledgeengineEvent("meta", 0) +
+          knowledgeengineEvent("answer_delta", 1, { text: "未完成正文" }) +
+          knowledgeengineEvent("native_event", 2, {
             response_type: "answer",
             done: true,
             native: { response_type: "answer", done: true },
@@ -625,13 +625,13 @@ describe("WeKnora 问答流", () => {
     const fetchMock = installGatewayFetch(
       () =>
         streamResponse(
-          weknoraEvent("meta", 0, { trace_id: traceId }) +
-            weknoraEvent("answer_delta", 1, {
+          knowledgeengineEvent("meta", 0, { trace_id: traceId }) +
+            knowledgeengineEvent("answer_delta", 1, {
               trace_id: traceId,
               text: "片段",
               native_message_id: "m-1",
             }) +
-            weknoraEvent("error", 2, {
+            knowledgeengineEvent("error", 2, {
               trace_id: traceId,
               code: "UPSTREAM_EOF",
             }),
@@ -656,12 +656,12 @@ describe("WeKnora 问答流", () => {
         },
         continued: () =>
           streamResponse(
-            weknoraEvent("meta", 0, { trace_id: traceId }) +
-              weknoraEvent("answer_delta", 1, {
+            knowledgeengineEvent("meta", 0, { trace_id: traceId }) +
+              knowledgeengineEvent("answer_delta", 1, {
                 trace_id: traceId,
                 text: "完整答案",
               }) +
-              weknoraEvent("final", 2, {
+              knowledgeengineEvent("final", 2, {
                 trace_id: traceId,
                 answer: "完整答案",
                 citations: [],
@@ -706,13 +706,13 @@ describe("WeKnora 问答流", () => {
     const fetchMock = installGatewayFetch(
       () =>
         streamResponse(
-          weknoraEvent("meta", 0, { trace_id: traceId }) +
-            weknoraEvent("answer_delta", 1, {
+          knowledgeengineEvent("meta", 0, { trace_id: traceId }) +
+            knowledgeengineEvent("answer_delta", 1, {
               trace_id: traceId,
               text: "片段",
               native_message_id: "m-1",
             }) +
-            weknoraEvent("error", 2, {
+            knowledgeengineEvent("error", 2, {
               trace_id: traceId,
               code: "UPSTREAM_EOF",
             }),
@@ -775,13 +775,13 @@ describe("WeKnora 问答流", () => {
     const fetchMock = installGatewayFetch(
       () =>
         streamResponse(
-          weknoraEvent("meta", 0, { trace_id: traceId }) +
-            weknoraEvent("answer_delta", 1, {
+          knowledgeengineEvent("meta", 0, { trace_id: traceId }) +
+            knowledgeengineEvent("answer_delta", 1, {
               trace_id: traceId,
               text: "已有片段",
               native_message_id: "m-1",
             }) +
-            weknoraEvent("references", 2, {
+            knowledgeengineEvent("references", 2, {
               trace_id: traceId,
               items: [
                 {
@@ -790,7 +790,7 @@ describe("WeKnora 问答流", () => {
                 },
               ],
             }) +
-            weknoraEvent("error", 3, {
+            knowledgeengineEvent("error", 3, {
               trace_id: traceId,
               code: "UPSTREAM_EOF",
             }),
@@ -820,8 +820,8 @@ describe("WeKnora 问答流", () => {
         },
         continued: () =>
           streamResponse(
-            weknoraEvent("meta", 0, { trace_id: traceId }) +
-              weknoraEvent("error", 1, {
+            knowledgeengineEvent("meta", 0, { trace_id: traceId }) +
+              knowledgeengineEvent("error", 1, {
                 trace_id: traceId,
                 code: "UPSTREAM_EOF",
               }),
@@ -859,12 +859,12 @@ describe("WeKnora 问答流", () => {
       count += 1;
       return streamResponse(
         count === 1
-          ? weknoraEvent("meta", 0, { trace_id: traceId }) +
-              weknoraEvent("error", 1, {
+          ? knowledgeengineEvent("meta", 0, { trace_id: traceId }) +
+              knowledgeengineEvent("error", 1, {
                 trace_id: traceId,
                 code: "UPSTREAM_EOF",
               })
-          : weknoraEvent("final", 0, {
+          : knowledgeengineEvent("final", 0, {
               answer: "新回答",
               citations: [],
               truncated: false,
@@ -914,7 +914,7 @@ describe("公共问答新话题生命周期", () => {
         if (path === "/api/public/session") {
           return Promise.resolve(
             Response.json({
-              session_id: "wstsid_11111111111111111111111111111111",
+              session_id: "iasid_11111111111111111111111111111111",
               csrf_token: "a".repeat(64),
               expires_in: 3600,
               deployment_id: "candidate_8289",
@@ -925,10 +925,10 @@ describe("公共问答新话题生命周期", () => {
         if (path === "/api/public/capabilities") {
           return Promise.resolve(
             Response.json({
-              mode: "wanshitong",
+              mode: "industrial_agent",
               stream: true,
-              stream_protocol: "wanshitong-public-sse-v1",
-              natural_stream_protocol: "wanshitong-natural-sse-v1",
+              stream_protocol: "industrial-agent-public-sse-v1",
+              natural_stream_protocol: "industrial_agent-natural-sse-v1",
               document_visibility: "all_internal",
               feedback: true,
               shortcuts: [],
@@ -975,8 +975,8 @@ describe("公共问答新话题生命周期", () => {
       ([input]) => pathOf(input) === "/api/public/chat",
     );
     expect(
-      new Headers(chatCall?.[1]?.headers).get("X-Wanshitong-Stream-Protocol"),
-    ).toBe("wanshitong-natural-sse-v1");
+      new Headers(chatCall?.[1]?.headers).get("X-IndustrialAgent-Stream-Protocol"),
+    ).toBe("industrial_agent-natural-sse-v1");
     act(() => {
       streamController.enqueue(
         encoder.encode(
@@ -1009,7 +1009,7 @@ describe("公共问答新话题生命周期", () => {
           if (path === "/api/public/session") {
             return Promise.resolve(
               Response.json({
-                session_id: "wstsid_11111111111111111111111111111111",
+                session_id: "iasid_11111111111111111111111111111111",
                 csrf_token: "a".repeat(64),
                 expires_in: 3600,
                 deployment_id: "candidate_8289",
@@ -1020,10 +1020,10 @@ describe("公共问答新话题生命周期", () => {
           if (path === "/api/public/capabilities") {
             return Promise.resolve(
               Response.json({
-                mode: "wanshitong",
+                mode: "industrial_agent",
                 stream: true,
-                stream_protocol: "wanshitong-public-sse-v1",
-                natural_stream_protocol: "wanshitong-natural-sse-v1",
+                stream_protocol: "industrial-agent-public-sse-v1",
+                natural_stream_protocol: "industrial_agent-natural-sse-v1",
                 document_visibility: "all_internal",
                 feedback: true,
                 shortcuts: [],

@@ -24,11 +24,11 @@ function ScopeComposer() {
   );
 }
 
-describe("湾事通提问输入框", () => {
+describe("工业智能体提问输入框", () => {
   it("范围 fieldset 直接挂在主题根节点，仍保留分组与多选语义", async () => {
     const user = userEvent.setup();
     const view = render(
-      <div className="wst-root" data-theme="dark">
+      <div className="ia-root" data-theme="dark">
         <div style={{ overflow: "hidden" }}>
           <ScopeComposer />
         </div>
@@ -40,7 +40,7 @@ describe("湾事通提问输入框", () => {
     const options = screen.getByRole("group", { name: "选择问答资料范围" });
     expect(options.tagName).toBe("FIELDSET");
     expect(options.parentElement).toBe(
-      view.container.querySelector(".wst-root"),
+      view.container.querySelector(".ia-root"),
     );
     expect(options.closest("[data-theme]")).toHaveAttribute(
       "data-theme",
@@ -58,7 +58,7 @@ describe("湾事通提问输入框", () => {
     const view = render(
       <PublicChatComposer busy onStop={onStop} onSubmit={onSubmit} />,
     );
-    const textbox = screen.getByRole("textbox", { name: "向湾小度提问" });
+    const textbox = screen.getByRole("textbox", { name: "向工业智能体提问" });
     expect(textbox).toBeEnabled();
     await user.type(textbox, "下一问的草稿");
     await user.keyboard("{Enter}");
@@ -104,11 +104,11 @@ describe("湾事通提问输入框", () => {
       screen.getByRole("button", { name: "资料范围：公共知识库 + 我的资料" }),
     );
     expect(screen.getByRole("checkbox", { name: "我的资料" })).toBeChecked();
-    await user.click(screen.getByRole("textbox", { name: "向湾小度提问" }));
+    await user.click(screen.getByRole("textbox", { name: "向工业智能体提问" }));
     expect(
       screen.queryByRole("group", { name: "选择问答资料范围" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "向工业智能体提问" })).toHaveFocus();
   });
 
   it("Esc 收起范围框并把焦点还给入口按钮", async () => {
@@ -223,7 +223,7 @@ describe("湾事通提问输入框", () => {
     render(
       <PublicChatComposer busy={false} onStop={vi.fn()} onSubmit={onSubmit} />,
     );
-    const textbox = screen.getByRole("textbox", { name: "向湾小度提问" });
+    const textbox = screen.getByRole("textbox", { name: "向工业智能体提问" });
     expect(screen.queryByText("当前 Demo 仅支持 DOCX")).not.toBeInTheDocument();
 
     await user.type(textbox, "第一行");

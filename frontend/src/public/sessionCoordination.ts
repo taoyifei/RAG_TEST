@@ -6,7 +6,7 @@ export interface PublicSessionChannel {
 }
 
 function channelName(deploymentId: string): string {
-  return `wanshitong-session-${deploymentId}`;
+  return `industrial_agent-session-${deploymentId}`;
 }
 
 /** 记录当前账号，并返回该部署是否发生了账号切换。 */

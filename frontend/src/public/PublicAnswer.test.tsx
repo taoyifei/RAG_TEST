@@ -156,7 +156,7 @@ it.each([
   if (notice) {
     expect(screen.getByRole("note")).toHaveTextContent(notice);
   } else {
-    expect(container.querySelector(".wst-answer-origin")).toBeNull();
+    expect(container.querySelector(".ia-answer-origin")).toBeNull();
   }
 });
 
@@ -165,7 +165,7 @@ it("生成等待期间只报告真实的连接活动，不伪造阶段进度", a
   vi.spyOn(Date, "now").mockReturnValue(now);
   const turn: PublicTurn = {
     id: "turn-test",
-    conversationId: "wst-test",
+    conversationId: "ia-test",
     question: "测试问题",
     status: "streaming",
     stageMessage: "正在组织回答",
@@ -217,7 +217,7 @@ it("安全渲染原生 Markdown 的代码、表格和链接，并展示截断提
   ].join("\n");
   const turn: PublicTurn = {
     id: "turn-markdown",
-    conversationId: "wst-test",
+    conversationId: "ia-test",
     question: "测试 Markdown",
     status: "completed",
     stageHistory: [],
@@ -250,7 +250,7 @@ it("实时正文与引用可同时显示，且不宣称内容已核验", () => {
   const now = Date.now();
   const turn: PublicTurn = {
     id: "turn-live",
-    conversationId: "wst-test",
+    conversationId: "ia-test",
     question: "测试引用",
     status: "streaming",
     stageHistory: [],
@@ -273,7 +273,7 @@ it("原生流只显示检索过程和实时答案，不暴露事件正文", () =
   const now = Date.now();
   const turn: PublicTurn = {
     id: "turn-native",
-    conversationId: "wst-test",
+    conversationId: "ia-test",
     question: "开发中心是干嘛的",
     status: "streaming",
     nativeProtocol: true,
@@ -356,7 +356,7 @@ it("把原生知识库引用标记显示为序号，保留原始引用和代码�
   const tag = '<kb doc="制度.docx" chunk_id="chunk-1" kb_id="kb-1" />';
   const turn: PublicTurn = {
     id: "turn-citation-marker",
-    conversationId: "wst-test",
+    conversationId: "ia-test",
     question: "何时折旧",
     status: "completed",
     stageHistory: [],
@@ -382,7 +382,7 @@ it("把原生知识库引用标记显示为序号，保留原始引用和代码�
   expect(screen.getByText("检索参考（1段）")).toBeInTheDocument();
   expect(container.querySelector("code")?.textContent).toContain(tag);
   expect(
-    container.querySelector(".wst-final-answer")?.textContent,
+    container.querySelector(".ia-final-answer")?.textContent,
   ).not.toContain(`${tag}${tag}`);
 });
 
@@ -421,7 +421,7 @@ it.each([
   try {
     const user = userEvent.setup();
     const { container } = render(
-      <div className="wst-root">
+      <div className="ia-root">
         <PublicAnswer
           onFeedback={vi.fn()}
           onRetry={vi.fn()}
@@ -466,7 +466,7 @@ it("答案把来源读取回调透传到阅读抽屉", async () => {
             document_name: "现行制度",
             reference_id: "ref-1",
             source_available: true,
-            source_kind: "weknora",
+            source_kind: "knowledgeengine",
             quote: "应按制度办理",
           },
         ],
@@ -498,7 +498,7 @@ it("回答没有配图时，引用独有图片仍透传本条会话身份并可�
             document_name: "操作说明",
             reference_id: "source-reference",
             source_available: true,
-            source_kind: "weknora",
+            source_kind: "knowledgeengine",
           },
         ],
       }}

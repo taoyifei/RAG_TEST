@@ -60,7 +60,7 @@ const PRIVATE_RESOURCE =
 /** 导出只保留可见内容，不把鉴权资源句柄变成可分享链接。 */
 function visibleText(value: string): string {
   return value
-    .replace(PRIVATE_RESOURCE, "（资源请在湾小度中查看）")
+    .replace(PRIVATE_RESOURCE, "（资源请在工业智能体中查看）")
     .replaceAll(String.fromCharCode(0), "");
 }
 
@@ -111,7 +111,7 @@ function inlineRuns(
         return [
           {
             ...format,
-            text: `图片：${visibleText(node.alt || "图示")}（请在湾小度原回答中查看）`,
+            text: `图片：${visibleText(node.alt || "图示")}（请在工业智能体原回答中查看）`,
           },
         ];
       case "link": {
@@ -333,6 +333,6 @@ export function answerClipboardText(
     answer + notice,
     "参考来源",
     ...(sources.length ? sources : ["本次回答未附参考来源。"]),
-    ...(sources.length ? ["完整引用原文可在湾小度的“引用依据”中查看。"] : []),
+    ...(sources.length ? ["完整引用原文可在工业智能体的“引用依据”中查看。"] : []),
   ].join("\n\n");
 }

@@ -87,9 +87,9 @@ export function AnchoredPopover({
     if (!open) return;
     const trigger = triggerRef.current;
     if (!trigger) return;
-    // 实际产品树总有 .wst-root；body 仅兼容独立挂载的组件测试。
+    // 实际产品树总有 .ia-root；body 仅兼容独立挂载的组件测试。
     setHost(
-      trigger.closest<HTMLElement>(".wst-root") ?? trigger.ownerDocument.body,
+      trigger.closest<HTMLElement>(".ia-root") ?? trigger.ownerDocument.body,
     );
   }, [open, triggerRef]);
 
@@ -226,7 +226,7 @@ export function AnchoredPopover({
   return createPortal(
     <Element
       aria-label={label}
-      className={`wst-anchored-popover${className ? ` ${className}` : ""}`}
+      className={`ia-anchored-popover${className ? ` ${className}` : ""}`}
       data-side={position?.side ?? preferredSide}
       id={id}
       onKeyDown={handleTab}

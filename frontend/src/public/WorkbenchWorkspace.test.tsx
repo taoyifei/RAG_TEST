@@ -30,7 +30,7 @@ describe("工作助手资料范围", () => {
         theme="light"
       />,
     );
-    const iframe = await screen.findByTitle("湾小度工作助手 · public");
+    const iframe = await screen.findByTitle("工业智能体工作助手 · public");
     expect(iframe).toHaveAttribute("src", `/workbench/${publicId}/`);
     expect(screen.getByLabelText("公共知识库")).toBeChecked();
     expect(screen.getByLabelText("我的资料")).not.toBeChecked();
@@ -85,14 +85,14 @@ describe("工作助手资料范围", () => {
       await Promise.resolve();
     });
     expect(
-      screen.queryByTitle("湾小度工作助手 · public"),
+      screen.queryByTitle("工业智能体工作助手 · public"),
     ).not.toBeInTheDocument();
     await act(async () => {
       resolvePersonal(response(personalId, "personal"));
       await Promise.resolve();
     });
     expect(
-      await screen.findByTitle("湾小度工作助手 · personal"),
+      await screen.findByTitle("工业智能体工作助手 · personal"),
     ).toHaveAttribute("src", `/workbench/${personalId}/`);
     let resolveNext!: (response: Response) => void;
     fetch.mockImplementationOnce(
@@ -105,14 +105,14 @@ describe("工作助手资料范围", () => {
     await user.click(screen.getByLabelText("我的资料"));
     await user.click(screen.getByRole("button", { name: "切换范围" }));
     expect(
-      screen.queryByTitle("湾小度工作助手 · personal"),
+      screen.queryByTitle("工业智能体工作助手 · personal"),
     ).not.toBeInTheDocument();
     await act(async () => {
       resolveNext(response());
       await Promise.resolve();
     });
     expect(
-      await screen.findByTitle("湾小度工作助手 · public"),
+      await screen.findByTitle("工业智能体工作助手 · public"),
     ).toBeInTheDocument();
   });
 
@@ -132,7 +132,7 @@ describe("工作助手资料范围", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("当前账号无权");
     expect(document.querySelector("iframe")).toBeNull();
     await user.click(screen.getByRole("button", { name: "重试" }));
-    await screen.findByTitle("湾小度工作助手 · public");
+    await screen.findByTitle("工业智能体工作助手 · public");
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
@@ -145,7 +145,7 @@ describe("工作助手资料范围", () => {
         theme="light"
       />,
     );
-    const frame = await screen.findByTitle("湾小度工作助手 · public");
+    const frame = await screen.findByTitle("工业智能体工作助手 · public");
     rerender(
       <WorkbenchWorkspace
         getCsrfToken={token}
@@ -153,7 +153,7 @@ describe("工作助手资料范围", () => {
         theme="dark"
       />,
     );
-    expect(screen.getByTitle("湾小度工作助手 · public")).toBe(frame);
+    expect(screen.getByTitle("工业智能体工作助手 · public")).toBe(frame);
     expect(fetch).toHaveBeenCalledTimes(1);
     rerender(
       <WorkbenchWorkspace

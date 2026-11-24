@@ -1,10 +1,10 @@
-const WANSHITONG_BASE_PATH = "/kb";
+const INDUSTRIAL_AGENT_BASE_PATH = "/kb";
 
 /** 返回当前页面实际使用的外部路径前缀；根路径保留本地开发兼容。 */
 export function appBasePath(pathname = window.location.pathname): string {
-  return pathname === WANSHITONG_BASE_PATH ||
-    pathname.startsWith(`${WANSHITONG_BASE_PATH}/`)
-    ? WANSHITONG_BASE_PATH
+  return pathname === INDUSTRIAL_AGENT_BASE_PATH ||
+    pathname.startsWith(`${INDUSTRIAL_AGENT_BASE_PATH}/`)
+    ? INDUSTRIAL_AGENT_BASE_PATH
     : "";
 }
 
@@ -38,4 +38,4 @@ export function appHistoryLocation(path: string): string {
   return `${url.pathname}${url.search}`;
 }
 
-export { WANSHITONG_BASE_PATH };
+export { INDUSTRIAL_AGENT_BASE_PATH };

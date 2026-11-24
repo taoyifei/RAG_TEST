@@ -40,14 +40,14 @@ export function PublicFeedback({
 
   if (status === "sent") {
     return (
-      <p className="wst-feedback-status" role="status">
+      <p className="ia-feedback-status" role="status">
         感谢你的反馈
       </p>
     );
   }
   return (
-    <div className="wst-feedback-block">
-      <div className="wst-feedback" aria-label="回答反馈">
+    <div className="ia-feedback-block">
+      <div className="ia-feedback" aria-label="回答反馈">
         <span>这次结果怎么样？</span>
         <button
           disabled={submitting}
@@ -69,23 +69,23 @@ export function PublicFeedback({
           没帮助
         </button>
         {submitting && (
-          <span className="wst-feedback-pending" role="status">
+          <span className="ia-feedback-pending" role="status">
             正在提交
           </span>
         )}
       </div>
       {negativeOpen && detailsEnabled && (
         <form
-          className="wst-feedback-form"
+          className="ia-feedback-form"
           onSubmit={(event) => {
             event.preventDefault();
             onSubmit({ useful: false, reasonDetail, comment });
           }}
         >
-          <label htmlFor="wst-feedback-reason">主要原因（可选）</label>
+          <label htmlFor="ia-feedback-reason">主要原因（可选）</label>
           <select
             disabled={submitting}
-            id="wst-feedback-reason"
+            id="ia-feedback-reason"
             onChange={(event) =>
               setReasonDetail(
                 (event.target.value || undefined) as
@@ -102,17 +102,17 @@ export function PublicFeedback({
               </option>
             ))}
           </select>
-          <label htmlFor="wst-feedback-comment">补充说明（可选）</label>
+          <label htmlFor="ia-feedback-comment">补充说明（可选）</label>
           <textarea
             disabled={submitting}
-            id="wst-feedback-comment"
+            id="ia-feedback-comment"
             maxLength={1000}
             onChange={(event) => setComment(event.target.value)}
             placeholder="例如：更合适的来源、缺少的条件或出现问题的位置"
             rows={3}
             value={comment}
           />
-          <div className="wst-feedback-form-actions">
+          <div className="ia-feedback-form-actions">
             <span>{comment.length}/1000</span>
             <button disabled={submitting} type="submit">
               {status === "failed" ? (
@@ -124,7 +124,7 @@ export function PublicFeedback({
         </form>
       )}
       {status === "failed" && (
-        <div className="wst-feedback-status is-error" role="alert">
+        <div className="ia-feedback-status is-error" role="alert">
           <span>{errorMessage ?? "反馈暂未提交成功，已保留你的输入。"}</span>
           {errorMessage?.includes("登录会话已过期") && onLogin ? (
             <button onClick={onLogin} type="button">

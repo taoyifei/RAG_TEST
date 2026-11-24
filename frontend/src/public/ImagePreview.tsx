@@ -30,24 +30,24 @@ export function ImagePreview({
       returnFocusTo={returnFocusTo}
       returnFocusFallback={returnFocusFallback}
     >
-      <header className="wst-reading-header">
+      <header className="ia-reading-header">
         <div>
-          <p className="wst-reading-eyebrow">图片预览</p>
+          <p className="ia-reading-eyebrow">图片预览</p>
           <h2>{alt || "回答中的图片"}</h2>
         </div>
         <button
           aria-label="关闭图片预览"
-          className="wst-reading-close"
+          className="ia-reading-close"
           onClick={onClose}
           type="button"
         >
           <X aria-hidden="true" size={20} />
         </button>
       </header>
-      <div className="wst-image-canvas">
+      <div className="ia-image-canvas">
         {status === "loading" && <p role="status">正在显示图片…</p>}
         {status === "error" && (
-          <div className="wst-reading-error" role="alert">
+          <div className="ia-reading-error" role="alert">
             <p>
               图片暂时无法显示，可以重新加载；若资料或权限已变化，请刷新页面。
             </p>

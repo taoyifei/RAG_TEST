@@ -18,7 +18,7 @@ afterEach(() => stylesheet.remove());
 
 // jsdom 不计算 var() 的背景色；直接解析真实规则并确认引用的主题值存在。
 function tabBackground(selected: boolean, root: Element): string {
-  const selector = `.wst-question-tab-buttons button${selected ? '[aria-selected="true"]' : ""}`;
+  const selector = `.ia-question-tab-buttons button${selected ? '[aria-selected="true"]' : ""}`;
   const rule = Array.from(stylesheet.sheet?.cssRules ?? []).find(
     (item): item is CSSStyleRule =>
       "selectorText" in item && item.selectorText === selector,
@@ -40,7 +40,7 @@ describe.each([
   it("两个标签切换后都有深绿选中底色和清楚的文字", async () => {
     const user = userEvent.setup();
     render(
-      <div className="wst-root" data-theme={theme}>
+      <div className="ia-root" data-theme={theme}>
         <PublicQuestionTabs
           busy={false}
           onRefresh={vi.fn()}
@@ -75,7 +75,7 @@ describe.each([
     ]) {
       await user.click(selected);
       expect(selected).toHaveAttribute("aria-selected", "true");
-      const root = selected.closest(".wst-root");
+      const root = selected.closest(".ia-root");
       expect(root).not.toBeNull();
       expect(tabBackground(true, root!)).toBe("#0b2f29");
       expect(getComputedStyle(selected).color).toBe("rgb(255, 255, 255)");

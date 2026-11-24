@@ -6,10 +6,10 @@ from dataclasses import replace
 
 import pytest
 
-from wanshitong_gateway.compat.core.errors import PolicyDenied
-from wanshitong_gateway.compat.product.crypto import MasterKey
-from wanshitong_gateway.compat.wanshitong import sso_session
-from wanshitong_gateway.compat.wanshitong.sso_session import (
+from industrial_agent.compat.core.errors import PolicyDenied
+from industrial_agent.compat.product.crypto import MasterKey
+from industrial_agent.compat.portal import sso_session
+from industrial_agent.compat.portal.sso_session import (
     SsoIdentity,
     SsoSessionService,
 )
@@ -39,7 +39,7 @@ def test_pending_is_encrypted_bound_to_flow_and_expires() -> None:
     now = [1_000.0]
     service = _service(now)
     issue = service.issue_pending(
-        service="http://kb.test:8289/kb/sso/callback",
+        service="http://kb.test:18300/kb/sso/callback",
         return_to="/kb/admin/history",
         origin_id="internal",
     )
@@ -127,7 +127,7 @@ def test_existing_cookie_with_claims_remains_readable() -> None:
             "nick_name": "测试用户",
             "permissions": ["kb:read"],
             "roles": ["employee"],
-            "sid": "wstsid_" + "a" * 32,
+            "sid": "iasid_" + "a" * 32,
             "user_id": "1001",
             "username": "tester",
             "v": 1,

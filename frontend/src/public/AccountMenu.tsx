@@ -24,12 +24,12 @@ export function AccountMenu({
     trigger,
   );
   return (
-    <div className="wst-account-menu" ref={container}>
+    <div className="ia-account-menu" ref={container}>
       <button
         aria-label="账户与外观"
         aria-expanded={open}
         aria-controls={id}
-        className="wst-account-trigger"
+        className="ia-account-trigger"
         onClick={() => setOpen((value) => !value)}
         ref={trigger}
         type="button"
@@ -41,7 +41,7 @@ export function AccountMenu({
       {open && (
         <div
           aria-label="账户与外观设置"
-          className="wst-account-popover"
+          className="ia-account-popover"
           id={id}
           role="group"
         >
@@ -55,7 +55,7 @@ export function AccountMenu({
             {theme === "dark" ? "浅色模式" : "深色模式"}
           </button>
           {onLogout && (
-            <button aria-label="退出湾小度" onClick={onLogout} type="button">
+            <button aria-label="退出工业智能体" onClick={onLogout} type="button">
               <LogOut aria-hidden="true" size={17} />
               退出登录
             </button>

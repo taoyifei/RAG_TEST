@@ -1,0 +1,23 @@
+FROM node:24-bookworm-slim AS user-ui
+WORKDIR /build
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ .
+RUN npm run build
+
+FROM node:24-bookworm-slim AS admin-ui
+WORKDIR /build
+COPY vendor/knowledge-engine/frontend/package*.json ./
+RUN npm ci
+COPY vendor/knowledge-engine/frontend/ .
+RUN VITE_INDUSTRIAL_AGENT_GATEWAY_AUTH=true npm run build
+
+FROM nginx:1.28-alpine
+COPY deployment/industrial-agent/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=user-ui /build/dist/ /usr/share/nginx/html/kb/
+COPY --from=admin-ui /build/dist/ /usr/share/nginx/html/kb/admin/
+COPY vendor/knowledge-engine/website-docs/ /usr/share/nginx/html/kb/admin/docs/
+COPY deployment/industrial-agent/verify-admin-bundle.sh /tmp/verify-admin-bundle.sh
+RUN sh /tmp/verify-admin-bundle.sh /usr/share/nginx/html/kb/admin \
+    && rm /tmp/verify-admin-bundle.sh
+EXPOSE 8080

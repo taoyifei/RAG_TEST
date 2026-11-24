@@ -43,7 +43,7 @@ import {
   type PublicCitation,
   type PublicErrorEvent,
   type PublicStreamEvent,
-  WEKNORA_STREAM_PROTOCOL,
+  KNOWLEDGE_ENGINE_STREAM_PROTOCOL,
 } from "./publicSse";
 
 export type PublicChatPhase =
@@ -302,7 +302,7 @@ export function usePublicChat() {
   >([]);
   const targetDocumentsRef = useRef<PublicTargetDocument[]>([]);
   const [naturalProtocol, setNaturalProtocol] = useState<
-    "wanshitong-natural-sse-v1" | typeof WEKNORA_STREAM_PROTOCOL | undefined
+    "industrial_agent-natural-sse-v1" | typeof KNOWLEDGE_ENGINE_STREAM_PROTOCOL | undefined
   >();
   const [turns, setTurns] = useState<PublicTurn[]>([]);
   const turnsRef = useRef(turns);
@@ -334,7 +334,7 @@ export function usePublicChat() {
   useEffect(() => {
     historySessionsRef.current = historySessions;
   }, [historySessions]);
-  const [conversationId, setConversationId] = useState(() => randomId("wst"));
+  const [conversationId, setConversationId] = useState(() => randomId("ia"));
   const csrfRef = useRef<string | undefined>(undefined);
   const conversationRef = useRef(conversationId);
   const sessionControllerRef = useRef<AbortController | undefined>(undefined);
@@ -366,7 +366,7 @@ export function usePublicChat() {
       }
     }
     historyKeyRef.current = undefined;
-    const nextConversationId = randomId("wst");
+    const nextConversationId = randomId("ia");
     conversationRef.current = nextConversationId;
     setConversationId(nextConversationId);
     feedbackAttemptsRef.current.clear();
@@ -415,7 +415,7 @@ export function usePublicChat() {
     streamControllerRef.current = undefined;
     activeTurnRef.current = undefined;
     activeTraceIdRef.current = undefined;
-    const nextConversationId = randomId("wst");
+    const nextConversationId = randomId("ia");
     conversationRef.current = nextConversationId;
     if (historyKeyRef.current) {
       try {
@@ -534,8 +534,8 @@ export function usePublicChat() {
       setUsageContextEnabled(capabilities.request_usage_context === true);
       setNaturalProtocol(
         capabilities.natural_stream_protocol ??
-          (capabilities.stream_protocol === WEKNORA_STREAM_PROTOCOL
-            ? WEKNORA_STREAM_PROTOCOL
+          (capabilities.stream_protocol === KNOWLEDGE_ENGINE_STREAM_PROTOCOL
+            ? KNOWLEDGE_ENGINE_STREAM_PROTOCOL
             : undefined),
       );
       setLoggedOut(false);
@@ -547,10 +547,10 @@ export function usePublicChat() {
       }
       if (
         capabilities.natural_stream_protocol ||
-        capabilities.stream_protocol === WEKNORA_STREAM_PROTOCOL
+        capabilities.stream_protocol === KNOWLEDGE_ENGINE_STREAM_PROTOCOL
       ) {
         const identity = session.user?.userId ?? session.sessionId;
-        const key = `wst-natural-conversation:${session.deploymentId ?? "local"}:${identity}`;
+        const key = `ia-natural-conversation:${session.deploymentId ?? "local"}:${identity}`;
         historyKeyRef.current = key;
         try {
           const saved = window.sessionStorage.getItem(key);
@@ -582,7 +582,7 @@ export function usePublicChat() {
             (saved && history.length === 0) ||
             restoredScopes.length !== new Set(historyScopes).size
           ) {
-            const nextId = randomId("wst");
+            const nextId = randomId("ia");
             conversationRef.current = nextId;
             setConversationId(nextId);
             window.sessionStorage.setItem(key, nextId);
@@ -599,7 +599,7 @@ export function usePublicChat() {
                   restored,
                   item,
                   (capabilities.natural_stream_protocol ??
-                    capabilities.stream_protocol) === WEKNORA_STREAM_PROTOCOL,
+                    capabilities.stream_protocol) === KNOWLEDGE_ENGINE_STREAM_PROTOCOL,
                 ),
               ),
             );
@@ -613,7 +613,7 @@ export function usePublicChat() {
             [403, 404].includes(error.status)
           ) {
             // 其他标签页可能已删除该会话；刷新后不能继续提交已删除的旧ID。
-            const nextId = randomId("wst");
+            const nextId = randomId("ia");
             conversationRef.current = nextId;
             setConversationId(nextId);
             setTurns([]);
@@ -659,8 +659,8 @@ export function usePublicChat() {
           error instanceof PublicApiError && error.status === 403
             ? publicErrorMessage(error)
             : error instanceof TypeError
-              ? "暂时无法连接湾小度，请检查网络后重试。"
-              : "湾小度暂时无法初始化，请重试。",
+              ? "暂时无法连接工业智能体，请检查网络后重试。"
+              : "工业智能体暂时无法初始化，请重试。",
         );
       });
   }, [clearLocalSession, initializeSession]);
@@ -751,7 +751,7 @@ export function usePublicChat() {
             stageStartedAt: Date.now(),
             lastSignalAt: Date.now(),
             claims: [],
-            nativeProtocol: naturalProtocol === WEKNORA_STREAM_PROTOCOL,
+            nativeProtocol: naturalProtocol === KNOWLEDGE_ENGINE_STREAM_PROTOCOL,
             citations: [],
             partial: false,
             feedback: "idle",
@@ -965,7 +965,7 @@ export function usePublicChat() {
               stageMessage: undefined,
               claims: [],
               answer:
-                event.protocol === WEKNORA_STREAM_PROTOCOL
+                event.protocol === KNOWLEDGE_ENGINE_STREAM_PROTOCOL
                   ? (event.answer ?? "")
                   : finalAnswerMessage(event),
               provisionalAnswer: undefined,
@@ -1220,7 +1220,7 @@ export function usePublicChat() {
           restoreNaturalTurn(
             selectedConversationId,
             item,
-            naturalProtocol === WEKNORA_STREAM_PROTOCOL,
+            naturalProtocol === KNOWLEDGE_ENGINE_STREAM_PROTOCOL,
           ),
         ),
       );
@@ -1686,7 +1686,7 @@ export function usePublicChat() {
   const announcement =
     turns.at(-1)?.stageMessage ??
     turns.at(-1)?.errorMessage ??
-    (phase === "creating_session" ? "正在连接湾小度" : "");
+    (phase === "creating_session" ? "正在连接工业智能体" : "");
 
   const getCsrfToken = useCallback(() => csrfRef.current, []);
 

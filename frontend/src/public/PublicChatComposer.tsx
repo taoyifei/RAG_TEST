@@ -69,16 +69,16 @@ export function PublicChatComposer({
   };
 
   return (
-    <div className={`wst-composer ${compact ? "is-compact" : ""}`}>
+    <div className={`ia-composer ${compact ? "is-compact" : ""}`}>
       <label
         className="sr-only"
-        htmlFor={`wst-question-${compact ? "chat" : "home"}`}
+        htmlFor={`ia-question-${compact ? "chat" : "home"}`}
       >
-        向湾小度提问
+        向工业智能体提问
       </label>
       <textarea
-        id={`wst-question-${compact ? "chat" : "home"}`}
-        aria-label="向湾小度提问"
+        id={`ia-question-${compact ? "chat" : "home"}`}
+        aria-label="向工业智能体提问"
         ref={textareaRef}
         onChange={(event) => setQuestion(event.target.value)}
         onKeyDown={handleKeyDown}
@@ -86,12 +86,12 @@ export function PublicChatComposer({
         rows={1}
         value={question}
       />
-      <div className="wst-composer-footer">
-        <div className="wst-search-scopes">
+      <div className="ia-composer-footer">
+        <div className="ia-search-scopes">
           <button
             aria-controls={scopeId}
             aria-expanded={scopeOpen}
-            className="wst-search-scopes-trigger"
+            className="ia-search-scopes-trigger"
             disabled={busy || !onSearchScopesChange}
             onClick={() => setScopeOpen((value) => !value)}
             ref={scopeTriggerRef}
@@ -114,7 +114,7 @@ export function PublicChatComposer({
           </button>
           <AnchoredPopover
             as="fieldset"
-            className="wst-search-scopes-options"
+            className="ia-search-scopes-options"
             id={scopeId}
             onDismiss={dismissScope}
             open={scopeOpen}
@@ -150,14 +150,14 @@ export function PublicChatComposer({
           </AnchoredPopover>
         </div>
         {busy ? (
-          <button className="wst-stop-button" onClick={onStop} type="button">
+          <button className="ia-stop-button" onClick={onStop} type="button">
             <Square aria-hidden="true" size={15} />
             停止
           </button>
         ) : (
           <button
             aria-label="发送问题"
-            className="wst-send-button"
+            className="ia-send-button"
             disabled={!question.trim()}
             onClick={send}
             type="button"
@@ -166,13 +166,13 @@ export function PublicChatComposer({
           </button>
         )}
       </div>
-      <p className="wst-composer-hint">
+      <p className="ia-composer-hint">
         {busy
           ? "可以先写下一问，当前回答结束后再发送"
           : "Enter 发送 · Shift + Enter 换行"}
       </p>
       {scopeNotice && (
-        <p className="wst-search-scopes-notice" role="status">
+        <p className="ia-search-scopes-notice" role="status">
           {scopeNotice}
         </p>
       )}

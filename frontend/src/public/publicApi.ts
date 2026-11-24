@@ -38,12 +38,12 @@ export interface PublicSearchScopeOption {
 }
 
 export interface PublicCapabilities {
-  mode: "wanshitong";
+  mode: "industrial_agent";
   stream: true;
-  stream_protocol: "wanshitong-public-sse-v1" | "wanshitong-weknora-sse-v1";
+  stream_protocol: "industrial-agent-public-sse-v1" | "industrial_agent-knowledgeengine-sse-v1";
   natural_stream_protocol?:
-    | "wanshitong-natural-sse-v1"
-    | "wanshitong-weknora-sse-v1";
+    | "industrial_agent-natural-sse-v1"
+    | "industrial_agent-knowledgeengine-sse-v1";
   document_visibility: "all_internal";
   feedback: boolean;
   feedback_details?: boolean;
@@ -340,7 +340,7 @@ export async function openPublicChat(options: {
   question: string;
   signal: AbortSignal;
   clientContext?: PublicUsageContext;
-  naturalProtocol?: "wanshitong-natural-sse-v1" | "wanshitong-weknora-sse-v1";
+  naturalProtocol?: "industrial_agent-natural-sse-v1" | "industrial_agent-knowledgeengine-sse-v1";
   searchScopes?: PublicSearchScope[];
   knowledgeIds?: string[];
 }): Promise<Response> {
@@ -352,7 +352,7 @@ export async function openPublicChat(options: {
       "Content-Type": "application/json",
       "X-CSRF-Token": options.csrfToken,
       ...(options.naturalProtocol
-        ? { "X-Wanshitong-Stream-Protocol": options.naturalProtocol }
+        ? { "X-IndustrialAgent-Stream-Protocol": options.naturalProtocol }
         : {}),
     },
     body: JSON.stringify({

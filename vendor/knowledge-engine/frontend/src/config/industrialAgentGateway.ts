@@ -1,0 +1,135 @@
+/** 工业智能体管理端只使用同源网关和服务端管理员会话。 */
+export const INDUSTRIAL_AGENT_GATEWAY_AUTH = import.meta.env?.VITE_INDUSTRIAL_AGENT_GATEWAY_AUTH === 'true'
+
+export const INDUSTRIAL_AGENT_ADMIN_BASE = '/kb/admin/'
+export const INDUSTRIAL_AGENT_ADMIN_LOGIN = '/kb/admin/login'
+/** 独立工作区只从当前同源地址取得标识，不复用管理端的服务身份。 */
+export function workbenchIdFromPath(pathname: string): string {
+  return /^\/kb\/workbench\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i.exec(pathname)?.[1] || ''
+}
+const locationPath = typeof window === 'undefined' ? '' : window.location.pathname
+export const INDUSTRIAL_AGENT_WORKBENCH = INDUSTRIAL_AGENT_GATEWAY_AUTH && locationPath.startsWith('/kb/workbench/')
+export const INDUSTRIAL_AGENT_WORKBENCH_ID = workbenchIdFromPath(locationPath)
+export const INDUSTRIAL_AGENT_ENGINE_API = INDUSTRIAL_AGENT_WORKBENCH
+  ? `/kb/api/workbench/${INDUSTRIAL_AGENT_WORKBENCH_ID || 'invalid'}/native`
+  : '/kb/api/engine-admin'
+export const WORKBENCH_SESSION_EXPIRED = 'industrial_agent:workbench-session-expired'
+let adminCsrfToken = ''
+let publicCsrfToken = ''
+
+/** 员工 Cookie 恢复 CSRF；不缓存 JWT，也不使用管理后台的 CSRF。 */
+export async function resumeIndustrialAgentWorkbenchSession(): Promise<void> {
+  if (!INDUSTRIAL_AGENT_WORKBENCH || !INDUSTRIAL_AGENT_WORKBENCH_ID) throw new Error('工作区地址无效，请从工业智能体重新进入。')
+  publicCsrfToken = ''
+  const response = await fetch('/kb/api/public/session', {
+    method: 'POST', credentials: 'include', cache: 'no-store',
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) throw new Error(response.status === 401 ? '登录已过期，请返回工业智能体重新登录。' : '暂时无法连接工作区，请重试。')
+  const payload = await response.json() as { csrf_token?: string }
+  if (!payload.csrf_token) throw new Error('会话响应不完整，请重试。')
+  publicCsrfToken = payload.csrf_token
+}
+
+/** 只允许登录后返回本管理站已经注册的页面。 */
+export function safeIndustrialAgentReturnTo(value: unknown): string {
+  if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) return '/overview'
+  const path = value.split(/[?#]/, 1)[0]
+  if (
+    path === '/overview' ||
+    path === '/public-settings' ||
+    path === '/records' ||
+    path === '/diagnostics' ||
+    path === '/platform/knowledge-bases' ||
+    /^\/platform\/knowledge-bases\/[^/]+$/.test(path) ||
+    path === '/platform/settings'
+  ) return value
+  return '/overview'
+}
+
+/** 口令仅发送给既有 Console Session；原生 JWT 不进浏览器。 */
+export async function loginIndustrialAgentAdmin(bootstrapToken: string): Promise<void> {
+  const response = await fetch('/kb/api/v1/console/session', {
+    method: 'POST',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bootstrap_token: bootstrapToken }),
+  })
+  if (!response.ok) throw new Error(`登录失败（${response.status}）`)
+  const payload = await response.json() as { csrf_token?: string }
+  if (!payload.csrf_token) throw new Error('登录响应缺少会话校验信息')
+  adminCsrfToken = payload.csrf_token
+}
+
+export async function logoutIndustrialAgentAdmin(): Promise<void> {
+  const response = await fetch('/kb/api/v1/console/session', {
+    method: 'DELETE',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: gatewayCsrfHeaders('DELETE'),
+  })
+  if (!response.ok) throw new Error(`退出失败（${response.status}）`)
+  adminCsrfToken = ''
+}
+
+/** 恢复现有 Console Session，CSRF 只保存在当前页面内存。 */
+export async function resumeIndustrialAgentAdminSession(): Promise<boolean> {
+  if (!INDUSTRIAL_AGENT_GATEWAY_AUTH) return true
+  try {
+    const response = await fetch('/kb/api/v1/console/session', {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+    })
+    if (!response.ok) return false
+    const payload = await response.json() as { authenticated?: boolean; csrf_token?: string }
+    if (payload.authenticated !== true || !payload.csrf_token) return false
+    adminCsrfToken = payload.csrf_token
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function gatewayCsrfHeaders(method: string): Record<string, string> {
+  if (!INDUSTRIAL_AGENT_GATEWAY_AUTH || /^(GET|HEAD|OPTIONS)$/i.test(method)) return {}
+  const token = INDUSTRIAL_AGENT_WORKBENCH ? publicCsrfToken : adminCsrfToken
+  return token ? { 'X-CSRF-Token': token } : {}
+}
+
+/** 原生 API 路径在白标构建中统一由服务端代理，不直连 KnowledgeEngine。 */
+export function engineResourceUrl(path: string): string {
+  if (!INDUSTRIAL_AGENT_GATEWAY_AUTH) return path
+  if (path.startsWith(INDUSTRIAL_AGENT_ENGINE_API)) return path
+  let resourcePath = path
+  if (/^https?:\/\//i.test(path)) {
+    try {
+      const parsed = new URL(path)
+      resourcePath = `${parsed.pathname}${parsed.search}${parsed.hash}`
+    } catch {
+      return path
+    }
+  }
+  if (resourcePath.startsWith('/api/') || resourcePath === '/files' || resourcePath.startsWith('/files?')) {
+    return `${INDUSTRIAL_AGENT_ENGINE_API}${resourcePath}`
+  }
+  return path
+}
+
+export function redirectToIndustrialAgentAdminLogin(): void {
+  if (typeof window !== 'undefined' && INDUSTRIAL_AGENT_GATEWAY_AUTH) {
+    if (INDUSTRIAL_AGENT_WORKBENCH) {
+      publicCsrfToken = ''
+      window.dispatchEvent(new Event(WORKBENCH_SESSION_EXPIRED))
+      return
+    }
+    adminCsrfToken = ''
+    if (window.location.pathname === INDUSTRIAL_AGENT_ADMIN_LOGIN) return
+    const localPath = window.location.pathname.startsWith(INDUSTRIAL_AGENT_ADMIN_BASE)
+      ? window.location.pathname.slice(INDUSTRIAL_AGENT_ADMIN_BASE.length - 1) + window.location.search
+      : '/overview'
+    const returnTo = safeIndustrialAgentReturnTo(localPath)
+    window.location.replace(`${INDUSTRIAL_AGENT_ADMIN_LOGIN}?returnTo=${encodeURIComponent(returnTo)}`)
+  }
+}

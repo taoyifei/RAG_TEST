@@ -37,7 +37,7 @@ function groupCitations(citations: PublicCitation[]): CitationGroup[] {
           department ?? "",
           category ?? "",
         ])}`
-      : citation.source_kind === "weknora" && citation.native_knowledge_id
+      : citation.source_kind === "knowledgeengine" && citation.native_knowledge_id
         ? `native:${citation.native_knowledge_id}`
         : `unpathed:${index}`;
     const existing = groups.get(key);
@@ -97,14 +97,14 @@ export function PublicCitations({
   const groups = groupCitations(visible);
   return (
     <>
-      <details className="wst-citations">
+      <details className="ia-citations">
         <summary>检索参考（{visible.length}段）</summary>
-        <div className="wst-citation-list">
+        <div className="ia-citation-list">
           {groups.map((group) => {
             const documentIds = [
               ...new Set(
                 group.citations.flatMap((item) =>
-                  item.source_kind === "weknora" &&
+                  item.source_kind === "knowledgeengine" &&
                   typeof item.native_knowledge_id === "string" &&
                   item.native_knowledge_id.trim()
                     ? [item.native_knowledge_id]
@@ -117,13 +117,13 @@ export function PublicCitations({
             const original = group.citations.find(
               (citation) =>
                 citation.reference_id &&
-                (citation.source_kind !== "weknora" ||
+                (citation.source_kind !== "knowledgeengine" ||
                   citation.original_available === true),
             );
             return (
               <article key={group.key}>
                 <details
-                  className="wst-citation-group"
+                  className="ia-citation-group"
                   onToggle={(event) => {
                     const open = event.currentTarget.open;
                     setExpandedGroups((previous) => {
@@ -135,13 +135,13 @@ export function PublicCitations({
                     });
                   }}
                 >
-                  <summary className="wst-citation-heading">
+                  <summary className="ia-citation-heading">
                     <strong>
                       {onReadReference ? (
                         <button
                           aria-haspopup="dialog"
                           aria-label={`阅读来源：${group.documentName}`}
-                          className="wst-citation-document-open"
+                          className="ia-citation-document-open"
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
@@ -163,8 +163,8 @@ export function PublicCitations({
                         group.documentName
                       )}
                     </strong>
-                    <span className="wst-citation-heading-actions">
-                      <span className="wst-citation-count">
+                    <span className="ia-citation-heading-actions">
+                      <span className="ia-citation-count">
                         {group.citations.length}段
                       </span>
                       {allowSourceDownload &&
@@ -173,7 +173,7 @@ export function PublicCitations({
                           <button
                             aria-label={`下载原件：${group.documentName}`}
                             aria-busy={downloadingGroup === group.key}
-                            className="wst-citation-download"
+                            className="ia-citation-download"
                             disabled={Boolean(downloadingGroup)}
                             onClick={(event) => {
                               event.preventDefault();
@@ -185,7 +185,7 @@ export function PublicCitations({
                               void onDownloadReference(
                                 original.reference_id!,
                                 original.document_name,
-                                original.source_kind === "weknora"
+                                original.source_kind === "knowledgeengine"
                                   ? true
                                   : undefined,
                               )
@@ -209,15 +209,15 @@ export function PublicCitations({
                           </button>
                         )}
                     </span>
-                    <span className="wst-citation-toggle">展开全部片段</span>
+                    <span className="ia-citation-toggle">展开全部片段</span>
                   </summary>
-                  <div className="wst-citation-group-body">
+                  <div className="ia-citation-group-body">
                     {expandedGroups.has(group.key) &&
                       typeof documentId === "string" && (
                         <DocumentAttachments documentId={documentId} />
                       )}
                     {(group.department || group.category) && (
-                      <p className="wst-citation-meta">
+                      <p className="ia-citation-meta">
                         {[group.department, group.category]
                           .filter(Boolean)
                           .join(" · ")}
@@ -225,39 +225,39 @@ export function PublicCitations({
                     )}
                     {group.sourceRelativePath && (
                       <>
-                        <p className="wst-citation-locator">
+                        <p className="ia-citation-locator">
                           {group.sourceRelativePath}
                         </p>
-                        <p className="wst-citation-group-note">
+                        <p className="ia-citation-group-note">
                           按本次返回路径整理
                         </p>
                       </>
                     )}
-                    <ol className="wst-citation-segments">
+                    <ol className="ia-citation-segments">
                       {group.citations.map((citation, index) => (
                         <li
-                          className="wst-citation-segment"
+                          className="ia-citation-segment"
                           key={`${group.key}-segment-${index}`}
                         >
-                          <p className="wst-citation-segment-label">
+                          <p className="ia-citation-segment-label">
                             片段 {index + 1}
                           </p>
                           {citation.locator && (
-                            <p className="wst-citation-locator">
+                            <p className="ia-citation-locator">
                               {citation.locator}
                             </p>
                           )}
                           {citation.quote && (
                             <blockquote>{citation.quote}</blockquote>
                           )}
-                          {citation.source_kind === "weknora" &&
+                          {citation.source_kind === "knowledgeengine" &&
                             citation.reference_id &&
                             citation.source_available &&
                             (onReadReference || onDownloadReference) && (
                               <button
                                 onClick={(event) => {
                                   if (
-                                    citation.source_kind === "weknora" &&
+                                    citation.source_kind === "knowledgeengine" &&
                                     onReadReference
                                   ) {
                                     setReading({
@@ -288,7 +288,7 @@ export function PublicCitations({
                   </div>
                 </details>
                 {downloadError?.groupKey === group.key && (
-                  <p className="wst-citation-download-error" role="alert">
+                  <p className="ia-citation-download-error" role="alert">
                     {downloadError.message}
                   </p>
                 )}

@@ -1,0 +1,1336 @@
+"""网关身份映射、引用与运营记录的独立 SQLite 存储。"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from industrial_agent.knowledge_engine.answer_origin import (
+    answer_origin_from_events,
+)
+
+_CONVERSATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_conversations (
+    deployment_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    native_session_id TEXT NOT NULL,
+    search_scopes_json TEXT,
+    knowledge_targets_json TEXT,
+    custom_title TEXT,
+    archived_at TEXT,
+    deleted_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (deployment_id, owner_id, conversation_id),
+    UNIQUE (native_session_id)
+);
+"""
+_TURN_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_turns (
+    trace_id TEXT PRIMARY KEY,
+    deployment_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    asker_name TEXT,
+    conversation_id TEXT NOT NULL,
+    native_session_id TEXT NOT NULL,
+    native_message_id TEXT,
+    native_request_id TEXT,
+    question TEXT NOT NULL,
+    client_context_json TEXT NOT NULL DEFAULT '{}',
+    kb_scope_json TEXT NOT NULL DEFAULT '[]',
+    answer TEXT,
+    references_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    finish_reason TEXT,
+    error_category TEXT,
+    error_phase TEXT,
+    upstream_status INTEGER,
+    stop_acknowledged INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+"""
+_REFERENCE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_references (
+    reference_id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    native_chunk_id TEXT,
+    native_knowledge_id TEXT,
+    resource_handle TEXT,
+    source_json TEXT NOT NULL,
+    FOREIGN KEY (trace_id) REFERENCES gateway_turns(trace_id)
+);
+"""
+_FEEDBACK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_feedback (
+    trace_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    useful INTEGER NOT NULL,
+    reason_code TEXT,
+    reason_detail TEXT,
+    comment TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (trace_id) REFERENCES gateway_turns(trace_id)
+);
+"""
+_EVENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_events (
+    trace_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    native_request_id TEXT,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (trace_id, sequence),
+    FOREIGN KEY (trace_id) REFERENCES gateway_turns(trace_id)
+);
+"""
+_ADMIN_AUDIT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_admin_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor TEXT NOT NULL,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    status_code INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+_FEEDBACK_REVIEW_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_feedback_reviews (
+    trace_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK(status IN ('open', 'in_review', 'resolved')),
+    note TEXT NOT NULL DEFAULT '',
+    root_cause TEXT NOT NULL DEFAULT '',
+    fix_reference TEXT NOT NULL DEFAULT '',
+    verification_references_json TEXT NOT NULL DEFAULT '[]',
+    evaluation_candidate INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (trace_id) REFERENCES gateway_turns(trace_id)
+);
+"""
+_RECOMMENDATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_recommendations (
+    recommendation_id TEXT PRIMARY KEY,
+    deployment_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    topic_key TEXT NOT NULL,
+    source_knowledge_ids_json TEXT NOT NULL DEFAULT '[]',
+    review_note TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL CHECK(state IN ('DRAFT', 'APPROVED', 'DISABLED')),
+    disabled_reason TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_recommendations_scope
+ON gateway_recommendations (deployment_id, state, updated_at);
+"""
+_PUBLIC_APP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_public_app (
+    deployment_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    native_agent_id TEXT NOT NULL,
+    native_config_digest TEXT NOT NULL,
+    kb_ids_json TEXT NOT NULL,
+    page_settings_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+_VISIBLE_TURN_SQL = (
+    " AND NOT EXISTS (SELECT 1 FROM json_each(t.kb_scope_json) AS scope "
+    "WHERE scope.value IN (SELECT value FROM json_each(?))) "
+)
+
+
+class GatewayStore:
+    """只保存必要映射和真实观察事件，不写原生业务表。"""
+
+    def __init__(self, database_path: Path) -> None:
+        database_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not database_path.exists():
+            descriptor = os.open(
+                database_path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+            os.close(descriptor)
+        self._database_path = database_path
+        with self._connect() as connection:
+            connection.executescript(
+                _CONVERSATION_SCHEMA
+                + _TURN_SCHEMA
+                + _REFERENCE_SCHEMA
+                + _FEEDBACK_SCHEMA
+                + _EVENT_SCHEMA
+                + _ADMIN_AUDIT_SCHEMA
+                + _FEEDBACK_REVIEW_SCHEMA
+                + _RECOMMENDATION_SCHEMA
+                + _PUBLIC_APP_SCHEMA
+            )
+            conversation_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(gateway_conversations)"
+                )
+            }
+            if "search_scopes_json" not in conversation_columns:
+                connection.execute(
+                    "ALTER TABLE gateway_conversations "
+                    "ADD COLUMN search_scopes_json TEXT"
+                )
+            if "knowledge_targets_json" not in conversation_columns:
+                connection.execute(
+                    "ALTER TABLE gateway_conversations "
+                    "ADD COLUMN knowledge_targets_json TEXT"
+                )
+            for name in ("archived_at", "deleted_at", "custom_title"):
+                if name not in conversation_columns:
+                    connection.execute(
+                        "ALTER TABLE gateway_conversations "
+                        f"ADD COLUMN {name} TEXT"
+                    )
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(gateway_turns)"
+                )
+            }
+            if "client_context_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE gateway_turns ADD COLUMN "
+                    "client_context_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            if "kb_scope_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE gateway_turns ADD COLUMN "
+                    "kb_scope_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "asker_name" not in columns:
+                connection.execute(
+                    "ALTER TABLE gateway_turns ADD COLUMN asker_name TEXT"
+                )
+            diagnostic_columns = {
+                "error_category": "TEXT",
+                "error_phase": "TEXT",
+                "upstream_status": "INTEGER",
+                "stop_acknowledged": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, definition in diagnostic_columns.items():
+                if name not in columns:
+                    connection.execute(
+                        "ALTER TABLE gateway_turns ADD COLUMN "
+                        f"{name} {definition}"
+                    )
+            review_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(gateway_feedback_reviews)"
+                )
+            }
+            review_additions = {
+                "root_cause": "TEXT NOT NULL DEFAULT ''",
+                "fix_reference": "TEXT NOT NULL DEFAULT ''",
+                "verification_references_json": "TEXT NOT NULL DEFAULT '[]'",
+                "evaluation_candidate": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, definition in review_additions.items():
+                if name not in review_columns:
+                    connection.execute(
+                        f"ALTER TABLE gateway_feedback_reviews ADD COLUMN "
+                        f"{name} {definition}"
+                    )
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._database_path, timeout=10.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA journal_mode=WAL")
+        return connection
+
+    def native_session(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> str | None:
+        """只返回当前部署和用户拥有的原生会话。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT native_session_id FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=? "
+                "AND deleted_at IS NULL",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+        return str(row["native_session_id"]) if row else None
+
+    def public_app(self, *, deployment_id: str) -> dict[str, Any] | None:
+        """读取当前部署唯一生效绑定；没有记录表示仍在迁移前。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT revision,native_agent_id,native_config_digest,"
+                "kb_ids_json,page_settings_json,updated_at "
+                "FROM gateway_public_app WHERE deployment_id=?",
+                (deployment_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "revision": int(row["revision"]),
+            "native_agent_id": str(row["native_agent_id"]),
+            "native_config_digest": str(row["native_config_digest"]),
+            "knowledge_base_ids": tuple(json.loads(row["kb_ids_json"])),
+            "page_settings": json.loads(row["page_settings_json"]),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def save_public_app(  # noqa: PLR0913 - CAS 需显式提交所有生效字段。
+        self,
+        *,
+        deployment_id: str,
+        expected_revision: int,
+        native_agent_id: str,
+        native_config_digest: str,
+        knowledge_base_ids: tuple[str, ...],
+        page_settings: dict[str, Any],
+    ) -> dict[str, Any]:
+        """用 SQLite CAS 切换生效绑定；竞争失败不覆盖已发布配置。"""
+        now = _now()
+        with self._connect() as connection:
+            if expected_revision == 0:
+                try:
+                    connection.execute(
+                        "INSERT INTO gateway_public_app "
+                        "(deployment_id,revision,native_agent_id,"
+                        "native_config_digest,kb_ids_json,page_settings_json,"
+                        "updated_at) VALUES (?,1,?,?,?,?,?)",
+                        (
+                            deployment_id,
+                            native_agent_id,
+                            native_config_digest,
+                            json.dumps(knowledge_base_ids),
+                            json.dumps(page_settings, ensure_ascii=False),
+                            now,
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    raise ValueError("public app revision conflict") from error
+            else:
+                cursor = connection.execute(
+                    "UPDATE gateway_public_app SET revision=revision+1,"
+                    "native_agent_id=?,native_config_digest=?,kb_ids_json=?,"
+                    "page_settings_json=?,updated_at=? "
+                    "WHERE deployment_id=? AND revision=?",
+                    (
+                        native_agent_id,
+                        native_config_digest,
+                        json.dumps(knowledge_base_ids),
+                        json.dumps(page_settings, ensure_ascii=False),
+                        now,
+                        deployment_id,
+                        expected_revision,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError("public app revision conflict")
+        saved = self.public_app(deployment_id=deployment_id)
+        if saved is None:
+            raise RuntimeError("public app was not saved")
+        return saved
+
+    def bind_session(  # noqa: PLR0913 - 会话身份、逻辑范围和文件范围必须一起固定。
+        self,
+        *,
+        deployment_id: str,
+        owner_id: str,
+        conversation_id: str,
+        native_session_id: str,
+        search_scopes: tuple[str, ...] | None = None,
+        knowledge_targets: tuple[dict[str, str], ...] | None = None,
+    ) -> str:
+        """唯一绑定外部会话；并发竞争时返回已存在的权威映射。"""
+        now = _now()
+        target_json = json.dumps(knowledge_targets or (), ensure_ascii=False)
+        with self._connect() as connection:
+            deleted = connection.execute(
+                "SELECT deleted_at FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+            if deleted is not None and deleted["deleted_at"] is not None:
+                raise ValueError("会话已删除，请新建对话。")
+            connection.execute(
+                "INSERT OR IGNORE INTO gateway_conversations "
+                "(deployment_id,owner_id,conversation_id,native_session_id,"
+                "created_at,updated_at,search_scopes_json,"
+                "knowledge_targets_json) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    deployment_id,
+                    owner_id,
+                    conversation_id,
+                    native_session_id,
+                    now,
+                    now,
+                    json.dumps(search_scopes) if search_scopes else None,
+                    target_json,
+                ),
+            )
+            if search_scopes is not None:
+                connection.execute(
+                    "UPDATE gateway_conversations SET search_scopes_json=? "
+                    "WHERE deployment_id=? AND owner_id=? "
+                    "AND conversation_id=? "
+                    "AND search_scopes_json IS NULL",
+                    (
+                        json.dumps(search_scopes),
+                        deployment_id,
+                        owner_id,
+                        conversation_id,
+                    ),
+                )
+                stored = connection.execute(
+                    "SELECT search_scopes_json FROM gateway_conversations "
+                    "WHERE deployment_id=? AND owner_id=? "
+                    "AND conversation_id=?",
+                    (deployment_id, owner_id, conversation_id),
+                ).fetchone()
+                if (
+                    tuple(json.loads(stored["search_scopes_json"]))
+                    != search_scopes
+                ):
+                    raise ValueError("资料范围已变化，请新建对话。")
+            # 空数组也固定为全库会话，不能沿用旧上下文再缩成指定文件。
+            stored_targets = connection.execute(
+                "SELECT knowledge_targets_json FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+            stored_ids = tuple(
+                item["id"]
+                for item in json.loads(
+                    stored_targets["knowledge_targets_json"] or "[]"
+                )
+            )
+            if stored_ids != tuple(
+                item["id"] for item in (knowledge_targets or ())
+            ):
+                raise ValueError("指定资料已变化，请新建对话。")
+        bound = self.native_session(
+            deployment_id=deployment_id,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+        )
+        if bound is None:
+            raise RuntimeError("无法保存原生会话映射。")
+        return bound
+
+    def conversation_knowledge_targets(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> tuple[dict[str, str], ...] | None:
+        """恢复本人会话固定的文件范围；旧会话空列视为未指定文件。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT knowledge_targets_json FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return tuple(json.loads(row["knowledge_targets_json"] or "[]"))
+
+    def turn_answer_origin(
+        self,
+        trace_id: str,
+        *,
+        citations: list[dict[str, Any]],
+        status: str,
+        answer: str | None,
+    ) -> str:
+        """仅恢复来源标识；调用方先核对本人会话和当前资料权限。"""
+        return answer_origin_from_events(
+            self.turn_native_events(trace_id),
+            citations=citations,
+            status=status,
+            answer=answer,
+        )
+
+    def turn_native_events(self, trace_id: str) -> list[dict[str, Any]]:
+        """读回原流与续流的检索证据，仅供已授权轮次恢复来源状态。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM gateway_events WHERE trace_id=? "
+                "AND event_type IN ('native_event','recovery_native_event') "
+                "ORDER BY sequence",
+                (trace_id,),
+            ).fetchall()
+        return [{"payload": json.loads(row["payload_json"])} for row in rows]
+
+    def turn_template_lookup(self, trace_id: str) -> dict[str, Any] | None:
+        """读回本人轮次的模板卡片或待澄清场景，调用方先检查轮次归属。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM gateway_events "
+                "WHERE trace_id=? AND event_type='final' "
+                "ORDER BY sequence DESC LIMIT 1",
+                (trace_id,),
+            ).fetchone()
+        data = (
+            json.loads(row["payload_json"]).get("template_lookup")
+            if row
+            else None
+        )
+        return data if isinstance(data, dict) else None
+
+    def conversation_search_scopes(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> tuple[str, ...] | None:
+        """会话固定逻辑范围，旧记录空值由实际历史库列表恢复。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT search_scopes_json FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+        return (
+            tuple(json.loads(row["search_scopes_json"]))
+            if row is not None and row["search_scopes_json"] is not None
+            else None
+        )
+
+    def list_conversations(
+        self, *, deployment_id: str, owner_id: str, archived: bool = False
+    ) -> list[dict[str, str]]:
+        """按归档状态列出本人有效会话，不展示已删除的映射墓碑。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT conversation_id,native_session_id,updated_at, "
+                "coalesce(custom_title,'') AS custom_title "
+                "FROM gateway_conversations WHERE deployment_id=? "
+                "AND owner_id=? AND deleted_at IS NULL "
+                "AND (archived_at IS NOT NULL)=? "
+                "ORDER BY updated_at DESC,conversation_id DESC",
+                (deployment_id, owner_id, archived),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def conversation_title(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> str | None:
+        """读取本人有效会话的手动名称，不回退到原生自动标题。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT custom_title FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=? "
+                "AND deleted_at IS NULL",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+        title = row["custom_title"] if row is not None else None
+        return title if isinstance(title, str) else None
+
+    def rename_conversation(
+        self,
+        *,
+        deployment_id: str,
+        owner_id: str,
+        conversation_id: str,
+        title: str,
+    ) -> bool:
+        """只修改本人有效会话的手动名称，保留排序、归档及资料范围。"""
+        with self._connect() as connection:
+            result = connection.execute(
+                "UPDATE gateway_conversations SET custom_title=? "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=? "
+                "AND deleted_at IS NULL",
+                (title, deployment_id, owner_id, conversation_id),
+            )
+        return result.rowcount == 1
+
+    def conversation_deleted(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> bool:
+        """只核对本人的删除墓碑，阻止旧浏览器用同一ID重新生成。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT deleted_at FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchone()
+        return row is not None and row["deleted_at"] is not None
+
+    def archive_conversation(
+        self,
+        *,
+        deployment_id: str,
+        owner_id: str,
+        conversation_id: str,
+        archived: bool,
+    ) -> bool:
+        """归档或恢复本人会话，不改变原生历史、资料范围或对话更新时间。"""
+        with self._connect() as connection:
+            result = connection.execute(
+                "UPDATE gateway_conversations SET archived_at=? "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=? "
+                "AND deleted_at IS NULL",
+                (
+                    _now() if archived else None,
+                    deployment_id,
+                    owner_id,
+                    conversation_id,
+                ),
+            )
+        return result.rowcount == 1
+
+    def delete_conversation(
+        self, *, deployment_id: str, owner_id: str, conversation_id: str
+    ) -> bool:
+        """原生删除确认后事务清除问答及其子记录，仅保留会话ID墓碑。"""
+        scope = (deployment_id, owner_id, conversation_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT deleted_at FROM gateway_conversations "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                scope,
+            ).fetchone()
+            if row is None:
+                return False
+            for table in (
+                "gateway_feedback_reviews",
+                "gateway_feedback",
+                "gateway_references",
+                "gateway_events",
+            ):
+                connection.execute(
+                    f"DELETE FROM {table} WHERE trace_id IN "  # noqa: S608 - 表及条件均为内部固定常量，值参数化。
+                    "(SELECT trace_id FROM gateway_turns WHERE deployment_id=? "
+                    "AND owner_id=? AND conversation_id=?)",
+                    scope,
+                )
+            connection.execute(
+                "DELETE FROM gateway_turns WHERE deployment_id=? "
+                "AND owner_id=? AND conversation_id=?",
+                scope,
+            )
+            connection.execute(
+                "UPDATE gateway_conversations SET archived_at=NULL, "
+                "deleted_at=coalesce(deleted_at,?),updated_at=? "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (_now(), _now(), *scope),
+            )
+        return True
+
+    def start_turn(  # noqa: PLR0913 - 持久化边界显式接收全部归属键。
+        self,
+        *,
+        trace_id: str,
+        deployment_id: str,
+        owner_id: str,
+        conversation_id: str,
+        native_session_id: str,
+        question: str,
+        asker_name: str | None = None,
+        client_context: Mapping[str, Any] | None = None,
+        kb_scope: tuple[str, ...] = (),
+    ) -> None:
+        """记录已接受的问答轮次及其资料范围。"""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO gateway_turns "
+                "(trace_id,deployment_id,owner_id,asker_name,conversation_id,"
+                "native_session_id,question,client_context_json,"
+                "kb_scope_json,status,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    trace_id,
+                    deployment_id,
+                    owner_id,
+                    asker_name,
+                    conversation_id,
+                    native_session_id,
+                    question,
+                    json.dumps(client_context or {}, ensure_ascii=False),
+                    json.dumps(kb_scope, ensure_ascii=False),
+                    "streaming",
+                    _now(),
+                ),
+            )
+            connection.execute(
+                "UPDATE gateway_conversations SET updated_at=? "
+                "WHERE deployment_id=? AND owner_id=? AND conversation_id=?",
+                (_now(), deployment_id, owner_id, conversation_id),
+            )
+
+    def record_event(
+        self,
+        *,
+        trace_id: str,
+        sequence: int,
+        event_type: str,
+        payload: Mapping[str, Any],
+    ) -> None:
+        """保存网关实际见到的事件，不伪称原生内部 Trace。"""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO gateway_events "
+                "(trace_id,sequence,event_type,native_request_id,"
+                "payload_json,created_at) VALUES (?,?,?,?,?,?)",
+                (
+                    trace_id,
+                    sequence,
+                    event_type,
+                    payload.get("native_request_id"),
+                    json.dumps(payload, ensure_ascii=False),
+                    _now(),
+                ),
+            )
+
+    def append_recovery_event(
+        self, *, trace_id: str, event_type: str, payload: Mapping[str, Any]
+    ) -> None:
+        """在原 Trace 后追加续流事件，标记其来自重放而非新生成。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(sequence), -1) AS last_sequence "
+                "FROM gateway_events WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()
+            sequence = int(row["last_sequence"]) + 1
+            connection.execute(
+                "INSERT INTO gateway_events "
+                "(trace_id,sequence,event_type,native_request_id,"
+                "payload_json,created_at) VALUES (?,?,?,?,?,?)",
+                (
+                    trace_id,
+                    sequence,
+                    f"recovery_{event_type}",
+                    payload.get("native_request_id"),
+                    json.dumps(payload, ensure_ascii=False),
+                    _now(),
+                ),
+            )
+
+    def set_native_message(
+        self,
+        *,
+        trace_id: str,
+        native_message_id: str,
+        native_request_id: str | None,
+    ) -> None:
+        """在流开始时持久化停止所需 ID。"""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE gateway_turns SET native_message_id=?,"
+                "native_request_id=? WHERE trace_id=?",
+                (native_message_id, native_request_id, trace_id),
+            )
+
+    def request_stop(self, *, trace_id: str, owner_id: str) -> None:
+        """记录已发往原生停止接口的用户动作。"""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE gateway_turns SET status='stop_requested',"
+                "stop_acknowledged=1 "
+                "WHERE trace_id=? AND owner_id=? AND status='streaming'",
+                (trace_id, owner_id),
+            )
+
+    def mark_recovering(self, *, trace_id: str, owner_id: str) -> None:
+        """原生续流开始后保持同一 Trace 与消息映射。"""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE gateway_turns SET status='streaming' "
+                "WHERE trace_id=? AND owner_id=?",
+                (trace_id, owner_id),
+            )
+
+    def record_diagnostic(
+        self,
+        *,
+        trace_id: str,
+        category: str,
+        phase: str,
+        upstream_status: int | None = None,
+    ) -> None:
+        """只保存受控错误类别和状态，不保存上游原始报错或密钥。"""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE gateway_turns SET error_category=?,error_phase=?,"
+                "upstream_status=? WHERE trace_id=?",
+                (category, phase, upstream_status, trace_id),
+            )
+
+    def add_reference(
+        self,
+        *,
+        reference_id: str,
+        trace_id: str,
+        source: Mapping[str, Any],
+        resource_handle: str | None,
+    ) -> None:
+        """保存引用与原生 chunk/knowledge 的可验证对应。"""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO gateway_references "
+                "(reference_id,trace_id,native_chunk_id,native_knowledge_id,"
+                "resource_handle,source_json) VALUES (?,?,?,?,?,?)",
+                (
+                    reference_id,
+                    trace_id,
+                    source.get("id"),
+                    source.get("knowledge_id"),
+                    resource_handle,
+                    json.dumps(source, ensure_ascii=False),
+                ),
+            )
+
+    def finish_turn(  # noqa: PLR0913 - 终态字段逐项保存便于审计。
+        self,
+        *,
+        trace_id: str,
+        status: str,
+        answer: str,
+        references: tuple[Mapping[str, Any], ...],
+        native_message_id: str | None,
+        native_request_id: str | None,
+        truncated: bool,
+        finish_reason: str | None,
+    ) -> None:
+        """只按真实终态封存本轮回答和原生 ID。"""
+        with self._connect() as connection:
+            stopped = connection.execute(
+                "SELECT stop_acknowledged FROM gateway_turns WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()
+            if stopped and stopped[0] and status in {"failed", "disconnected"}:
+                # 原生停止可能以流 EOF 结束，不能将已确认取消误记为失败。
+                status = "cancelled"
+            connection.execute(
+                "UPDATE gateway_turns SET status=?,answer=?,"
+                "references_json=?,native_message_id=?,native_request_id=?,"
+                "truncated=?,finish_reason=?,completed_at=? WHERE trace_id=?",
+                (
+                    status,
+                    answer,
+                    json.dumps(references, ensure_ascii=False),
+                    native_message_id,
+                    native_request_id,
+                    int(truncated),
+                    finish_reason,
+                    _now(),
+                    trace_id,
+                ),
+            )
+
+    def get_turn(
+        self, *, trace_id: str, owner_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """按真实用户归属读取单轮；管理员可显式省略 owner。"""
+        query = "SELECT * FROM gateway_turns WHERE trace_id=?"
+        arguments: tuple[str, ...] = (trace_id,)
+        if owner_id is not None:
+            query += " AND owner_id=?"
+            arguments = (trace_id, owner_id)
+        with self._connect() as connection:
+            row = connection.execute(query, arguments).fetchone()
+        return dict(row) if row else None
+
+    def list_turns(
+        self,
+        *,
+        deployment_id: str,
+        owner_id: str,
+        conversation_id: str,
+    ) -> list[dict[str, Any]]:
+        """按会话返回同一用户的新引擎历史映射。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM gateway_turns WHERE deployment_id=? "
+                "AND owner_id=? AND conversation_id=? ORDER BY created_at",
+                (deployment_id, owner_id, conversation_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_reference(
+        self, *, reference_id: str, trace_id: str
+    ) -> dict[str, Any] | None:
+        """引用必须先匹配已授权的本地 Trace。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM gateway_references "
+                "WHERE reference_id=? AND trace_id=?",
+                (reference_id, trace_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_feedback(  # noqa: PLR0913 - 反馈字段保持产品协议原样。
+        self,
+        *,
+        trace_id: str,
+        owner_id: str,
+        useful: bool,
+        reason_code: str | None,
+        reason_detail: str | None,
+        comment: str | None,
+    ) -> None:
+        """关联真实原生消息保存工业智能体产品反馈。"""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO gateway_feedback "
+                "(trace_id,owner_id,useful,reason_code,reason_detail,"
+                "comment,created_at) VALUES (?,?,?,?,?,?,?)",
+                (
+                    trace_id,
+                    owner_id,
+                    int(useful),
+                    reason_code,
+                    reason_detail,
+                    comment,
+                    _now(),
+                ),
+            )
+
+    def record_admin_action(
+        self,
+        *,
+        actor: str,
+        method: str,
+        path: str,
+        status_code: int,
+    ) -> None:
+        """只记管理员审计标识和操作结果，不记录内容及凭据。"""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO gateway_admin_audit "
+                "(actor,method,path,status_code,created_at) "
+                "VALUES (?,?,?,?,?)",
+                (actor, method, path, status_code, _now()),
+            )
+
+    def list_traces(  # noqa: PLR0913 - 分页和业务可见范围分别传入。
+        self,
+        *,
+        deployment_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        query: str = "",
+        feedback_only: bool = False,
+        excluded_kb_ids: tuple[str, ...] = (),
+    ) -> list[dict[str, Any]]:
+        """管理员列表返回本候选的提问者、问题和原生 ID。"""
+        arguments = (
+            deployment_id,
+            query,
+            query,
+            query,
+            f"rdms:{deployment_id}:{query}",
+            int(feedback_only),
+            json.dumps(excluded_kb_ids),
+            limit,
+            offset,
+        )
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT t.trace_id,t.created_at,t.completed_at,t.status,"
+                "t.owner_id,t.asker_name,t.question,"
+                "t.native_session_id,t.native_message_id,t.native_request_id,"
+                "t.truncated,t.finish_reason,t.error_category,"
+                "t.error_phase,t.upstream_status,t.stop_acknowledged,"
+                "LENGTH(t.question) AS question_chars,"
+                "LENGTH(t.answer) AS answer_chars,"
+                "f.useful AS feedback_useful,"
+                "r.status AS review_status "
+                "FROM gateway_turns AS t LEFT JOIN gateway_feedback AS f "
+                "ON f.trace_id=t.trace_id "
+                "LEFT JOIN gateway_feedback_reviews AS r "
+                "ON r.trace_id=t.trace_id WHERE t.deployment_id=? "
+                "AND (?='' OR instr(t.question,?)>0 OR "
+                "instr(COALESCE(t.asker_name,''),?)>0 OR t.owner_id=?) "
+                "AND (?=0 OR f.trace_id IS NOT NULL) "
+                + _VISIBLE_TURN_SQL
+                + "ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
+                arguments,
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "asker_id": str(row["owner_id"]).rsplit(":", maxsplit=1)[-1],
+            }
+            for row in rows
+        ]
+
+    def count_traces(
+        self,
+        *,
+        deployment_id: str,
+        query: str = "",
+        feedback_only: bool = False,
+        excluded_kb_ids: tuple[str, ...] = (),
+    ) -> int:
+        """给管理页分页提供与列表相同的筛选总数。"""
+        arguments = (
+            deployment_id,
+            query,
+            query,
+            query,
+            f"rdms:{deployment_id}:{query}",
+            int(feedback_only),
+            json.dumps(excluded_kb_ids),
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total FROM gateway_turns AS t "  # noqa: S608 - 仅拼接固定SQL，值均绑定。
+                "LEFT JOIN gateway_feedback AS f ON f.trace_id=t.trace_id "
+                "WHERE t.deployment_id=? "
+                "AND (?='' OR instr(t.question,?)>0 OR "
+                "instr(COALESCE(t.asker_name,''),?)>0 OR t.owner_id=?) "
+                "AND (?=0 OR f.trace_id IS NOT NULL)" + _VISIBLE_TURN_SQL,
+                arguments,
+            ).fetchone()
+        return int(row["total"])
+
+    def ops_summary(
+        self, *, deployment_id: str, excluded_kb_ids: tuple[str, ...] = ()
+    ) -> dict[str, int]:
+        """统计当前候选部署内的新引擎记录与反馈。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS turns,COUNT(DISTINCT t.owner_id) AS users,"
+                "SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END) "
+                "AS completed,"
+                "SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) "
+                "AS failed,"
+                "SUM(CASE WHEN f.useful=0 THEN 1 ELSE 0 END) "
+                "AS negative_feedback,"
+                "SUM(CASE WHEN f.trace_id IS NOT NULL THEN 1 ELSE 0 END) "
+                "AS feedback_count,"
+                "SUM(CASE WHEN f.useful=1 THEN 1 ELSE 0 END) "
+                "AS helpful_feedback,"
+                "SUM(CASE WHEN f.trace_id IS NOT NULL AND "
+                "COALESCE(r.status,'open')!='resolved' THEN 1 ELSE 0 END) "
+                "AS pending_feedback "
+                "FROM gateway_turns AS t LEFT JOIN gateway_feedback AS f "
+                "ON f.trace_id=t.trace_id "
+                "LEFT JOIN gateway_feedback_reviews AS r "
+                "ON r.trace_id=t.trace_id WHERE t.deployment_id=?"
+                + _VISIBLE_TURN_SQL,
+                (deployment_id, json.dumps(excluded_kb_ids)),
+            ).fetchone()
+        return {
+            key: int(row[key] or 0)
+            for key in (
+                "turns",
+                "users",
+                "completed",
+                "failed",
+                "negative_feedback",
+                "feedback_count",
+                "helpful_feedback",
+                "pending_feedback",
+            )
+        }
+
+    def frequent_questions(
+        self,
+        *,
+        deployment_id: str,
+        days: int = 7,
+        limit: int = 20,
+        excluded_kb_ids: tuple[str, ...] = (),
+    ) -> list[dict[str, Any]]:
+        """按原问题精确归组，不把不同业务表述擅自合并。"""
+        since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT TRIM(t.question) AS question,COUNT(*) AS count,"
+                "COUNT(DISTINCT t.owner_id) AS user_count,"
+                "SUM(CASE WHEN f.useful=0 THEN 1 ELSE 0 END) "
+                "AS negative_feedback,MAX(t.created_at) AS last_asked_at "
+                "FROM gateway_turns AS t LEFT JOIN gateway_feedback AS f "
+                "ON f.trace_id=t.trace_id "
+                "WHERE t.deployment_id=? AND t.created_at>=? "
+                + _VISIBLE_TURN_SQL
+                + "GROUP BY TRIM(t.question) "
+                "ORDER BY count DESC,last_asked_at DESC LIMIT ?",
+                (deployment_id, since, json.dumps(excluded_kb_ids), limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_recommendations(
+        self, *, deployment_id: str, approved_only: bool = False
+    ) -> list[dict[str, Any]]:
+        """运营题目独立于旧题库；公开端只读取人工审核通过的题面。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT recommendation_id,question,topic_key,"
+                "source_knowledge_ids_json,review_note,state,disabled_reason,"
+                "version,created_at,updated_at FROM gateway_recommendations "
+                "WHERE deployment_id=? AND (?=0 OR state='APPROVED') "
+                "ORDER BY updated_at DESC LIMIT 200",
+                (deployment_id, int(approved_only)),
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "source_knowledge_ids": json.loads(
+                    row["source_knowledge_ids_json"]
+                ),
+            }
+            for row in rows
+        ]
+
+    def save_recommendation(  # noqa: PLR0913 - 草稿版本与审核字段逐项入库。
+        self,
+        *,
+        deployment_id: str,
+        recommendation_id: str | None,
+        expected_version: int | None,
+        question: str,
+        topic_key: str,
+        source_knowledge_ids: list[str],
+        review_note: str,
+        state: str,
+        disabled_reason: str | None,
+    ) -> dict[str, Any]:
+        """草稿、发布和下架在网关留版本；不改原生知识或答案。"""
+        if state not in {"DRAFT", "APPROVED", "DISABLED"}:
+            raise ValueError("invalid recommendation state")
+        now = _now()
+        identifier = recommendation_id or f"pq_{uuid4().hex}"
+        with self._connect() as connection:
+            if recommendation_id is None:
+                connection.execute(
+                    "INSERT INTO gateway_recommendations "
+                    "(recommendation_id,deployment_id,question,topic_key,"
+                    "source_knowledge_ids_json,review_note,state,"
+                    "disabled_reason,version,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,1,?,?)",
+                    (
+                        identifier,
+                        deployment_id,
+                        question,
+                        topic_key,
+                        json.dumps(source_knowledge_ids, ensure_ascii=False),
+                        review_note,
+                        state,
+                        disabled_reason,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                cursor = connection.execute(
+                    "UPDATE gateway_recommendations SET question=?,topic_key=?,"
+                    "source_knowledge_ids_json=?,review_note=?,state=?,"
+                    "disabled_reason=?,version=version+1,updated_at=? "
+                    "WHERE recommendation_id=? AND deployment_id=? "
+                    "AND version=?",
+                    (
+                        question,
+                        topic_key,
+                        json.dumps(source_knowledge_ids, ensure_ascii=False),
+                        review_note,
+                        state,
+                        disabled_reason,
+                        now,
+                        identifier,
+                        deployment_id,
+                        expected_version,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError("recommendation version conflict")
+            row = connection.execute(
+                "SELECT recommendation_id,question,topic_key,"
+                "source_knowledge_ids_json,review_note,state,disabled_reason,"
+                "version,created_at,updated_at FROM gateway_recommendations "
+                "WHERE recommendation_id=? AND deployment_id=?",
+                (identifier, deployment_id),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("recommendation not saved")
+        return {
+            **dict(row),
+            "source_knowledge_ids": json.loads(
+                row["source_knowledge_ids_json"]
+            ),
+        }
+
+    def trace_overview(
+        self, *, trace_id: str, deployment_id: str
+    ) -> dict[str, Any] | None:
+        """管理员在页面查看原问答，技术事件仍只返回时序。"""
+        record = self.trace_export(trace_id=trace_id, include_content=False)
+        turn = self.get_turn(trace_id=trace_id)
+        if (
+            record is None
+            or turn is None
+            or turn["deployment_id"] != deployment_id
+        ):
+            return None
+        with self._connect() as connection:
+            review = connection.execute(
+                "SELECT status,note,root_cause,fix_reference,"
+                "verification_references_json,evaluation_candidate,updated_at "
+                "FROM gateway_feedback_reviews "
+                "WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()
+        return {
+            **record,
+            "asker_id": str(turn["owner_id"]).rsplit(":", maxsplit=1)[-1],
+            "asker_name": turn["asker_name"],
+            "question": turn["question"],
+            "answer": turn["answer"],
+            "review": (
+                {
+                    **dict(review),
+                    "verification_references": json.loads(
+                        review["verification_references_json"]
+                    ),
+                    "evaluation_candidate": bool(
+                        review["evaluation_candidate"]
+                    ),
+                }
+                if review
+                else None
+            ),
+        }
+
+    def save_feedback_review(  # noqa: PLR0913 - 保留运营复核字段。
+        self,
+        *,
+        trace_id: str,
+        status: str,
+        note: str,
+        root_cause: str = "",
+        fix_reference: str = "",
+        verification_references: list[str] | None = None,
+        evaluation_candidate: bool = False,
+    ) -> None:
+        """记录人工复核状态；不改变原生回答或模型配置。"""
+        if status not in {"open", "in_review", "resolved"}:
+            raise ValueError("invalid review status")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO gateway_feedback_reviews "
+                "(trace_id,status,note,root_cause,fix_reference,"
+                "verification_references_json,evaluation_candidate,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(trace_id) DO UPDATE SET "
+                "status=excluded.status,note=excluded.note,"
+                "root_cause=excluded.root_cause,"
+                "fix_reference=excluded.fix_reference,"
+                "verification_references_json=excluded.verification_references_json,"
+                "evaluation_candidate=excluded.evaluation_candidate,"
+                "updated_at=excluded.updated_at",
+                (
+                    trace_id,
+                    status,
+                    note,
+                    root_cause,
+                    fix_reference,
+                    json.dumps(
+                        verification_references or [], ensure_ascii=False
+                    ),
+                    int(evaluation_candidate),
+                    _now(),
+                ),
+            )
+
+    def trace_export(
+        self, *, trace_id: str, include_content: bool
+    ) -> dict[str, Any] | None:
+        """导出网关真实可见事件；默认去除问题、答案和原生事件正文。"""
+        turn = self.get_turn(trace_id=trace_id)
+        if turn is None:
+            return None
+        with self._connect() as connection:
+            events = connection.execute(
+                "SELECT sequence,event_type,native_request_id,payload_json,"
+                "created_at FROM gateway_events WHERE trace_id=? "
+                "ORDER BY sequence",
+                (trace_id,),
+            ).fetchall()
+            references = connection.execute(
+                "SELECT reference_id,native_chunk_id,native_knowledge_id,"
+                "resource_handle,source_json FROM gateway_references "
+                "WHERE trace_id=? ORDER BY rowid",
+                (trace_id,),
+            ).fetchall()
+            feedback = connection.execute(
+                "SELECT useful,reason_code,reason_detail,comment,created_at "
+                "FROM gateway_feedback WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()
+        result = {
+            "engine": "knowledgeengine",
+            "bridge_trace_id": trace_id,
+            "native_trace": "NOT_CONFIGURED",
+            "deployment_id": turn["deployment_id"],
+            "conversation_id": turn["conversation_id"],
+            "native_session_id": turn["native_session_id"],
+            "native_message_id": turn["native_message_id"],
+            "native_request_id": turn["native_request_id"],
+            "status": turn["status"],
+            "truncated": bool(turn["truncated"]),
+            "finish_reason": turn["finish_reason"],
+            "stop_acknowledged": bool(turn["stop_acknowledged"]),
+            "diagnostic": {
+                "category": turn["error_category"],
+                "phase": turn["error_phase"],
+                "upstream_status": turn["upstream_status"],
+                "native_request_id": turn["native_request_id"],
+            },
+            "created_at": turn["created_at"],
+            "completed_at": turn["completed_at"],
+            "client_context": json.loads(turn["client_context_json"]),
+            "kb_scope": json.loads(turn["kb_scope_json"]),
+            "question": turn["question"] if include_content else None,
+            "answer": turn["answer"] if include_content else None,
+            "references": [
+                {
+                    "reference_id": row["reference_id"],
+                    "native_chunk_id": row["native_chunk_id"],
+                    "native_knowledge_id": row["native_knowledge_id"],
+                    "resource_available": row["resource_handle"] is not None,
+                    "native_reference": json.loads(row["source_json"])
+                    if include_content
+                    else None,
+                }
+                for row in references
+            ],
+            "events": [
+                {
+                    "sequence": row["sequence"],
+                    "event_type": row["event_type"],
+                    "native_request_id": row["native_request_id"],
+                    "created_at": row["created_at"],
+                    "payload": json.loads(row["payload_json"])
+                    if include_content
+                    else None,
+                }
+                for row in events
+            ],
+            "feedback": (
+                {
+                    "useful": bool(feedback["useful"]),
+                    "reason_code": feedback["reason_code"],
+                    "reason_detail": feedback["reason_detail"],
+                    "comment": feedback["comment"] if include_content else None,
+                    "created_at": feedback["created_at"],
+                }
+                if feedback is not None
+                else None
+            ),
+            "content_redacted": not include_content,
+        }
+        return result

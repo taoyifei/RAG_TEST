@@ -1,19 +1,19 @@
 import {
   currentReturnTo,
-  WANSHITONG_BASE_PATH,
+  INDUSTRIAL_AGENT_BASE_PATH,
   withAppBase,
 } from "../app/basePath";
 
 const MAX_DRAFT_CHARS = 4_000;
 
 function draftKey(): string {
-  return `wanshitong-sso-draft:${withAppBase("/")}`;
+  return `industrial_agent-sso-draft:${withAppBase("/")}`;
 }
 
 /** 构造只回到当前 KB 页面、不会自动重发问题的 SSO entry 地址。 */
 export function ssoEntryLocation(): string {
   const parameters = new URLSearchParams({ return_to: currentReturnTo() });
-  return `${WANSHITONG_BASE_PATH}/sso/entry?${parameters.toString()}`;
+  return `${INDUSTRIAL_AGENT_BASE_PATH}/sso/entry?${parameters.toString()}`;
 }
 
 /** 在整页登录前暂存待发送草稿；callback 后只恢复到输入框。 */

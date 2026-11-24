@@ -18,19 +18,19 @@ it("展开原生引用文档后才加载对应附件，旧引用不猜测文件�
       citations={[
         {
           document_name: "线上操作指引.docx",
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           native_knowledge_id: "doc-actual",
         },
         { document_name: "旧引用.docx" },
         {
           document_name: "同路径但不同资料.docx",
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           source_relative_path: "同路径.docx",
           native_knowledge_id: "doc-version-one",
         },
         {
           document_name: "同路径但不同资料.docx",
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           source_relative_path: "同路径.docx",
           native_knowledge_id: "doc-version-two",
         },
@@ -72,7 +72,7 @@ it("按完整来源身份分组并保留全部片段和原始顺序", async () =
   const { container } = render(<PublicCitations citations={citations} />);
 
   const panelSummary = screen.getByText("检索参考（5段）");
-  const panel = container.querySelector(".wst-citations");
+  const panel = container.querySelector(".ia-citations");
   expect(panel).not.toHaveAttribute("open");
   panelSummary.focus();
   expect(panelSummary).toHaveFocus();
@@ -84,7 +84,7 @@ it("按完整来源身份分组并保留全部片段和原始顺序", async () =
   const groupSummary = within(groups[0])
     .getByText("展开全部片段")
     .closest("summary");
-  const group = groups[0].querySelector(".wst-citation-group");
+  const group = groups[0].querySelector(".ia-citation-group");
   expect(groupSummary).not.toBeNull();
   expect(group).not.toHaveAttribute("open");
   groupSummary?.focus();
@@ -139,17 +139,17 @@ it("原生引用缺少路径时仍按知识 ID 聚合同一文件", () => {
     <PublicCitations
       citations={[
         citation(1, {
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           source_relative_path: undefined,
           native_knowledge_id: "knowledge-1",
         }),
         citation(2, {
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           source_relative_path: undefined,
           native_knowledge_id: "knowledge-1",
         }),
         citation(3, {
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           source_relative_path: undefined,
           native_knowledge_id: "knowledge-2",
         }),
@@ -172,13 +172,13 @@ it("空引用不渲染，旧响应缺少可选字段时仍可展开", () => {
   expect(screen.getByText("1段")).toBeInTheDocument();
 });
 
-it("仅对标记原件可用的 WeKnora 引用展示下载入口", () => {
+it("仅对标记原件可用的 KnowledgeEngine 引用展示下载入口", () => {
   const referenceId = `ref_${"a".repeat(32)}`;
   const { container, rerender } = render(
     <PublicCitations
       citations={[
         citation(1, {
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           reference_id: referenceId,
           source_available: false,
         }),
@@ -186,13 +186,13 @@ it("仅对标记原件可用的 WeKnora 引用展示下载入口", () => {
       onDownloadReference={() => Promise.resolve()}
     />,
   );
-  expect(container.querySelector(".wst-citation-segment button")).toBeNull();
-  expect(container.querySelector(".wst-citation-download")).toBeNull();
+  expect(container.querySelector(".ia-citation-segment button")).toBeNull();
+  expect(container.querySelector(".ia-citation-download")).toBeNull();
   rerender(
     <PublicCitations
       citations={[
         citation(1, {
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           reference_id: referenceId,
           source_available: true,
         }),
@@ -201,10 +201,10 @@ it("仅对标记原件可用的 WeKnora 引用展示下载入口", () => {
     />,
   );
   expect(
-    container.querySelector(".wst-citation-segment button"),
+    container.querySelector(".ia-citation-segment button"),
   ).toBeInTheDocument();
   expect(screen.getByText("查看引用片段")).toBeInTheDocument();
-  expect(container.querySelector(".wst-citation-download")).toBeNull();
+  expect(container.querySelector(".ia-citation-download")).toBeNull();
 });
 
 it("原生引用的片段与原件分别使用明确入口", async () => {
@@ -214,7 +214,7 @@ it("原生引用的片段与原件分别使用明确入口", async () => {
     <PublicCitations
       citations={[
         citation(1, {
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           reference_id: `ref_${"b".repeat(32)}`,
           source_available: true,
           original_available: true,
@@ -243,7 +243,7 @@ it("同一文件多段只在标题旁提供一次下载，折叠时也可用并�
         citation(index + 1, {
           document_name: "操作流程.docx",
           document_title: "操作流程",
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           reference_id: `ref-${index}`,
           source_available: true,
           original_available: originalAvailable,
@@ -258,10 +258,10 @@ it("同一文件多段只在标题旁提供一次下载，折叠时也可用并�
   const button = within(group).getByRole("button", {
     name: "下载原件：操作流程",
   });
-  expect(group.querySelector(".wst-citation-group")).not.toHaveAttribute(
+  expect(group.querySelector(".ia-citation-group")).not.toHaveAttribute(
     "open",
   );
-  expect(button.closest("summary")).toHaveClass("wst-citation-heading");
+  expect(button.closest("summary")).toHaveClass("ia-citation-heading");
   expect(button).toBeVisible();
   await user.click(button);
   expect(download).toHaveBeenCalledExactlyOnceWith(
@@ -270,7 +270,7 @@ it("同一文件多段只在标题旁提供一次下载，折叠时也可用并�
     true,
   );
   expect(reader).not.toHaveBeenCalled();
-  expect(group.querySelector(".wst-citation-group")).not.toHaveAttribute(
+  expect(group.querySelector(".ia-citation-group")).not.toHaveAttribute(
     "open",
   );
   await user.click(within(group).getByText("展开全部片段"));
@@ -298,7 +298,7 @@ it("下载中阻止重复请求，失败时折叠状态仍显示提示并可重�
     <PublicCitations
       citations={[
         citation(1, {
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           reference_id: "ref-original",
           original_available: true,
         }),
@@ -358,7 +358,7 @@ it("关闭原件下载时保留原生引用片段和依据，隐藏新旧原件�
       allowSourceDownload={false}
       citations={[
         citation(1, {
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           reference_id: `ref_${"a".repeat(32)}`,
           source_available: true,
           original_available: true,
@@ -373,7 +373,7 @@ it("关闭原件下载时保留原生引用片段和依据，隐藏新旧原件�
   );
   await user.click(screen.getByText("检索参考（2段）"));
   for (const group of screen.getAllByRole("article")) {
-    const summary = group.querySelector(".wst-citation-heading");
+    const summary = group.querySelector(".ia-citation-heading");
     if (summary) await user.click(summary);
   }
   expect(
@@ -393,13 +393,13 @@ it("点击文档名在旁边阅读来源，保留答案与原下载权限检查"
   const reader = vi.fn().mockResolvedValue("完整的本次引用原文");
   const download = vi.fn().mockResolvedValue(undefined);
   render(
-    <div className="wst-root">
+    <div className="ia-root">
       <p>当前答案继续显示</p>
       <PublicCitations
         allowSourceDownload={false}
         citations={[
           citation(1, {
-            source_kind: "weknora",
+            source_kind: "knowledgeengine",
             reference_id: "ref-source",
             source_available: true,
             original_available: true,
@@ -438,7 +438,7 @@ it("阅读原文不触发下载，原件下载仍传递original标记", async ()
     <PublicCitations
       citations={[
         citation(1, {
-          source_kind: "weknora",
+          source_kind: "knowledgeengine",
           reference_id: "ref-source",
           source_available: true,
           original_available: true,

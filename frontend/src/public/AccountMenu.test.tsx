@@ -19,7 +19,7 @@ it("账号操作按需展开，Escape恢复焦点，外部点击不会被拦截"
     </>,
   );
   expect(
-    screen.queryByRole("button", { name: "退出湾小度" }),
+    screen.queryByRole("button", { name: "退出工业智能体" }),
   ).not.toBeInTheDocument();
   const trigger = screen.getByRole("button", { name: "账户与外观" });
   await user.click(trigger);

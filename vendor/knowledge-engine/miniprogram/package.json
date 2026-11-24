@@ -1,0 +1,9 @@
+{
+  "name": "knowledgeengine-miniprogram",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WeChat Mini Program plugin for KnowledgeEngine",
+  "scripts": {
+    "test": "node --test ../tests/miniprogram/*.test.js"
+  }
+}

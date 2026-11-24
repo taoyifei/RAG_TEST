@@ -45,8 +45,8 @@ export function ReadingOverlay({
   const [host] = useState(() =>
     typeof document === "undefined"
       ? null
-      : (returnFocusTo?.closest<HTMLElement>(".wst-root") ??
-        document.querySelector<HTMLElement>(".wst-root") ??
+      : (returnFocusTo?.closest<HTMLElement>(".ia-root") ??
+        document.querySelector<HTMLElement>(".ia-root") ??
         document.body),
   );
   const layerRef = useRef<HTMLDivElement>(null);
@@ -175,13 +175,13 @@ export function ReadingOverlay({
   if (!host) return null;
   return createPortal(
     <div
-      className={`wst-reading-layer wst-${kind}-reading-layer${modal ? " is-modal" : ""}`}
+      className={`ia-reading-layer ia-${kind}-reading-layer${modal ? " is-modal" : ""}`}
       ref={layerRef}
     >
       {modal && (
         <button
           aria-label={`关闭${kind === "image" ? "图片预览" : kind === "rename" ? "重命名会话" : "来源阅读"}遮罩`}
-          className="wst-reading-backdrop"
+          className="ia-reading-backdrop"
           onClick={onClose}
           tabIndex={-1}
           type="button"
@@ -191,7 +191,7 @@ export function ReadingOverlay({
         aria-label={label}
         aria-modal={(!suspended && modal) || undefined}
         aria-hidden={suspended || undefined}
-        className={`wst-reading-panel wst-${kind}-panel`}
+        className={`ia-reading-panel ia-${kind}-panel`}
         ref={panelRef}
         role="dialog"
         inert={suspended || undefined}

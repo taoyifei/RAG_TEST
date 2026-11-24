@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { usePublicChat } from "./usePublicChat";
 
 const originalId = "history-current";
-const storageKey = "wst-natural-conversation:history_8289:1001";
+const storageKey = "ia-natural-conversation:history_8289:1001";
 const turn = {
   turn_id: "turn-history",
   trace_id: "trace-history",
@@ -61,15 +61,15 @@ function installHistory(
       );
       if (url.pathname === "/api/public/session")
         return Response.json({
-          session_id: "wstsid_11111111111111111111111111111111",
+          session_id: "iasid_11111111111111111111111111111111",
           csrf_token: "a".repeat(64),
           deployment_id: "history_8289",
           user: { user_id: "1001", display_name: "测试用户", role: "user" },
         });
       if (url.pathname === "/api/public/capabilities")
         return Response.json({
-          stream_protocol: "wanshitong-weknora-sse-v1",
-          natural_stream_protocol: "wanshitong-weknora-sse-v1",
+          stream_protocol: "industrial_agent-knowledgeengine-sse-v1",
+          natural_stream_protocol: "industrial_agent-knowledgeengine-sse-v1",
           feedback: false,
           shortcuts: [],
         });

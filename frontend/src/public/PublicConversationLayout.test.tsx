@@ -50,8 +50,8 @@ function props() {
     viewLabel: "知识问答",
     children: (
       <main>
-        <div className="wst-composer">
-          <textarea aria-label="向湾小度提问" />
+        <div className="ia-composer">
+          <textarea aria-label="向工业智能体提问" />
         </div>
       </main>
     ),
@@ -150,7 +150,7 @@ describe("历史会话侧栏", () => {
     );
     const history = screen.getByRole("navigation", { name: "历史会话" });
     history.scrollTop = 140;
-    const draft = screen.getByRole("textbox", { name: "向湾小度提问" });
+    const draft = screen.getByRole("textbox", { name: "向工业智能体提问" });
     await user.type(draft, "尚未发送的草稿");
     await user.type(
       screen.getByRole("searchbox", { name: "搜索历史会话" }),
@@ -331,8 +331,8 @@ describe("历史会话侧栏", () => {
     ).toBeDisabled();
     expect(
       screen
-        .getByRole("textbox", { name: "向湾小度提问" })
-        .closest(".wst-main-pane"),
+        .getByRole("textbox", { name: "向工业智能体提问" })
+        .closest(".ia-main-pane"),
     ).toHaveAttribute("inert");
     expect(screen.getByText("正在更新会话…")).toBeVisible();
   });
@@ -384,7 +384,7 @@ describe("历史会话侧栏", () => {
     const history = screen.getByRole("navigation", { name: "历史会话" });
     history.scrollTop = 140;
     await user.type(
-      screen.getByRole("textbox", { name: "向湾小度提问" }),
+      screen.getByRole("textbox", { name: "向工业智能体提问" }),
       "还没发送的问题",
     );
     await user.click(screen.getByRole("button", { name: "收起会话侧栏" }));
@@ -397,11 +397,11 @@ describe("历史会话侧栏", () => {
     expect(screen.getByRole("navigation", { name: "历史会话" })).toBe(history);
     expect(history.scrollTop).toBe(140);
     await user.click(screen.getByRole("button", { name: "收起会话侧栏" }));
-    expect(screen.getByRole("textbox", { name: "向湾小度提问" })).toHaveValue(
+    expect(screen.getByRole("textbox", { name: "向工业智能体提问" })).toHaveValue(
       "还没发送的问题",
     );
     expect(parameters.onSelect).not.toHaveBeenCalled();
-    expect(window.localStorage.getItem("wanshitong-sidebar-collapsed")).toBe(
+    expect(window.localStorage.getItem("industrial_agent-sidebar-collapsed")).toBe(
       "true",
     );
     expect(Object.values(window.localStorage).join()).not.toContain(
@@ -417,7 +417,7 @@ describe("历史会话侧栏", () => {
   it("只显示一个侧栏开关，收起时关闭会话菜单且不把焦点留在隐藏内容", async () => {
     const user = userEvent.setup();
     render(
-      <div className="wst-root" data-theme="dark">
+      <div className="ia-root" data-theme="dark">
         <PublicConversationLayout
           {...props()}
           onArchive={vi.fn()}
@@ -434,7 +434,7 @@ describe("历史会话侧栏", () => {
     const menu = screen.getByRole("group", {
       name: `操作：${sessions[0].title}`,
     });
-    expect(menu.parentElement).toHaveClass("wst-root");
+    expect(menu.parentElement).toHaveClass("ia-root");
     await user.click(screen.getByRole("button", { name: "收起会话侧栏" }));
     expect(
       screen.queryByRole("button", { name: "归档会话" }),
@@ -538,7 +538,7 @@ describe("历史会话侧栏", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("textbox", { name: "向湾小度提问" }),
+        screen.getByRole("textbox", { name: "向工业智能体提问" }),
       ).toHaveFocus(),
     );
   });

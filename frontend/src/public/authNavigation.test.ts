@@ -11,7 +11,7 @@ afterEach(() => {
   window.sessionStorage.clear();
 });
 
-describe("湾事通 SSO 导航", () => {
+describe("工业智能体 SSO 导航", () => {
   it("公共根入口登录后仍返回已公布的根地址", () => {
     window.history.replaceState({}, "", "/?source=notice#ignored");
 

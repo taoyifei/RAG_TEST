@@ -1,0 +1,11 @@
+FROM python:3.11-slim-bookworm
+
+WORKDIR /opt/industrial-agent
+COPY requirements.runtime.lock .
+RUN pip install --no-cache-dir -r requirements.runtime.lock \
+    && mkdir /data && chown 10001:10001 /data
+COPY src/industrial_agent/ ./src/industrial_agent/
+ENV PYTHONPATH=/opt/industrial-agent/src PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 10001:10001
+EXPOSE 8088
+CMD ["python", "-m", "uvicorn", "industrial_agent.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8088", "--no-proxy-headers"]

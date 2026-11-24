@@ -97,7 +97,7 @@ export function UserRolesWorkspace({
     }
     const name = user.display_name || user.username;
     const blocked = !user.access_blocked;
-    if (blocked && !window.confirm(`禁止“${name}”访问湾小度？`)) return;
+    if (blocked && !window.confirm(`禁止“${name}”访问工业智能体？`)) return;
     setBusy(`access:${user.user_id}`);
     setError(undefined);
     setNotice(undefined);
@@ -110,7 +110,7 @@ export function UserRolesWorkspace({
       );
       setNotice(
         saved.access_blocked
-          ? `已禁止 ${name} 访问湾小度。`
+          ? `已禁止 ${name} 访问工业智能体。`
           : saved.access_block_reason === "department"
             ? `已解除 ${name} 的账号限制。该部门暂未开通访问。`
             : `已恢复 ${name} 的访问。`,
@@ -122,10 +122,10 @@ export function UserRolesWorkspace({
     }
   };
   return (
-    <main className="wst-workspace" id="main-content">
-      <header className="wst-workspace-heading">
+    <main className="ia-workspace" id="main-content">
+      <header className="ia-workspace-heading">
         <div>
-          <button className="wst-text-action" type="button" onClick={onBack}>
+          <button className="ia-text-action" type="button" onClick={onBack}>
             ← 返回问答
           </button>
           <h1>用户与角色</h1>
@@ -145,32 +145,32 @@ export function UserRolesWorkspace({
         </button>
       </header>
       {error && (
-        <p className="wst-workspace-error" role="alert">
+        <p className="ia-workspace-error" role="alert">
           {error}
         </p>
       )}
       {notice && (
-        <p className="wst-workspace-notice" role="status">
+        <p className="ia-workspace-notice" role="status">
           {notice}
         </p>
       )}
-      <section className="wst-library-panel" aria-label="用户角色管理">
+      <section className="ia-library-panel" aria-label="用户角色管理">
         {users?.some((user) => user.personal_quota) && (
-          <p className="wst-document-meta">
+          <p className="ia-document-meta">
             个人资料额度仅限超级管理员调整，调整额度不会开放个人文件的查看权限。
           </p>
         )}
         {!users && !error && (
-          <p className="wst-workspace-empty" role="status">
+          <p className="ia-workspace-empty" role="status">
             正在加载用户…
           </p>
         )}
         {users?.length === 0 && (
-          <p className="wst-workspace-empty">暂时没有已登录的用户。</p>
+          <p className="ia-workspace-empty">暂时没有已登录的用户。</p>
         )}
         {users && users.length > 0 && (
-          <div className="wst-workspace-table-scroll">
-            <table className="wst-workspace-table wst-user-table">
+          <div className="ia-workspace-table-scroll">
+            <table className="ia-workspace-table ia-user-table">
               <thead>
                 <tr>
                   <th scope="col">用户</th>
@@ -225,12 +225,12 @@ function UserRoleRow({
     <tr>
       <td>
         <strong>{user.display_name || user.username}</strong>
-        <div className="wst-document-meta">
+        <div className="ia-document-meta">
           {user.username !== user.user_id ? `${user.username} · ` : ""}
           用户 ID：{user.user_id}
         </div>
         {user.username === user.user_id && (
-          <div className="wst-document-meta">登录账号待本人下次登录同步</div>
+          <div className="ia-document-meta">登录账号待本人下次登录同步</div>
         )}
       </td>
       <td>{user.dept_id ? `部门 ID：${user.dept_id}` : "登录系统暂未提供"}</td>
@@ -240,10 +240,10 @@ function UserRoleRow({
             <strong>
               {user.is_super_admin ? "超级管理员" : ROLE_LABELS[user.role]}
             </strong>
-            <div className="wst-document-meta">{user.role_edit_note}</div>
+            <div className="ia-document-meta">{user.role_edit_note}</div>
           </div>
         ) : (
-          <div className="wst-role-editor">
+          <div className="ia-role-editor">
             <select
               aria-label={`${user.display_name || user.username}的角色`}
               value={role}
@@ -269,9 +269,9 @@ function UserRoleRow({
         )}
       </td>
       <td>
-        <div className="wst-user-access">
+        <div className="ia-user-access">
           <span
-            className="wst-user-access-status"
+            className="ia-user-access-status"
             data-restricted={departmentBlocked || user.access_blocked === true}
           >
             {departmentBlocked
@@ -307,7 +307,7 @@ function UserRoleRow({
             </span>
           )
         ) : (
-          <span className="wst-document-meta">尚未同步</span>
+          <span className="ia-document-meta">尚未同步</span>
         )}
       </td>
     </tr>
@@ -337,7 +337,7 @@ function PersonalQuotaEditor({
   const name = user.display_name || user.username;
   return (
     <form
-      className="wst-quota-limit-editor"
+      className="ia-quota-limit-editor"
       aria-label={`${name}的个人资料额度`}
       noValidate
       onSubmit={(event) => {
@@ -356,7 +356,7 @@ function PersonalQuotaEditor({
         onSave({ max_bytes: capacity * MEBIBYTE, max_files: fileCount });
       }}
     >
-      <div className="wst-quota-limit-fields">
+      <div className="ia-quota-limit-fields">
         <label>
           <span>容量（MB）</span>
           <input
@@ -388,7 +388,7 @@ function PersonalQuotaEditor({
         保存额度
       </button>
       {error && (
-        <p className="wst-document-error" role="alert">
+        <p className="ia-document-error" role="alert">
           {error}
         </p>
       )}

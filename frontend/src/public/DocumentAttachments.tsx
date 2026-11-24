@@ -25,13 +25,13 @@ export function TemplateDownload({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   return (
-    <section className="wst-document-related" aria-label="文件直达">
-      <span className="wst-document-kind">
+    <section className="ia-document-related" aria-label="文件直达">
+      <span className="ia-document-kind">
         {file.kind === "template" ? "可填写模板" : "采购需求核对清单"} ·{" "}
         {file.format}
       </span>
       <strong>{file.filename}</strong>
-      <div className="wst-document-assets">
+      <div className="ia-document-assets">
         <button
           disabled={busy}
           onClick={() => {
@@ -54,7 +54,7 @@ export function TemplateDownload({
         </button>
       </div>
       {error && (
-        <p role="alert" className="wst-document-error">
+        <p role="alert" className="ia-document-error">
           {error}
         </p>
       )}
@@ -73,7 +73,7 @@ export function DocumentAssetButtons({
   const [busy, setBusy] = useState<string>();
   if (!assets.length) return null;
   return (
-    <div className="wst-document-assets">
+    <div className="ia-document-assets">
       {assets.map((asset) => (
         <button
           type="button"
@@ -112,7 +112,7 @@ export function DocumentAssetButtons({
         <small>附件可能含填写示例，使用时请替换为实际信息。</small>
       )}
       {error && (
-        <p role="alert" className="wst-document-error">
+        <p role="alert" className="ia-document-error">
           {error}
         </p>
       )}
@@ -144,15 +144,15 @@ export function DocumentAttachments({ documentId }: { documentId: string }) {
   }, [documentId]);
   if (result?.id !== documentId) return null;
   const { data, error } = result;
-  if (error) return <p className="wst-document-meta">{error}</p>;
+  if (error) return <p className="ia-document-meta">{error}</p>;
   if (!data) return null;
   return (
-    <div className="wst-document-related">
-      <span className="wst-document-kind">
+    <div className="ia-document-related">
+      <span className="ia-document-kind">
         {DOCUMENT_KIND_NAMES[data.kind]}
       </span>
       {data.version_state === "archived" && (
-        <span className="wst-document-meta">
+        <span className="ia-document-meta">
           此引用来自旧版本，请以当前发布的资料为准。
         </span>
       )}

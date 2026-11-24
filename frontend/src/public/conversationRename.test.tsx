@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { WanshitongApp } from "./WanshitongApp";
+import { IndustrialAgentApp } from "./IndustrialAgentApp";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -14,7 +14,7 @@ it("保存后同一页面的侧栏、顶栏和搜索同步更新，无需手动�
   let customTitle: string | null = null;
   const conversationId = "rename-history";
   window.sessionStorage.setItem(
-    "wst-natural-conversation:rename_8289:325",
+    "ia-natural-conversation:rename_8289:325",
     conversationId,
   );
   const fetchMock = vi
@@ -32,7 +32,7 @@ it("保存后同一页面的侧栏、顶栏和搜索同步更新，无需手动�
       if (url.pathname === "/api/public/session")
         return Promise.resolve(
           Response.json({
-            session_id: "wstsid_11111111111111111111111111111111",
+            session_id: "iasid_11111111111111111111111111111111",
             csrf_token: "a".repeat(64),
             deployment_id: "rename_8289",
             user: { user_id: "325", display_name: "测试用户", role: "user" },
@@ -41,8 +41,8 @@ it("保存后同一页面的侧栏、顶栏和搜索同步更新，无需手动�
       if (url.pathname === "/api/public/capabilities")
         return Promise.resolve(
           Response.json({
-            stream_protocol: "wanshitong-weknora-sse-v1",
-            natural_stream_protocol: "wanshitong-weknora-sse-v1",
+            stream_protocol: "industrial_agent-knowledgeengine-sse-v1",
+            natural_stream_protocol: "industrial_agent-knowledgeengine-sse-v1",
             feedback: false,
             page_settings: { show_recommendations: false },
           }),
@@ -98,7 +98,7 @@ it("保存后同一页面的侧栏、顶栏和搜索同步更新，无需手动�
         );
       return Promise.resolve(Response.json({}, { status: 404 }));
     });
-  render(<WanshitongApp />);
+  render(<IndustrialAgentApp />);
   expect(
     await screen.findByRole("button", { name: "旧会话名称" }),
   ).toHaveAttribute("aria-current", "page");
@@ -121,7 +121,7 @@ it("保存后同一页面的侧栏、顶栏和搜索同步更新，无需手动�
     screen.getByRole("button", { name: "我的委托单资料" }),
   ).toHaveAttribute("aria-current", "page");
   expect(
-    screen.getByText("我的委托单资料", { selector: ".wst-app-view-label" }),
+    screen.getByText("我的委托单资料", { selector: ".ia-app-view-label" }),
   ).toBeVisible();
   const search = screen.getByRole("searchbox", { name: "搜索历史会话" });
   await user.type(search, "旧会话名称");
@@ -129,7 +129,7 @@ it("保存后同一页面的侧栏、顶栏和搜索同步更新，无需手动�
     await screen.findByText("没有匹配的会话，试试其他关键词。"),
   ).toBeVisible();
   expect(
-    screen.getByText("我的委托单资料", { selector: ".wst-app-view-label" }),
+    screen.getByText("我的委托单资料", { selector: ".ia-app-view-label" }),
   ).toBeVisible();
   await user.clear(search);
   await user.type(search, "我的委托单");

@@ -6,20 +6,20 @@ import json
 
 import pytest
 
-from wanshitong_gateway.compat.wanshitong.sso_settings import SsoSettings
+from industrial_agent.compat.portal.sso_settings import SsoSettings
 
 
 def _environment() -> dict[str, str]:
     return {
-        "RAG_WANSHITONG_AUTH_MODE": "sso",
-        "RAG_WANSHITONG_SSO_DEPLOYMENT_ID": "candidate_8289",
-        "RAG_WANSHITONG_SSO_ENTRIES": json.dumps(
+        "RAG_INDUSTRIAL_AGENT_AUTH_MODE": "sso",
+        "RAG_INDUSTRIAL_AGENT_SSO_DEPLOYMENT_ID": "candidate_8289",
+        "RAG_INDUSTRIAL_AGENT_SSO_ENTRIES": json.dumps(
             [
                 {
                     "id": "internal",
-                    "origin": "http://10.242.180.54:8289",
+                    "origin": "http://gateway.example:18300",
                     "authorize_url": (
-                        "http://10.242.180.50:8080/sso/authorize"
+                        "http://sso.example:8080/sso/authorize"
                     ),
                 },
                 {
@@ -29,11 +29,11 @@ def _environment() -> dict[str, str]:
                 },
             ]
         ),
-        "RAG_WANSHITONG_SSO_VALIDATE_URL": (
-            "http://10.242.180.50:21000/sso/validate"
+        "RAG_INDUSTRIAL_AGENT_SSO_VALIDATE_URL": (
+            "http://sso.example:21000/sso/validate"
         ),
-        "RAG_WANSHITONG_SSO_CLIENT_ID": "kb",
-        "RAG_WANSHITONG_SSO_CLIENT_SECRET_FILE": (
+        "RAG_INDUSTRIAL_AGENT_SSO_CLIENT_ID": "kb",
+        "RAG_INDUSTRIAL_AGENT_SSO_CLIENT_SECRET_FILE": (
             "/run/rag-secrets/sso-client-secret"
         ),
     }
@@ -45,8 +45,8 @@ def test_sso_settings_freeze_exact_callbacks_and_entry_lookup() -> None:
     assert settings.enabled is True
     assert settings.deployment_id == "candidate_8289"
     assert settings.entry_for_origin(
-        "http://10.242.180.54:8289"
-    ).callback_url == ("http://10.242.180.54:8289/kb/sso/callback")
+        "http://gateway.example:18300"
+    ).callback_url == ("http://gateway.example:18300/kb/sso/callback")
     assert settings.entry_by_id("external").callback_url == (
         "https://rd.example.test/kb/sso/callback"
     )
@@ -62,10 +62,10 @@ def test_anonymous_mode_does_not_require_sso_inputs() -> None:
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        ({"RAG_WANSHITONG_AUTH_MODE": "oidc"}, "AUTH_MODE"),
-        ({"RAG_WANSHITONG_SSO_ENTRIES": "[]"}, "非空"),
+        ({"RAG_INDUSTRIAL_AGENT_AUTH_MODE": "oidc"}, "AUTH_MODE"),
+        ({"RAG_INDUSTRIAL_AGENT_SSO_ENTRIES": "[]"}, "非空"),
         (
-            {"RAG_WANSHITONG_SSO_VALIDATE_URL": ("http://idp.test/login")},
+            {"RAG_INDUSTRIAL_AGENT_SSO_VALIDATE_URL": ("http://idp.test/login")},
             "/sso/validate",
         ),
     ],
