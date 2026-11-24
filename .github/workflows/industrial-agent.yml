@@ -2,7 +2,7 @@ name: Industrial Agent
 
 on:
   push:
-    branches: ["codex/industrial-agent"]
+    branches: ["industrial-agent"]
   pull_request:
   workflow_dispatch:
 
