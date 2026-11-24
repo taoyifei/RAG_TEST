@@ -36,3 +36,10 @@ output/
 /tmp/
 /docs/RAG资料库*/
 /docs/工业标准*/
+
+# 本机编辑器配置与运行数据
+/.idea/
+/.vscode/
+/data/
+.DS_Store
+Thumbs.db

@@ -1,2 +1,9 @@
 /build-context/
 /.env
+
+# 本地部署配置与初始化输出
+/data/
+/bootstrap.json
+/config/builtin_models.yaml
+/config/*.local.yaml
+/layout-ocr-relay.conf
