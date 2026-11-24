@@ -22,6 +22,7 @@ output/
 **/node_modules/
 **/dist/
 **/coverage/
+**/third_party/anydoc-go/lib/
 **/.vite/
 **/playwright-report/
 **/test-results/
